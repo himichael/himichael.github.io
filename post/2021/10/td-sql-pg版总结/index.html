@@ -1,0 +1,597 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    
+
+    <title>TD-SQL-PG版总结 | 记录每个瞬间</title>
+    <meta property="og:title" content="TD-SQL-PG版总结 - 记录每个瞬间">
+    <meta property="og:type" content="article">
+        
+    <meta property="article:published_time" content='2021-10-11T14:57:04&#43;08:00'>
+        
+        
+    <meta property="article:modified_time" content='2021-10-11T14:57:04&#43;08:00'>
+        
+    <meta name="Keywords" content="">
+    <meta name="description" content="TD-SQL-PG版总结">
+        <meta name="author" content="隔壁老王">
+        
+    <meta property="og:url" content="https://code0xff.cn/post/2021/10/td-sql-pg%E7%89%88%E6%80%BB%E7%BB%93/">
+    <link rel="shortcut icon" href='/favicon.ico'  type="image/x-icon">
+
+    <link rel="stylesheet" href='/css/normalize.css'>
+    <link rel="stylesheet" href='/css/style.css'>
+    <script type="text/javascript" src="//cdn.bootcdn.net/ajax/libs/jquery/3.4.1/jquery.min.js"></script>
+
+    
+    
+    
+    
+    
+    
+</head>
+
+
+<body>
+    <header id="header" class="clearfix">
+    <div class="container">
+        <div class="col-group">
+            <div class="site-name ">
+                
+                    <a id="logo" href="https://code0xff.cn/">
+                        记录每个瞬间
+                    </a>
+                
+                
+            </div>
+            <div>
+                <nav id="nav-menu" class="clearfix">
+                    <a class="current" href="https://code0xff.cn/">首页</a>
+                    
+                    <a  href="https://code0xff.cn/linked/" title="链接">链接</a>
+                    
+                    <a  href="https://code0xff.cn/archives/" title="归档">归档</a>
+                    
+                    <a  href="https://code0xff.cn/about/" title="关于">关于</a>
+                    
+                </nav>
+            </div>
+        </div>
+    </div>
+</header>
+
+    <div id="body">
+        <div class="container">
+            <div class="col-group">
+
+                <div class="col-8" id="main">
+                    
+<div class="res-cons">
+    
+    <article class="post">
+        <header>
+            <h1 class="post-title">TD-SQL-PG版总结</h1>
+        </header>
+        <date class="post-meta meta-date">
+            2021年10月11日
+        </date>
+<nav id="TableOfContents">
+  <ul>
+    <li>
+      <ul>
+        <li><a href="#概览">概览</a></li>
+        <li><a href="#产品核心功能">产品核心功能</a>
+          <ul>
+            <li>
+              <ul>
+                <li><a href="#兼容性">兼容性</a></li>
+                <li><a href="#分布式事务">分布式事务</a></li>
+                <li><a href="#在线扩容">在线扩容</a></li>
+                <li><a href="#htap">HTAP</a></li>
+                <li><a href="#并行化">并行化</a></li>
+                <li><a href="#多级容灾能力">多级容灾能力</a></li>
+                <li><a href="#读写多平面">读写多平面</a></li>
+                <li><a href="#安全保障">安全保障</a></li>
+                <li><a href="#数据治理">数据治理</a></li>
+              </ul>
+            </li>
+          </ul>
+        </li>
+      </ul>
+    </li>
+  </ul>
+</nav>
+        
+        <div class="post-meta">
+            <span>|</span>
+            
+            <span class="meta-category"><a href='/categories/%E5%88%86%E5%B8%83%E5%BC%8F'>分布式</a></span>
+            
+        </div>
+        
+        
+        
+        <div class="post-content">
+            <p>[[<em>TOC</em>]]</p>
+<h2 id="概览">概览</h2>
+<p>发展历程</p>
+<ul>
+<li>PostGreSQL 在2008年的时候引入，比MySQL要晚了几年</li>
+<li>PG版为 游戏、逛逛、微信等业务提供服务，单机版很快遇到瓶颈</li>
+<li>2011年开始探索分布式化</li>
+<li>2013年微信支付商户迁移到了 PG分布式版，从原来<strong>手动分库分表</strong>，到<strong>自动分库分表</strong></li>
+<li>PG版随着公有云一起发展，开始对接外部用户，增加了安全性、列存储、压缩、读写分离、资源隔离等特性</li>
+<li>截止到2021年，在银行、保险、证券、微信支付、政府、电力都多个行业提供支持</li>
+</ul>
+<p>PG版本要解决的问题：</p>
+<ul>
+<li>方便业务迁移，PG还兼容部分Oracle语法</li>
+<li>分布式事务一致性</li>
+<li>服务高可用</li>
+<li>集群可扩展能力</li>
+<li>数据安全保证</li>
+<li>HTAP双引擎</li>
+</ul>
+<p>整体架构<br>
+
+        <img class="mx-auto" alt="1" src="https://woquhaha.gitee.io/pic_tech_1/post/2021/10/TD-SQL-PG%E7%89%88%E6%80%BB%E7%BB%93/1.png" />   
+    </p>
+<p>功能介绍</p>
+<ul>
+<li>Coordinator，对外接口，负责数据的分发和查询，多个节点对等，每个节点都提供相同的全局元数据</li>
+<li>DataNode，存储了本地的元数据，和数据分片</li>
+<li>GTM，全局事务管理器，还管理集群的全局对象，如序列等</li>
+</ul>
+<p>看起来跟 GreenPlum 有点类似，但多了一个全局事务管理器</p>
+<h2 id="产品核心功能">产品核心功能</h2>
+<h4 id="兼容性">兼容性</h4>
+<p>兼容大多数 原生PG 的语法，包括查询、外键、触发器、视图、存储过程等<br>
+还兼容大部分 Oracle的语法，在源码方面做了改动，支持很多Oracle的函数    <br>
+实现SQL2011标准<br>
+数据类型，支持常规的原生PG类型，还支持</p>
+<ul>
+<li>自增序列</li>
+<li>货币</li>
+<li>几何</li>
+<li>UUID</li>
+<li>Array</li>
+<li>JSON</li>
+<li>Range</li>
+</ul>
+<p>接口兼容</p>
+<ul>
+<li>JDBC</li>
+<li>ODBC</li>
+<li>shell</li>
+<li>C</li>
+<li>Python</li>
+<li>PHP</li>
+<li>.NET</li>
+</ul>
+<p>语法上的支持<br>
+
+        <img class="mx-auto" alt="image" src="https://woquhaha.gitee.io/pic_tech_1/post/2021/10/TD-SQL-PG%E7%89%88%E6%80%BB%E7%BB%93/2.png" />   
+       <br>
+
+        <img class="mx-auto" alt="image" src="https://woquhaha.gitee.io/pic_tech_1/post/2021/10/TD-SQL-PG%E7%89%88%E6%80%BB%E7%BB%93/3.png" />   
+    <br>
+支持存储过程、触发器、自定义函数、视图、物化视图、游标、全局序列、窗口函数、递归cte、全局分布式事务、分布式JOIN。原生支持整数、浮点数、字符、time、date、datetime、bytea(二进制)、数组、Json、Jsonb、XML、uuid、GIS（几何类型点，线，面），复合、范围以及全文搜索等数据类型，支持自定义数据类型。</p>
+<h4 id="分布式事务">分布式事务</h4>
+<p>自研的分布式事务一致性，包括两阶段提交，全局时钟<br>
+对GTM的优化</p>
+<ul>
+<li>网络带宽的优化，取消系统的集群快照，改为逻辑时钟来判断事务的集群可见性，大幅减少对GTM的网络带宽的占用，同时还降低了GTM的CPU占用</li>
+<li>CPU使用率的优化，通过线程资源复用的方式大大减少GTM的线程数据，减少系统调度CPU占用率，大幅的提升GTM的处理效率</li>
+<li>系统锁的优化，在系统吞吐量达到百万级时GTM原来使用的系统互斥锁占用了绝大多的CPU，我们编写了用户态的互斥锁，使得CPU使用率只有原来的十分之一，提升了系统的处理能力上限</li>
+<li>免锁队列的使用，使用免锁队列取代原来的带锁队列，减少系统的锁使用，大幅提升系统的处理效率</li>
+</ul>
+<p>60 台机器的吞吐量<br>
+
+        <img class="mx-auto" alt="4" src="https://woquhaha.gitee.io/pic_tech_1/post/2021/10/TD-SQL-PG%E7%89%88%E6%80%BB%E7%BB%93/4.png" />   
+    </p>
+<p>两阶段提交的问题：</p>
+<ul>
+<li>资源阻塞问题：残留的存在prepare状态的两阶段事务仍然持有一些资源锁，这将会阻塞之后对部分数据的访问和更新操作</li>
+<li>数据不一致问题：数据不一致问题集中体现在第二阶段的故障场景中。当两阶段提交事务出现了部分commit部分prepare，那么更新数据在部分commit的节点可见；当两阶段提交事务出现了部分commit部分rollback，那么数据在所有节点出现了不可恢复的不一致状态。</li>
+<li>协调节点宕机问题：当出现协调节点宕机的情况，即便是有做了主备倒换，产生了新的协调节点，参与节点中的异常两阶段事务将一直残留下来</li>
+</ul>
+<p>修复方案</p>
+<ul>
+<li>首先内核处理机制上：这个部分我们做了两件事，第一，在两阶段事务执行过程中记录信息，用于恢复残留两阶段事务；第二， 避免进入“Commit Prepared”的两阶段事务在所有参与节点回滚该事务。</li>
+<li>其次在异常处理上：TDSQL PostgreSQL版提供了一个两阶段事务的自动处理工具，在系统监测到残留的2PC事务时，运行工具来处理系统的两阶段事务，保证业务的正常运行。通过访问残留两阶段事务的信息，来判断其在各个参与节点中的状态，根据事务的全局状态，我们对其进行异常事务清理，最终使得数据恢复至全局一致状态。</li>
+</ul>
+<p>根据 prepared、commit、rollback状态判断的补偿机制<br>
+
+        <img class="mx-auto" alt="5" src="https://woquhaha.gitee.io/pic_tech_1/post/2021/10/TD-SQL-PG%E7%89%88%E6%80%BB%E7%BB%93/5.png" />   
+    <br>
+这个检查动作由后台定时器完成<br>
+文档中没有提到协调节点故障问题，可能是有超时机制</p>
+<p>如果是 commit 阶段，协调节点向所有库发送了commit，3个库有两个返回ack，但一个库因网络问没收到<br>
+之后协调节点宕机<br>
+那剩余的库是否能处理 残留事务问，文档上没有说怎么实现的</p>
+<h4 id="在线扩容">在线扩容</h4>
+<p>普通的 hash 扩展简单，但是新增/删减机器时会比较麻烦</p>
+<p>
+        <img class="mx-auto" alt="image" src="https://woquhaha.gitee.io/pic_tech_1/post/2021/10/TD-SQL-PG%E7%89%88%E6%80%BB%E7%BB%93/6.png" />   
+    
+因为 shard-map，它的每一项是&lt;shard-id, data-node&gt; 这种结构<br>
+shard-id跟 data-node是一一映射的，通过id就可以找到 data-node<br>
+shard-table的记录通过 hash(row) % shard-map entry 来决定存储到哪个shard-id，再通过查询shard-map就可以直到对应的data-node<br>
+增减机器时，修改shard-map中的shard-id即可</p>
+<h4 id="htap">HTAP</h4>
+<p>能同时支持 OLTP 和 OLAP<br>
+分布式 join实现<br>
+假设语句为</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4">
+<table style="border-spacing:0;padding:0;margin:0;border:0;width:auto;overflow:auto;display:block;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-sql" data-lang="sql"><span style="color:#ff79c6">select</span> <span style="color:#ff79c6">*</span> <span style="color:#ff79c6">from</span> TBL_A <span style="color:#ff79c6">join</span> TBL_B <span style="color:#ff79c6">on</span> TBL_A.id <span style="color:#ff79c6">=</span> TBL_B.id;
+</code></pre></td></tr></table>
+</div>
+</div><p>其中 A 表的 id是分布式key，B的id也是分布式key<br>
+由于 key 一样，hash后会都会落到同一台机器，所以可以直接下推
+
+        <img class="mx-auto" alt="7" src="https://woquhaha.gitee.io/pic_tech_1/post/2021/10/TD-SQL-PG%E7%89%88%E6%80%BB%E7%BB%93/7.png" />   
+    </p>
+<p>如果表很小，可以广播<br>
+
+        <img class="mx-auto" alt="image" src="https://woquhaha.gitee.io/pic_tech_1/post/2021/10/TD-SQL-PG%E7%89%88%E6%80%BB%E7%BB%93/8.png" />   
+    </p>
+<p>大表join，不可下推，PG版使用数据重分布方式并行查询的 <br>
+
+        <img class="mx-auto" alt="9" src="https://woquhaha.gitee.io/pic_tech_1/post/2021/10/TD-SQL-PG%E7%89%88%E6%80%BB%E7%BB%93/9.png" />   
+    <br>
+这里文档没有太详细说明，是把 一个节点的数据 -&gt; 另一个节点，保证每个节点都可以在本地做join ？</p>
+<h4 id="并行化">并行化</h4>
+<p>PG版本，每个节点根据数据大小，来启动多个进程，并行查询<br>
+使用最多的是 join 和 agg <br>
+并行版的 hash-join如下：<br>
+
+        <img class="mx-auto" alt="10" src="https://woquhaha.gitee.io/pic_tech_1/post/2021/10/TD-SQL-PG%E7%89%88%E6%80%BB%E7%BB%93/10.png" />   
+    <br>
+对 B 表会启动两个进程，然后分表构建 hash表，再做合并，变成一个hash表<br>
+A表也是两个进程同时查询，再做join的时候，会去共享的hash表中查找</p>
+<p>聚合操作并行化<br>
+
+        <img class="mx-auto" alt="11" src="https://woquhaha.gitee.io/pic_tech_1/post/2021/10/TD-SQL-PG%E7%89%88%E6%80%BB%E7%BB%93/11.png" />   
+    <br>
+两个进行分别读取 A 表的一部分，然后重新分布，再次group by 聚合，这样就得到了最终数据</p>
+<p>支持并行的操作有：</p>
+<ul>
+<li>hash-join</li>
+<li>aggregate</li>
+<li>nest-loop-join</li>
+<li>merge-join</li>
+<li>并行scan</li>
+</ul>
+<p>相关参数：</p>
+<ul>
+<li>一个查询的最大并行度</li>
+<li>一个节点的最大并行度</li>
+<li>一个节点可以启动的最大进程数</li>
+</ul>
+<h4 id="多级容灾能力">多级容灾能力</h4>
+<p>跟 MySQL 版本类似， PG 版本也有强同步复制，data-node主节点等待 从节点复制完后，才算完成<br>
+除了正常的 主从切换外，PG版还支持：</p>
+<ul>
+<li>故障自动转移，自动在从节点中选主，这是基于强同步复制前提下保证的，不知道有没有用<code>raft</code>选主</li>
+<li>支持故障恢复，因磁盘点故障导致数据丢失，DBA可以通过重做备机恢复备机的可靠性；可以选择新的物理节点上添加备机，恢复主从的备份关系，提供系统的可靠性</li>
+<li>每组主从节点（可以是1主N从）， 每个节点都包含完整的数据副本，可以根据DBA需求切换</li>
+<li>支持手动禁止故障转移</li>
+<li>支持跨可用区部署，节点的主机和从机可分处于不同机房，数据之间通过专线网络进行实时的数据复制。本地为主机，远程为从机，首先访问本地的节点，若本地实例发生故障或访问不可达，则远程的从机升主提供服务</li>
+</ul>
+<p>支持 全量、增量备份<br>
+
+        <img class="mx-auto" alt="12" src="https://woquhaha.gitee.io/pic_tech_1/post/2021/10/TD-SQL-PG%E7%89%88%E6%80%BB%E7%BB%93/12.png" />   
+    </p>
+<h4 id="读写多平面">读写多平面</h4>
+<p>协调节点有主备、数据节点也有主备<br>
+
+        <img class="mx-auto" alt="13" src="https://woquhaha.gitee.io/pic_tech_1/post/2021/10/TD-SQL-PG%E7%89%88%E6%80%BB%E7%BB%93/13.png" />   
+      <br>
+协调主 + 数据主，负责处理 OLTP 的读写业务<br>
+协调从 + 数据从，负责处理 OLAP 的只读业务</p>
+<h4 id="安全保障">安全保障</h4>
+<p>将传统数据库系统DBA的角色分解为三个相互独立的角色，</p>
+<ul>
+<li>安全管理员</li>
+<li>审计管理员</li>
+<li>数据管理员</li>
+</ul>
+<p>在此基础上构建安全策略</p>
+<ul>
+<li>数据加密</li>
+<li>数据脱敏</li>
+<li>强制访问控制</li>
+</ul>
+<p>安全体系如下：<br>
+
+        <img class="mx-auto" alt="14" src="https://woquhaha.gitee.io/pic_tech_1/post/2021/10/TD-SQL-PG%E7%89%88%E6%80%BB%E7%BB%93/14.png" />   
+    </p>
+<p>root 角色分离后结构如下，这个 MySQL 也有<br>
+
+        <img class="mx-auto" alt="15" src="https://woquhaha.gitee.io/pic_tech_1/post/2021/10/TD-SQL-PG%E7%89%88%E6%80%BB%E7%BB%93/15.png" />   
+    </p>
+<p>数据加密：</p>
+<ul>
+<li>提供函数，业务层自己完成</li>
+<li>内核层自动完成加密，加密策略由安全管理员配置，加密会增加写入/查询时间，但对业务方是透明的</li>
+</ul>
+<p>加密级别</p>
+<ul>
+<li>列加密</li>
+<li>文件加密</li>
+</ul>
+<p>内核实现加密计算时，使用异步加密
+目前支持的加密算法：</p>
+<ul>
+<li>AES128</li>
+<li>AES192</li>
+<li>AES256</li>
+<li>国密SM4</li>
+</ul>
+<p>安全管理员可以定义某些字段，做<strong>脱敏</strong>处理<br>
+三元组安全访问级别，这个 MySQL 也有<br>
+
+        <img class="mx-auto" alt="16" src="https://woquhaha.gitee.io/pic_tech_1/post/2021/10/TD-SQL-PG%E7%89%88%E6%80%BB%E7%BB%93/16.png" />   
+    </p>
+<p>审计包括如下：</p>
+<ul>
+<li>语句审计，如 <code>audit create view</code></li>
+<li>对象审计，如<code>audit alter on jason.tbl_test;</code></li>
+<li>用户审计，如<code>audit view by jason</code></li>
+<li>细粒度审计，可以设计复杂的条件</li>
+</ul>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4">
+<table style="border-spacing:0;padding:0;margin:0;border:0;width:auto;overflow:auto;display:block;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-sql" data-lang="sql">add_policy( <span style="color:#f1fa8c">&#39;JASON&#39;</span>, <span style="color:#f1fa8c">&#39;ACCOUNTS&#39;</span>, <span style="color:#f1fa8c">&#39;ACCOUNTS_ACCESS&#39;</span>, <span style="color:#f1fa8c">&#39;BALANCE&#39;</span>, <span style="color:#f1fa8c">&#39;BALANCE &gt;= 11000&#39;</span> , <span style="color:#f1fa8c">&#39;JASON&#39;</span>, <span style="color:#f1fa8c">&#39;email_alert&#39;</span>, <span style="color:#ff79c6">true</span>, ALL_COLUMNS); 
+</code></pre></td></tr></table>
+</div>
+</div><h4 id="数据治理">数据治理</h4>
+<p>要解决两个问题</p>
+<ul>
+<li>数据倾斜问题</li>
+<li>冷热存储问题</li>
+</ul>
+<p>解决数据倾斜，把 data-node 分为group，每个group里面包括一个或者多个data-node<br>
+每个group里面有一个shard-map，协调节点可以访问所有group<br>
+
+        <img class="mx-auto" alt="17" src="https://woquhaha.gitee.io/pic_tech_1/post/2021/10/TD-SQL-PG%E7%89%88%E6%80%BB%E7%BB%93/17.png" />   
+    </p>
+<p>对于普通用户，还是正常访问，对于大客户，加白名单，通过另一种 hash策略访问<br>
+
+        <img class="mx-auto" alt="18" src="https://woquhaha.gitee.io/pic_tech_1/post/2021/10/TD-SQL-PG%E7%89%88%E6%80%BB%E7%BB%93/18.png" />   
+    <br>
+文档中用了京东举了例子，不知道真实场景，京东是不是跑在 PG 集群上<br>
+普通用户的：</p>
+<pre tabindex="0"><code>Shardid = Hash(merchantid) % #shardmap 
+</code></pre><p>京东这样的大客户的</p>
+<pre tabindex="0"><code>Shardid = Hash(merchantid) % #shardmap + fcreate_time dayoffset from 1970-01-01 
+</code></pre><p>通过加上时间偏移量，实现同一个用户在group内部多个节点均匀分布</p>
+<p>实际处理方式<br>
+
+        <img class="mx-auto" alt="19" src="https://woquhaha.gitee.io/pic_tech_1/post/2021/10/TD-SQL-PG%E7%89%88%E6%80%BB%E7%BB%93/19.png" />   
+    <br>
+如上，大客户每天都有不同的 shard-id，也就是不同的数据库节点，从而达到在 group 内平衡</p>
+<p>内核层应该是做了改动，自动支持冷热分离，对业务无感知   <br>
+
+        <img class="mx-auto" alt="20" src="https://woquhaha.gitee.io/pic_tech_1/post/2021/10/TD-SQL-PG%E7%89%88%E6%80%BB%E7%BB%93/20.png" />   
+    <br>
+处理逻辑</p>
+<ul>
+<li>冷热数据使用不同的节点group存储，这些节点组内部使用的物理机型配置不同，从而达到冷热分离节省成本的目的</li>
+<li>后台的定时任务会根据用户配置的冷热数据规则，自动的进行数据的迁移</li>
+</ul>
+
+        </div>
+
+        
+
+
+        
+
+<div class="post-archive">
+    <h2>See Also</h2>
+    <ul class="listing">
+        
+        <li><a href="/post/2021/10/td-sql%E6%80%BB%E7%BB%93/">TD-SQL总结</a></li>
+        
+        <li><a href="/post/2021/09/td-sql%E8%B0%83%E7%A0%94/">TD-SQL调研</a></li>
+        
+    </ul>
+</div>
+
+
+        <div class="post-meta meta-tags">
+            
+            <ul class="clearfix">
+                
+                <li><a href='/tags/%E5%88%86%E5%B8%83%E5%BC%8F'>分布式</a></li>
+                
+                <li><a href='/tags/%E6%95%B0%E6%8D%AE%E5%BA%93'>数据库</a></li>
+                
+            </ul>
+            
+        </div>
+    </article>
+    
+    
+
+    
+    
+</div>
+
+                    <footer id="footer">
+    <div>
+        &copy; 2021 <a href="https://code0xff.cn/">记录每个瞬间 By </a>
+        
+    </div>
+    <br />
+    <div>
+        <div class="github-badge">
+            <a href="https://gohugo.io/" target="_black" rel="nofollow"><span class="badge-subject">Powered by</span><span class="badge-value bg-blue">Hugo</span></a>
+        </div>
+        <div class="github-badge">
+            <a href="https://github.com/flysnow-org/maupassant-hugo" target="_black"><span class="badge-subject">Theme</span><span class="badge-value bg-yellowgreen">Maupassant</span></a>
+        </div>
+    </div>
+    <div>
+        <a href="http://www.beian.miit.gov.cn/">京ICP备19014975号</a>
+    </div>
+</footer>
+
+
+    
+    <script type="text/javascript">
+        window.MathJax = {
+            tex2jax: {
+                inlineMath: [['$', '$']],
+                processEscapes: true
+                }
+            };
+    </script>
+    <script src='https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.5/MathJax.js?config=TeX-MML-AM_CHTML' async></script>
+
+<a id="rocket" href="#top"></a>
+<script type="text/javascript" src='/js/totop.js?v=0.0.0' async=""></script>
+
+
+
+
+
+
+                </div>
+
+                <div id="secondary">
+    <section class="widget">
+        <form id="search" action='//www.google.com/search' method="get" accept-charset="utf-8" target="_blank" _lpchecked="1">
+      
+      <input type="text" name="q" maxlength="20" placeholder="Search">
+      <input type="hidden" name="sitesearch" value="https://code0xff.cn/">
+      <button type="submit" class="submit icon-search"></button>
+</form>
+    </section>
+    
+    <section class="widget">
+        <h3 class="widget-title">最近文章</h3>
+<ul class="widget-list">
+    
+    <li>
+        <a href="https://code0xff.cn/post/2021/10/td-sql-pg%E7%89%88%E6%80%BB%E7%BB%93/" title="TD-SQL-PG版总结">TD-SQL-PG版总结</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.cn/post/2021/10/%E5%A4%9A%E5%BD%A9%E7%9A%84%E9%BB%94%E4%B8%9C%E5%8D%97/" title="多彩的黔东南">多彩的黔东南</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.cn/post/2021/10/%E4%BB%8E%E6%B1%87%E7%BC%96%E8%A7%92%E5%BA%A6%E7%9C%8B%E7%A8%8B%E5%BA%8F%E7%9A%84%E6%89%A7%E8%A1%8C/" title="从汇编角度看程序的执行">从汇编角度看程序的执行</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.cn/post/2021/10/td-sql%E6%80%BB%E7%BB%93/" title="TD-SQL总结">TD-SQL总结</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.cn/post/2021/10/%E8%8E%AB%E9%87%8C%E6%96%AF%E9%81%8D%E5%8E%86/" title="莫里斯遍历">莫里斯遍历</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.cn/post/2021/10/%E6%9C%9D%E9%B2%9C%E4%B9%8B%E8%A1%8C/" title="朝鲜之行">朝鲜之行</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.cn/post/2021/10/%E6%97%A5%E6%9C%AC%E4%B9%8B%E8%A1%8C/" title="日本之行">日本之行</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.cn/post/2021/10/%E4%B8%BD%E6%B1%9F%E4%B9%8B%E8%A1%8C/" title="丽江之行">丽江之行</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.cn/post/2021/10/%E6%B5%B7%E8%BE%B9%E7%9A%84%E4%BA%9A%E5%BA%87/" title="海边的亚庇">海边的亚庇</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.cn/post/2021/09/%E6%9B%BE%E7%BB%8F%E6%90%AD%E5%BB%BA%E5%8D%9A%E5%AE%A2%E7%9A%84%E8%BF%87%E7%A8%8B/" title="曾经搭建博客的过程">曾经搭建博客的过程</a>
+    </li>
+    
+</ul>
+    </section>
+
+    
+
+    <section class="widget">
+        <h3 class="widget-title"><a href='/categories/'>分类</a></h3>
+<ul class="widget-list">
+    
+    <li><a href="https://code0xff.cn/categories/%E5%88%86%E5%B8%83%E5%BC%8F/">分布式 (3)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E6%97%85%E8%A1%8C/">旅行 (5)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E7%94%9F%E6%B4%BB/">生活 (2)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E7%AE%97%E6%B3%95/">算法 (1)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E8%AE%A1%E7%AE%97%E6%9C%BA%E5%8E%9F%E7%90%86/">计算机原理 (1)</a></li>
+    
+</ul>
+    </section>
+
+    <section class="widget">
+        <h3 class="widget-title"><a href='/tags/'>标签</a></h3>
+<div class="tagcloud">
+    
+    <a href="https://code0xff.cn/tags/%E4%B8%9C%E4%BA%AC/">东京</a>
+    
+    <a href="https://code0xff.cn/tags/%E4%B8%BD%E6%B1%9F/">丽江</a>
+    
+    <a href="https://code0xff.cn/tags/%E4%BA%8C%E5%8F%89%E6%A0%91%E9%81%8D%E5%8E%86/">二叉树遍历</a>
+    
+    <a href="https://code0xff.cn/tags/%E4%BA%9A%E5%BA%87/">亚庇</a>
+    
+    <a href="https://code0xff.cn/tags/%E5%88%86%E5%B8%83%E5%BC%8F/">分布式</a>
+    
+    <a href="https://code0xff.cn/tags/%E5%A4%A7%E7%90%86/">大理</a>
+    
+    <a href="https://code0xff.cn/tags/%E5%A4%A7%E9%98%AA/">大阪</a>
+    
+    <a href="https://code0xff.cn/tags/%E6%95%B0%E6%8D%AE%E5%BA%93/">数据库</a>
+    
+    <a href="https://code0xff.cn/tags/%E6%9C%9D%E9%B2%9C/">朝鲜</a>
+    
+    <a href="https://code0xff.cn/tags/%E6%B1%87%E7%BC%96/">汇编</a>
+    
+    <a href="https://code0xff.cn/tags/%E7%94%9F%E6%B4%BB/">生活</a>
+    
+    <a href="https://code0xff.cn/tags/%E8%B4%B5%E5%B7%9E/">贵州</a>
+    
+    <a href="https://code0xff.cn/tags/%E9%A9%AC%E6%9D%A5%E8%A5%BF%E4%BA%9A/">马来西亚</a>
+    
+</div>
+    </section>
+
+    
+
+    <section class="widget">
+        <h3 class="widget-title">RSS</h3>
+        <ul class="widget-list">
+            <li><a href="https://code0xff.cn/index.xml">文章 RSS</a></li>
+        </ul>
+    </section>
+</div>
+            </div>
+        </div>
+    </div>
+</body>
+
+</html>
