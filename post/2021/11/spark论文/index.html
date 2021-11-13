@@ -88,6 +88,7 @@
     <li>
       <ul>
         <li><a href="#设计目标">设计目标</a></li>
+        <li><a href="#resilient-distributed-datasets">Resilient Distributed Datasets</a></li>
       </ul>
     </li>
   </ul>
@@ -142,6 +143,132 @@ to shared state.</p>
 <li>现有基于集群范围的内存框架是细粒度更新的，因为这些系统是偏向<code>OLTP</code>场景的</li>
 <li>而现在的场景更偏<code>OLAP</code>，目的是基于内存、复用中间结果，计算结果丢了可以重算一次</li>
 </ul>
+<h2 id="resilient-distributed-datasets">Resilient Distributed Datasets</h2>
+<p><code>RDD</code>是只读的、被分区的数据集<br>
+创建<code>RDD</code>有两种方式：</p>
+<ul>
+<li>从持久存储中</li>
+<li>从其他<code>RDD</code>转换而来</li>
+</ul>
+<p><code>RDD</code>也不需要物化操作，根据数据集的血缘关系，可以从持久存储中计算得出<br>
+控制<code>RDD</code>包括两个方面：</p>
+<ul>
+<li>persistence，一个具体的存储策略，默认放内存，也可以溢出到磁盘，反正是可配置的</li>
+<li>partitioning，根据每个记录的<code>key</code>做分区，对<code>JOIN</code>操作优化很有帮助</li>
+</ul>
+<p><code>RDD</code>提供的程序接口是基于对象上的函数操作，类似于<code>DryadLINQ</code>和<code>FlumeJava</code><br>
+<code>DryadLINQ</code>是分布式版的<code>LINQ</code></p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4">
+<table style="border-spacing:0;padding:0;margin:0;border:0;width:auto;overflow:auto;display:block;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-scala" data-lang="scala">lines <span style="color:#ff79c6">=</span> spark<span style="color:#ff79c6">.</span>textFile<span style="color:#ff79c6">(</span><span style="color:#f1fa8c">&#34;hdfs://...&#34;</span><span style="color:#ff79c6">)</span>
+errors <span style="color:#ff79c6">=</span> lines<span style="color:#ff79c6">.</span>filter<span style="color:#ff79c6">(</span><span style="color:#ff79c6">_</span><span style="color:#ff79c6">.</span>startsWith<span style="color:#ff79c6">(</span><span style="color:#f1fa8c">&#34;ERROR&#34;</span><span style="color:#ff79c6">))</span>
+errors<span style="color:#ff79c6">.</span>persist<span style="color:#ff79c6">()</span>
+</code></pre></td></tr></table>
+</div>
+</div><p>上面的执行过程：</p>
+<ol>
+<li>从<code>HDFS</code>文本集合中读取数据</li>
+<li>通过<code>filter</code>得到一个新<code>RDD</code></li>
+<li>将其保存在内存中，这样其他查询可以共享这些信息</li>
+</ol>
+<p>经过上面三步之后，其实并没有执行什么操作，而执行通过下面操作触发执行</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4">
+<table style="border-spacing:0;padding:0;margin:0;border:0;width:auto;overflow:auto;display:block;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-scala" data-lang="scala">errors<span style="color:#ff79c6">.</span>count<span style="color:#ff79c6">()</span>
+</code></pre></td></tr></table>
+</div>
+</div><p>也可以继续做一些转换操作：</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4">
+<table style="border-spacing:0;padding:0;margin:0;border:0;width:auto;overflow:auto;display:block;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">5
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">6
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">7
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">8
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-scala" data-lang="scala"><span style="color:#6272a4">// Count errors mentioning MySQL:
+</span><span style="color:#6272a4"></span>errors<span style="color:#ff79c6">.</span>filter<span style="color:#ff79c6">(</span><span style="color:#ff79c6">_</span><span style="color:#ff79c6">.</span>contains<span style="color:#ff79c6">(</span><span style="color:#f1fa8c">&#34;MySQL&#34;</span><span style="color:#ff79c6">)).</span>count<span style="color:#ff79c6">()</span>
+<span style="color:#6272a4">// Return the time fields of errors mentioning
+</span><span style="color:#6272a4">// HDFS as an array (assuming time is field
+</span><span style="color:#6272a4">// number 3 in a tab-separated format):
+</span><span style="color:#6272a4"></span>errors<span style="color:#ff79c6">.</span>filter<span style="color:#ff79c6">(</span><span style="color:#ff79c6">_</span><span style="color:#ff79c6">.</span>contains<span style="color:#ff79c6">(</span><span style="color:#f1fa8c">&#34;HDFS&#34;</span><span style="color:#ff79c6">))</span>
+<span style="color:#ff79c6">.</span>map<span style="color:#ff79c6">(</span><span style="color:#ff79c6">_</span><span style="color:#ff79c6">.</span>split<span style="color:#ff79c6">(</span>’\t’<span style="color:#ff79c6">)(</span><span style="color:#bd93f9">3</span><span style="color:#ff79c6">))</span>
+<span style="color:#ff79c6">.</span>collect<span style="color:#ff79c6">()</span>
+</code></pre></td></tr></table>
+</div>
+</div><p>和传统分布式内存对比：</p>
+<table>
+<thead>
+<tr>
+<th>Aspect</th>
+<th>RDDs</th>
+<th>Distr. Shared Mem.</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Reads</td>
+<td>Coarse- or fine-grained</td>
+<td>Fine-grained</td>
+</tr>
+<tr>
+<td>Writes</td>
+<td>Coarse-grained</td>
+<td>Fine-grained</td>
+</tr>
+<tr>
+<td>Consistency</td>
+<td>Trivial (immutable)</td>
+<td>Up to app / runtime</td>
+</tr>
+<tr>
+<td>Fault recovery</td>
+<td>Fine-grained and lowoverhead using lineage</td>
+<td>Requires checkpoints and program rollback</td>
+</tr>
+<tr>
+<td>Straggler mitigation</td>
+<td>Possible using backup tasks</td>
+<td>Difficult</td>
+</tr>
+<tr>
+<td>Work placement</td>
+<td>Automatic based on data locality</td>
+<td>Up to app (runtimes aim for transparency)</td>
+</tr>
+<tr>
+<td>Behavior if not enough RAM</td>
+<td>Similar to existing data flow systems</td>
+<td>Poor performance (swapping?)</td>
+</tr>
+</tbody>
+</table>
+<p>Table 1: Comparison of RDDs with distributed shared memory.</p>
+<p>
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2021/11/Spark%E8%AE%BA%E6%96%87/1.png">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2021/11/Spark%E8%AE%BA%E6%96%87/1.png" />
+        </a>
+    <br>
+Figure 1: Lineage graph for the third query in our example.<br>
+Boxes represent RDDs and arrows represent transformations.</p>
+<p>
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2021/11/Spark%E8%AE%BA%E6%96%87/2.png">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2021/11/Spark%E8%AE%BA%E6%96%87/2.png" />
+        </a>
+    <br>
+Figure 2: Spark runtime. The user’s driver program launches multiple workers, which read data blocks from a distributed file system and can persist computed RDD partitions in memory.</p>
 
 			<script type="text/javascript"
         async
