@@ -91,6 +91,7 @@
         <li><a href="#resilient-distributed-datasets">Resilient Distributed Datasets</a></li>
         <li><a href="#spark编程接口">Spark编程接口</a></li>
         <li><a href="#rdd的表示">RDD的表示</a></li>
+        <li><a href="#实现">实现</a></li>
       </ul>
     </li>
   </ul>
@@ -438,6 +439,17 @@ Figure 3: Lineage graph for datasets in PageRank</p>
 </tbody>
 </table>
 <p>Table 3: Interface used to represent RDDs in Spark.</p>
+<p><code>RDD</code>之间的依赖关系有两种，如下面的 图4</p>
+<ul>
+<li>窄依赖，父RDD的每个分区最多被子RDD的一个分区使用</li>
+<li>宽依赖，多个子分区可能依赖一个父RDD分区</li>
+</ul>
+<p>窄依赖很有用：</p>
+<ul>
+<li>允许在一个集群节点上流水线执行，如可以执行map，再执行filter；而宽依赖要求所有父分区的数据都是可用的，然后执行一个map-reduce操作</li>
+<li>节点故障恢复更有效，只需要重新就算丢失的父分区即可</li>
+</ul>
+<p>这种通用的接口，在<code>Spark</code>上不到<code>20</code>行代码，就可以直线各种转换了。</p>
 <p>
         <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2021/11/Spark%E8%AE%BA%E6%96%87/5.png">
             <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2021/11/Spark%E8%AE%BA%E6%96%87/5.png" />
@@ -445,6 +457,15 @@ Figure 3: Lineage graph for datasets in PageRank</p>
     <br>
 Figure 4: Examples of narrow and wide dependencies. Each<br>
 box is an RDD, with partitions shown as shaded rectangles.</p>
+<p>几个重要的操作</p>
+<ul>
+<li>HDFS文件：输入的<code>RDD</code>是HDFS上的文件，文件的每个block都对应一个partition，块的offset存在每个partition对象中</li>
+<li>map：在任何<code>RDD</code>上调用后返回一个<code>MappedRDD</code>，跟父分区有相同的partition和preferred_locations，在迭代父对象时，将函数传递到map中</li>
+<li>union：新的分区是两个父分区的并集，每个子分区通过窄依赖到对应的父分区</li>
+<li>sample：类似映射，为每个分区存储一个随机数生成器seed，然后确定抽样的父记录</li>
+<li>join：会出现两个窄依赖(如果有相同分区)、或者两个宽依赖、也可能是一个混合依赖</li>
+</ul>
+<h2 id="实现">实现</h2>
 <p>
         <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2021/11/Spark%E8%AE%BA%E6%96%87/6.png">
             <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2021/11/Spark%E8%AE%BA%E6%96%87/6.png" />
