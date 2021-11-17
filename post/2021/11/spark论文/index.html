@@ -466,6 +466,23 @@ box is an RDD, with partitions shown as shaded rectangles.</p>
 <li>join：会出现两个窄依赖(如果有相同分区)、或者两个宽依赖、也可能是一个混合依赖</li>
 </ul>
 <h2 id="实现">实现</h2>
+<p>最初版的<code>Spark</code>只用了<code>1.4W</code>行的<code>scala</code>代码；出版的<code>Spark</code>跑在<code>Mesos</code>上，可以访问<code>Hadoop</code>、<code>MPI</code>等其他应用资源。<br>
+每个<code>Spark</code>应用都是独立的，有自己的 driver 和 worker，而应用之间的共享由<code>Mesos</code>负责。<br>
+下面来分析几个重要的部分：</p>
+<ul>
+<li>job scheduler</li>
+<li>交互式的解释器</li>
+<li>内存管理</li>
+<li>checkpoint</li>
+</ul>
+<p>Job scheduler有点类似 Dryad，但会分析内存中哪些持久<code>RDD</code>分区可用<br>
+当用户调用 action 操作后，scheduler 检查<code>RDD</code>的血缘关系，然后建立要执行的 DAG stages，类似下图<br>
+每个 stage 都包含进可能多的，有窄依赖的流水线转换；而 stage 的边界是宽依赖的 shuffle 操作，或者是一个计算好的分区，可以缩父<code>RDD</code>的计算量。<br>
+scheduler 启动 task，计算每个 stage所需要的分区，直到目标<code>RDD</code>完成。<br>
+scheduler 将计算任务下推到数据节点上，也就是尽可能满足数据本地性，如果要处理的分区正好在一个节点的内存中，那就将这个task发往那个节点，否则就找一个本地性最好的节点执行。<br>
+对于宽依赖，我们要将中间结果物化到节点上，来保存父节点的数据，这样可以简化故障恢复，而这个操作非常像<code>Map-Reduce</code>中的<code>map</code>物化输出。<br>
+如果任务失败了，但父分区仍然可用，那就再找一个节点重新计算一下；如果stage变成不可用(如shuffle丢失了map输出)，我们重新提交这个任务，并行的计算丢失分区。复制<code>RDD</code>血缘很简单，但是scheduler不能容忍调度失败。<br>
+所有的计算都是通过 driver端调用action触发的；也可以让集群上的任务执行查找操作，该操作通过 key 随机访问<code>RDD</code>的hash分区元素。如果缺少所需分区，task需要告诉scheduler所需的分区。</p>
 <p>
         <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2021/11/Spark%E8%AE%BA%E6%96%87/6.png">
             <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2021/11/Spark%E8%AE%BA%E6%96%87/6.png" />
@@ -476,6 +493,13 @@ with solid outlines are RDDs. Partitions are shaded rectangles,<br>
 in black if they are already in memory. To run an action on RDD<br>
 G, we build build stages at wide dependencies and pipeline narrow transformations inside each stage. In this case, stage 1’s<br>
 output RDD is already in RAM, so we run stage 2 and then 3.</p>
+<p>
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2021/11/Spark%E8%AE%BA%E6%96%87/7.png">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2021/11/Spark%E8%AE%BA%E6%96%87/7.png" />
+        </a>
+    
+Figure 6: Example showing how the Spark interpreter translates<br>
+two lines entered by the user into Java objects.</p>
 
 			<script type="text/javascript"
         async
