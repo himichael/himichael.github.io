@@ -110,7 +110,7 @@
             <li><a href="#pagerank">PageRank</a></li>
             <li><a href="#失败恢复">失败恢复</a></li>
             <li><a href="#内存不够的情况">内存不够的情况</a></li>
-            <li><a href="#spark上的用户应用">Spark上的用户应用</a></li>
+            <li><a href="#使用spark构建应用">使用Spark构建应用</a></li>
             <li><a href="#交互式的数据检索">交互式的数据检索</a></li>
           </ul>
         </li>
@@ -568,7 +568,7 @@ checkpoint 对于宽依赖很有帮助，因为在宽依赖时，一个节点的
 <ul>
 <li>相比Hadoop上的迭代机器学习和图应用，<code>Spark</code>提升了 <strong>20倍</strong> 性能，主要是避免了大量的I/O以及从磁盘读取数据反序列化的时间</li>
 <li>应用程序有很好的扩展性，使用<code>Spark</code>将 Hadoop 上的分析报告提升了 <strong>40倍</strong></li>
-<li>当节点宕机了，可以快速恢复</li>
+<li>节点宕机了，可以快速恢复</li>
 <li>在 1TB数据上做交互查询，延迟为 <strong>5- 7秒</strong></li>
 </ul>
 <p>测试环境：</p>
@@ -611,13 +611,13 @@ HadoopBinMem, and Spark. The jobs all processed 100 GB.</p>
 <p><code>Spark</code>比内存中的Hadoop还要好，这主要是下面这些原因：</p>
 <ul>
 <li>Hadoop软件栈本身的开销</li>
-<li>处理数据的小凯</li>
+<li>处理数据的消耗</li>
 <li>将二进制转为Java对象的开销</li>
 <li><code>Spark</code>没有运行任何Hadoop作业，而这些作业本身需要启动、清理、设置，这会带来25秒开销</li>
 <li>Hadoop对每个block会执行多个内存拷贝和checksum</li>
 </ul>
-<p>之后又补充了单机版的基准测试，各种格式的256M输入上运行逻辑回归<br>
-并比较了从HDFS上读取二进制/文本文件，这些都是放在本地内存中的<br>
+<p>之后又补充了单机版的基准测试，输入为各种格式的256M数据，再运行逻辑回归算法   <br>
+这里比较了从HDFS上读取二进制/文本文件(都是放在本地内存中的)<br>
 图9显示了 文本文件、二进制文件的差异</p>
 <ul>
 <li>即使数据在本地内存，通过HDFS读取也有2秒的开销</li>
@@ -633,10 +633,84 @@ HadoopBinMem, and Spark. The jobs all processed 100 GB.</p>
 Figure 9: Iteration times for logistic regression using 256 MB<br>
 data on a single machine for different sources of input.</p>
 <h3 id="pagerank">PageRank</h3>
+<p>使用了 54G的维基百科文档，运行10轮 PageRank 算法，文档总量约 400万<br>
+图10显示了在30个节点上，Spark运行速度是Hadoop的 <strong>2.4倍</strong><br>
+如果显示的控制分区，那么可以提升 <strong>7.4倍</strong>，机器数量也可以线性的扩展到 60台<br>
+此外还在<code>Spark</code>上实现了<code>Pregel</code>版本，这个版本的效果跟图10差不多，但是总时间会多 4秒，这是因为<code>Pregel</code>在每轮迭代时有一个额外的操作，让顶点投票是否结束这个任务</p>
+<p>
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2021/11/Spark%E8%AE%BA%E6%96%87/11.png">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2021/11/Spark%E8%AE%BA%E6%96%87/11.png" />
+        </a>
+    
+Figure 10: Performance of PageRank on Hadoop and Spark.</p>
 <h3 id="失败恢复">失败恢复</h3>
+<p>用 k-means 来评估节点失败的情况<br>
+如图11所示，运行10轮 k-means算法，集群规模为75个节点，每轮迭代有400个task，100G的数据<br>
+前面 5轮的 执行时间都是58秒左右，到 第6轮 时，人为的kill掉一个节点<br>
+于是这个机器上任务分区数据就丢失了，之后<code>Spark</code>在其他节点上并行的再次执行这些任务，根据血缘关系从输入中读取数据重建<code>RDD</code><br>
+这轮的时间为80秒，等恢复完成后面的运行时间又降回到58秒<br>
+如果使用了checkpoint恢复机制，则需要好几轮迭代，还需要把100G的数据集跨节点复制，这至少需要两倍的内存、或者等待100G数据写磁盘<br>
+而基于<code>RDD</code>的血缘图，则不到10K</p>
+<p>
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2021/11/Spark%E8%AE%BA%E6%96%87/12.png">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2021/11/Spark%E8%AE%BA%E6%96%87/12.png" />
+        </a>
+    
+Figure 11: Iteration times for k-means in presence of a failure.<br>
+One machine was killed at the start of the 6th iteration, resulting<br>
+in partial reconstruction of an RDD using lineage.</p>
 <h3 id="内存不够的情况">内存不够的情况</h3>
-<h3 id="spark上的用户应用">Spark上的用户应用</h3>
+<p>前面的例子都是内存充足情况下的测试，现在展示内存不足情况下<code>Spark</code>的运行情况。<br>
+配置每个机器的内存不超过固定的百分比，图12显示各种存储空间情况下的运行结果，可以看到，在空间不足的情况下，执行效果是优雅的退化。</p>
+<p>
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2021/11/Spark%E8%AE%BA%E6%96%87/13.png">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2021/11/Spark%E8%AE%BA%E6%96%87/13.png" />
+        </a>
+    
+Figure 12: Performance of logistic regression using 100 GB<br>
+data on 25 machines with varying amounts of data in memory.</p>
+<h3 id="使用spark构建应用">使用Spark构建应用</h3>
+<p><strong>内存分析</strong><br>
+有一个视频分发公司之前使用了Hadoop，而后改为用<code>Spark</code>。<br>
+之前是用 Hive 计算客户的各种统计信息，这些查询使用了相同的数据集(对客户数据的过滤)，但是执行各种分组聚合时(avg、百分比、count、distinct)却跑了不同的<code>M-R</code>任务上。  <br>
+而<code>Spark</code>上的<code>RDD</code>是可以跨节点共享的，这家公司将查询时间提升了<strong>40倍</strong>。<br>
+之前在Hadoop上的200G压缩数据需要 20个小时才能跑完，而<code>Spark</code>只用两台机器 30分钟就搞定了。<br>
+<code>Spark</code>需要96G内存，用来存放 filter之后的用户数据，而不是整个解压缩文件。</p>
+<p><strong>流量模型</strong><br>
+伯克利的研究团队使用了一种并行学习算法，根据少量的GPS数据，来推断道路拥塞情况。<br>
+数据来自大城市的 1W交通路线，以及60W个点对点GPS行程(每个行程可能包含多个路线)<br>
+系统可以评估每条路线的花费时间，研究人员训练的模型使用了最大期望(expectation maximization)算法。<br>
+这个算法需要两轮 map和reduceByKey 迭代，应用基本是线性的从20个节点扩展到了80个节点(每个节点4核)<br>
+图13(a)展示了运行效果</p>
+<p><strong>推特垃圾邮件</strong><br>
+伯克利使用<code>Spark</code>识别推特上的垃圾信息，在<code>Spark</code>上实现了逻辑回归分类器，使用了分布式的 reduceByKey 并行计算梯度向量之和。<br>
+数据子集为50G，包括25W个URL，每个URL的网络和内容数量有107个(特征/尺寸)。<br>
+由于每次迭代都有比较大的固定通讯开销，导致扩容后的效率不是线性增长，如图13(b)</p>
+<p>
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2021/11/Spark%E8%AE%BA%E6%96%87/14.png">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2021/11/Spark%E8%AE%BA%E6%96%87/14.png" />
+        </a>
+    
+Figure 13: Per-iteration running time of two user applications<br>
+implemented with Spark. Error bars show standard deviations.</p>
 <h3 id="交互式的数据检索">交互式的数据检索</h3>
+<p>为了证明<code>Spark</code>可以用于交互式的查询，使用了 1TB的维基百科页面访问日志(2年的数据)<br>
+使用了100个AWS机器，每个机器为 8核68G内存<br>
+包括三种查询，每种查询都是扫描全部数据</p>
+<ul>
+<li>查询所有页面总数</li>
+<li>通过给定关键字，精确匹配网页标题</li>
+<li>通过给定关键字，部分匹配网页标题</li>
+</ul>
+<p>图14显示了查询 100G、500G、1T的响应时间，即使 1T数据量，也只需要5-7秒时间<br>
+这比磁盘处理快了一个数量级，从磁盘读1T数据需要170s，这证明<code>Spark</code>在交互式的数据检索上效果非常好。</p>
+<p>
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2021/11/Spark%E8%AE%BA%E6%96%87/15.png">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2021/11/Spark%E8%AE%BA%E6%96%87/15.png" />
+        </a>
+    
+Figure 14: Response times for interactive queries on Spark,<br>
+scanning increasingly larger input datasets on 100 machines.</p>
 <h2 id="讨论">讨论</h2>
 <h2 id="相关工作">相关工作</h2>
 <h2 id="结论">结论</h2>
