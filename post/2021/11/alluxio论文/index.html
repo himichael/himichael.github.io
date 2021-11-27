@@ -1,0 +1,510 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    
+    <meta name="referrer" content="no-referrer-when-downgrade">
+    
+
+    <title>Alluxio论文 | 记录每个瞬间</title>
+    <meta property="og:title" content="Alluxio论文 - 记录每个瞬间">
+    <meta property="og:type" content="article">
+        
+    <meta property="article:published_time" content='2021-11-22T12:32:17&#43;08:00'>
+        
+        
+    <meta property="article:modified_time" content='2021-11-22T12:32:17&#43;08:00'>
+        
+    <meta name="Keywords" content="">
+    <meta name="description" content="读Alluxio论文">
+        <meta name="author" content="隔壁老王">
+        
+    <meta property="og:url" content="https://code0xff.cn/post/2021/11/alluxio%E8%AE%BA%E6%96%87/">
+    <link rel="shortcut icon" href='/favicon.ico'  type="image/x-icon">
+
+    <link rel="stylesheet" href='/css/normalize.css'>
+    <link rel="stylesheet" href='/css/style.css'>
+    <script type="text/javascript" src="//cdn.bootcdn.net/ajax/libs/jquery/3.4.1/jquery.min.js"></script>
+
+    
+    
+    
+        <link href="https://cdn.bootcdn.net/ajax/libs/fancybox/3.5.7/jquery.fancybox.min.css" rel="stylesheet">
+    
+    
+    
+    
+</head>
+
+
+<body>
+    <header id="header" class="clearfix">
+    <div class="container">
+        <div class="col-group">
+            <div class="site-name ">
+                
+                    <a id="logo" href="https://code0xff.cn/">
+                        记录每个瞬间
+                    </a>
+                
+                
+            </div>
+            <div>
+                <nav id="nav-menu" class="clearfix">
+                    <a class="current" href="https://code0xff.cn/">首页</a>
+                    
+                    <a  href="https://code0xff.cn/linked/" title="链接">链接</a>
+                    
+                    <a  href="https://code0xff.cn/archives/" title="归档">归档</a>
+                    
+                    <a  href="https://code0xff.cn/about/" title="关于">关于</a>
+                    
+                </nav>
+            </div>
+        </div>
+    </div>
+</header>
+
+    <div id="body">
+        <div class="container">
+            <div class="col-group">
+
+                <div class="col-8" id="main">
+                    
+<div class="res-cons">
+    
+    <article class="post">
+        <header>
+            <h1 class="post-title">Alluxio论文</h1>
+        </header>
+        <date class="post-meta meta-date">
+            2021年11月22日
+        </date>
+<nav id="TableOfContents">
+  <ul>
+    <li>
+      <ul>
+        <li><a href="#设计目标">设计目标</a></li>
+        <li><a href="#介绍">介绍</a></li>
+        <li><a href="#背景">背景</a>
+          <ul>
+            <li><a href="#目标工作点">目标工作点</a></li>
+            <li><a href="#反对复制的理由">反对复制的理由</a></li>
+          </ul>
+        </li>
+        <li><a href="#设计概览">设计概览</a></li>
+        <li><a href="#checkpointing">Checkpointing</a></li>
+        <li><a href="#资源分配">资源分配</a></li>
+        <li><a href="#实现">实现</a></li>
+        <li><a href="#评估">评估</a></li>
+        <li><a href="#相关工作">相关工作</a></li>
+        <li><a href="#局限性和未来计划">局限性和未来计划</a></li>
+        <li><a href="#结论">结论</a></li>
+      </ul>
+    </li>
+  </ul>
+</nav>
+        
+        <div class="post-meta">
+            
+            <span class="post-meta meta-tags">
+                <ul class="clearfix">
+                    <a href='/categories/%E5%A4%A7%E6%95%B0%E6%8D%AE'>大数据</a>
+                </ul>
+            </span>
+            
+        </div>
+        
+        
+        <div class="post-meta">
+            <span id="busuanzi_container_page_pv">|<span id="busuanzi_value_page_pv"></span><span>
+                    阅读</span></span>
+        </div>
+        
+        
+        <div class="post-content">
+            <blockquote>
+<p>原文：<br>
+<a href="https://people.csail.mit.edu/matei/papers/2014/socc_tachyon.pdf">《Tachyon: Reliable, Memory Speed Storage
+for Cluster Computing Frameworks》</a></p>
+</blockquote>
+<h2 id="设计目标">设计目标</h2>
+<p><code>Alluxio</code>的前身叫<code>Tachyon</code>，后来改名的。<br>
+Tachyon是一个分布式文件系统，对于跨集群的计算框架，可以提供可靠的内存级别的数据共享。<br>
+缓存可以提高读取效率，但写需要依赖网络复制、或者写磁盘来达到容错。<br>
+Tachyon使用了血缘关系这种技术，将其写入到存储层，来消除这些问题；基于血缘关系存储时，如果长时间运行那么一旦出错，想要快速恢复是个挑战。<br>
+Tachyon使用了checkpoint来解决这些问题，可以控制恢复的时间，在资源调度时，提供了重计算时的资源分配策略。<br>
+在评估中显示出，Tachyon比使用内存的HDFS写数据时候快了<strong>110倍</strong>，对于端到端的工作流延迟也提高了<strong>4倍</strong>，Tachyon目前已开源并部署到多家公司。</p>
+<h2 id="介绍">介绍</h2>
+<p>在过去几年，业界在大规模数据并行处理方面做了很多工作，让性能、复杂度都有了很大提升，也推出了各种编程框架、适用于各种工作服在的存储系统。<br>
+由于许多系统的瓶颈是I/O，那么自然的想法是将数据加载到内存中，来提升它的性能。 cache确实可以提高读性能，但对于写性能帮助不大，因为并行的系统需要提供容错能力，为了实现容错数据就需要跨节点的复制。  <br>
+对于写请求，即使是基于内存的复制也会带来很大的性能下降，因为跨节点复制会有延迟、也有吞吐量限制，比本地内存要差太多。<br>
+对于job管道任务，缓慢的写请求会导致巨大的性能下降，一个job需要消费另一个job的输出，管道是由Oozie、Luigi等产生的。<br>
+比如执行MapReduce的提取任务、再执行SQL查询、然后在查询结果上运行一个机器学习算法，之后像Pig、FlumeJava、等编程语言接口会继续运行在多个MapReduce左右中，而上面的所有case，都会触发跨网络的数据复制。<br>
+为了提供写请求，我们推出了<code>Tachyon</code>，一个基于内存的存储框架，可以实现高吞吐量的读/写，而不影响容错，<code>Tachyon</code>通过血缘来避免跨节点复制，通过血缘关系重建执行操作来达到容错。  <br>
+血缘这一概念在Spark、Nectar 、BADFS这样的框架中出现过，<code>Tachyon</code>是一个存储系统所以需要持续运行，那么相比之前的几个框架，会出现几个新问题：</p>
+<ol>
+<li>Spark、MapRecue的任务重新计算时间为单个任务的时间，而<code>Tachyon</code>是需要持续运行的，那重计算的时间可能会无限长；前面几个框架通过checkpoint来避免复制问题，但存储层并不知道job的数据语义(比如 输出被重用时)，job的特征可能也各式各样；如果数据写入速度 比磁盘带宽快，那么固定间隔的checkpoint可能导致恢复时间无限长，而根据血缘图的数据结构来选择checkpoint可以控制恢复时间。</li>
+<li>如何分配资源，如果某个job优先级很高，那么重新计算的时候就必须确保获得足够的资源(当集群资源满了)；另外重计算时，也不能对现有的高优先级任务有影响。<code>Tachyon</code>通过在后台持续的运行checkpoint，控制了重新计算的成本，解决了第一个问题。<br>
+对于哪个文件做checkpoint，以及什么时候做，我们提出了一个边缘算法，不管计算负载是什么样的，这种算法的花费的时间上限都可以确定。</li>
+</ol>
+<p>为解决第二个问题，<code>Tachyon</code>基于job优先级提出了资源分配模型，有两种分配模型：</p>
+<ul>
+<li>严格的优先级</li>
+<li>加权公平共享</li>
+</ul>
+<p>比如，在严格优先级调度的集群中，如果一个低优先级job缺少必要输入，那么会最小化重这个job的重算资源，以便对高优先级的影响降到最低。<br>
+如果之后又有一个高优先级job有没有必要输入，那么<code>Tachyon</code>会自动增加其重新计算时的资源分配，这样避免了高优先级job被资源倒挂。</p>
+<p>我们用一个通用的血缘规范API实现了<code>Tachyon</code>，它可以用于目前大部分流行的并行计算框架中，如MapReduce和SQL，我们还将Hadoop和Saprk移植到<code>Tachyon</code>上面。<br>
+该项目已开源，有来自15家机构的40多位开发者贡献了代码，<code>Tachyon</code>超过内存级Hadoop <strong>110倍</strong>的写吞吐量，在真实的端到端环境中，延迟是内存级别Hadoop的 <strong>1/4</strong>。<br>
+由于计算集群中很多文件都是临时的，在checkpoint之前就被删除了，<code>Tachyon</code>可以减少 50%的网络复制开销，根据 facebook 和bing的研究，<code>Tachyon</code>重新计算的的开销大约占总资源的 1.6%。<br>
+更重要的是，由于带宽的限制，想让集群存储系统的性能达到内存计算的速度，基于血缘恢复的方式可能是唯一一种选择了。<br>
+这样工作的主要挑战是解决上面那些问题，使得这样的系统是可行的。</p>
+<h2 id="背景">背景</h2>
+<p>本节将介绍我们的工作目标，以及现有方案的背景。</p>
+<h3 id="目标工作点">目标工作点</h3>
+<p>我们根据当前的大数据环境，设计了<code>Tachyon</code>，他有下列特点：</p>
+<ul>
+<li>数据不可变：一旦写入就不可变了，如占据主导的HDFS只支持追加写</li>
+<li>确定的job：像MapReduce、Spark都是用重计算方式来解决容错问题，同时也要求用户代码是确定的，我们使用的血缘恢复方式也基于同样的假设，对于不确定的框架，仍然可以复制的方式将数据存储在<code>Tachyon</code>中</li>
+<li>本地化调度：很多计算框架的作业调度都是使用本地化，这样可以最大限度减少网络开销</li>
+<li>所有数据vs工作集：整体数据量很大，只能存在磁盘上，但工作集数据量并不大可以放到内存中</li>
+<li>程序size vs 数据size：相同的操作反复的应用到了海量数据上，因此程序复制的开销 必定小于 各种情况下的数据复制开销</li>
+</ul>
+<h3 id="反对复制的理由">反对复制的理由</h3>
+<p>对于内存计算框架-如Spark、Piccolo，以及存储系统，都大幅度提高了job的执行速度；但对于频繁在job之间共享(写入)数据，则会成为瓶颈。<br>
+在现有的大数据解决方案中，写入吞吐量受限于磁盘，以及网络带宽，比如HDFS、FDS、Cassandra、HBase、RAMCloud。这些系统都使用了远低于内存的介质(table 1)，这样做的目的是保证从容。<br>
+这些系统需要需要跨网络复制，至少写一份拷贝到持久存储设备中，用来避免数据中心级别的估值，如停电。<br>
+由于这些限制，以及内存计算框架的发展，job之间的数据共享导致端到端的延迟，job的输出明显小于他们的输入。<br>
+根据Cloudera的报告，跨5个客户端的job只有34%的情况下，输入和输出是差不多的，在内存计算框架中，job受限于写瓶颈。</p>
+<table>
+<thead>
+<tr>
+<th>Media</th>
+<th>Capacity</th>
+<th>Bandwith</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>HDD (x12)</td>
+<td>12-36 TB</td>
+<td>0.2-2 GB/sec</td>
+</tr>
+<tr>
+<td>SDD (x4)</td>
+<td>1-4 TB</td>
+<td>1-4 GB/sec</td>
+</tr>
+<tr>
+<td>Network</td>
+<td>N/A</td>
+<td>1.25 GB/sec</td>
+</tr>
+<tr>
+<td>Memory</td>
+<td>128-512 GB</td>
+<td>10-100 GB/sec</td>
+</tr>
+</tbody>
+</table>
+<p>Table 1: Typical datacenter node setting</p>
+<p>硬件的发展也解决不了这个问题，内存的带宽是磁盘的三个数量及之多，而且这之间的差距还在增大。<br>
+SSD的出现也解决不了此问题，因为主要的影响是磁盘的随机访问，而不是顺序访问，随机访问是大多数数据密集型应用所需要的。<br>
+网络吞吐量的增长说明了基于内存的复制时可行的，然而要保证数据中心的高可用，需要至少一份的磁盘拷贝，为了实现高吞吐量又要实现容错，那就必须放弃复制这个选项。</p>
+<p>
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2021/11/Alluxio%E8%AE%BA%E6%96%87/1.png">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2021/11/Alluxio%E8%AE%BA%E6%96%87/1.png" />
+        </a>
+    
+Figure 1: Tachyon Architecture.</p>
+<p>
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2021/11/Alluxio%E8%AE%BA%E6%96%87/2.png">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2021/11/Alluxio%E8%AE%BA%E6%96%87/2.png" />
+        </a>
+    
+Figure 2: A lineage graph example of multiple frameworks</p>
+<h2 id="设计概览">设计概览</h2>
+<h2 id="checkpointing">Checkpointing</h2>
+<h2 id="资源分配">资源分配</h2>
+<h2 id="实现">实现</h2>
+<h2 id="评估">评估</h2>
+<h2 id="相关工作">相关工作</h2>
+<h2 id="局限性和未来计划">局限性和未来计划</h2>
+<h2 id="结论">结论</h2>
+<p>随着越来越多的数据中心工作负载出现在内存，对应的写吞吐量成为主要瓶颈。<br>
+因此，我们相信，想让集群存储系统达到内存级别的吞吐量，基于血缘的恢复方式是唯一的选择。
+我们提出了Tachyon，一种基于内存的存储系统，包括一系列的血缘关系加速部分重要的任务(如批处理任务)恢复</p>
+<p>基于基于血缘可能是唯一一种，能让集群存储系统达到内存级别吞吐的方式。
+通过找到Tachyon的关键问题，我们的评估显示了Tachyon可以提供一种解决方案，帮助现有存储系统加速。HDFS社区也采用了我们类似的方案，在集群上高效的使用内存。<br>
+我们将Tachyon开源了，可以将其使用在真实的环境、或研究平台上。有超过15家公司、40多个人为我们的项目捐款。</p>
+
+			<script type="text/javascript"
+        async
+        src="https://cdn.bootcss.com/mathjax/2.7.3/MathJax.js?config=TeX-AMS-MML_HTMLorMML">
+MathJax.Hub.Config({
+  tex2jax: {
+    inlineMath: [['$','$'], ['\\(','\\)']],
+    displayMath: [['$$','$$'], ['\[\[','\]\]']],
+    processEscapes: true,
+    processEnvironments: true,
+    skipTags: ['script', 'noscript', 'style', 'textarea', 'pre'],
+    TeX: { equationNumbers: { autoNumber: "AMS" },
+         extensions: ["AMSmath.js", "AMSsymbols.js"] }
+  }
+});
+
+MathJax.Hub.Queue(function() {
+    
+    
+    
+    var all = MathJax.Hub.getAllJax(), i;
+    for(i = 0; i < all.length; i += 1) {
+        all[i].SourceElement().parentNode.className += ' has-jax';
+    }
+});
+</script>
+
+<style>
+code.has-jax {
+    font: inherit;
+    font-size: 100%;
+    background: inherit;
+    border: inherit;
+    color: #515151;
+}
+</style>
+        </div>
+
+        
+
+
+        
+
+<div class="post-archive">
+    <h2>See Also</h2>
+    <ul class="listing">
+        
+        <li><a href="/post/2021/11/spark%E8%AE%BA%E6%96%87/">Spark论文</a></li>
+        
+        <li><a href="/post/2021/11/gfs%E8%AE%BA%E6%96%87/">GFS论文</a></li>
+        
+        <li><a href="/post/2021/11/lfu%E7%BC%93%E5%AD%98/">LFU缓存</a></li>
+        
+    </ul>
+</div>
+
+
+        <div class="post-meta meta-tags">
+            
+            <ul class="clearfix">
+                
+                <li><a href='/tags/%E7%BC%93%E5%AD%98'>缓存</a></li>
+                
+                <li><a href='/tags/%E8%AE%BA%E6%96%87'>论文</a></li>
+                
+            </ul>
+            
+        </div>
+    </article>
+    
+    
+
+    
+    
+</div>
+
+
+                </div>
+
+                <div id="secondary">
+    <section class="widget">
+        <form id="search" action='https://code0xff.cn/search/' method="get" accept-charset="utf-8" target="_blank" _lpchecked="1">
+      
+      <input type="text" name="q" maxlength="20" placeholder="Search">
+      <input type="hidden" name="sitesearch" value="https://code0xff.cn/">
+      <button type="submit" class="submit icon-search"></button>
+</form>
+    </section>
+    
+    <section class="widget">
+        <h3 class="widget-title">最近文章</h3>
+<ul class="widget-list">
+    
+    <li>
+        <a href="https://code0xff.cn/post/2021/12/%E6%95%B0%E6%8D%AE%E5%AF%86%E9%9B%86%E5%9E%8B%E5%BA%94%E7%94%A8%E8%AE%BE%E8%AE%A1/" title="数据密集型应用设计读书笔记">数据密集型应用设计读书笔记</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.cn/post/2021/11/a-critique-of-ansi-sql-isolation-levels/" title="A Critique of ANSI SQL Isolation Levels论文">A Critique of ANSI SQL Isolation Levels论文</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.cn/post/2021/11/alluxio%E8%AE%BA%E6%96%87/" title="Alluxio论文">Alluxio论文</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.cn/post/2021/11/spark%E8%AE%BA%E6%96%87/" title="Spark论文">Spark论文</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.cn/post/2021/11/gfs%E8%AE%BA%E6%96%87/" title="GFS论文">GFS论文</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.cn/post/2021/11/lfu%E7%BC%93%E5%AD%98/" title="LFU缓存">LFU缓存</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.cn/post/2021/10/n%E7%9A%87%E5%90%8E/" title="N皇后">N皇后</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.cn/post/2021/10/%E4%B8%A4%E4%B8%AA%E6%9C%89%E5%BA%8F%E6%95%B0%E7%BB%84%E7%9A%84%E4%B8%AD%E4%BD%8D%E6%95%B0/" title="两个有序数组的中位数">两个有序数组的中位数</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.cn/post/2021/10/%E6%B2%B8%E8%85%BE%E6%96%B0%E5%8D%81%E5%B9%B4%E4%B8%8A/" title="沸腾新十年(上)">沸腾新十年(上)</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.cn/post/2021/10/%E6%B2%B8%E8%85%BE%E6%96%B0%E5%8D%81%E5%B9%B4%E4%B8%8B/" title="沸腾新十年(下)">沸腾新十年(下)</a>
+    </li>
+    
+</ul>
+    </section>
+
+    
+
+    <section class="widget">
+        <h3 class="widget-title"><a href='/categories/'>分类</a></h3>
+<ul class="widget-list">
+    
+    <li><a href="https://code0xff.cn/categories/%E5%95%86%E4%B8%9A/">商业 (2)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E5%A4%A7%E6%95%B0%E6%8D%AE/">大数据 (3)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E6%95%B0%E6%8D%AE%E5%BA%93/">数据库 (1)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E6%97%85%E8%A1%8C/">旅行 (10)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E6%9E%B6%E6%9E%84/">架构 (1)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E7%94%9F%E6%B4%BB/">生活 (4)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E7%AE%97%E6%B3%95/">算法 (5)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E8%AE%A1%E7%AE%97%E6%9C%BA%E5%8E%9F%E7%90%86/">计算机原理 (1)</a></li>
+    
+</ul>
+    </section>
+
+    <section class="widget">
+        <h3 class="widget-title"><a href='/tags/'>标签</a></h3>
+<div class="tagcloud">
+    
+    <a href="https://code0xff.cn/tags/manacher/">Manacher</a>
+    
+    <a href="https://code0xff.cn/tags/%E4%BA%8C%E5%88%86%E6%9F%A5%E6%89%BE/">二分查找</a>
+    
+    <a href="https://code0xff.cn/tags/%E4%BA%8C%E5%8F%89%E6%A0%91%E9%81%8D%E5%8E%86/">二叉树遍历</a>
+    
+    <a href="https://code0xff.cn/tags/%E5%8E%86%E5%8F%B2/">历史</a>
+    
+    <a href="https://code0xff.cn/tags/%E5%9B%9E%E6%BA%AF/">回溯</a>
+    
+    <a href="https://code0xff.cn/tags/%E5%9B%BD%E5%86%85%E6%97%85%E8%A1%8C/">国内旅行</a>
+    
+    <a href="https://code0xff.cn/tags/%E5%9B%BD%E5%A4%96%E6%97%85%E8%A1%8C/">国外旅行</a>
+    
+    <a href="https://code0xff.cn/tags/%E5%AD%98%E5%82%A8/">存储</a>
+    
+    <a href="https://code0xff.cn/tags/%E6%95%B0%E6%8D%AE%E5%BA%93/">数据库</a>
+    
+    <a href="https://code0xff.cn/tags/%E6%B1%87%E7%BC%96/">汇编</a>
+    
+    <a href="https://code0xff.cn/tags/%E7%94%9F%E6%B4%BB/">生活</a>
+    
+    <a href="https://code0xff.cn/tags/%E7%94%B5%E5%BD%B1/">电影</a>
+    
+    <a href="https://code0xff.cn/tags/%E7%BC%93%E5%AD%98/">缓存</a>
+    
+    <a href="https://code0xff.cn/tags/%E8%AE%A1%E7%AE%97%E6%A1%86%E6%9E%B6/">计算框架</a>
+    
+    <a href="https://code0xff.cn/tags/%E8%AE%BA%E6%96%87/">论文</a>
+    
+    <a href="https://code0xff.cn/tags/%E8%AF%BB%E4%B9%A6%E7%AC%94%E8%AE%B0/">读书笔记</a>
+    
+</div>
+    </section>
+
+    
+
+    <section class="widget">
+        <h3 class="widget-title">RSS</h3>
+        <ul class="widget-list">
+            <li><a href="https://code0xff.cn/index.xml">文章 RSS</a></li>
+        </ul>
+    </section>
+</div>
+            </div>
+        </div>
+    </div>
+    <footer id="footer">
+    <div>
+        &copy; 2021 <a href="https://code0xff.cn/">记录每个瞬间 By 老王</a>
+        
+    </div>
+    <br />
+    <div>
+        <div class="github-badge">
+            <a href="https://gohugo.io/" target="_black" rel="nofollow"><span class="badge-subject">Powered by</span><span class="badge-value bg-blue">Hugo</span></a>
+        </div>
+        <div class="github-badge">
+            <a href="https://github.com/flysnow-org/maupassant-hugo" target="_black"><span class="badge-subject">Theme</span><span class="badge-value bg-yellowgreen">Maupassant</span></a>
+        </div>
+    </div>
+    <div>
+        <a href="http://www.beian.miit.gov.cn/">京ICP备19014975号</a>
+    </div>
+</footer>
+
+
+    
+    <script type="text/javascript">
+        window.MathJax = {
+            tex2jax: {
+                inlineMath: [['$', '$']],
+                processEscapes: true
+                }
+            };
+    </script>
+    <script src='https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.5/MathJax.js?config=TeX-MML-AM_CHTML' async></script><script src="https://cdn.bootcdn.net/ajax/libs/fancybox/3.5.7/jquery.fancybox.min.js"></script>
+
+<a id="rocket" href="#top"></a>
+<script type="text/javascript" src='/js/totop.js?v=0.0.0' async=""></script>
+
+<script type="application/javascript">
+var doNotTrack = false;
+if (!doNotTrack) {
+	window.ga=window.ga||function(){(ga.q=ga.q||[]).push(arguments)};ga.l=+new Date;
+	ga('create', 'GA ID', 'auto');
+	
+	ga('send', 'pageview');
+}
+</script>
+<script async src='https://www.google-analytics.com/analytics.js'></script>
+
+
+
+    <script type="text/javascript" src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js" async></script>
+
+
+
+
+</body>
+
+</html>
