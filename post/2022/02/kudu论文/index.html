@@ -9,21 +9,24 @@
     <meta name="referrer" content="no-referrer-when-downgrade">
     
 
-    <title>论文 | 记录每个瞬间</title>
-    <meta property="og:title" content="论文 - 记录每个瞬间">
+    <title>Kudu论文 | 记录每个瞬间</title>
+    <meta property="og:title" content="Kudu论文 - 记录每个瞬间">
     <meta property="og:type" content="article">
         
+    <meta property="article:published_time" content='2022-02-20T10:27:11&#43;08:00'>
+        
+        
+    <meta property="article:modified_time" content='2022-02-20T10:27:11&#43;08:00'>
         
     <meta name="Keywords" content="">
-    <meta name="description" content="论文">
+    <meta name="description" content="读Kudu论文">
+        <meta name="author" content="隔壁老王">
         
-    <meta name="author" content="老王">
-    <meta property="og:url" content="https://code0xff.cn/tags/%E8%AE%BA%E6%96%87/">
+    <meta property="og:url" content="https://code0xff.cn/post/2022/02/kudu%E8%AE%BA%E6%96%87/">
     <link rel="shortcut icon" href='/favicon.ico'  type="image/x-icon">
 
     <link rel="stylesheet" href='/css/normalize.css'>
     <link rel="stylesheet" href='/css/style.css'>
-    <link rel="alternate" type="application/rss+xml" href="https://code0xff.cn/tags/%E8%AE%BA%E6%96%87/index.xml" title="记录每个瞬间" />
     <script type="text/javascript" src="//cdn.bootcdn.net/ajax/libs/jquery/3.4.1/jquery.min.js"></script>
 
     
@@ -51,7 +54,7 @@
             </div>
             <div>
                 <nav id="nav-menu" class="clearfix">
-                    <a class="" href="https://code0xff.cn/">首页</a>
+                    <a class="current" href="https://code0xff.cn/">首页</a>
                     
                     <a  href="https://code0xff.cn/linked/" title="链接">链接</a>
                     
@@ -73,113 +76,168 @@
                     
 <div class="res-cons">
     
-    <h3 class="archive-title">
-        包含标签
-        <span class="keyword">论文</span>
-        的文章
-    </h3>
-    
-
-    
     <article class="post">
         <header>
-            <h1 class="post-title">
-                <a href="https://code0xff.cn/post/2021/11/a-critique-of-ansi-sql-isolation-levels/">A Critique of ANSI SQL Isolation Levels论文</a>
-            </h1>
+            <h1 class="post-title">Kudu论文</h1>
         </header>
         <date class="post-meta meta-date">
-            2021年11月26日
+            2022年2月20日
         </date>
+<nav id="TableOfContents">
+  <ul>
+    <li>
+      <ul>
+        <li><a href="#背景">背景</a></li>
+        <li><a href="#高层api">高层API</a>
+          <ul>
+            <li><a href="#一致性">一致性</a></li>
+          </ul>
+        </li>
+        <li><a href="#架构">架构</a></li>
+      </ul>
+    </li>
+  </ul>
+</nav>
         
-        <div class="post-meta meta-category">
-            |
+        <div class="post-meta">
             
-            <a href='/categories/%E6%95%B0%E6%8D%AE%E5%BA%93'>数据库</a>
+            <span class="post-meta meta-tags">
+                <ul class="clearfix">
+                    <a href='/categories/%E5%A4%A7%E6%95%B0%E6%8D%AE'>大数据</a>
+                </ul>
+            </span>
             
         </div>
         
+        
+        <div class="post-meta">
+            <span id="busuanzi_container_page_pv">|<span id="busuanzi_value_page_pv"></span><span>
+                    阅读</span></span>
+        </div>
+        
+        
         <div class="post-content">
-            读A Critique of ANSI SQL Isolation Levels论文
-            <p class="readmore"><a href="https://code0xff.cn/post/2021/11/a-critique-of-ansi-sql-isolation-levels/">阅读全文</a></p>
+            <blockquote>
+<p>原文：<br>
+<a href="https://kudu.apache.org/kudu.pdf">Kudu: Storage for Fast Analytics on Fast Data</a></p>
+</blockquote>
+<h2 id="背景">背景</h2>
+<p>Kudu支持结构化数据、低延迟随机访问，可以跟查询分分析模式整合；支持水平分区，分区选主支持raft。<br>
+Kudu支持Hadoop生态，包括Spark、Impala、MapReduce<br>
+Hadoop 生态的结构化目前有两种方式：</p>
+<ul>
+<li>静态数据：基于Avro、Parquet，但它们都不提供更新记录、也不支持随机访问</li>
+<li>不可变数据：基于HBase、cassandra，提供低延迟的随机读写，但对于批量读比前者差了很多</li>
+</ul>
+<p>对于某些应用，可能同时包括了上述两种需求：随机读/写，大批量的文件扫描，这样需要将上述两种系统整合才可以，这就带来了一系列问题：</p>
+<ul>
+<li>首先是架构变复杂了，要维护、监控两套系统</li>
+<li>对于应用层来说，要主动区分流数据、非流数据，代码也复杂了</li>
+<li>数据是先进HBase、再落到HDFS上，对于实时分析来说，是有延迟的</li>
+<li>真实系统，可能要经常修复过去的错误数据、删除隐私敏感数据、还要适应延迟数据，上述架构要实现这些代价也不小</li>
+</ul>
+<p>Kudu是新设计的一套存储系统，为的就是填补上述的 “空隙”，对于现有系统，他们在适合的场景下仍然有优势，但Kudu的优势提供了一个简化的架构，可以同时满足 低延迟随机读写+批量scan。<br>
+Kudu也提供了高层的API，包括对行级别的CURD操作。</p>
+<h2 id="高层api">高层API</h2>
+<p>Kudu集群包含了多个 table，每个table都包含了多个列，每个列都是有具体类型的，这一点跟关系型数据库比较类似<br>
+Kudu的表包含一个主键，通过主键做更新/删除<br>
+用户也可以修改表、删除表，但是不能删除主键<br>
+显示的列类型有两个优势：</p>
+<ul>
+<li>可以对某一列更好的压缩、编码</li>
+<li>可以将元数据导出到其他系统如BI、数据探索工具等</li>
+</ul>
+<p>Kudu目前不支持唯一约束、不支持二级索引、没有自增主键 <br>
+对于 insert、update、delete 需要手动指定主键<br>
+目前不提供多行更新的事务API，对于单行操作相当于 跨多列的原子操作    <br>
+对于读，Kudu只提供了 scan 操作，并提供了两种类型的谓词：</p>
+<ul>
+<li>基于列和常数值的比较</li>
+<li>复合主键range</li>
+</ul>
+<p>除了谓词，还可以指定列，因为Kudu是列存储的，这样也可以提高性能 <br>
+Hadoop生态系统中通过调度数据位置来提升性能，Kudu也提供了对应的API，让调用者可以决定数据映射到指定的服务器 <br>
+这可以帮助上层的计算框架如Spark、Impala、MapReduce来更好的调度</p>
+<h3 id="一致性">一致性</h3>
+<p>Kudu提供了两个一致性模式，默认的是 “快照一致性” ，对单个客户端来说相当于 read-your-writes 一致性<br>
+Kudu不提供外部一致性保证，比如一个客户端执行写，另一个客户端通过外部机制执行一个写，这两个写之间的依赖就没法保证了。<br>
+Kudu提供了一个选项，通过时间戳token来保证多个客户端之间的因果依赖 <br>
+如果token太复杂，可以类似 Spanner那样，增加一个 commit-wait，通过等待一个周期就可以保证因果依赖了 <br>
+这种方式需要依赖硬件时钟，只有少部分企业可以实现，而现在云厂商提供了全球时间同步机制<br>
+时间戳分配算法是： HybridTime <br>
+Kudu内部通过 时间戳 来实现一致性，但不允许用户手动设置时间戳 执行写操作，这点跟Hbase、Cassandra不同 <br>
+Kudu的设计者认为 写带时间戳对大部分用户来说，会带来混乱，特别是插入、删除的语义方面<br>
+但Kudu允许 读 带时间戳，这样就可以查询过去的某个时间戳的数据，相当于是 读 一致性快照</p>
+<h2 id="架构">架构</h2>
+<p>跟Hbase、HDFS类似，有一个master，通过复制实现快速故障恢复<br>
+Kudu也支持分区，多个行会对应到一个固定的tablet上，随机访问可以根据主键映射到一个确定的分区   <br>
+Kudu可以根据提供的函数将 主键 映射到一个分区，客户端可以根据key来路由到确定的分区</p>
+<ul>
+<li>hash分区：由方言<code>DISTRIBUTE BY HASH(hostname, ts) INTO 16 BUCKETS</code>指定
+<ul>
+<li>这是将 hostname,ts编码为二进制键，然后连起来再编码，对 16 取模，最后落到一个具体的分区上</li>
+</ul>
+</li>
+</ul>
+
+			<script type="text/javascript"
+        async
+        src="https://cdn.bootcss.com/mathjax/2.7.3/MathJax.js?config=TeX-AMS-MML_HTMLorMML">
+MathJax.Hub.Config({
+  tex2jax: {
+    inlineMath: [['$','$'], ['\\(','\\)']],
+    displayMath: [['$$','$$'], ['\[\[','\]\]']],
+    processEscapes: true,
+    processEnvironments: true,
+    skipTags: ['script', 'noscript', 'style', 'textarea', 'pre'],
+    TeX: { equationNumbers: { autoNumber: "AMS" },
+         extensions: ["AMSmath.js", "AMSsymbols.js"] }
+  }
+});
+
+MathJax.Hub.Queue(function() {
+    
+    
+    
+    var all = MathJax.Hub.getAllJax(), i;
+    for(i = 0; i < all.length; i += 1) {
+        all[i].SourceElement().parentNode.className += ' has-jax';
+    }
+});
+</script>
+
+<style>
+code.has-jax {
+    font: inherit;
+    font-size: 100%;
+    background: inherit;
+    border: inherit;
+    color: #515151;
+}
+</style>
+        </div>
+
+        
+
+
+        
+
+
+        <div class="post-meta meta-tags">
+            
+            <ul class="clearfix">
+                
+                <li><a href='/tags/kudu'>Kudu</a></li>
+                
+            </ul>
+            
         </div>
     </article>
     
-    <article class="post">
-        <header>
-            <h1 class="post-title">
-                <a href="https://code0xff.cn/post/2021/11/alluxio%E8%AE%BA%E6%96%87/">Alluxio论文</a>
-            </h1>
-        </header>
-        <date class="post-meta meta-date">
-            2021年11月22日
-        </date>
-        
-        <div class="post-meta meta-category">
-            |
-            
-            <a href='/categories/%E5%A4%A7%E6%95%B0%E6%8D%AE'>大数据</a>
-            
-        </div>
-        
-        <div class="post-content">
-            读Alluxio论文
-            <p class="readmore"><a href="https://code0xff.cn/post/2021/11/alluxio%E8%AE%BA%E6%96%87/">阅读全文</a></p>
-        </div>
-    </article>
-    
-    <article class="post">
-        <header>
-            <h1 class="post-title">
-                <a href="https://code0xff.cn/post/2021/11/spark%E8%AE%BA%E6%96%87/">Spark论文</a>
-            </h1>
-        </header>
-        <date class="post-meta meta-date">
-            2021年11月6日
-        </date>
-        
-        <div class="post-meta meta-category">
-            |
-            
-            <a href='/categories/%E5%A4%A7%E6%95%B0%E6%8D%AE'>大数据</a>
-            
-        </div>
-        
-        <div class="post-content">
-            读Spark论文
-            <p class="readmore"><a href="https://code0xff.cn/post/2021/11/spark%E8%AE%BA%E6%96%87/">阅读全文</a></p>
-        </div>
-    </article>
-    
-    <article class="post">
-        <header>
-            <h1 class="post-title">
-                <a href="https://code0xff.cn/post/2021/11/gfs%E8%AE%BA%E6%96%87/">GFS论文</a>
-            </h1>
-        </header>
-        <date class="post-meta meta-date">
-            2021年11月5日
-        </date>
-        
-        <div class="post-meta meta-category">
-            |
-            
-            <a href='/categories/%E5%A4%A7%E6%95%B0%E6%8D%AE'>大数据</a>
-            
-        </div>
-        
-        <div class="post-content">
-            读GFS论文
-            <p class="readmore"><a href="https://code0xff.cn/post/2021/11/gfs%E8%AE%BA%E6%96%87/">阅读全文</a></p>
-        </div>
-    </article>
     
 
     
-
-
-
-
-
+    
 </div>
 
 
@@ -365,6 +423,16 @@
 </footer>
 
 
+    
+    <script type="text/javascript">
+        window.MathJax = {
+            tex2jax: {
+                inlineMath: [['$', '$']],
+                processEscapes: true
+                }
+            };
+    </script>
+    <script src='https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.5/MathJax.js?config=TeX-MML-AM_CHTML' async></script><script src="https://cdn.bootcdn.net/ajax/libs/fancybox/3.5.7/jquery.fancybox.min.js"></script>
 
 <a id="rocket" href="#top"></a>
 <script type="text/javascript" src='/js/totop.js?v=0.0.0' async=""></script>
