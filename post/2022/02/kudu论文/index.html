@@ -216,6 +216,38 @@ Kudu使用Raft来复制更新操作，也就是客户端的一个写操作会发
 <p>我们还发现了一些罕见的条件竞争，因为存储层是跨节点解耦的，因此不会导致数据丢失无法恢复，在所有情况下，可以检查副本已经损坏并复制它</p>
 </li>
 </ul>
+<p>Raft协议中，建议配置变更采用：一个接一个方式，也就是从<code>3</code>副本变成<code>5</code>副本需要经过两步：</p>
+<ul>
+<li>从 3 -&gt; 4，提交</li>
+<li>从 4 -&gt; 5，提交</li>
+</ul>
+<p>Kudu的变更流程：</p>
+<ul>
+<li>在Kudu中通过<code>remote bootstrap</code>来实现的，首先增加一个 成员到 Raft中，再提交变更</li>
+<li>master触发<code>StartRemoteBootstrap RPC</code>，目标服务器会从 leader上拉取数据和log的快照</li>
+<li>当传输完成，新的服务器就会打开表的数据，并重放必要的 write-ahead log</li>
+<li>此时新机器就完成了leader在开始传输时的状态，并可以作为正常的副本响应请求了</li>
+<li>最初实现时，是将这个服务器立刻变成一个 VOTER副本，但这会有问题
+<ul>
+<li>从 3副本变为4副时，4个中的3个都必须确认彼此的操作</li>
+<li>但新机器还在拷贝中，它无法确认操作，一旦有机器此时宕机了，table的写操作就会不可用</li>
+<li>直到 remote bootstrap  完成前都不可用</li>
+</ul>
+</li>
+<li>为了解决这个问题：
+<ul>
+<li>新增一个状态 PRE_VOTER</li>
+<li>leader会发送Raft变更，触发数据拷贝，但不会将其算作投票者</li>
+<li>当检查到PRE_VOTER完成赶上了当前log，leader会触发一个提议和提交，将其变为VOTER</li>
+</ul>
+</li>
+<li>对于删除副本也是类似的，leader触发一个配置变更，但不包含被移除的节点
+<ul>
+<li>当这个提议被commit后，其他节点就不再跟 删除节点通信了，尽管删除节点自己并不知道</li>
+<li>其他节点向master报告配置的变更，而master负责删除掉这个节点</li>
+</ul>
+</li>
+</ul>
 
 			<script type="text/javascript"
         async
