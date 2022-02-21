@@ -96,6 +96,7 @@
         <li><a href="#架构">架构</a>
           <ul>
             <li><a href="#复制">复制</a></li>
+            <li><a href="#master">master</a></li>
           </ul>
         </li>
       </ul>
@@ -248,6 +249,21 @@ Kudu使用Raft来复制更新操作，也就是客户端的一个写操作会发
 </ul>
 </li>
 </ul>
+<h3 id="master">master</h3>
+<p>master作为中控主要负责，非多主方式，可以简化设计，也方便调试</p>
+<ul>
+<li>作为catalog管理者，维护table和tablet，相当于他们的schema</li>
+<li>当 创建、修改、删除表时 master负责协调这些操作，确保最终完成</li>
+<li>集群的协调者，用于跟踪机器的状态，等服务宕机后负责协调</li>
+<li>跟踪每个tablet的副本都在哪些机器上</li>
+</ul>
+<p>master自身维护了一个 <strong>单tablet</strong>的表，这个表不能直接访问，master内部将这个表的数据全部放在缓存中 <br>
+因为现代商业机器的内存都比较大，而且每个tablet的元数据也不大，足够放入内存了，如果实在放不下，可以考虑linux的page cache<br>
+master还维护了每个表的状态(比如创建中，运行中，删除中)，以及当前表的schema版本<br>
+master将<code>CREATING</code>状态写入catalog中，用来表示创建表，并异步副本信息发给其他tablet<br>
+这里是用Raft来维护复制的，所以收到大多数响应后master就可以提交了，否则就是失败，失败的话表可以被安全的删除<br>
+如果master在中间状态失败，需要往前回滚<br>
+master -&gt; follower是冥等的，如果主master挂了，备份的master会被选举为主，然后scan 元数据表，加载到内存，并服务请求</p>
 
 			<script type="text/javascript"
         async
