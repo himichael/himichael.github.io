@@ -272,6 +272,18 @@ master -&gt; follower是冥等的，如果主master挂了，备份的master会�
 <li>状态变更是通过Raft完成的，所以master会保持最新状态</li>
 <li>一旦某个主机的index跟master不对，可以简单丢弃</li>
 <li>master并不负责对机器的检查，而是由Raft来实现的，当有机器宕机后，就会检查到并触发Raft变更，将此机器移除</li>
+<li>master是根据负载情况，选择副本的，当master选择了要复制的 副本后，就会触发一次变更</li>
+<li>master自身并不改变配置，它必须等待其他副本提议并提交后，才会操作</li>
+<li>如果中途失败，只要不断重试就可以了，这些操作都是冥等且不冲突</li>
+<li>如果master收到了一个移除消息(一个table的副本从配置中移除了)就会触发一个<code>DeleteTable</code>的RPC请求</li>
+<li>为了确保master宕机这个操作也会成功，master也会触发一个RPC请求，指明这个表正在被删除</li>
+</ul>
+<p>客户端访问目录：</p>
+<ul>
+<li>客户端会只要访问过就会缓存元信息，包含表的分区key范围，raft配置等</li>
+<li>某时，客户端的cache可能过时了，当它发送信息给旧的leader时(此时已变成follower)，服务端会拒绝请求，客户端会联系新的master</li>
+<li>上面的方式会多一次往返开销，其实follower所持有的信息都是最新的，可以让follower响应这个客户端，返回最新数据即可</li>
+<li>master将所有分区信息全部cache了，论文中270个节点、几千个tablet集群，99.99%的请求tablet位置信息，都是在3毫秒返回</li>
 </ul>
 
 			<script type="text/javascript"
