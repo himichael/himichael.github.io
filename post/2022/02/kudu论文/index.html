@@ -310,6 +310,27 @@ RowSets，Tablets的更小单位，一行就代表RowSets中的RowSet</p>
 <li>不支持原地更新，只允许不修改值大小，这样可以通过 CAS把变更操作 加到每个记录的链表中</li>
 <li>对叶子节点增加了 next 指针，这样做 scan 的时候就会非常有效</li>
 <li>没有实现完整的 前缀树，只实现了一棵树，设计者不太关注极高的随机访问吞吐量</li>
+<li>MemRowSets是行存储布局的，设计者使用 SSE2 指令在 scan 之前预取了一个叶节点</li>
+<li>使用LLVM 进行 JIT 编译了投影操作，这些操作都显著的提升了性能</li>
+<li>使用顺序编码主键，使插入到B树更高效，运行 memcmp，由于MemRowSet是排序的，所以scan，或者查找单个key都很高效</li>
+</ul>
+<p>DiskRowSet实现：</p>
+<ul>
+<li>MemRowSets刷到磁盘后，就变成了 DiskRowSets，默认每 32M 为一个段</li>
+<li>DiskRowSets自身也是有序的，每个段的主键都是不想交的</li>
+<li>包含两个组件：base data、delta data</li>
+<li>base data是列存储格式，每个列都会写到独立的磁盘上，并被单独写入到一个连续的数据块中</li>
+<li>列自身被分为更小的page，可以更细粒度的随机读，同时内嵌了 B树索引</li>
+<li>列的page可以使用各种编码，如bitshuffle、字典等，也包括各种压缩算法：如LZ4、gzip、bzip2</li>
+<li>每个列都可以使用不同的压缩算法，如不经常访问的文本列使用 gzip，小整数列使用 bit-packed</li>
+<li>Kudu的页格式使用了Impala代码，所以很多页格式都是相同的</li>
+<li>Kudu还对主键做了编码，另外flush的时候可以加入Bloom过滤器</li>
+<li>Kudu不支持原地更新，因为编码后再更新效率很低，而将更新的数据写入到 delta store中</li>
+<li>delta store要不在内存中(DeltaMemStore)，或者在磁盘(DeltaFiles)</li>
+<li>DeltaMemStore是并发的B树结构 ，DeltaFiles是二进制类型的块，</li>
+<li>增量存储维护了 (row_offset,timestamp)到 RowChange-List记录的映射</li>
+<li>row_offset是RowSet中的有序索引，比如主键的最低offse是 0 ，timestamp是写操作时分配的MVCC时间戳</li>
+<li>RowChangeList是行的变更记录(二进制编码)，指明 column是： id 3 = &lsquo;foo&rsquo; 或 DELETE</li>
 </ul>
 
 			<script type="text/javascript"
@@ -407,6 +428,10 @@ code.has-jax {
 <ul class="widget-list">
     
     <li>
+        <a href="https://code0xff.cn/post/2022/02/scala%E7%9A%84%E4%B8%80%E4%BA%9B%E7%89%B9%E6%80%A7/" title="scala的一些特性">scala的一些特性</a>
+    </li>
+    
+    <li>
         <a href="https://code0xff.cn/post/2022/02/kudu%E8%AE%BA%E6%96%87/" title="Kudu论文">Kudu论文</a>
     </li>
     
@@ -442,10 +467,6 @@ code.has-jax {
         <a href="https://code0xff.cn/post/2021/12/unix%E7%8E%AF%E5%A2%83%E9%AB%98%E7%BA%A7%E7%BC%96%E7%A8%8B/" title="UNIX环境高级编程读书笔记">UNIX环境高级编程读书笔记</a>
     </li>
     
-    <li>
-        <a href="https://code0xff.cn/post/2021/11/a-critique-of-ansi-sql-isolation-levels/" title="A Critique of ANSI SQL Isolation Levels论文">A Critique of ANSI SQL Isolation Levels论文</a>
-    </li>
-    
 </ul>
     </section>
 
@@ -471,6 +492,8 @@ code.has-jax {
     
     <li><a href="https://code0xff.cn/categories/%E7%BB%8F%E6%B5%8E/">经济 (1)</a></li>
     
+    <li><a href="https://code0xff.cn/categories/%E7%BC%96%E7%A8%8B%E8%AF%AD%E8%A8%80/">编程语言 (1)</a></li>
+    
     <li><a href="https://code0xff.cn/categories/%E8%AE%A1%E7%AE%97%E6%9C%BA%E5%8E%9F%E7%90%86/">计算机原理 (1)</a></li>
     
     <li><a href="https://code0xff.cn/categories/%E8%AF%BB%E4%B9%A6%E7%AC%94%E8%AE%B0/">读书笔记 (3)</a></li>
@@ -484,7 +507,7 @@ code.has-jax {
     
     <li><a href="https://code0xff.cn/years/2021%E5%B9%B4/">2021年 (29)</a></li>
     
-    <li><a href="https://code0xff.cn/years/2022%E5%B9%B4/">2022年 (6)</a></li>
+    <li><a href="https://code0xff.cn/years/2022%E5%B9%B4/">2022年 (7)</a></li>
     
 </ul>
     </section>
@@ -496,6 +519,8 @@ code.has-jax {
     <a href="https://code0xff.cn/tags/kudu/">kudu(2) </a>
     
     <a href="https://code0xff.cn/tags/manacher/">Manacher(1) </a>
+    
+    <a href="https://code0xff.cn/tags/scala/">scala(1) </a>
     
     <a href="https://code0xff.cn/tags/unix/">unix(1) </a>
     
