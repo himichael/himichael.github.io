@@ -100,6 +100,15 @@
           </ul>
         </li>
         <li><a href="#tablet存储">tablet存储</a></li>
+        <li><a href="#hadoop整合">Hadoop整合</a></li>
+        <li><a href="#性能评估">性能评估</a>
+          <ul>
+            <li><a href="#和parquet比较">和parquet比较</a></li>
+            <li><a href="#和phoenix比较">和phoenix比较</a></li>
+            <li><a href="#随机访问性能">随机访问性能</a></li>
+          </ul>
+        </li>
+        <li><a href="#参考">参考</a></li>
       </ul>
     </li>
   </ul>
@@ -363,7 +372,9 @@ RowSets，Tablets的更小单位，一行就代表RowSets中的RowSet</p>
 </ul>
 <p>延迟物化</p>
 <ul>
-<li>。</li>
+<li>如果 scan 中指定了谓词，kudu会对列数据对延迟物化</li>
+<li>在对任何其他列之前，会优先读取带有 range谓词的列，之后读取每个列时，都会评估关联的谓词，这样谓词就会过滤掉 - 批处理查询中的所有行，相当于对其他列做了短路查询，提升了巨大的性能</li>
+<li>因为其他列中的大部分数据都不会真正触发磁盘读</li>
 </ul>
 <p>delta压缩</p>
 <ul>
@@ -383,7 +394,125 @@ RowSets，Tablets的更小单位，一行就代表RowSets中的RowSet</p>
 <li>tablet server内部维护了一个线程池，之前说的那些后台调度任务，都是在这些线程池中执行的</li>
 <li>线程都是常驻的，不是由事件触发的</li>
 <li>完成一个操作后，调度器会评估磁盘存储状态，执行启发式算法，平衡内存使用，WAL保留，和进一步的读写操作性能</li>
+<li>优化过程是：给定一个I/O预算(如128M)，然后选择一组DiskRowSet，进行压缩以减少他们的seek次数</li>
+<li>这个优化过程实际上是等价于 动态规划中的-背包问题</li>
+<li>当插入负载变高时，后台线程会将内存中的数据flush到磁盘；当插入负载降低，后台线程会做压缩以减未来的写负载</li>
+<li>这提供了平滑的性能过渡，使开发和运维人员可以方便的对 容量做规划，对负载延迟做评估</li>
 </ul>
+<h2 id="hadoop整合">Hadoop整合</h2>
+<p>MapReduce和Spark</p>
+<ul>
+<li>Kudu提供了对Hadoop生态系统组件的整合，可以将Kudu跟M-R的input、output job整合</li>
+<li>可以跟Spark高层API绑定，就可以用Spark-SQL、DataFrame操作Kudu表</li>
+<li>提供了数据本地化处理能力</li>
+<li>提供了API让用户选择需要使用的列投影，这样就减少I/O</li>
+<li>谓词下推，通过Spark-SQL就可以执行</li>
+</ul>
+<p>Impala整合</p>
+<ul>
+<li>Kudu自身不提供SQL、shell，这些是通过整合Impala提供的</li>
+<li>Impala查询计划通过Kudu的java API检索表位置信息，将后台查询处理任务分配到相同的节点上</li>
+<li>未来考虑通过共享内存来传输数据，以进一步做优化</li>
+<li>谓词下推，修改了Impala的查询计划，可以识别出谓词并下推给Kudu，只有在传递谓词后Kudu才物化列</li>
+<li>DDL扩展，Impala的 DDL(create table)支持Kudu分区schema、复制因子、主键定义</li>
+<li>Kudu是Hadoop生态中第一个支持快速分析的引擎，并且支持更新，Impala之前不支持的更新操作，现在都可以支持了</li>
+<li>Impala的模块化设计，可以支持联邦查询</li>
+</ul>
+<h2 id="性能评估">性能评估</h2>
+<h3 id="和parquet比较">和parquet比较</h3>
+<p>使用了<code>TPC-H</code>数据集，数据量 100G， 75个节点，每个节点配置：</p>
+<ul>
+<li>2G cpu、6核</li>
+<li>64G内存</li>
+<li>12块磁盘</li>
+</ul>
+<p>集群总内存是远大于数据集量的，所有的查询都会落到内存中<br>
+但所有的数据都会持久化到 DiskRowSet，而不是内存中 <br>
+使用 Impala 2.2 + parquet 去运行全部的 22个查询；再用 Impala + Kudu 运行一次 做对比<br>
+每个表按主键分为 256个bucket，除非特别小的表如国家和地区等维度表<br>
+所有的数据都是用 <code>CREATE TABLE AS SELECT</code>创建的<br>
+目前还没有执行更深度的并行负载测试，只是用 TPC-H 对比了两个系统，结果如下：
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1//post/2022/02/Kudu%E8%AE%BA%E6%96%87/1.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1//post/2022/02/Kudu%E8%AE%BA%E6%96%87/1.jpg" />
+        </a>
+    </p>
+<p>按照上述结果， Kudu平均比 parquet 快了 31%，大概是有两点导致的：</p>
+<ul>
+<li>延迟物化，TPC-H中的查询都限定了谓词，Kudu的延迟物化避免了谓词不匹配时对其他列的操作，而这个特性parquet没有</li>
+<li>CPU效率，parquet对于每一行都会执行一次函数调用，导致效率不高</li>
+</ul>
+<p>在未来，parquet实现了上述功优化后，Kudu的优势可能就不明显了<br>
+parquet更适合磁盘常驻的负载如 8M的I/O访问，而Kudu适合小的页面级别的访问
+Kudu和parquet的比较证实了，Kudu有能力实现跟不可变存储类似的性能，同时还提供了可变的特性</p>
+<h3 id="和phoenix比较">和phoenix比较</h3>
+<p>虽然phoenix的主要目标不是做分析用的，我们还是做了少量的比较<br>
+展示了Hbase、Kudu在执行分析性负载下的性能差异<br>
+这次用了一个小的集群，一共 9 个节点，配置如下：</p>
+<ul>
+<li>2.13G cpu、4核 Xeon L5630</li>
+<li>48G内存</li>
+<li>3块数据盘</li>
+<li>Phonenix 4.3 + HBase 1.0</li>
+<li>HBase的 block cache为默认值， 9.6G</li>
+<li>Kudu配置了 1G 的进程block cache，更多是依靠OS的 buffer cache避免物理I/O</li>
+<li>HBase配置了 FAST_DIFF 编码，无压缩，一个版本</li>
+<li>Impala端使用 逐查询选项，关闭代码生成，消除了与存储引擎无关的开销</li>
+<li>region-server 和 tablet-server分配了24G内存</li>
+</ul>
+<p>将相同的 TCP-H lineitem表(62G csv格式)使用 CsvBulkLoadTool M-R job 加载到 phoenix中
+phoenix配置了100个hash分区，Kudu也一样<br>
+通过执行压缩去报 100%的HDFS数据快被本地化，并确保region被均匀的分配到各个节点上<br>
+当62G的数据被复制到 HBase后，被膨胀为 570G， kudu是 227G<br>
+之后验证了两个系统都没有磁盘读取，这样只关注CPU效率，kudu的列布局和更好的存储效率性能更好</p>
+<p>为了只关注scan速度而不是 join 情况，测试了 TPC-H的 query 1，同时也增加了其他几个查询，结果如下：<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1//post/2022/02/Kudu%E8%AE%BA%E6%96%87/2.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1//post/2022/02/Kudu%E8%AE%BA%E6%96%87/2.jpg" />
+        </a>
+    </p>
+<p>此外还对比了 Impala+Kudu、Impala+parquet、phoenix+HBase的各种查询<br>
+每个查询执行 10次，取中间结果：<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1//post/2022/02/Kudu%E8%AE%BA%E6%96%87/3.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1//post/2022/02/Kudu%E8%AE%BA%E6%96%87/3.jpg" />
+        </a>
+    
+如上显示，Impala+Kudu 是 phoenix+HBase的 16 - 187倍<br>
+对于基于主键的小范围扫描，Impala+Kudu、Impala+parquet都是压秒结果，而Phoenix+HBase 因为查询计划中的低常数因子开销，使得性能也 比 Impala+Kudu更好</p>
+<h3 id="随机访问性能">随机访问性能</h3>
+<p>尽管Kudu不是为OLTP设置的，它适合于轻度的随机访问，这里评估了Kudu的随机访问性能 <br>
+使用  Yahoo Cloud Serving Benchmark  YCSB 来测试<br>
+集群为 10个节点，配置跟测试 phoenix 时一样<br>
+为Kudu和HBase都配置了 24G内存，HBase使用了9.6G的block cache，Kudu使用了 1G 的block cache，更多是依靠OS的 buffer-cache，其他配置都是默认<br>
+为两个系统都分配了 100个 tablet<br>
+YCSB加载了 1亿条数据集，包括10列，每列100byte，由于Kudu没有行主键因此再增加一个主键key列<br>
+数据是完全加载到内存中的，这里没有测试 flush常驻、磁盘常驻的情况，因为大多数低延迟的应用基本都可以放到内存中<br>
+YCSB总结如下，先加载表，再执行A 到 D，中间没有暂停<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1//post/2022/02/Kudu%E8%AE%BA%E6%96%87/4.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1//post/2022/02/Kudu%E8%AE%BA%E6%96%87/4.jpg" />
+        </a>
+    </p>
+<p>对每种情况执行 1000W次操作<br>
+对于加载数据，使用 16个客户端线程，并开启客户端缓存，可以发送大批量数据到服务端 <br>
+其他操作使用 64客户端线程 并关闭客户端缓存<br>
+对两个系统都执行两次，每次都是删除并重新加载 <br>
+对第二次执行，使用 统一的分布式访问来替换默认的 Zipfian 执行 A - C<br>
+对于D使用特定的访问分布，它随机插入行，并随机读取最近查询的行<br>
+不执行E，因为这个是小范围查询Kudu目标表现不好，而 F 是基于CAS操作的，kudu目前不支持 <br>
+下图展示了其结果<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1//post/2022/02/Kudu%E8%AE%BA%E6%96%87/5.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1//post/2022/02/Kudu%E8%AE%BA%E6%96%87/5.jpg" />
+        </a>
+    <br>
+HBase执行的吞吐量明显比Kudu更好，Kudu在 zipfian 更新上效率不高，因为这行的链太长了，有很多delta合并操作<br>
+这些测试是Kudu的beta版发布时做的，因为时间有效测试场景不多</p>
+<h2 id="参考">参考</h2>
+<p><a href="https://www.cnblogs.com/GO-NO-1/p/12132223.html">kudu 架构原理</a><br>
+<a href="http://www.nosqlnotes.com/technotes/kudu-design/">Kudu设计原理初探</a><br>
+<a href="https://blog.cloudera.com/apache-kudu-read-write-paths/">Apache Kudu Read &amp; Write Paths</a></p>
 
 			<script type="text/javascript"
         async
@@ -428,7 +557,7 @@ code.has-jax {
         
 
 <div class="post-archive">
-    <h2>See Also</h2>
+    <h2>相关文章</h2>
     <ul class="listing">
         
         <li><a href="/post/2021/11/a-critique-of-ansi-sql-isolation-levels/">A Critique of ANSI SQL Isolation Levels论文</a></li>
