@@ -332,6 +332,58 @@ RowSets，Tablets的更小单位，一行就代表RowSets中的RowSet</p>
 <li>row_offset是RowSet中的有序索引，比如主键的最低offse是 0 ，timestamp是写操作时分配的MVCC时间戳</li>
 <li>RowChangeList是行的变更记录(二进制编码)，指明 column是： id 3 = &lsquo;foo&rsquo; 或 DELETE</li>
 </ul>
+<p>Delta flush:</p>
+<ul>
+<li>当 DeltaMemStore 满了，后台进程就会将其刷新到磁盘上，变成 DeltaFiles</li>
+<li>DeltaFiles 是二进制列，相当于 DeltaMemStore 的不可变副本</li>
+</ul>
+<p>写路径：</p>
+<ul>
+<li>Kudu因为有主键约束，所有插入的数据必须要先检查唯一约束</li>
+<li>每个表可能包含了几百上千个DiskRowSets，必须保证其高效性</li>
+<li>可以使用Bloom过滤器，将其划分为4K页面，每个页对应以一个小范围的key</li>
+<li>Bloom过滤器索引使用B树结构，在服务端用LRU缓存，这样就避免磁盘操作</li>
+<li>对于每个DiskRowSet还存储了max、min key，这样可以进一步做剪枝</li>
+<li>后台压缩进程可以重新组织DiskRowSet结构</li>
+<li>对于无法做减枝的DiskRowSet，就只能通过B树查找，其page会被放入OS的page cache中</li>
+</ul>
+<p>读路径：</p>
+<ul>
+<li>Kudu的采用批量行读取方式，这样可以平摊函数调用开销</li>
+<li>同时有机会对循环做展开，和SIMD指令优化</li>
+<li>Kudu内存中的批处理格式由一个顶层的结构组成，这个结构包含一些指针，指向每个正在读取的列的小块</li>
+<li>每个批处理本身是列式的，当从磁盘列拷贝到批处理时，避免了偏移量计算</li>
+<li>scan时Kudu确定是否可以用range谓词来过滤DiskRowSet中的行</li>
+<li>scan的时候可以设置主键的上下界，这样就可以确定其偏移量</li>
+<li>相当于把key的range谓词转成了offset range谓词，这样就避免了字符串比较操作</li>
+<li>kudu一次扫描一列，首先定位到正确的offset，将列中的数据解压拷贝到内存的batch中</li>
+<li>之后会检查是否有 delta数据，应用到当前的MVCC快照中</li>
+<li>delta记录了offset，所以不用任何比较可以直接定位</li>
+<li>服务端会维持scan的迭代器，下次查询就不用重新定位，直接从上次的位置直接查找即可</li>
+</ul>
+<p>延迟物化</p>
+<ul>
+<li>。</li>
+</ul>
+<p>delta压缩</p>
+<ul>
+<li>delta数据不是列式存储的，当delta文件数量增大后，读取就会变慢</li>
+<li>Kudu后台进程会定期扫描DiskRowSets，当发现 base data 和 delta data的比列过高，会将delta数据合并到base data</li>
+<li>如果delta中的数据只包含都某一列的更新，那么合并就只针对具体列，避免对其他列的操作</li>
+</ul>
+<p>RowSet压缩</p>
+<ul>
+<li>跟delta压缩类似，Kudu也有一个后台进程会定期压缩不同的 DiskRowSets</li>
+<li>压缩后重写到新的 DiskRowSets，让人是32M一个段</li>
+<li>压缩时，可以将删除标记的数据 真正删掉</li>
+<li>不同的DiskRowSets 的key范围可能会重叠，压缩后就减少了重叠，也为Boolm过滤器做了加速</li>
+</ul>
+<p>调度管理</p>
+<ul>
+<li>tablet server内部维护了一个线程池，之前说的那些后台调度任务，都是在这些线程池中执行的</li>
+<li>线程都是常驻的，不是由事件触发的</li>
+<li>完成一个操作后，调度器会评估磁盘存储状态，执行启发式算法，平衡内存使用，WAL保留，和进一步的读写操作性能</li>
+</ul>
 
 			<script type="text/javascript"
         async
