@@ -1,0 +1,1090 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    
+    <meta name="referrer" content="no-referrer-when-downgrade">
+    
+
+    <title>Spark论文 | 记录每个瞬间</title>
+    <meta property="og:title" content="Spark论文 - 记录每个瞬间">
+    <meta property="og:type" content="article">
+        
+    <meta property="article:published_time" content='2021-11-06T08:49:11&#43;08:00'>
+        
+        
+    <meta property="article:modified_time" content='2021-11-06T08:49:11&#43;08:00'>
+        
+    <meta name="Keywords" content="">
+    <meta name="description" content="读Spark论文">
+        <meta name="author" content="隔壁老王">
+        
+    <meta property="og:url" content="https://code0xff.cn/post/2021/11/spark%E8%AE%BA%E6%96%87/">
+    <link rel="shortcut icon" href='/favicon.ico'  type="image/x-icon">
+
+    <link rel="stylesheet" href='/css/normalize.css'>
+    <link rel="stylesheet" href='/css/style.css'>
+    <script type="text/javascript" src="//cdn.bootcdn.net/ajax/libs/jquery/3.4.1/jquery.min.js"></script>
+
+    
+    
+    
+        <link href="https://cdn.bootcdn.net/ajax/libs/fancybox/3.5.7/jquery.fancybox.min.css" rel="stylesheet">
+    
+    
+    
+    
+</head>
+
+
+<body>
+    <header id="header" class="clearfix">
+    <div class="container">
+        <div class="col-group">
+            <div class="site-name ">
+                
+                    <a id="logo" href="https://code0xff.cn/">
+                        记录每个瞬间
+                    </a>
+                
+                
+            </div>
+            <div>
+                <nav id="nav-menu" class="clearfix">
+                    <a class="current" href="https://code0xff.cn/">首页</a>
+                    
+                    <a  href="https://code0xff.cn/linked/" title="链接">链接</a>
+                    
+                    <a  href="https://code0xff.cn/archives/" title="归档">归档</a>
+                    
+                    <a  href="https://code0xff.cn/about/" title="关于">关于</a>
+                    
+                </nav>
+            </div>
+        </div>
+    </div>
+</header>
+
+    <div id="body">
+        <div class="container">
+            <div class="col-group">
+
+                <div class="col-8" id="main">
+                    
+<div class="res-cons">
+    
+    <article class="post">
+        <header>
+            <h1 class="post-title">Spark论文</h1>
+        </header>
+        <date class="post-meta meta-date">
+            2021年11月6日
+        </date>
+<nav id="TableOfContents">
+  <ul>
+    <li>
+      <ul>
+        <li><a href="#设计目标">设计目标</a></li>
+        <li><a href="#resilient-distributed-datasets">Resilient Distributed Datasets</a></li>
+        <li><a href="#spark编程接口">Spark编程接口</a>
+          <ul>
+            <li><a href="#一个逻辑回归的例子">一个逻辑回归的例子</a></li>
+            <li><a href="#一个page-rank的例子">一个page-rank的例子</a></li>
+          </ul>
+        </li>
+        <li><a href="#rdd的表示">RDD的表示</a></li>
+        <li><a href="#实现">实现</a>
+          <ul>
+            <li><a href="#job-scheduler">Job scheduler</a></li>
+            <li><a href="#解释器整合">解释器整合</a></li>
+            <li><a href="#内存管理">内存管理</a></li>
+            <li><a href="#checkpointing">Checkpointing</a></li>
+          </ul>
+        </li>
+        <li><a href="#评估">评估</a>
+          <ul>
+            <li><a href="#迭代机器学习应用">迭代机器学习应用</a></li>
+            <li><a href="#pagerank">PageRank</a></li>
+            <li><a href="#失败恢复">失败恢复</a></li>
+            <li><a href="#内存不够的情况">内存不够的情况</a></li>
+            <li><a href="#使用spark构建应用">使用Spark构建应用</a></li>
+            <li><a href="#交互式的数据检索">交互式的数据检索</a></li>
+          </ul>
+        </li>
+        <li><a href="#讨论">讨论</a></li>
+        <li><a href="#相关工作">相关工作</a></li>
+        <li><a href="#结论">结论</a></li>
+      </ul>
+    </li>
+  </ul>
+</nav>
+        
+        <div class="post-meta">
+            
+            <span class="post-meta meta-tags">
+                <ul class="clearfix">
+                    <a href='/categories/%E8%AE%BA%E6%96%87'>论文</a>
+                </ul>
+            </span>
+            
+        </div>
+        
+        
+        <div class="post-meta">
+            <span id="busuanzi_container_page_pv">|<span id="busuanzi_value_page_pv"></span><span>
+                    阅读</span></span>
+        </div>
+        
+        
+        <div class="post-content">
+            <blockquote>
+<p>原文：<br>
+<a href="https://www.usenix.org/system/files/conference/nsdi12/nsdi12-final138.pdf">《Resilient Distributed Datasets: A Fault-Tolerant Abstraction for
+In-Memory Cluster Computing》</a></p>
+</blockquote>
+<h2 id="设计目标">设计目标</h2>
+<p><code>RDD</code>全称为<code>Resilient Distributed Datasets</code> <br>
+它主要为了解决两类问题：</p>
+<ul>
+<li>多轮的迭代计算</li>
+<li>交互式数据挖掘</li>
+</ul>
+<p>谷歌发表的<code>Pregel</code>也是用于处理交互式计算的，不过<code>Spark</code>的处理范围比它更广。<br>
+论文中提到了，<code>Spark</code>提供了受限制的共享内存，基于粗粒度的转换，而不是细粒度更新。</p>
+<blockquote>
+<p>RDDs provide a restricted form of shared memory, based on coarse-grained transformations rather than fine-grained updates
+to shared state.</p>
+</blockquote>
+<p>对于多轮迭代(PageRank, K-means聚类、逻辑回归)、交互式分析，需要重复使用<strong>计算的中间结果</strong>，两个<code>Map-Reduce</code>如果想重用数据，就只能将数据写入<code>HDFS</code>，这个效率很低。<br>
+为了解决这些问题，后续出现了<code>Pregel</code>，用来解决多轮迭代的图计算框架，以及<code>HaLoop</code>用于解决迭代的<code>Map-Reduce</code>接口。<br>
+但是这些框架只是用于特定目的，而<code>Spark</code>想解决的，是提供一个更通用的抽象框架，用于可以数据集放入内存，然后执行各种<code>ad-hoc</code>查询。<br>
+<code>RDD</code>提供了容错的、并行的数据结构，可以显示的将中间结果保存在内存中，可以控制分区来优化数据的位置，还提供了一组丰富的操作。<br>
+现有的基于集群的内存框架包括<code>key-value</code>存储、数据库、<code>Piccolo</code>，他们提供了细粒度的更新，如操作表中的记录，他们实现<code>HA</code>的方式是跨节点复制数据、或者是跨节点的<code>WAL</code>，但对于数据密集型操作来说这又太重了，会有大量的网络拷贝。 <br>
+<code>RDD</code>提供了一组粗粒度的操作(<code>map</code>、<code>filter</code>、<code>join</code>)。它只对数据集转换做记录，而不是真实的操作数据。如果<code>RDD</code>丢失了，根据已经信息重新计算即可，恢复起来也很快。</p>
+<p>根据论文中的介绍，得出<code>Spark</code>的设计原因：</p>
+<ul>
+<li>要解决机器学习、交互式分析多轮迭代效率低下的问题，传统的<code>M-R</code>需要频繁写磁盘</li>
+<li>现有解决方案只是对于某些特定问题的，如<code>Pregel</code>、<code>HaLoop</code>不够通用</li>
+<li>现有基于集群范围的内存框架是细粒度更新的，因为这些系统是偏向<code>OLTP</code>场景的</li>
+<li>而现在的场景更偏<code>OLAP</code>，目的是基于内存、复用中间结果，计算结果丢了可以重算一次</li>
+</ul>
+<h2 id="resilient-distributed-datasets">Resilient Distributed Datasets</h2>
+<p><code>RDD</code>是只读的、被分区的数据集<br>
+创建<code>RDD</code>有两种方式：</p>
+<ul>
+<li>从持久存储中</li>
+<li>从其他<code>RDD</code>转换而来</li>
+</ul>
+<p><code>RDD</code>也不需要物化操作，根据数据集的血缘关系，可以从持久存储中计算得出<br>
+控制<code>RDD</code>包括两个方面：</p>
+<ul>
+<li>persistence，一个具体的存储策略，默认放内存，也可以溢出到磁盘，反正是可配置的</li>
+<li>partitioning，根据每个记录的<code>key</code>做分区，对<code>JOIN</code>操作优化很有帮助</li>
+</ul>
+<p><code>RDD</code>提供的程序接口是基于对象上的函数操作，类似于<code>DryadLINQ</code>和<code>FlumeJava</code><br>
+<code>DryadLINQ</code>是分布式版的<code>LINQ</code></p>
+<p>
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2021/11/Spark%E8%AE%BA%E6%96%87/1.png">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2021/11/Spark%E8%AE%BA%E6%96%87/1.png" />
+        </a>
+    <br>
+Figure 1: Lineage graph for the third query in our example.<br>
+Boxes represent RDDs and arrows represent transformations.</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4">
+<table style="border-spacing:0;padding:0;margin:0;border:0;width:auto;overflow:auto;display:block;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-scala" data-lang="scala">lines <span style="color:#ff79c6">=</span> spark<span style="color:#ff79c6">.</span>textFile<span style="color:#ff79c6">(</span><span style="color:#f1fa8c">&#34;hdfs://...&#34;</span><span style="color:#ff79c6">)</span>
+errors <span style="color:#ff79c6">=</span> lines<span style="color:#ff79c6">.</span>filter<span style="color:#ff79c6">(</span><span style="color:#ff79c6">_</span><span style="color:#ff79c6">.</span>startsWith<span style="color:#ff79c6">(</span><span style="color:#f1fa8c">&#34;ERROR&#34;</span><span style="color:#ff79c6">))</span>
+errors<span style="color:#ff79c6">.</span>persist<span style="color:#ff79c6">()</span>
+</code></pre></td></tr></table>
+</div>
+</div><p>上面的执行过程：</p>
+<ol>
+<li>从<code>HDFS</code>文本集合中读取数据</li>
+<li>通过<code>filter</code>得到一个新<code>RDD</code></li>
+<li>将其保存在内存中，这样其他查询可以共享这些信息</li>
+</ol>
+<p>经过上面三步之后，其实并没有执行什么操作，而执行通过下面操作触发执行</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4">
+<table style="border-spacing:0;padding:0;margin:0;border:0;width:auto;overflow:auto;display:block;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-scala" data-lang="scala">errors<span style="color:#ff79c6">.</span>count<span style="color:#ff79c6">()</span>
+</code></pre></td></tr></table>
+</div>
+</div><p>也可以继续做一些转换操作：</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4">
+<table style="border-spacing:0;padding:0;margin:0;border:0;width:auto;overflow:auto;display:block;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">5
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">6
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">7
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">8
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-scala" data-lang="scala"><span style="color:#6272a4">// Count errors mentioning MySQL:
+</span><span style="color:#6272a4"></span>errors<span style="color:#ff79c6">.</span>filter<span style="color:#ff79c6">(</span><span style="color:#ff79c6">_</span><span style="color:#ff79c6">.</span>contains<span style="color:#ff79c6">(</span><span style="color:#f1fa8c">&#34;MySQL&#34;</span><span style="color:#ff79c6">)).</span>count<span style="color:#ff79c6">()</span>
+<span style="color:#6272a4">// Return the time fields of errors mentioning
+</span><span style="color:#6272a4">// HDFS as an array (assuming time is field
+</span><span style="color:#6272a4">// number 3 in a tab-separated format):
+</span><span style="color:#6272a4"></span>errors<span style="color:#ff79c6">.</span>filter<span style="color:#ff79c6">(</span><span style="color:#ff79c6">_</span><span style="color:#ff79c6">.</span>contains<span style="color:#ff79c6">(</span><span style="color:#f1fa8c">&#34;HDFS&#34;</span><span style="color:#ff79c6">))</span>
+<span style="color:#ff79c6">.</span>map<span style="color:#ff79c6">(</span><span style="color:#ff79c6">_</span><span style="color:#ff79c6">.</span>split<span style="color:#ff79c6">(</span>’\t’<span style="color:#ff79c6">)(</span><span style="color:#bd93f9">3</span><span style="color:#ff79c6">))</span>
+<span style="color:#ff79c6">.</span>collect<span style="color:#ff79c6">()</span>
+</code></pre></td></tr></table>
+</div>
+</div><p>当第一次调用<code>action</code>操作后，<code>Spark</code>将记录错误信息的分区存储在内存中。<br>
+而原始的<code>RDD</code>则不需要放到内存中。</p>
+<p>和传统分布式共享内存(distributed shared memory DSM)对比：</p>
+<table>
+<thead>
+<tr>
+<th>Aspect</th>
+<th>RDDs</th>
+<th>Distr. Shared Mem.</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Reads</td>
+<td>Coarse- or fine-grained</td>
+<td>Fine-grained</td>
+</tr>
+<tr>
+<td>Writes</td>
+<td>Coarse-grained</td>
+<td>Fine-grained</td>
+</tr>
+<tr>
+<td>Consistency</td>
+<td>Trivial (immutable)</td>
+<td>Up to app / runtime</td>
+</tr>
+<tr>
+<td>Fault recovery</td>
+<td>Fine-grained and lowoverhead using lineage</td>
+<td>Requires checkpoints and program rollback</td>
+</tr>
+<tr>
+<td>Straggler mitigation</td>
+<td>Possible using backup tasks</td>
+<td>Difficult</td>
+</tr>
+<tr>
+<td>Work placement</td>
+<td>Automatic based on data locality</td>
+<td>Up to app (runtimes aim for transparency)</td>
+</tr>
+<tr>
+<td>Behavior if not enough RAM</td>
+<td>Similar to existing data flow systems</td>
+<td>Poor performance (swapping?)</td>
+</tr>
+</tbody>
+</table>
+<p>Table 1: Comparison of RDDs with distributed shared memory.</p>
+<p><code>DSM</code>是一种非常通用的抽象，但是对于普通集群来说，要在其之上实现有效和容错比较难。   <br>
+相比<code>DSM</code>，<code>RDD</code>要实现【写】，只能通过粗粒度转换这种方式，而传统的<code>DSM</code>允许任意位置的读写。 <br>
+<code>RDD</code>的转换相当于执行批量写，这种方式对容错比较有效，不需要 checkkpint。因为丢失一个分区，可以并行重计算方式来恢复，所以不用将程序再执行一遍。 <br>
+由于<code>RDD</code>是不可变的，也可以将其的副本放到一个运行较慢的系统上。 <br>
+对于批量执行时，还可以将这个计算下推到数据节点上提升性能；对于 scan 这种操作，如果内存不够了，也可以放到磁盘上。</p>
+<p><code>RDD</code>适用于 大量类似操作的批处理任务；对于异步的细粒度状态更新则不合适，比如 web应用的存储系统、增量的web爬虫。<br>
+这种操作用 更新日志、或者数据库的checkkpoint 更合适。</p>
+<p>根据上述内容，可以得出结论：</p>
+<ul>
+<li>RDD的这些特性是用于重复的批处理操作的，在这种情况下用DSM就不划算了</li>
+<li>RDD的lazy、粗粒度转换，对于性能和容错都不错</li>
+<li>而且可以将计算下推到数据节点，优化性能</li>
+<li>两个特性：persistence，也就是怎么存(内存、还是磁盘等)，以及partitioning，怎么分区</li>
+<li>RDD提供的这些操作接口类似<code>LINQ</code>，而且是通用的基于内存的批处理模型</li>
+</ul>
+<h2 id="spark编程接口">Spark编程接口</h2>
+<p><code>Spark</code>使用<code>scala</code>实现的，选用这门语言的原因是：操作方便(交互特性)、效率也不错(静态类型)</p>
+<p>开发者可以写一个<code>driver</code>程序，这个程序会连接到集群中的所有节点，<code>driver</code>中包含了一个或多个<code>RDD</code>，<code>Spark</code>还可以追踪<code>driver</code>的调用链。<br>
+工作节点都是常驻内存的。<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2021/11/Spark%E8%AE%BA%E6%96%87/2.png">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2021/11/Spark%E8%AE%BA%E6%96%87/2.png" />
+        </a>
+    <br>
+Figure 2: Spark runtime. The user’s driver program launches multiple workers, which read data blocks from a distributed file system and can persist computed RDD partitions in memory.</p>
+<p><code>scala</code>通过跨节点传递闭包(每个闭包就是一个<code>Java</code>对象)，所以这些对象/闭包就可以序列化/反序列化 到其他节点上，还可以将任何变量绑定到这些闭包上。<br>
+<code>RDD</code>是可以带类型参数的，比如<code>RDD[Int]</code>表示一个<code>integer</code>类型的<code>RDD</code>，不过一般可以省略，因为<code>scala</code>支持类型推导。</p>
+<p>
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2021/11/Spark%E8%AE%BA%E6%96%87/3.png">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2021/11/Spark%E8%AE%BA%E6%96%87/3.png" />
+        </a>
+    <br>
+Table 2: Transformations and actions available on RDDs in Spark. Seq[T] denotes a sequence of elements of type T.</p>
+<p>大部分机器学习算法都是迭代计算，因为要迭代优化程序，比如梯度下降，以最大化函数，将数据保存在内存中，可以大幅度提高运行效率。</p>
+<p>论文中给出了用<code>Spark</code>实现迭代应用的两个例子</p>
+<h3 id="一个逻辑回归的例子">一个逻辑回归的例子</h3>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4">
+<table style="border-spacing:0;padding:0;margin:0;border:0;width:auto;overflow:auto;display:block;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">5
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">6
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">7
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">8
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">9
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-scala" data-lang="scala"><span style="color:#ff79c6">val</span> points <span style="color:#ff79c6">=</span> spark<span style="color:#ff79c6">.</span>textFile<span style="color:#ff79c6">(...)</span>
+                <span style="color:#ff79c6">.</span>map<span style="color:#ff79c6">(</span>parsePoint<span style="color:#ff79c6">).</span>persist<span style="color:#ff79c6">()</span>
+<span style="color:#ff79c6">var</span> w <span style="color:#ff79c6">=</span> <span style="color:#6272a4">// random initial vector
+</span><span style="color:#6272a4"></span><span style="color:#ff79c6">for</span> <span style="color:#ff79c6">(</span>i <span style="color:#ff79c6">&lt;-</span> <span style="color:#bd93f9">1</span> to <span style="color:#50fa7b">ITERATIONS</span><span style="color:#ff79c6">)</span> <span style="color:#ff79c6">{</span>
+    <span style="color:#ff79c6">val</span> gradient <span style="color:#ff79c6">=</span> points<span style="color:#ff79c6">.</span>map<span style="color:#ff79c6">{</span> p <span style="color:#ff79c6">=&gt;</span>
+        p<span style="color:#ff79c6">.</span>x <span style="color:#ff79c6">*</span> <span style="color:#ff79c6">(</span><span style="color:#bd93f9">1</span><span style="color:#ff79c6">/(</span><span style="color:#bd93f9">1</span><span style="color:#ff79c6">+</span>exp<span style="color:#ff79c6">(-</span>p<span style="color:#ff79c6">.</span>y<span style="color:#ff79c6">*(</span>w dot p<span style="color:#ff79c6">.</span>x<span style="color:#ff79c6">)))-</span><span style="color:#bd93f9">1</span><span style="color:#ff79c6">)*</span>p<span style="color:#ff79c6">.</span>y
+    <span style="color:#ff79c6">}.</span>reduce<span style="color:#ff79c6">((</span>a<span style="color:#ff79c6">,</span>b<span style="color:#ff79c6">)</span> <span style="color:#ff79c6">=&gt;</span> a<span style="color:#ff79c6">+</span>b<span style="color:#ff79c6">)</span>
+    w <span style="color:#ff79c6">-=</span> gradient
+<span style="color:#ff79c6">}</span>
+</code></pre></td></tr></table>
+</div>
+</div><p>操作过程如下：</p>
+<ul>
+<li>定义一个<code>points</code>的<code>RDD</code>(通过解析文本中的每一行得到的)</li>
+<li>再定义一个随机的<code>w</code></li>
+<li>然后反复运行<code>map</code>和<code>reduce</code>，通过当前<code>w</code>的函数求和来计算每一步的梯度</li>
+<li>对<code>w</code>除以数据的函数求和，这样<code>w</code>就朝着改进的方向前进</li>
+</ul>
+<h3 id="一个page-rank的例子">一个page-rank的例子</h3>
+<p>该算通过增加链接到每个文档的贡献，迭代的更新每个文档的排名，每次迭代中，每个文档向它的邻居发送$\frac{r}{n}$的贡献。<br>
+这里的<code>r</code>是排名，<code>n</code>是邻居的数量，然后将其排名更新为：$\frac{a}{N} + (1 - a)\sum{ci}$   <br>
+<code>sum</code>是受到的贡献总和，<code>N</code>是文档总数，在<code>Spark</code>中可以这么写：</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4">
+<table style="border-spacing:0;padding:0;margin:0;border:0;width:auto;overflow:auto;display:block;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-scala" data-lang="scala"><span style="color:#6272a4">// Load graph as an RDD of (URL, outlinks) pairs
+</span><span style="color:#6272a4"></span><span style="color:#ff79c6">val</span> links <span style="color:#ff79c6">=</span> spark<span style="color:#ff79c6">.</span>textFile<span style="color:#ff79c6">(...).</span>map<span style="color:#ff79c6">(...).</span>persist<span style="color:#ff79c6">()</span>
+<span style="color:#ff79c6">var</span> ranks <span style="color:#ff79c6">=</span> <span style="color:#6272a4">// RDD of (URL, rank) pairs
+</span><span style="color:#6272a4"></span><span style="color:#ff79c6">for</span> <span style="color:#ff79c6">(</span>i <span style="color:#ff79c6">&lt;-</span> <span style="color:#bd93f9">1</span> to <span style="color:#50fa7b">ITERATIONS</span><span style="color:#ff79c6">)</span> <span style="color:#ff79c6">{</span>
+    <span style="color:#6272a4">// Build an RDD of (targetURL, float) pairs
+</span><span style="color:#6272a4"></span>    <span style="color:#6272a4">// with the contributions sent by each page
+</span><span style="color:#6272a4"></span>    <span style="color:#ff79c6">val</span> contribs <span style="color:#ff79c6">=</span> links<span style="color:#ff79c6">.</span>join<span style="color:#ff79c6">(</span>ranks<span style="color:#ff79c6">).</span>flatMap <span style="color:#ff79c6">{</span>
+        <span style="color:#ff79c6">(</span>url<span style="color:#ff79c6">,</span> <span style="color:#ff79c6">(</span>links<span style="color:#ff79c6">,</span> rank<span style="color:#ff79c6">))</span> <span style="color:#ff79c6">=&gt;</span>
+            links<span style="color:#ff79c6">.</span>map<span style="color:#ff79c6">(</span>dest <span style="color:#ff79c6">=&gt;</span> <span style="color:#ff79c6">(</span>dest<span style="color:#ff79c6">,</span> rank<span style="color:#ff79c6">/</span>links<span style="color:#ff79c6">.</span>size<span style="color:#ff79c6">))</span>
+    <span style="color:#ff79c6">}</span>
+    <span style="color:#6272a4">// Sum contributions by URL and get new ranks
+</span><span style="color:#6272a4"></span>    ranks <span style="color:#ff79c6">=</span> contribs<span style="color:#ff79c6">.</span>reduceByKey<span style="color:#ff79c6">((</span>x<span style="color:#ff79c6">,</span>y<span style="color:#ff79c6">)</span> <span style="color:#ff79c6">=&gt;</span> x<span style="color:#ff79c6">+</span>y<span style="color:#ff79c6">)</span>
+            <span style="color:#ff79c6">.</span>mapValues<span style="color:#ff79c6">(</span>sum <span style="color:#ff79c6">=&gt;</span> a<span style="color:#ff79c6">/</span>N <span style="color:#ff79c6">+</span> <span style="color:#ff79c6">(</span><span style="color:#bd93f9">1</span><span style="color:#ff79c6">-</span>a<span style="color:#ff79c6">)*</span>sum<span style="color:#ff79c6">)</span>
+<span style="color:#ff79c6">}</span>
+</code></pre></td></tr></table>
+</div>
+</div><p>
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2021/11/Spark%E8%AE%BA%E6%96%87/4.png">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2021/11/Spark%E8%AE%BA%E6%96%87/4.png" />
+        </a>
+    <br>
+Figure 3: Lineage graph for datasets in PageRank</p>
+<p>随着迭代次数的增加，计算时间也在增加，在有许多迭代的任务中，需要可靠的复制来减少故障恢复的时间。<br>
+可以手动的设置 persist 来执行此操作，但 links并不需要复制到其他机器，因为通过 重新执行文件块上执行map，就可以重建分区了。   <br>
+数据集一般比rank要大很多，因为文档有很多链接，但是排名只是一个数字，通过血缘关系重建可以节省时间，不用把整个程序状态做checkpoint。</p>
+<p>我们通过控制<code>RDD</code>的分区来优化<code>PageRank</code>程序 <br>
+比如指定<code>link</code>的分区，在<code>join</code>时，以相同的方式对<code>link</code>和<code>rank</code>分区，那么每个URL的 rank 和它的 link就在一台机器上，这样就能节省网络 I/O   <br>
+也可以自定义一个 Partitioner类来对每个相互链接的页面做分组</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4">
+<table style="border-spacing:0;padding:0;margin:0;border:0;width:auto;overflow:auto;display:block;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-scala" data-lang="scala">links <span style="color:#ff79c6">=</span> spark<span style="color:#ff79c6">.</span>textFile<span style="color:#ff79c6">(...).</span>map<span style="color:#ff79c6">(...)</span>
+        <span style="color:#ff79c6">.</span>partitionBy<span style="color:#ff79c6">(</span>myPartFunc<span style="color:#ff79c6">).</span>persist<span style="color:#ff79c6">()</span>
+</code></pre></td></tr></table>
+</div>
+</div><p>这种跨迭代的一致性分区类型，是专用的框架如<code>Pregel</code>的主要优化手段，而在 Spark中，用户可以直接使用这种方式。</p>
+<h2 id="rdd的表示">RDD的表示</h2>
+<p>设计<code>RDD</code>的一个挑战是为他们提供一种抽象表示，可以各种transformations时追踪其血缘关系。<br>
+设计者的目标是为系统尽可能多的转换(transformations)，而对于用户来说，要能任意的组合这些转换。<br>
+设计者使用了 <strong>图</strong>的方式来实现，这样不用增加什么额外信息，而且设计也简单很多。<br>
+通过接口，对每个<code>RDD</code>暴露这么一些信息：</p>
+<ul>
+<li>partitions集合，它是dataset的一部分</li>
+<li>dependencies集合，<code>RDD</code>的父依赖</li>
+<li>基于父dataset的计算函数</li>
+<li>关于partitioning scheme的元数据</li>
+<li>数据的具体位置</li>
+</ul>
+<p>一个<code>RDD</code>(表示一个<code>HDFS</code>文件)，对文件的每个块都有一个分区，也知道这个文件在哪个机器上。同时<code>RDD</code>上的映射结果也有相同的分区，计算它的元素时，将函数映射到父分区的数据上。</p>
+<table>
+<thead>
+<tr>
+<th>Operation</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>partitions()</td>
+<td>Return a list of Partition objects</td>
+</tr>
+<tr>
+<td>preferredLocations(p)</td>
+<td>List nodes where partition p can be accessed faster due to data locality</td>
+</tr>
+<tr>
+<td>dependencies()</td>
+<td>Return a list of dependencies</td>
+</tr>
+<tr>
+<td>iterator(p, parentIters)</td>
+<td>Compute the elements of partition p given iterators for its parent partitions</td>
+</tr>
+<tr>
+<td>partitioner()</td>
+<td>Return metadata specifying whether the RDD is hash/range partitioned</td>
+</tr>
+</tbody>
+</table>
+<p>Table 3: Interface used to represent RDDs in Spark.</p>
+<p><code>RDD</code>之间的依赖关系有两种，如下面的 图4</p>
+<ul>
+<li>窄依赖，父RDD的每个分区最多被子RDD的一个分区使用</li>
+<li>宽依赖，多个子分区可能依赖一个父RDD分区</li>
+</ul>
+<p>窄依赖很有用：</p>
+<ul>
+<li>允许在一个集群节点上流水线执行，如可以执行map，再执行filter；而宽依赖要求所有父分区的数据都是可用的，然后执行一个map-reduce操作</li>
+<li>节点故障恢复更有效，只需要重新就算丢失的父分区即可</li>
+</ul>
+<p>这种通用的接口，在<code>Spark</code>上不到<code>20</code>行代码，就可以直线各种转换了。</p>
+<p>
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2021/11/Spark%E8%AE%BA%E6%96%87/5.png">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2021/11/Spark%E8%AE%BA%E6%96%87/5.png" />
+        </a>
+    <br>
+Figure 4: Examples of narrow and wide dependencies. Each<br>
+box is an RDD, with partitions shown as shaded rectangles.</p>
+<p>几个重要的操作</p>
+<ul>
+<li>HDFS文件：输入的<code>RDD</code>是HDFS上的文件，文件的每个block都对应一个partition，块的offset存在每个partition对象中</li>
+<li>map：在任何<code>RDD</code>上调用后返回一个<code>MappedRDD</code>，跟父分区有相同的partition和preferred_locations，在迭代父对象时，将函数传递到map中</li>
+<li>union：新的分区是两个父分区的并集，每个子分区通过窄依赖到对应的父分区</li>
+<li>sample：类似映射，为每个分区存储一个随机数生成器seed，然后确定抽样的父记录</li>
+<li>join：会出现两个窄依赖(如果有相同分区)、或者两个宽依赖、也可能是一个混合依赖</li>
+</ul>
+<h2 id="实现">实现</h2>
+<p>最初版的<code>Spark</code>只用了<code>1.4W</code>行的<code>scala</code>代码；出版的<code>Spark</code>跑在<code>Mesos</code>上，可以访问<code>Hadoop</code>、<code>MPI</code>等其他应用资源。<br>
+每个<code>Spark</code>应用都是独立的，有自己的 driver 和 worker，而应用之间的共享由<code>Mesos</code>负责。<br>
+下面来分析几个重要的部分：</p>
+<ul>
+<li>job scheduler：数据是怎么关联的，任务是怎么调度的</li>
+<li>交互式的解释器：Spark的交互式执行方式，以及对scala解释器的改动</li>
+<li>内存管理：RDD的几种存储方式</li>
+<li>checkpoint：通过检查点，可以加速恢复宽依赖</li>
+</ul>
+<h3 id="job-scheduler">Job scheduler</h3>
+<p>有点类似 Dryad，但会分析内存中哪些持久<code>RDD</code>分区可用<br>
+当用户调用 action 操作后，scheduler 检查<code>RDD</code>的血缘关系，然后建立要执行的 DAG stages，类似下图<br>
+每个 stage 都包含进可能多的，有窄依赖的流水线转换；而 stage 的边界是宽依赖的 shuffle 操作，或者是一个计算好的分区，可以缩父<code>RDD</code>的计算量。<br>
+scheduler 启动 task，计算每个 stage所需要的分区，直到目标<code>RDD</code>完成。<br>
+scheduler 将计算任务下推到数据节点上，也就是尽可能满足数据本地性，如果要处理的分区正好在一个节点的内存中，那就将这个task发往那个节点，否则就找一个本地性最好的节点执行。<br>
+对于宽依赖，我们要将中间结果物化到节点上，来保存父节点的数据，这样可以简化故障恢复，而这个操作非常像<code>Map-Reduce</code>中的<code>map</code>物化输出。<br>
+如果任务失败了，但父分区仍然可用，那就再找一个节点重新计算一下；如果stage变成不可用(如shuffle丢失了map输出)，我们重新提交这个任务，并行的计算丢失分区。复制<code>RDD</code>血缘很简单，但是scheduler不能容忍调度失败。<br>
+所有的计算都是通过 driver端调用action触发的；也可以让集群上的任务执行查找操作，该操作通过 key 随机访问<code>RDD</code>的hash分区元素。如果缺少所需分区，task需要告诉scheduler所需的分区。</p>
+<p>
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2021/11/Spark%E8%AE%BA%E6%96%87/6.png">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2021/11/Spark%E8%AE%BA%E6%96%87/6.png" />
+        </a>
+    <br>
+Figure 5: Example of how Spark computes job stages. Boxes<br>
+with solid outlines are RDDs. Partitions are shaded rectangles,<br>
+in black if they are already in memory. To run an action on RDD<br>
+G, we build build stages at wide dependencies and pipeline narrow transformations inside each stage. In this case, stage 1’s<br>
+output RDD is already in RAM, so we run stage 2 and then 3.</p>
+<h3 id="解释器整合">解释器整合</h3>
+<ul>
+<li>类似于 ruby 和 python 这样的交互式执行，用户可以通过解释器运行<code>Spark</code>交互式查询大数据集</li>
+<li>每输入一行都会被编译成一个类，然后加载到JVM中运行</li>
+<li>这个类中包含一个单例对象，该对象包含各种变量和函数，并在初始化函数中运行这些代码</li>
+</ul>
+<p><code>Spark</code>的解释器做了一些改动：</p>
+<ul>
+<li>让工作节点从每一行中获取字节码，通过<code>HTTP</code>来传递解释器的字节码</li>
+<li>修改代码生成逻辑
+<ul>
+<li>一般是通过静态函数访问每行创建的单例对象，但对于闭包引用<code>line.x</code>，Java不会传输对象图</li>
+<li>也就是，节点收不到line包裹的x，所以修改了代码生成逻辑，直接引用每行的对象逻辑</li>
+</ul>
+</li>
+</ul>
+<blockquote>
+<p>We modified the code generation logic to reference the instance of each line object directly.</p>
+</blockquote>
+<p>操作过程类似下图<br>
+在初版的<code>Spark</code>中，设计者们还没有引入<code>SQL</code>这种更高级的交互式查询</p>
+<p>
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2021/11/Spark%E8%AE%BA%E6%96%87/7.png">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2021/11/Spark%E8%AE%BA%E6%96%87/7.png" />
+        </a>
+     
+Figure 6: Example showing how the Spark interpreter translates<br>
+two lines entered by the user into Java objects.</p>
+<h3 id="内存管理">内存管理</h3>
+<p><code>Spark</code>提供了三种<code>RDD</code>持久存储：</p>
+<ul>
+<li>类似 Java对象序列化形式，保存在内存中；性能最快</li>
+<li>序列化数据保存在内存中；比原生Java对象更节省内存，但性能会有损失</li>
+<li>保存在磁盘，当<code>RDD</code>太大内存放不下可以保存到磁盘，这样节省了重复计算的时间</li>
+</ul>
+<p><code>Spark</code>使用了<code>LRU</code>算法来管理内存中的分区   <br>
+旧的分区也会保存在内存中，以防止同样的分区频繁换入/换出 <br>
+在初版，<code>Spark</code>的每个实例都有自己独立的内存空间，未来对于跨实例的共享<code>RDD</code>，用统一内存管理实现。</p>
+<h3 id="checkpointing">Checkpointing</h3>
+<p>通过血缘关系可以恢复<code>RDD</code>，但如果调用链太长的话，恢复时间也会增加。<br>
+checkpoint 对于宽依赖很有帮助，因为在宽依赖时，一个节点的失败会导致所有节点的父分区都丢失，通过checkpoint可以加速恢复；而对于窄依赖帮助则不大。<br>
+因为窄依赖只需要在其他节点上计算丢失的分区即可，这个动作还可以是并行的。 <br>
+初版的<code>Spark</code>提供了checkpoint的选项，但对于哪些<code>RDD</code>需要做checkpoint这个动作留给用户；未来这个动作可能会变成自动化，因为 scheduler 是知道每个数据集的大小，那么就可以选择一个最优的<code>RDD</code>集合做checkpoint。<br>
+由于<code>RDD</code>是只读的，所以在做checkpoint时比普通的共享内存要容易，因为共享内存要考虑到一致性问题，可能牵扯到程序的暂停、分布式快照等问题，而<code>RDD</code>做checkpoint时，只要在后台写即可。</p>
+<h2 id="评估">评估</h2>
+<p>基于AWS上做了一系列实验，以及一些应用级别的性能测试，得出结论如下：</p>
+<ul>
+<li>相比Hadoop上的迭代机器学习和图应用，<code>Spark</code>提升了 <strong>20倍</strong> 性能，主要是避免了大量的I/O以及从磁盘读取数据反序列化的时间</li>
+<li>应用程序有很好的扩展性，使用<code>Spark</code>将 Hadoop 上的分析报告提升了 <strong>40倍</strong></li>
+<li>节点宕机了，可以快速恢复</li>
+<li>在 1TB数据上做交互查询，延迟为 <strong>5- 7秒</strong></li>
+</ul>
+<p>测试环境：</p>
+<ul>
+<li>AWS上的4核15G机器</li>
+<li>Hadoop的block为256M</li>
+<li>每次测试都清空了 OS 的缓存</li>
+</ul>
+<h3 id="迭代机器学习应用">迭代机器学习应用</h3>
+<p>在下面几种环境中运行迭代的机器学习应用(逻辑回归、K-means)</p>
+<ul>
+<li>普通的Hadoop</li>
+<li>HadoopbinMem，输入数据是二进制的，这样省去了文本解释时间，另外数据是放在Hadoop的内存实例中</li>
+<li>Spark</li>
+</ul>
+<p>运行这两种算法 10 轮，数据量为100G，集群规模为 25 - 100台<br>
+这两个算法的区别是计算量，k-means由计算量决定，而逻辑回归计算量少些，但对I/O和反序列时间更敏感 <br>
+由于要经过10次迭代，因此列出了第一轮和后续的迭代的报告</p>
+<p><strong>第一轮</strong><br>
+<code>Spark</code>比普通的Hadoop稍微快一点，这其中的差别是Hadoop的主从心跳导致的<br>
+而HadoopBinMem明显慢得多，因为它要运行<code>M-R</code>任务，将数据转换为二进制，还要通过网络复制数据到其他节点上。</p>
+<p><strong>后续迭代</strong><br>
+可以看到<code>Spark</code>有大幅度提升，相比Hadoop有20倍的提升，而HadoopBinMem也有2-3倍的提升<br>
+参考图7、图8</p>
+<p>
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2021/11/Spark%E8%AE%BA%E6%96%87/8.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2021/11/Spark%E8%AE%BA%E6%96%87/8.jpg" />
+        </a>
+     
+Figure 7: Duration of the first and later iterations in Hadoop,<br>
+HadoopBinMem and Spark for logistic regression and k-means<br>
+using 100 GB of data on a 100-node cluster.</p>
+<p>
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2021/11/Spark%E8%AE%BA%E6%96%87/9.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2021/11/Spark%E8%AE%BA%E6%96%87/9.jpg" />
+        </a>
+     
+Figure 8: Running times for iterations after the first in Hadoop,<br>
+HadoopBinMem, and Spark. The jobs all processed 100 GB.</p>
+<p><code>Spark</code>比内存中的Hadoop还要好，这主要是下面这些原因：</p>
+<ul>
+<li>Hadoop软件栈本身的开销</li>
+<li>处理数据的消耗</li>
+<li>将二进制转为Java对象的开销</li>
+<li><code>Spark</code>没有运行任何Hadoop作业，而这些作业本身需要启动、清理、设置，这会带来25秒开销</li>
+<li>Hadoop对每个block会执行多个内存拷贝和checksum</li>
+</ul>
+<p>之后又补充了单机版的基准测试，输入为各种格式的256M数据，再运行逻辑回归算法   <br>
+这里比较了从HDFS上读取二进制/文本文件(都是放在本地内存中的)<br>
+图9显示了 文本文件、二进制文件的差异</p>
+<ul>
+<li>即使数据在本地内存，通过HDFS读取也有2秒的开销</li>
+<li>文本和二进制解析开销为7秒</li>
+<li>从内存中读取文件时，将二进制转为Java对象也有3秒开销(几乎跟逻辑回归本身花费一样了)</li>
+<li><code>RDD</code>将Java对象直接存储在内存中，避免了这些开销</li>
+</ul>
+<p>
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2021/11/Spark%E8%AE%BA%E6%96%87/10.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2021/11/Spark%E8%AE%BA%E6%96%87/10.jpg" />
+        </a>
+     
+Figure 9: Iteration times for logistic regression using 256 MB<br>
+data on a single machine for different sources of input.</p>
+<h3 id="pagerank">PageRank</h3>
+<p>使用了 54G的维基百科文档，运行10轮 PageRank 算法，文档总量约 400万<br>
+图10显示了在30个节点上，Spark运行速度是Hadoop的 <strong>2.4倍</strong><br>
+如果显示的控制分区，那么可以提升 <strong>7.4倍</strong>，机器数量也可以线性的扩展到 60台<br>
+此外还在<code>Spark</code>上实现了<code>Pregel</code>版本，这个版本的效果跟图10差不多，但是总时间会多 4秒，这是因为<code>Pregel</code>在每轮迭代时有一个额外的操作，让顶点投票是否结束这个任务</p>
+<p>
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2021/11/Spark%E8%AE%BA%E6%96%87/11.png">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2021/11/Spark%E8%AE%BA%E6%96%87/11.png" />
+        </a>
+     
+Figure 10: Performance of PageRank on Hadoop and Spark.</p>
+<h3 id="失败恢复">失败恢复</h3>
+<p>用 k-means 来评估节点失败的情况<br>
+如图11所示，运行10轮 k-means算法，集群规模为75个节点，每轮迭代有400个task，100G的数据<br>
+前面 5轮的 执行时间都是58秒左右，到 第6轮 时，人为的kill掉一个节点<br>
+于是这个机器上任务分区数据就丢失了，之后<code>Spark</code>在其他节点上并行的再次执行这些任务，根据血缘关系从输入中读取数据重建<code>RDD</code><br>
+这轮的时间为80秒，等恢复完成后面的运行时间又降回到58秒<br>
+如果使用了checkpoint恢复机制，则需要好几轮迭代，还需要把100G的数据集跨节点复制，这至少需要两倍的内存、或者等待100G数据写磁盘<br>
+而基于<code>RDD</code>的血缘图，则不到10K</p>
+<p>
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2021/11/Spark%E8%AE%BA%E6%96%87/12.png">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2021/11/Spark%E8%AE%BA%E6%96%87/12.png" />
+        </a>
+     
+Figure 11: Iteration times for k-means in presence of a failure.<br>
+One machine was killed at the start of the 6th iteration, resulting<br>
+in partial reconstruction of an RDD using lineage.</p>
+<h3 id="内存不够的情况">内存不够的情况</h3>
+<p>前面的例子都是内存充足情况下的测试，现在展示内存不足情况下<code>Spark</code>的运行情况。<br>
+配置每个机器的内存不超过固定的百分比，图12显示各种存储空间情况下的运行结果，可以看到，在空间不足的情况下，执行效果是优雅的退化。</p>
+<p>
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2021/11/Spark%E8%AE%BA%E6%96%87/13.png">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2021/11/Spark%E8%AE%BA%E6%96%87/13.png" />
+        </a>
+     
+Figure 12: Performance of logistic regression using 100 GB<br>
+data on 25 machines with varying amounts of data in memory.</p>
+<h3 id="使用spark构建应用">使用Spark构建应用</h3>
+<p><strong>内存分析</strong><br>
+有一个视频分发公司之前使用了Hadoop，而后改为用<code>Spark</code>。<br>
+之前是用 Hive 计算客户的各种统计信息，这些查询使用了相同的数据集(对客户数据的过滤)，但是执行各种分组聚合时(avg、百分比、count、distinct)却跑了不同的<code>M-R</code>任务上。  <br>
+而<code>Spark</code>上的<code>RDD</code>是可以跨节点共享的，这家公司将查询时间提升了<strong>40倍</strong>。<br>
+之前在Hadoop上的200G压缩数据需要 20个小时才能跑完，而<code>Spark</code>只用两台机器 30分钟就搞定了。<br>
+<code>Spark</code>需要96G内存，用来存放 filter之后的用户数据，而不是整个解压缩文件。</p>
+<p><strong>流量模型</strong><br>
+伯克利的研究团队使用了一种并行学习算法，根据少量的GPS数据，来推断道路拥塞情况。<br>
+数据来自大城市的 1W交通路线，以及60W个点对点GPS行程(每个行程可能包含多个路线)<br>
+系统可以评估每条路线的花费时间，研究人员训练的模型使用了最大期望(expectation maximization)算法。<br>
+这个算法需要两轮 map和reduceByKey 迭代，应用基本是线性的从20个节点扩展到了80个节点(每个节点4核)<br>
+图13(a)展示了运行效果</p>
+<p><strong>推特垃圾邮件</strong><br>
+伯克利使用<code>Spark</code>识别推特上的垃圾信息，在<code>Spark</code>上实现了逻辑回归分类器，使用了分布式的 reduceByKey 并行计算梯度向量之和。<br>
+数据子集为50G，包括25W个URL，每个URL的网络和内容数量有107个(特征/尺寸)。<br>
+由于每次迭代都有比较大的固定通讯开销，导致扩容后的效率不是线性增长，如图13(b)</p>
+<p>
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2021/11/Spark%E8%AE%BA%E6%96%87/14.png">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2021/11/Spark%E8%AE%BA%E6%96%87/14.png" />
+        </a>
+     
+Figure 13: Per-iteration running time of two user applications<br>
+implemented with Spark. Error bars show standard deviations.</p>
+<h3 id="交互式的数据检索">交互式的数据检索</h3>
+<p>为了证明<code>Spark</code>可以用于交互式的查询，使用了 1TB的维基百科页面访问日志(2年的数据)<br>
+使用了100个AWS机器，每个机器为 8核68G内存<br>
+包括三种查询，每种查询都是扫描全部数据</p>
+<ul>
+<li>查询所有页面总数</li>
+<li>通过给定关键字，精确匹配网页标题</li>
+<li>通过给定关键字，部分匹配网页标题</li>
+</ul>
+<p>图14显示了查询 100G、500G、1T的响应时间，即使 1T数据量，也只需要5-7秒时间<br>
+这比磁盘处理快了一个数量级，从磁盘读1T数据需要170s，这证明<code>Spark</code>在交互式的数据检索上效果非常好。</p>
+<p>
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2021/11/Spark%E8%AE%BA%E6%96%87/15.png">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2021/11/Spark%E8%AE%BA%E6%96%87/15.png" />
+        </a>
+     
+Figure 14: Response times for interactive queries on Spark,<br>
+scanning increasingly larger input datasets on 100 machines.</p>
+<h2 id="讨论">讨论</h2>
+<p>尽管<code>RDD</code>只提供了有限的接口，如不可变性、粗粒度转换等，但他们实际的应用范围却很广，可以用<code>RDD</code>来实现现有的各种分布式编程模型，   另外<code>RDD</code>的血缘关系，对于 debug 也有帮助。</p>
+<p><code>RDD</code>可以产生和程序一样的输出，也可以处理框架执行时的优化，如：  -  在内存中保持特定的数据</p>
+<ul>
+<li>分区最小化通讯</li>
+<li>有效的失败恢复</li>
+</ul>
+<p><strong>表示现有的编程模型</strong>：</p>
+<ul>
+<li>Map-Reduce：通过<code>flatMap</code>和<code>groupByKey</code>来表示，如果要组合则用<code>reduceByKey</code></li>
+<li>DryadLINQ：提供比<code>MapReduce</code>更宽泛的操作，但都是批量的，对应<code>Spark</code>的map、groupByKey、join等</li>
+<li>SQL：类似于DryadLINQ，SQL查询是对数据集的并行操作</li>
+<li>Pregel：谷歌的迭代图模型
+<ul>
+<li>程序运行一系列协调的&quot;supersteps&quot;</li>
+<li>每个&quot;supersteps&quot;上的每个图顶点运行一个用户函数，该函数可以更新关联的顶点、状态拓扑、发送消息到其他顶点，以便在下个&quot;supersteps&quot;中使用</li>
+<li>这个模型可以表示很多图算法如：最短路径、二部匹配、PageRank</li>
+<li>用<code>RDD</code>实现的关键点是，Pergel在每次迭代时，对所有顶点使用相同的用户函数</li>
+<li>在每次迭代时存储顶点状态，然后使用这些函数执行批量转换(flatMap)，生成消息的<code>RDD</code></li>
+<li>然后将这个<code>RDD</code>和顶点状态做join，来执行消息交换</li>
+<li><code>RDD</code>也可以在内存中保存顶点状态，控制分区减少通讯，支持部分错误恢复</li>
+</ul>
+</li>
+<li>Iterative MapReduce：HaLoop、Twister提供了迭代的MapReduce模型
+<ul>
+<li>用户可以提交一系列的MapReduce作业</li>
+<li>这些系统可在执行迭代时保持分区的一致性</li>
+<li>Twister还可以将其保存在内存中</li>
+<li>这两种优化用<code>RDD</code>实现起来都比较容易</li>
+</ul>
+</li>
+<li>Batched Stream Processing
+<ul>
+<li>每15分钟更新一次广告点击统计信息</li>
+<li>将前面15分钟的中间数据 跟当前数据合并</li>
+<li>将中间结果放入<code>RDD</code>中可以加速处理</li>
+</ul>
+</li>
+</ul>
+<p>为什么<code>RDD</code>可以实现这么多程序模型：</p>
+<ul>
+<li>在并行应用中<code>RDD</code>的那些限制其实微不足道</li>
+<li>并行操作时可以将同一个操作应用到多个数据上</li>
+<li>同样也可以创建多个<code>RDD</code>表示同一个数据集的不同版本</li>
+<li>大多数<code>M-R</code>应用是不允许更新文件系统的</li>
+<li>先前的那些框架可能是专注于<code>Map-Reduce</code>和<code>Dryad</code>的不足，导致他们缺乏通用的抽象模型</li>
+</ul>
+<p>利用RDD做调试：</p>
+<ul>
+<li>最初只是用来做容错的，但是发现对于debug也有帮助</li>
+<li>通过重新计算依赖的<code>RDD</code>分区，可以在单个流调试器中运行各种作业</li>
+<li>传统的分布式系统上，需要捕获、推断跨节点的时间顺序</li>
+<li><code>RDD</code>只有记录血缘关系即可，团队打算基于这种方式增加<code>Spark</code>的调试功能</li>
+</ul>
+<h2 id="相关工作">相关工作</h2>
+<p>Cluster Programming Models：</p>
+<ul>
+<li>像<code>M-R</code>、<code>Dryad</code>、<code>Ciel</code>这样的模型可以支持很多操作，但他们都是通过持久存储共享数据的，而<code>RDD</code>提供了更有效的方式，避免了数据复制、磁盘I/O、序列化</li>
+<li>DryadLINQ和FlumeJava这种高级编程接口，通过map、join实现实现并行集合，虽然也能用流水线的方式操作多个map，但是没能在多个查询中有效共享数据</li>
+<li>Pregel、Twister、HaLoop 这些框架将数据共享的方式隐藏了，用户无法指定可以将哪些数据集加载到内存，更没法在上面做什么操作</li>
+<li>Piccolo 这样的分布式内存系统，提供的是细粒度的状态更新，允许用户的函数读/写分布式hash表中的每个元素，而他们提供的checkpoint做容错代价很高</li>
+</ul>
+<p>Caching Systems:</p>
+<ul>
+<li>通过识别带有分析程序的子表达式，Nectar可以重新DryadLINQ的job的中间结果</li>
+<li>不过Nectar没有提供内存级的缓存，也没有控制数据集的接口</li>
+<li>Ciel和FlumeJava 也可以缓存任务结果，但没有提供操作接口</li>
+<li>现有的缓存方案是将数据写入到分布式文件系统，但对于中间结果这块没有很好处理，所以效率不如<code>RDD</code></li>
+</ul>
+<p>Lineage:</p>
+<ul>
+<li>捕获血缘或者源头信息，一直都是计算机和数据库方面的研究主题，可以用来解释结果</li>
+<li>允许在其他地方重新构建数据，或者因为BUG、数据集丢失，可以重新计算</li>
+<li><code>RDD</code>提供了细粒度的血缘关系，用于容错</li>
+<li>MapReduce、Dryad也有恢复机制，通过跟踪任务的DAG来实现</li>
+<li>但这些系统一旦任务结束，血缘就丢了，需要持久存储来保存其结果</li>
+<li><code>RDD</code>是将血缘放在内存中的，避免了复制和I/O开销</li>
+</ul>
+<p>Relational Databases：</p>
+<ul>
+<li><code>RDD</code>在概念上跟关系型数据的view类似，持久化的<code>RDD</code>类似物化视图</li>
+<li>关系型数据库允许细粒度的读/写所有数据</li>
+<li>需要WAL和容错来实现一致性，这也带来了不小的开销</li>
+<li><code>RDD</code>是用粗粒度方式实现的，所以不需要这些额外的开销</li>
+</ul>
+<h2 id="结论">结论</h2>
+<p>resilient distributed datasets (RDDs)是有通用性的、容错的框架，可以在集群应用中共享数据。<br>
+<code>RDD</code>可以用于很多并行应用，包括很多特定的变成模型，和现有的框架不同，<code>RDD</code>不需要数据复制来实现容错，它的 API是基于粗粒度转换，通过血缘关系实现容错。<br>
+我们用一个叫<code>Spark</code>的系统实现了<code>RDD</code>，它有超过Hadoop20倍的速度做迭代查询，也可以在几百G的数据上做交互式查询。</p>
+
+			<script type="text/javascript"
+        async
+        src="https://cdn.bootcss.com/mathjax/2.7.3/MathJax.js?config=TeX-AMS-MML_HTMLorMML">
+MathJax.Hub.Config({
+  tex2jax: {
+    inlineMath: [['$','$'], ['\\(','\\)']],
+    displayMath: [['$$','$$'], ['\[\[','\]\]']],
+    processEscapes: true,
+    processEnvironments: true,
+    skipTags: ['script', 'noscript', 'style', 'textarea', 'pre'],
+    TeX: { equationNumbers: { autoNumber: "AMS" },
+         extensions: ["AMSmath.js", "AMSsymbols.js"] }
+  }
+});
+
+MathJax.Hub.Queue(function() {
+    
+    
+    
+    var all = MathJax.Hub.getAllJax(), i;
+    for(i = 0; i < all.length; i += 1) {
+        all[i].SourceElement().parentNode.className += ' has-jax';
+    }
+});
+</script>
+
+<style>
+code.has-jax {
+    font: inherit;
+    font-size: 100%;
+    background: inherit;
+    border: inherit;
+    color: #515151;
+}
+</style>
+        </div>
+
+        
+
+
+        
+
+
+        <div class="post-meta meta-tags">
+            
+            <ul class="clearfix">
+                
+                <li><a href='/tags/%E8%AE%A1%E7%AE%97%E6%A1%86%E6%9E%B6'>计算框架</a></li>
+                
+                <li><a href='/tags/spark'>spark</a></li>
+                
+            </ul>
+            
+        </div>
+    </article>
+    
+    
+
+    
+    
+</div>
+
+
+                </div>
+
+                <div id="secondary">
+    <section class="widget">
+        <form id="search" action='https://code0xff.cn/search/' method="get" accept-charset="utf-8" target="_blank" _lpchecked="1">
+      
+      <input type="text" name="q" maxlength="20" placeholder="Search">
+      <input type="hidden" name="sitesearch" value="https://code0xff.cn/">
+      <button type="submit" class="submit icon-search"></button>
+</form>
+    </section>
+    
+    <section class="widget">
+        <h3 class="widget-title">最近文章</h3>
+<ul class="widget-list">
+    
+    <li>
+        <a href="https://code0xff.cn/post/2022/02/%E7%94%A8javacc%E5%AE%9E%E7%8E%B0%E5%9B%9B%E5%88%99%E8%BF%90%E7%AE%97/" title="用javacc实现四则运算">用javacc实现四则运算</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.cn/post/2022/02/scala%E7%9A%84%E4%B8%80%E4%BA%9B%E7%89%B9%E6%80%A7/" title="scala的一些特性">scala的一些特性</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.cn/post/2022/02/kudu%E8%AE%BA%E6%96%87%E7%BF%BB%E8%AF%91/" title="Kudu论文翻译">Kudu论文翻译</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.cn/post/2022/02/%E5%BE%AE%E6%9C%8D%E5%8A%A1%E7%9A%84%E8%AE%BE%E8%AE%A1%E7%9A%84ideals/" title="微服务的设计的IDEALS">微服务的设计的IDEALS</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.cn/post/2022/02/kudu%E7%9A%84%E6%A8%A1%E5%9E%8B%E8%AE%BE%E8%AE%A1/" title="Kudu的模型设计">Kudu的模型设计</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.cn/post/2022/01/lr%E7%AE%97%E6%B3%95/" title="LR算法">LR算法</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.cn/post/2022/01/%E5%AF%B9%E6%B0%B8%E4%B9%85%E7%BB%84%E5%90%88%E7%9A%84%E5%AE%9E%E8%B7%B5/" title="对永久组合的实践">对永久组合的实践</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.cn/post/2022/01/%E7%94%A8dfa%E9%AA%8C%E8%AF%81%E5%AD%97%E7%AC%A6%E4%B8%B2%E4%B8%AD%E7%9A%84%E6%95%B0%E5%AD%97/" title="用DFA验证字符串中的数字">用DFA验证字符串中的数字</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.cn/post/2021/12/%E5%88%86%E5%B8%83%E5%BC%8F%E6%95%B0%E6%8D%AE%E5%BA%93%E8%AF%BE%E7%A8%8B%E4%B8%AD%E7%9A%84%E8%AE%BA%E6%96%87/" title="分布式数据库课程中的论文">分布式数据库课程中的论文</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.cn/post/2021/12/%E6%95%B0%E6%8D%AE%E5%AF%86%E9%9B%86%E5%9E%8B%E5%BA%94%E7%94%A8%E8%AE%BE%E8%AE%A1/" title="数据密集型应用设计读书笔记">数据密集型应用设计读书笔记</a>
+    </li>
+    
+</ul>
+    </section>
+
+    
+
+    <section class="widget">
+        <h3 class="widget-title"><a href='/categories/'>分类</a></h3>
+<ul class="widget-list">
+    
+    <li><a href="https://code0xff.cn/categories/%E5%95%86%E4%B8%9A/">商业 (2)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E5%A4%A7%E6%95%B0%E6%8D%AE/">大数据 (1)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E6%97%85%E8%A1%8C/">旅行 (10)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E6%9E%B6%E6%9E%84/">架构 (1)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E7%94%9F%E6%B4%BB/">生活 (4)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E7%AE%97%E6%B3%95/">算法 (7)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E7%BB%8F%E6%B5%8E/">经济 (1)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E7%BC%96%E7%A8%8B%E8%AF%AD%E8%A8%80/">编程语言 (1)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E8%AE%A1%E7%AE%97%E6%9C%BA%E5%8E%9F%E7%90%86/">计算机原理 (2)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E8%AE%BA%E6%96%87/">论文 (5)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E8%AF%BB%E4%B9%A6%E7%AC%94%E8%AE%B0/">读书笔记 (3)</a></li>
+    
+</ul>
+    </section>
+
+    <section class="widget">
+        <h3 class="widget-title">归档</a></h3>
+<ul class="widget-list">
+    
+    <li><a href="https://code0xff.cn/years/2021%E5%B9%B4/">2021年 (29)</a></li>
+    
+    <li><a href="https://code0xff.cn/years/2022%E5%B9%B4/">2022年 (8)</a></li>
+    
+</ul>
+    </section>
+
+    <section class="widget">
+        <h3 class="widget-title"><a href='/tags/'>标签</a></h3>
+<div class="tagcloud">
+    
+    <a href="https://code0xff.cn/tags/kudu/">kudu </a>
+    
+    <a href="https://code0xff.cn/tags/manacher/">Manacher </a>
+    
+    <a href="https://code0xff.cn/tags/scala/">scala </a>
+    
+    <a href="https://code0xff.cn/tags/spark/">spark </a>
+    
+    <a href="https://code0xff.cn/tags/unix/">unix </a>
+    
+    <a href="https://code0xff.cn/tags/%E4%BA%8C%E5%88%86%E6%9F%A5%E6%89%BE/">二分查找 </a>
+    
+    <a href="https://code0xff.cn/tags/%E4%BA%8C%E5%8F%89%E6%A0%91%E9%81%8D%E5%8E%86/">二叉树遍历 </a>
+    
+    <a href="https://code0xff.cn/tags/%E5%88%86%E5%B8%83%E5%BC%8F/">分布式 </a>
+    
+    <a href="https://code0xff.cn/tags/%E5%8E%86%E5%8F%B2/">历史 </a>
+    
+    <a href="https://code0xff.cn/tags/%E5%9B%9E%E6%BA%AF/">回溯 </a>
+    
+    <a href="https://code0xff.cn/tags/%E5%9B%BD%E5%86%85%E6%97%85%E8%A1%8C/">国内旅行 </a>
+    
+    <a href="https://code0xff.cn/tags/%E5%9B%BD%E5%A4%96%E6%97%85%E8%A1%8C/">国外旅行 </a>
+    
+    <a href="https://code0xff.cn/tags/%E5%AD%98%E5%82%A8/">存储 </a>
+    
+    <a href="https://code0xff.cn/tags/%E5%BE%AE%E6%9C%8D%E5%8A%A1/">微服务 </a>
+    
+    <a href="https://code0xff.cn/tags/%E6%95%B0%E6%8D%AE%E5%BA%93/">数据库 </a>
+    
+    <a href="https://code0xff.cn/tags/%E6%B1%87%E7%BC%96/">汇编 </a>
+    
+    <a href="https://code0xff.cn/tags/%E7%94%9F%E6%B4%BB/">生活 </a>
+    
+    <a href="https://code0xff.cn/tags/%E7%94%B5%E5%BD%B1/">电影 </a>
+    
+    <a href="https://code0xff.cn/tags/%E7%AE%97%E6%B3%95/">算法 </a>
+    
+    <a href="https://code0xff.cn/tags/%E7%BB%8F%E6%B5%8E/">经济 </a>
+    
+    <a href="https://code0xff.cn/tags/%E7%BC%93%E5%AD%98/">缓存 </a>
+    
+    <a href="https://code0xff.cn/tags/%E7%BC%96%E8%AF%91%E5%8E%9F%E7%90%86/">编译原理 </a>
+    
+    <a href="https://code0xff.cn/tags/%E8%AE%A1%E7%AE%97%E6%A1%86%E6%9E%B6/">计算框架 </a>
+    
+    <a href="https://code0xff.cn/tags/%E8%AF%BB%E4%B9%A6%E7%AC%94%E8%AE%B0/">读书笔记 </a>
+    
+</div>
+    </section>
+
+    
+
+    <section class="widget">
+        <h3 class="widget-title">RSS</h3>
+        <ul class="widget-list">
+            <li><a href="https://code0xff.cn/index.xml">文章 RSS</a></li>
+        </ul>
+    </section>
+</div>
+            </div>
+        </div>
+    </div>
+    <footer id="footer">
+    <div>
+        &copy; 2022 <a href="https://code0xff.cn/">记录每个瞬间 By 老王</a>
+        
+    </div>
+    <br />
+    <div>
+        <div class="github-badge">
+            <a href="https://gohugo.io/" target="_black" rel="nofollow"><span class="badge-subject">Powered by</span><span class="badge-value bg-blue">Hugo</span></a>
+        </div>
+        <div class="github-badge">
+            <a href="https://github.com/flysnow-org/maupassant-hugo" target="_black"><span class="badge-subject">Theme</span><span class="badge-value bg-yellowgreen">Maupassant</span></a>
+        </div>
+    </div>
+    <div>
+        <a href="http://www.beian.miit.gov.cn/">京ICP备19014975号</a>
+    </div>
+</footer>
+
+
+    
+    <script type="text/javascript">
+        window.MathJax = {
+            tex2jax: {
+                inlineMath: [['$', '$']],
+                processEscapes: true
+                }
+            };
+    </script>
+    <script src='https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.5/MathJax.js?config=TeX-MML-AM_CHTML' async></script><script src="https://cdn.bootcdn.net/ajax/libs/fancybox/3.5.7/jquery.fancybox.min.js"></script>
+
+<a id="rocket" href="#top"></a>
+<script type="text/javascript" src='/js/totop.js?v=0.0.0' async=""></script>
+
+<script type="application/javascript">
+var doNotTrack = false;
+if (!doNotTrack) {
+	window.ga=window.ga||function(){(ga.q=ga.q||[]).push(arguments)};ga.l=+new Date;
+	ga('create', 'GA ID', 'auto');
+	
+	ga('send', 'pageview');
+}
+</script>
+<script async src='https://www.google-analytics.com/analytics.js'></script>
+
+
+
+    <script type="text/javascript" src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js" async></script>
+
+
+
+
+</body>
+
+</html>
