@@ -1,0 +1,815 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    
+    <meta name="referrer" content="no-referrer-when-downgrade">
+    
+
+    <title>Kudu论文翻译 | 记录每个瞬间</title>
+    <meta property="og:title" content="Kudu论文翻译 - 记录每个瞬间">
+    <meta property="og:type" content="article">
+        
+    <meta property="article:published_time" content='2022-02-20T10:27:11&#43;08:00'>
+        
+        
+    <meta property="article:modified_time" content='2022-02-20T10:27:11&#43;08:00'>
+        
+    <meta name="Keywords" content="">
+    <meta name="description" content="读Kudu论文">
+        <meta name="author" content="隔壁老王">
+        
+    <meta property="og:url" content="https://code0xff.cn/post/2022/02/kudu%E8%AE%BA%E6%96%87%E7%BF%BB%E8%AF%91/">
+    <link rel="shortcut icon" href='/favicon.ico'  type="image/x-icon">
+
+    <link rel="stylesheet" href='/css/normalize.css'>
+    <link rel="stylesheet" href='/css/style.css'>
+    <script type="text/javascript" src="//cdn.bootcdn.net/ajax/libs/jquery/3.4.1/jquery.min.js"></script>
+
+    
+    
+    
+        <link href="https://cdn.bootcdn.net/ajax/libs/fancybox/3.5.7/jquery.fancybox.min.css" rel="stylesheet">
+    
+    
+    
+    
+</head>
+
+
+<body>
+    <header id="header" class="clearfix">
+    <div class="container">
+        <div class="col-group">
+            <div class="site-name ">
+                
+                    <a id="logo" href="https://code0xff.cn/">
+                        记录每个瞬间
+                    </a>
+                
+                
+            </div>
+            <div>
+                <nav id="nav-menu" class="clearfix">
+                    <a class="current" href="https://code0xff.cn/">首页</a>
+                    
+                    <a  href="https://code0xff.cn/linked/" title="链接">链接</a>
+                    
+                    <a  href="https://code0xff.cn/archives/" title="归档">归档</a>
+                    
+                    <a  href="https://code0xff.cn/about/" title="关于">关于</a>
+                    
+                </nav>
+            </div>
+        </div>
+    </div>
+</header>
+
+    <div id="body">
+        <div class="container">
+            <div class="col-group">
+
+                <div class="col-8" id="main">
+                    
+<div class="res-cons">
+    
+    <article class="post">
+        <header>
+            <h1 class="post-title">Kudu论文翻译</h1>
+        </header>
+        <date class="post-meta meta-date">
+            2022年2月20日
+        </date>
+<nav id="TableOfContents">
+  <ul>
+    <li>
+      <ul>
+        <li><a href="#背景">背景</a></li>
+        <li><a href="#高层api">高层API</a>
+          <ul>
+            <li><a href="#一致性">一致性</a></li>
+          </ul>
+        </li>
+        <li><a href="#架构">架构</a>
+          <ul>
+            <li><a href="#复制">复制</a></li>
+            <li><a href="#master">master</a></li>
+          </ul>
+        </li>
+        <li><a href="#tablet存储">tablet存储</a></li>
+        <li><a href="#hadoop整合">Hadoop整合</a></li>
+        <li><a href="#性能评估">性能评估</a>
+          <ul>
+            <li><a href="#和parquet比较">和parquet比较</a></li>
+            <li><a href="#和phoenix比较">和phoenix比较</a></li>
+            <li><a href="#随机访问性能">随机访问性能</a></li>
+          </ul>
+        </li>
+        <li><a href="#参考">参考</a></li>
+      </ul>
+    </li>
+  </ul>
+</nav>
+        
+        <div class="post-meta">
+            
+            <span class="post-meta meta-tags">
+                <ul class="clearfix">
+                    <a href='/categories/%E5%A4%A7%E6%95%B0%E6%8D%AE'>大数据</a>
+                </ul>
+            </span>
+            
+        </div>
+        
+        
+        <div class="post-meta">
+            <span id="busuanzi_container_page_pv">|<span id="busuanzi_value_page_pv"></span><span>
+                    阅读</span></span>
+        </div>
+        
+        
+        <div class="post-content">
+            <blockquote>
+<p>原文：<br>
+<a href="https://kudu.apache.org/kudu.pdf">Kudu: Storage for Fast Analytics on Fast Data</a></p>
+</blockquote>
+<h2 id="背景">背景</h2>
+<p>Kudu支持结构化数据、低延迟随机访问，可以跟查询分分析模式整合；支持水平分区，分区选主支持raft。<br>
+Kudu支持Hadoop生态，包括Spark、Impala、MapReduce<br>
+Hadoop 生态的结构化目前有两种方式：</p>
+<ul>
+<li>静态数据：基于Avro、Parquet，但它们都不提供更新记录、也不支持随机访问</li>
+<li>不可变数据：基于HBase、cassandra，提供低延迟的随机读写，但对于批量读比前者差了很多</li>
+</ul>
+<p>对于某些应用，可能同时包括了上述两种需求：随机读/写，大批量的文件扫描，这样需要将上述两种系统整合才可以，这就带来了一系列问题：</p>
+<ul>
+<li>首先是架构变复杂了，要维护、监控两套系统</li>
+<li>对于应用层来说，要主动区分流数据、非流数据，代码也复杂了</li>
+<li>数据是先进HBase、再落到HDFS上，对于实时分析来说，是有延迟的</li>
+<li>真实系统，可能要经常修复过去的错误数据、删除隐私敏感数据、还要适应延迟数据，上述架构要实现这些代价也不小</li>
+</ul>
+<p>Kudu是新设计的一套存储系统，为的就是填补上述的 “空隙”，对于现有系统，他们在适合的场景下仍然有优势，但Kudu的优势提供了一个简化的架构，可以同时满足 低延迟随机读写+批量scan。<br>
+Kudu也提供了高层的API，包括对行级别的CURD操作。</p>
+<h2 id="高层api">高层API</h2>
+<p>Kudu集群包含了多个 table，每个table都包含了多个列，每个列都是有具体类型的，这一点跟关系型数据库比较类似<br>
+Kudu的表包含一个主键，通过主键做更新/删除<br>
+用户也可以修改表、删除表，但是不能删除主键<br>
+显示的列类型有两个优势：</p>
+<ul>
+<li>可以对某一列更好的压缩、编码</li>
+<li>可以将元数据导出到其他系统如BI、数据探索工具等</li>
+</ul>
+<p>Kudu目前不支持唯一约束、不支持二级索引、没有自增主键 <br>
+对于 insert、update、delete 需要手动指定主键<br>
+目前不提供多行更新的事务API，对于单行操作相当于 跨多列的原子操作    <br>
+对于读，Kudu只提供了 scan 操作，并提供了两种类型的谓词：</p>
+<ul>
+<li>基于列和常数值的比较</li>
+<li>复合主键range</li>
+</ul>
+<p>除了谓词，还可以指定列，因为Kudu是列存储的，这样也可以提高性能 <br>
+Hadoop生态系统中通过调度数据位置来提升性能，Kudu也提供了对应的API，让调用者可以决定数据映射到指定的服务器 <br>
+这可以帮助上层的计算框架如Spark、Impala、MapReduce来更好的调度</p>
+<h3 id="一致性">一致性</h3>
+<p>Kudu提供了两个一致性模式，默认的是 “快照一致性” ，对单个客户端来说相当于 read-your-writes 一致性<br>
+Kudu不提供外部一致性保证，比如一个客户端执行写，另一个客户端通过外部机制执行一个写，这两个写之间的依赖就没法保证了。<br>
+Kudu提供了一个选项，通过时间戳token来保证多个客户端之间的因果依赖 <br>
+如果token太复杂，可以类似 Spanner那样，增加一个 commit-wait，通过等待一个周期就可以保证因果依赖了 <br>
+这种方式需要依赖硬件时钟，只有少部分企业可以实现，而现在云厂商提供了全球时间同步机制<br>
+时间戳分配算法是： HybridTime <br>
+Kudu内部通过 时间戳 来实现一致性，但不允许用户手动设置时间戳 执行写操作，这点跟Hbase、Cassandra不同 <br>
+Kudu的设计者认为 写带时间戳对大部分用户来说，会带来混乱，特别是插入、删除的语义方面<br>
+但Kudu允许 读 带时间戳，这样就可以查询过去的某个时间戳的数据，相当于是 读 一致性快照</p>
+<h2 id="架构">架构</h2>
+<p>跟Hbase、HDFS类似，有一个master，通过复制实现快速故障恢复<br>
+Kudu也支持分区，多个行会对应到一个固定的tablet上，随机访问可以根据主键映射到一个确定的分区   <br>
+Kudu可以根据提供的函数将 主键 映射到一个分区，客户端可以根据key来路由到确定的分区</p>
+<ul>
+<li>hash分区：由方言<code>DISTRIBUTE BY HASH(hostname, ts) INTO 16 BUCKETS</code>指定
+<ul>
+<li>这是将 hostname,ts编码为二进制键，然后连起来再编码，对 16 取模，最后落到一个具体的分区上</li>
+</ul>
+</li>
+<li>range分区：由一系列主键列子集组成；根据指定列使用的编码，将tuples转为二进制string</li>
+</ul>
+<p>为了写负载，可以将 timestamp设置为hash分区，不过读效率就会很差 <br>
+也可以将 timestamp 设置为 range分区，并将 metric 和 hostname 设置为 hash分区，这样就兼顾了读和写</p>
+<h3 id="复制">复制</h3>
+<p>Kudu将Table的数据复制到所有机器上，当创建表时候可以指定复制因子，如<code>3</code>、<code>5</code><br>
+Kudu使用Raft来复制更新操作，也就是客户端的一个写操作会发送到leader：</p>
+<ul>
+<li>如果当前的不是leader，则连接拒绝，并使客户端的元数据失效，然后重新找leader</li>
+<li>leader之后会锁住这个操作，避免并发问题</li>
+<li>然后通过Raft将操作发给所有的follower，如果大多数同意，则提交这个请求</li>
+<li>之后将log发给所有副本，如果大多数节点完成了 write-ahead log操作，则认为这个操作已经持久化</li>
+<li>这里并没有规定再发送 log 到所有follower时，leader必须先提交</li>
+<li>这样的好处是，如果leader本地磁盘有问题，则会首先收到网络返回的数据包</li>
+</ul>
+<p>Kudu对Raft的一些小改动</p>
+<ul>
+<li>当leader选举失败时后采用指数退避算法，将Raft元数据持久化到被征用的磁盘时，会加剧这个过程，因此这个算法会确保在繁忙的集群上尽快收敛</li>
+<li>如果leader发现follower跟自己的日志有分歧，Raft建议是每次回退一个点，直到找到分歧的位置
+<ul>
+<li>Kudu则增加了一个 <code>committedIndex</code>，当发生分歧的时候会立刻跳到这个位置</li>
+<li>这样就减少了很多不必要的网络操作</li>
+</ul>
+</li>
+</ul>
+<p>Kudu不复制存储在磁盘上的数据，只复制log，每个table的副本的物理存储完全解耦，有如下优势：</p>
+<ul>
+<li>
+<p>一个复制在后台操作时(flush、压缩)，其他节点不太可能再同一时间、同一节点上运行，因为Raft要等到大多数确认之后才提交，这减少了物理层操作对客户端写操作的尾部延迟；未来会继续实现一些技术，进一步减少并发读/写中的读取尾部延迟</p>
+</li>
+<li>
+<p>我们还发现了一些罕见的条件竞争，因为存储层是跨节点解耦的，因此不会导致数据丢失无法恢复，在所有情况下，可以检查副本已经损坏并复制它</p>
+</li>
+</ul>
+<p>Raft协议中，建议配置变更采用：一个接一个方式，也就是从<code>3</code>副本变成<code>5</code>副本需要经过两步：</p>
+<ul>
+<li>从 3 -&gt; 4，提交</li>
+<li>从 4 -&gt; 5，提交</li>
+</ul>
+<p>Kudu的变更流程：</p>
+<ul>
+<li>在Kudu中通过<code>remote bootstrap</code>来实现的，首先增加一个 成员到 Raft中，再提交变更</li>
+<li>master触发<code>StartRemoteBootstrap RPC</code>，目标服务器会从 leader上拉取数据和log的快照</li>
+<li>当传输完成，新的服务器就会打开表的数据，并重放必要的 write-ahead log</li>
+<li>此时新机器就完成了leader在开始传输时的状态，并可以作为正常的副本响应请求了</li>
+<li>最初实现时，是将这个服务器立刻变成一个 VOTER副本，但这会有问题
+<ul>
+<li>从 3副本变为4副时，4个中的3个都必须确认彼此的操作</li>
+<li>但新机器还在拷贝中，它无法确认操作，一旦有机器此时宕机了，table的写操作就会不可用</li>
+<li>直到 remote bootstrap  完成前都不可用</li>
+</ul>
+</li>
+<li>为了解决这个问题：
+<ul>
+<li>新增一个状态 PRE_VOTER</li>
+<li>leader会发送Raft变更，触发数据拷贝，但不会将其算作投票者</li>
+<li>当检查到PRE_VOTER完成赶上了当前log，leader会触发一个提议和提交，将其变为VOTER</li>
+</ul>
+</li>
+<li>对于删除副本也是类似的，leader触发一个配置变更，但不包含被移除的节点
+<ul>
+<li>当这个提议被commit后，其他节点就不再跟 删除节点通信了，尽管删除节点自己并不知道</li>
+<li>其他节点向master报告配置的变更，而master负责删除掉这个节点</li>
+</ul>
+</li>
+</ul>
+<h3 id="master">master</h3>
+<p>master作为中控主要负责，非多主方式，可以简化设计，也方便调试</p>
+<ul>
+<li>作为catalog管理者，维护table和tablet，相当于他们的schema</li>
+<li>当 创建、修改、删除表时 master负责协调这些操作，确保最终完成</li>
+<li>集群的协调者，用于跟踪机器的状态，等服务宕机后负责协调</li>
+<li>跟踪每个tablet的副本都在哪些机器上</li>
+</ul>
+<p>master自身维护了一个 <strong>单tablet</strong>的表，这个表不能直接访问，master内部将这个表的数据全部放在缓存中 <br>
+因为现代商业机器的内存都比较大，而且每个tablet的元数据也不大，足够放入内存了，如果实在放不下，可以考虑linux的page cache<br>
+master还维护了每个表的状态(比如创建中，运行中，删除中)，以及当前表的schema版本<br>
+master将<code>CREATING</code>状态写入catalog中，用来表示创建表，并异步副本信息发给其他tablet<br>
+这里是用Raft来维护复制的，所以收到大多数响应后master就可以提交了，否则就是失败，失败的话表可以被安全的删除<br>
+如果master在中间状态失败，需要往前回滚<br>
+master -&gt; follower是冥等的，如果主master挂了，备份的master会被选举为主，然后scan 元数据表，加载到内存，并服务请求</p>
+<p>集群协调</p>
+<ul>
+<li>master中包含了所有机器名的列表</li>
+<li>服务启动后就会向master报告，第一次报告是全量的</li>
+<li>之后每次都是增量信息(增、删、改)</li>
+<li>状态变更是通过Raft完成的，所以master会保持最新状态</li>
+<li>一旦某个主机的index跟master不对，可以简单丢弃</li>
+<li>master并不负责对机器的检查，而是由Raft来实现的，当有机器宕机后，就会检查到并触发Raft变更，将此机器移除</li>
+<li>master是根据负载情况，选择副本的，当master选择了要复制的 副本后，就会触发一次变更</li>
+<li>master自身并不改变配置，它必须等待其他副本提议并提交后，才会操作</li>
+<li>如果中途失败，只要不断重试就可以了，这些操作都是冥等且不冲突</li>
+<li>如果master收到了一个移除消息(一个table的副本从配置中移除了)就会触发一个<code>DeleteTable</code>的RPC请求</li>
+<li>为了确保master宕机这个操作也会成功，master也会触发一个RPC请求，指明这个表正在被删除</li>
+</ul>
+<p>客户端访问目录：</p>
+<ul>
+<li>客户端会只要访问过就会缓存元信息，包含表的分区key范围，raft配置等</li>
+<li>某时，客户端的cache可能过时了，当它发送信息给旧的leader时(此时已变成follower)，服务端会拒绝请求，客户端会联系新的master</li>
+<li>上面的方式会多一次往返开销，其实follower所持有的信息都是最新的，可以让follower响应这个客户端，返回最新数据即可</li>
+<li>master将所有分区信息全部cache了，论文中270个节点、几千个tablet集群，99.99%的请求tablet位置信息，都是在3毫秒返回</li>
+</ul>
+<h2 id="tablet存储">tablet存储</h2>
+<p>Kudu的每个tablet都是完全独立的，也就是相互解耦的，这样的设计对于开发底层的存储系统很方便 <br>
+理论上对于每个table、tablet、每个复制事件都可以有独立的存储布局，不过kudu目前只提供了一种存储布局</p>
+<p>tablet存储实现要解决这些问题</p>
+<ul>
+<li>快速的列扫描：跟Parquet、ORCFile这些不可变数据的差不多的分析性能，有效的列数据编码就很重要</li>
+<li>低延迟的随机更新：对任意行进行快速读/更新，需要 $O(logN)$ 查找时间</li>
+<li>性能一致性：有些用户宁可牺牲最快的性能，也要使时间在预期内完成</li>
+</ul>
+<p>为了实现这些特性，Kudu重新开发了一套存储引擎，实现了新的混合式的列存储架构
+RowSets，Tablets的更小单位，一行就代表RowSets中的RowSet</p>
+<ul>
+<li>有两种实现MemRowSets、DiskRowSets</li>
+<li>前者是将数据放在内存中，比如最近插入的数据</li>
+<li>后台线程会周期的将内存数据flush到磁盘，刷新过程对 读/写都不影响，是并发的</li>
+<li>flush过程中的更新操作会跟记录，然后前滚到磁盘数据中</li>
+</ul>
+<p>MemRowSet实现：</p>
+<ul>
+<li>基于MessTree实现，是一个并发的B树，并做了锁优化</li>
+<li>不支持删除，用MVCC记录表示一个删除的墓碑，真正删除是等待disk再做的</li>
+<li>不支持原地更新，只允许不修改值大小，这样可以通过 CAS把变更操作 加到每个记录的链表中</li>
+<li>对叶子节点增加了 next 指针，这样做 scan 的时候就会非常有效</li>
+<li>没有实现完整的 前缀树，只实现了一棵树，设计者不太关注极高的随机访问吞吐量</li>
+<li>MemRowSets是行存储布局的，设计者使用 SSE2 指令在 scan 之前预取了一个叶节点</li>
+<li>使用LLVM 进行 JIT 编译了投影操作，这些操作都显著的提升了性能</li>
+<li>使用顺序编码主键，使插入到B树更高效，运行 memcmp，由于MemRowSet是排序的，所以scan，或者查找单个key都很高效</li>
+</ul>
+<p>DiskRowSet实现：</p>
+<ul>
+<li>MemRowSets刷到磁盘后，就变成了 DiskRowSets，默认每 32M 为一个段</li>
+<li>DiskRowSets自身也是有序的，每个段的主键都是不想交的</li>
+<li>包含两个组件：base data、delta data</li>
+<li>base data是列存储格式，每个列都会写到独立的磁盘上，并被单独写入到一个连续的数据块中</li>
+<li>列自身被分为更小的page，可以更细粒度的随机读，同时内嵌了 B树索引</li>
+<li>列的page可以使用各种编码，如bitshuffle、字典等，也包括各种压缩算法：如LZ4、gzip、bzip2</li>
+<li>每个列都可以使用不同的压缩算法，如不经常访问的文本列使用 gzip，小整数列使用 bit-packed</li>
+<li>Kudu的页格式使用了Impala代码，所以很多页格式都是相同的</li>
+<li>Kudu还对主键做了编码，另外flush的时候可以加入Bloom过滤器</li>
+<li>Kudu不支持原地更新，因为编码后再更新效率很低，而将更新的数据写入到 delta store中</li>
+<li>delta store要不在内存中(DeltaMemStore)，或者在磁盘(DeltaFiles)</li>
+<li>DeltaMemStore是并发的B树结构 ，DeltaFiles是二进制类型的块，</li>
+<li>增量存储维护了 (row_offset,timestamp)到 RowChange-List记录的映射</li>
+<li>row_offset是RowSet中的有序索引，比如主键的最低offse是 0 ，timestamp是写操作时分配的MVCC时间戳</li>
+<li>RowChangeList是行的变更记录(二进制编码)，指明 column是： id 3 = &lsquo;foo&rsquo; 或 DELETE</li>
+</ul>
+<p>Delta flush:</p>
+<ul>
+<li>当 DeltaMemStore 满了，后台进程就会将其刷新到磁盘上，变成 DeltaFiles</li>
+<li>DeltaFiles 是二进制列，相当于 DeltaMemStore 的不可变副本</li>
+</ul>
+<p>写路径：</p>
+<ul>
+<li>Kudu因为有主键约束，所有插入的数据必须要先检查唯一约束</li>
+<li>每个表可能包含了几百上千个DiskRowSets，必须保证其高效性</li>
+<li>可以使用Bloom过滤器，将其划分为4K页面，每个页对应以一个小范围的key</li>
+<li>Bloom过滤器索引使用B树结构，在服务端用LRU缓存，这样就避免磁盘操作</li>
+<li>对于每个DiskRowSet还存储了max、min key，这样可以进一步做剪枝</li>
+<li>后台压缩进程可以重新组织DiskRowSet结构</li>
+<li>对于无法做减枝的DiskRowSet，就只能通过B树查找，其page会被放入OS的page cache中</li>
+</ul>
+<p>读路径：</p>
+<ul>
+<li>Kudu的采用批量行读取方式，这样可以平摊函数调用开销</li>
+<li>同时有机会对循环做展开，和SIMD指令优化</li>
+<li>Kudu内存中的批处理格式由一个顶层的结构组成，这个结构包含一些指针，指向每个正在读取的列的小块</li>
+<li>每个批处理本身是列式的，当从磁盘列拷贝到批处理时，避免了偏移量计算</li>
+<li>scan时Kudu确定是否可以用range谓词来过滤DiskRowSet中的行</li>
+<li>scan的时候可以设置主键的上下界，这样就可以确定其偏移量</li>
+<li>相当于把key的range谓词转成了offset range谓词，这样就避免了字符串比较操作</li>
+<li>kudu一次扫描一列，首先定位到正确的offset，将列中的数据解压拷贝到内存的batch中</li>
+<li>之后会检查是否有 delta数据，应用到当前的MVCC快照中</li>
+<li>delta记录了offset，所以不用任何比较可以直接定位</li>
+<li>服务端会维持scan的迭代器，下次查询就不用重新定位，直接从上次的位置直接查找即可</li>
+</ul>
+<p>延迟物化</p>
+<ul>
+<li>如果 scan 中指定了谓词，kudu会对列数据对延迟物化</li>
+<li>在对任何其他列之前，会优先读取带有 range谓词的列，之后读取每个列时，都会评估关联的谓词，这样谓词就会过滤掉 - 批处理查询中的所有行，相当于对其他列做了短路查询，提升了巨大的性能</li>
+<li>因为其他列中的大部分数据都不会真正触发磁盘读</li>
+</ul>
+<p>delta压缩</p>
+<ul>
+<li>delta数据不是列式存储的，当delta文件数量增大后，读取就会变慢</li>
+<li>Kudu后台进程会定期扫描DiskRowSets，当发现 base data 和 delta data的比列过高，会将delta数据合并到base data</li>
+<li>如果delta中的数据只包含都某一列的更新，那么合并就只针对具体列，避免对其他列的操作</li>
+</ul>
+<p>RowSet压缩</p>
+<ul>
+<li>跟delta压缩类似，Kudu也有一个后台进程会定期压缩不同的 DiskRowSets</li>
+<li>压缩后重写到新的 DiskRowSets，让人是32M一个段</li>
+<li>压缩时，可以将删除标记的数据 真正删掉</li>
+<li>不同的DiskRowSets 的key范围可能会重叠，压缩后就减少了重叠，也为Boolm过滤器做了加速</li>
+</ul>
+<p>调度管理</p>
+<ul>
+<li>tablet server内部维护了一个线程池，之前说的那些后台调度任务，都是在这些线程池中执行的</li>
+<li>线程都是常驻的，不是由事件触发的</li>
+<li>完成一个操作后，调度器会评估磁盘存储状态，执行启发式算法，平衡内存使用，WAL保留，和进一步的读写操作性能</li>
+<li>优化过程是：给定一个I/O预算(如128M)，然后选择一组DiskRowSet，进行压缩以减少他们的seek次数</li>
+<li>这个优化过程实际上是等价于 动态规划中的-背包问题</li>
+<li>当插入负载变高时，后台线程会将内存中的数据flush到磁盘；当插入负载降低，后台线程会做压缩以减未来的写负载</li>
+<li>这提供了平滑的性能过渡，使开发和运维人员可以方便的对 容量做规划，对负载延迟做评估</li>
+</ul>
+<h2 id="hadoop整合">Hadoop整合</h2>
+<p>MapReduce和Spark</p>
+<ul>
+<li>Kudu提供了对Hadoop生态系统组件的整合，可以将Kudu跟M-R的input、output job整合</li>
+<li>可以跟Spark高层API绑定，就可以用Spark-SQL、DataFrame操作Kudu表</li>
+<li>提供了数据本地化处理能力</li>
+<li>提供了API让用户选择需要使用的列投影，这样就减少I/O</li>
+<li>谓词下推，通过Spark-SQL就可以执行</li>
+</ul>
+<p>Impala整合</p>
+<ul>
+<li>Kudu自身不提供SQL、shell，这些是通过整合Impala提供的</li>
+<li>Impala查询计划通过Kudu的java API检索表位置信息，将后台查询处理任务分配到相同的节点上</li>
+<li>未来考虑通过共享内存来传输数据，以进一步做优化</li>
+<li>谓词下推，修改了Impala的查询计划，可以识别出谓词并下推给Kudu，只有在传递谓词后Kudu才物化列</li>
+<li>DDL扩展，Impala的 DDL(create table)支持Kudu分区schema、复制因子、主键定义</li>
+<li>Kudu是Hadoop生态中第一个支持快速分析的引擎，并且支持更新，Impala之前不支持的更新操作，现在都可以支持了</li>
+<li>Impala的模块化设计，可以支持联邦查询</li>
+</ul>
+<h2 id="性能评估">性能评估</h2>
+<h3 id="和parquet比较">和parquet比较</h3>
+<p>使用了<code>TPC-H</code>数据集，数据量 100G， 75个节点，每个节点配置：</p>
+<ul>
+<li>2G cpu、6核</li>
+<li>64G内存</li>
+<li>12块磁盘</li>
+</ul>
+<p>集群总内存是远大于数据集量的，所有的查询都会落到内存中<br>
+但所有的数据都会持久化到 DiskRowSet，而不是内存中 <br>
+使用 Impala 2.2 + parquet 去运行全部的 22个查询；再用 Impala + Kudu 运行一次 做对比<br>
+每个表按主键分为 256个bucket，除非特别小的表如国家和地区等维度表<br>
+所有的数据都是用 <code>CREATE TABLE AS SELECT</code>创建的<br>
+目前还没有执行更深度的并行负载测试，只是用 TPC-H 对比了两个系统，结果如下：
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1//post/2022/02/Kudu%E8%AE%BA%E6%96%87/1.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1//post/2022/02/Kudu%E8%AE%BA%E6%96%87/1.jpg" />
+        </a>
+    </p>
+<p>按照上述结果， Kudu平均比 parquet 快了 31%，大概是有两点导致的：</p>
+<ul>
+<li>延迟物化，TPC-H中的查询都限定了谓词，Kudu的延迟物化避免了谓词不匹配时对其他列的操作，而这个特性parquet没有</li>
+<li>CPU效率，parquet对于每一行都会执行一次函数调用，导致效率不高</li>
+</ul>
+<p>在未来，parquet实现了上述功优化后，Kudu的优势可能就不明显了<br>
+parquet更适合磁盘常驻的负载如 8M的I/O访问，而Kudu适合小的页面级别的访问
+Kudu和parquet的比较证实了，Kudu有能力实现跟不可变存储类似的性能，同时还提供了可变的特性</p>
+<h3 id="和phoenix比较">和phoenix比较</h3>
+<p>虽然phoenix的主要目标不是做分析用的，我们还是做了少量的比较<br>
+展示了Hbase、Kudu在执行分析性负载下的性能差异<br>
+这次用了一个小的集群，一共 9 个节点，配置如下：</p>
+<ul>
+<li>2.13G cpu、4核 Xeon L5630</li>
+<li>48G内存</li>
+<li>3块数据盘</li>
+<li>Phonenix 4.3 + HBase 1.0</li>
+<li>HBase的 block cache为默认值， 9.6G</li>
+<li>Kudu配置了 1G 的进程block cache，更多是依靠OS的 buffer cache避免物理I/O</li>
+<li>HBase配置了 FAST_DIFF 编码，无压缩，一个版本</li>
+<li>Impala端使用 逐查询选项，关闭代码生成，消除了与存储引擎无关的开销</li>
+<li>region-server 和 tablet-server分配了24G内存</li>
+</ul>
+<p>将相同的 TCP-H lineitem表(62G csv格式)使用 CsvBulkLoadTool M-R job 加载到 phoenix中
+phoenix配置了100个hash分区，Kudu也一样<br>
+通过执行压缩去报 100%的HDFS数据快被本地化，并确保region被均匀的分配到各个节点上<br>
+当62G的数据被复制到 HBase后，被膨胀为 570G， kudu是 227G<br>
+之后验证了两个系统都没有磁盘读取，这样只关注CPU效率，kudu的列布局和更好的存储效率性能更好</p>
+<p>为了只关注scan速度而不是 join 情况，测试了 TPC-H的 query 1，同时也增加了其他几个查询，结果如下：<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1//post/2022/02/Kudu%E8%AE%BA%E6%96%87/2.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1//post/2022/02/Kudu%E8%AE%BA%E6%96%87/2.jpg" />
+        </a>
+    </p>
+<p>此外还对比了 Impala+Kudu、Impala+parquet、phoenix+HBase的各种查询<br>
+每个查询执行 10次，取中间结果：<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1//post/2022/02/Kudu%E8%AE%BA%E6%96%87/3.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1//post/2022/02/Kudu%E8%AE%BA%E6%96%87/3.jpg" />
+        </a>
+    
+如上显示，Impala+Kudu 是 phoenix+HBase的 16 - 187倍<br>
+对于基于主键的小范围扫描，Impala+Kudu、Impala+parquet都是压秒结果，而Phoenix+HBase 因为查询计划中的低常数因子开销，使得性能也 比 Impala+Kudu更好</p>
+<h3 id="随机访问性能">随机访问性能</h3>
+<p>尽管Kudu不是为OLTP设置的，它适合于轻度的随机访问，这里评估了Kudu的随机访问性能 <br>
+使用  Yahoo Cloud Serving Benchmark  YCSB 来测试<br>
+集群为 10个节点，配置跟测试 phoenix 时一样<br>
+为Kudu和HBase都配置了 24G内存，HBase使用了9.6G的block cache，Kudu使用了 1G 的block cache，更多是依靠OS的 buffer-cache，其他配置都是默认<br>
+为两个系统都分配了 100个 tablet<br>
+YCSB加载了 1亿条数据集，包括10列，每列100byte，由于Kudu没有行主键因此再增加一个主键key列<br>
+数据是完全加载到内存中的，这里没有测试 flush常驻、磁盘常驻的情况，因为大多数低延迟的应用基本都可以放到内存中<br>
+YCSB总结如下，先加载表，再执行A 到 D，中间没有暂停<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1//post/2022/02/Kudu%E8%AE%BA%E6%96%87/4.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1//post/2022/02/Kudu%E8%AE%BA%E6%96%87/4.jpg" />
+        </a>
+    </p>
+<p>对每种情况执行 1000W次操作<br>
+对于加载数据，使用 16个客户端线程，并开启客户端缓存，可以发送大批量数据到服务端 <br>
+其他操作使用 64客户端线程 并关闭客户端缓存<br>
+对两个系统都执行两次，每次都是删除并重新加载 <br>
+对第二次执行，使用 统一的分布式访问来替换默认的 Zipfian 执行 A - C<br>
+对于D使用特定的访问分布，它随机插入行，并随机读取最近查询的行<br>
+不执行E，因为这个是小范围查询Kudu目标表现不好，而 F 是基于CAS操作的，kudu目前不支持 <br>
+下图展示了其结果<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1//post/2022/02/Kudu%E8%AE%BA%E6%96%87/5.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1//post/2022/02/Kudu%E8%AE%BA%E6%96%87/5.jpg" />
+        </a>
+    <br>
+HBase执行的吞吐量明显比Kudu更好，Kudu在 zipfian 更新上效率不高，因为这行的链太长了，有很多delta合并操作<br>
+这些测试是Kudu的beta版发布时做的，因为时间有效测试场景不多</p>
+<h2 id="参考">参考</h2>
+<p><a href="https://www.cnblogs.com/GO-NO-1/p/12132223.html">kudu 架构原理</a><br>
+<a href="http://www.nosqlnotes.com/technotes/kudu-design/">Kudu设计原理初探</a><br>
+<a href="https://blog.cloudera.com/apache-kudu-read-write-paths/">Apache Kudu Read &amp; Write Paths</a></p>
+
+			<script type="text/javascript"
+        async
+        src="https://cdn.bootcss.com/mathjax/2.7.3/MathJax.js?config=TeX-AMS-MML_HTMLorMML">
+MathJax.Hub.Config({
+  tex2jax: {
+    inlineMath: [['$','$'], ['\\(','\\)']],
+    displayMath: [['$$','$$'], ['\[\[','\]\]']],
+    processEscapes: true,
+    processEnvironments: true,
+    skipTags: ['script', 'noscript', 'style', 'textarea', 'pre'],
+    TeX: { equationNumbers: { autoNumber: "AMS" },
+         extensions: ["AMSmath.js", "AMSsymbols.js"] }
+  }
+});
+
+MathJax.Hub.Queue(function() {
+    
+    
+    
+    var all = MathJax.Hub.getAllJax(), i;
+    for(i = 0; i < all.length; i += 1) {
+        all[i].SourceElement().parentNode.className += ' has-jax';
+    }
+});
+</script>
+
+<style>
+code.has-jax {
+    font: inherit;
+    font-size: 100%;
+    background: inherit;
+    border: inherit;
+    color: #515151;
+}
+</style>
+        </div>
+
+        
+
+
+        
+
+<div class="post-archive">
+    <h2>相关文章</h2>
+    <ul class="listing">
+        
+        <li><a href="/post/2021/11/a-critique-of-ansi-sql-isolation-levels/">A Critique of ANSI SQL Isolation Levels论文</a></li>
+        
+        <li><a href="/post/2021/11/alluxio%E8%AE%BA%E6%96%87/">Alluxio论文</a></li>
+        
+        <li><a href="/post/2021/11/spark%E8%AE%BA%E6%96%87/">Spark论文</a></li>
+        
+        <li><a href="/post/2021/11/gfs%E8%AE%BA%E6%96%87/">GFS论文</a></li>
+        
+    </ul>
+</div>
+
+
+        <div class="post-meta meta-tags">
+            
+            <ul class="clearfix">
+                
+                <li><a href='/tags/kudu'>Kudu</a></li>
+                
+                <li><a href='/tags/%E8%AE%BA%E6%96%87'>论文</a></li>
+                
+            </ul>
+            
+        </div>
+    </article>
+    
+    
+
+    
+    
+</div>
+
+
+                </div>
+
+                <div id="secondary">
+    <section class="widget">
+        <form id="search" action='https://code0xff.cn/search/' method="get" accept-charset="utf-8" target="_blank" _lpchecked="1">
+      
+      <input type="text" name="q" maxlength="20" placeholder="Search">
+      <input type="hidden" name="sitesearch" value="https://code0xff.cn/">
+      <button type="submit" class="submit icon-search"></button>
+</form>
+    </section>
+    
+    <section class="widget">
+        <h3 class="widget-title">最近文章</h3>
+<ul class="widget-list">
+    
+    <li>
+        <a href="https://code0xff.cn/post/2022/02/%E7%94%A8javacc%E5%AE%9E%E7%8E%B0%E5%9B%9B%E5%88%99%E8%BF%90%E7%AE%97/" title="用javacc实现四则运算">用javacc实现四则运算</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.cn/post/2022/02/scala%E7%9A%84%E4%B8%80%E4%BA%9B%E7%89%B9%E6%80%A7/" title="scala的一些特性">scala的一些特性</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.cn/post/2022/02/kudu%E8%AE%BA%E6%96%87%E7%BF%BB%E8%AF%91/" title="Kudu论文翻译">Kudu论文翻译</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.cn/post/2022/02/%E5%BE%AE%E6%9C%8D%E5%8A%A1%E7%9A%84%E8%AE%BE%E8%AE%A1%E7%9A%84ideals/" title="微服务的设计的IDEALS">微服务的设计的IDEALS</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.cn/post/2022/02/kudu%E7%9A%84%E6%A8%A1%E5%9E%8B%E8%AE%BE%E8%AE%A1/" title="Kudu的模型设计">Kudu的模型设计</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.cn/post/2022/01/lr%E7%AE%97%E6%B3%95/" title="LR算法">LR算法</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.cn/post/2022/01/%E5%AF%B9%E6%B0%B8%E4%B9%85%E7%BB%84%E5%90%88%E7%9A%84%E5%AE%9E%E8%B7%B5/" title="对永久组合的实践">对永久组合的实践</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.cn/post/2022/01/%E7%94%A8dfa%E9%AA%8C%E8%AF%81%E5%AD%97%E7%AC%A6%E4%B8%B2%E4%B8%AD%E7%9A%84%E6%95%B0%E5%AD%97/" title="用DFA验证字符串中的数字">用DFA验证字符串中的数字</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.cn/post/2021/12/%E5%88%86%E5%B8%83%E5%BC%8F%E6%95%B0%E6%8D%AE%E5%BA%93%E8%AF%BE%E7%A8%8B%E4%B8%AD%E7%9A%84%E8%AE%BA%E6%96%87/" title="分布式数据库课程中的论文">分布式数据库课程中的论文</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.cn/post/2021/12/%E6%95%B0%E6%8D%AE%E5%AF%86%E9%9B%86%E5%9E%8B%E5%BA%94%E7%94%A8%E8%AE%BE%E8%AE%A1/" title="数据密集型应用设计读书笔记">数据密集型应用设计读书笔记</a>
+    </li>
+    
+</ul>
+    </section>
+
+    
+
+    <section class="widget">
+        <h3 class="widget-title"><a href='/categories/'>分类</a></h3>
+<ul class="widget-list">
+    
+    <li><a href="https://code0xff.cn/categories/%E5%95%86%E4%B8%9A/">商业 (2)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E5%A4%A7%E6%95%B0%E6%8D%AE/">大数据 (5)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E6%95%B0%E6%8D%AE%E5%BA%93/">数据库 (1)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E6%97%85%E8%A1%8C/">旅行 (10)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E6%9E%B6%E6%9E%84/">架构 (1)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E7%94%9F%E6%B4%BB/">生活 (4)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E7%AE%97%E6%B3%95/">算法 (7)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E7%BB%8F%E6%B5%8E/">经济 (1)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E7%BC%96%E7%A8%8B%E8%AF%AD%E8%A8%80/">编程语言 (1)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E8%AE%A1%E7%AE%97%E6%9C%BA%E5%8E%9F%E7%90%86/">计算机原理 (2)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E8%AF%BB%E4%B9%A6%E7%AC%94%E8%AE%B0/">读书笔记 (3)</a></li>
+    
+</ul>
+    </section>
+
+    <section class="widget">
+        <h3 class="widget-title">归档</a></h3>
+<ul class="widget-list">
+    
+    <li><a href="https://code0xff.cn/years/2021%E5%B9%B4/">2021年 (29)</a></li>
+    
+    <li><a href="https://code0xff.cn/years/2022%E5%B9%B4/">2022年 (8)</a></li>
+    
+</ul>
+    </section>
+
+    <section class="widget">
+        <h3 class="widget-title"><a href='/tags/'>标签</a></h3>
+<div class="tagcloud">
+    
+    <a href="https://code0xff.cn/tags/kudu/">kudu(2) </a>
+    
+    <a href="https://code0xff.cn/tags/manacher/">Manacher(1) </a>
+    
+    <a href="https://code0xff.cn/tags/scala/">scala(1) </a>
+    
+    <a href="https://code0xff.cn/tags/unix/">unix(1) </a>
+    
+    <a href="https://code0xff.cn/tags/%E4%BA%8C%E5%88%86%E6%9F%A5%E6%89%BE/">二分查找(1) </a>
+    
+    <a href="https://code0xff.cn/tags/%E4%BA%8C%E5%8F%89%E6%A0%91%E9%81%8D%E5%8E%86/">二叉树遍历(1) </a>
+    
+    <a href="https://code0xff.cn/tags/%E5%8E%86%E5%8F%B2/">历史(2) </a>
+    
+    <a href="https://code0xff.cn/tags/%E5%9B%9E%E6%BA%AF/">回溯(1) </a>
+    
+    <a href="https://code0xff.cn/tags/%E5%9B%BD%E5%86%85%E6%97%85%E8%A1%8C/">国内旅行(2) </a>
+    
+    <a href="https://code0xff.cn/tags/%E5%9B%BD%E5%A4%96%E6%97%85%E8%A1%8C/">国外旅行(8) </a>
+    
+    <a href="https://code0xff.cn/tags/%E5%AD%98%E5%82%A8/">存储(1) </a>
+    
+    <a href="https://code0xff.cn/tags/%E5%BE%AE%E6%9C%8D%E5%8A%A1/">微服务(1) </a>
+    
+    <a href="https://code0xff.cn/tags/%E6%95%B0%E6%8D%AE%E5%BA%93/">数据库(1) </a>
+    
+    <a href="https://code0xff.cn/tags/%E6%B1%87%E7%BC%96/">汇编(1) </a>
+    
+    <a href="https://code0xff.cn/tags/%E7%94%9F%E6%B4%BB/">生活(3) </a>
+    
+    <a href="https://code0xff.cn/tags/%E7%94%B5%E5%BD%B1/">电影(1) </a>
+    
+    <a href="https://code0xff.cn/tags/%E7%AE%97%E6%B3%95/">算法(1) </a>
+    
+    <a href="https://code0xff.cn/tags/%E7%BB%8F%E6%B5%8E/">经济(1) </a>
+    
+    <a href="https://code0xff.cn/tags/%E7%BC%93%E5%AD%98/">缓存(2) </a>
+    
+    <a href="https://code0xff.cn/tags/%E7%BC%96%E8%AF%91%E5%8E%9F%E7%90%86/">编译原理(3) </a>
+    
+    <a href="https://code0xff.cn/tags/%E8%AE%A1%E7%AE%97%E6%A1%86%E6%9E%B6/">计算框架(1) </a>
+    
+    <a href="https://code0xff.cn/tags/%E8%AE%BA%E6%96%87/">论文(5) </a>
+    
+    <a href="https://code0xff.cn/tags/%E8%AF%BB%E4%B9%A6%E7%AC%94%E8%AE%B0/">读书笔记(3) </a>
+    
+</div>
+    </section>
+
+    
+
+    <section class="widget">
+        <h3 class="widget-title">RSS</h3>
+        <ul class="widget-list">
+            <li><a href="https://code0xff.cn/index.xml">文章 RSS</a></li>
+        </ul>
+    </section>
+</div>
+            </div>
+        </div>
+    </div>
+    <footer id="footer">
+    <div>
+        &copy; 2022 <a href="https://code0xff.cn/">记录每个瞬间 By 老王</a>
+        
+    </div>
+    <br />
+    <div>
+        <div class="github-badge">
+            <a href="https://gohugo.io/" target="_black" rel="nofollow"><span class="badge-subject">Powered by</span><span class="badge-value bg-blue">Hugo</span></a>
+        </div>
+        <div class="github-badge">
+            <a href="https://github.com/flysnow-org/maupassant-hugo" target="_black"><span class="badge-subject">Theme</span><span class="badge-value bg-yellowgreen">Maupassant</span></a>
+        </div>
+    </div>
+    <div>
+        <a href="http://www.beian.miit.gov.cn/">京ICP备19014975号</a>
+    </div>
+</footer>
+
+
+    
+    <script type="text/javascript">
+        window.MathJax = {
+            tex2jax: {
+                inlineMath: [['$', '$']],
+                processEscapes: true
+                }
+            };
+    </script>
+    <script src='https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.5/MathJax.js?config=TeX-MML-AM_CHTML' async></script><script src="https://cdn.bootcdn.net/ajax/libs/fancybox/3.5.7/jquery.fancybox.min.js"></script>
+
+<a id="rocket" href="#top"></a>
+<script type="text/javascript" src='/js/totop.js?v=0.0.0' async=""></script>
+
+<script type="application/javascript">
+var doNotTrack = false;
+if (!doNotTrack) {
+	window.ga=window.ga||function(){(ga.q=ga.q||[]).push(arguments)};ga.l=+new Date;
+	ga('create', 'GA ID', 'auto');
+	
+	ga('send', 'pageview');
+}
+</script>
+<script async src='https://www.google-analytics.com/analytics.js'></script>
+
+
+
+    <script type="text/javascript" src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js" async></script>
+
+
+
+
+</body>
+
+</html>
