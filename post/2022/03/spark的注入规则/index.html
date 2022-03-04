@@ -1,0 +1,877 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    
+    <meta name="referrer" content="no-referrer-when-downgrade">
+    
+
+    <title>Spark的注入规则 | 记录每个瞬间</title>
+    <meta property="og:title" content="Spark的注入规则 - 记录每个瞬间">
+    <meta property="og:type" content="article">
+        
+    <meta property="article:published_time" content='2022-03-04T21:46:12&#43;08:00'>
+        
+        
+    <meta property="article:modified_time" content='2022-03-04T21:46:12&#43;08:00'>
+        
+    <meta name="Keywords" content="">
+    <meta name="description" content="扩展Spark的注入规则，实现updae">
+        <meta name="author" content="隔壁老王">
+        
+    <meta property="og:url" content="https://code0xff.cn/post/2022/03/spark%E7%9A%84%E6%B3%A8%E5%85%A5%E8%A7%84%E5%88%99/">
+    <link rel="shortcut icon" href='/favicon.ico'  type="image/x-icon">
+
+    <link rel="stylesheet" href='/css/normalize.css'>
+    <link rel="stylesheet" href='/css/style.css'>
+    <script type="text/javascript" src="//cdn.bootcdn.net/ajax/libs/jquery/3.4.1/jquery.min.js"></script>
+
+    
+    
+    
+        <link href="https://cdn.bootcdn.net/ajax/libs/fancybox/3.5.7/jquery.fancybox.min.css" rel="stylesheet">
+    
+    
+    
+    
+</head>
+
+
+<body>
+    <header id="header" class="clearfix">
+    <div class="container">
+        <div class="col-group">
+            <div class="site-name ">
+                
+                    <a id="logo" href="https://code0xff.cn/">
+                        记录每个瞬间
+                    </a>
+                
+                
+            </div>
+            <div>
+                <nav id="nav-menu" class="clearfix">
+                    <a class="current" href="https://code0xff.cn/">首页</a>
+                    
+                    <a  href="https://code0xff.cn/linked/" title="链接">链接</a>
+                    
+                    <a  href="https://code0xff.cn/archives/" title="归档">归档</a>
+                    
+                    <a  href="https://code0xff.cn/about/" title="关于">关于</a>
+                    
+                </nav>
+            </div>
+        </div>
+    </div>
+</header>
+
+    <div id="body">
+        <div class="container">
+            <div class="col-group">
+
+                <div class="col-8" id="main">
+                    
+<div class="res-cons">
+    
+    <article class="post">
+        <header>
+            <h1 class="post-title">Spark的注入规则</h1>
+        </header>
+        <date class="post-meta meta-date">
+            2022年3月4日
+        </date>
+<nav id="TableOfContents">
+  <ul>
+    <li>
+      <ul>
+        <li><a href="#语法解析">语法解析</a></li>
+        <li><a href="#注入规则">注入规则</a></li>
+        <li><a href="#扩展规则的调用">扩展规则的调用</a></li>
+        <li><a href="#优化规则">优化规则</a></li>
+        <li><a href="#具体执行">具体执行</a></li>
+      </ul>
+    </li>
+  </ul>
+</nav>
+        
+        <div class="post-meta">
+            
+            <span class="post-meta meta-tags">
+                <ul class="clearfix">
+                    <a href='/categories/%E5%A4%A7%E6%95%B0%E6%8D%AE'>大数据</a>
+                </ul>
+            </span>
+            
+        </div>
+        
+        
+        <div class="post-meta">
+            <span id="busuanzi_container_page_pv">|<span id="busuanzi_value_page_pv"></span><span>
+                    阅读</span></span>
+        </div>
+        
+        
+        <div class="post-content">
+            <p>[[<em>TOC</em>]]</p>
+<h2 id="语法解析">语法解析</h2>
+<p>入口点是 SparkSession#sql 函数</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4">
+<table style="border-spacing:0;padding:0;margin:0;border:0;width:auto;overflow:auto;display:block;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">5
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">6
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">7
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-scala" data-lang="scala">  <span style="color:#ff79c6">def</span> sql<span style="color:#ff79c6">(</span>sqlText<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">String</span><span style="color:#ff79c6">)</span><span style="color:#ff79c6">:</span> <span style="color:#8be9fd">DataFrame</span> <span style="color:#ff79c6">=</span> withActive <span style="color:#ff79c6">{</span>
+    <span style="color:#ff79c6">val</span> tracker <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">new</span> <span style="color:#50fa7b">QueryPlanningTracker</span>
+    <span style="color:#ff79c6">val</span> plan <span style="color:#ff79c6">=</span> tracker<span style="color:#ff79c6">.</span>measurePhase<span style="color:#ff79c6">(</span><span style="color:#50fa7b">QueryPlanningTracker</span><span style="color:#ff79c6">.</span><span style="color:#50fa7b">PARSING</span><span style="color:#ff79c6">)</span> <span style="color:#ff79c6">{</span>
+      sessionState<span style="color:#ff79c6">.</span>sqlParser<span style="color:#ff79c6">.</span>parsePlan<span style="color:#ff79c6">(</span>sqlText<span style="color:#ff79c6">)</span>
+    <span style="color:#ff79c6">}</span>
+    <span style="color:#50fa7b">Dataset</span><span style="color:#ff79c6">.</span>ofRows<span style="color:#ff79c6">(</span>self<span style="color:#ff79c6">,</span> plan<span style="color:#ff79c6">,</span> tracker<span style="color:#ff79c6">)</span>
+  <span style="color:#ff79c6">}</span>
+</code></pre></td></tr></table>
+</div>
+</div><p>其中<code>sessionState.sqlParser.parsePlan(sqlText)</code>对文本内容做解析，得到的就是 <strong>一颗语法树</strong>，具体实现在 <code>AbstractSqlParser</code></p>
+<p>解析如下，这里是将<code>SqlBaseParser </code>转为<code>LogicalPlan</code><br>
+也就是将 ANTLR 的语法树，转为 Spark 的语法树</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4">
+<table style="border-spacing:0;padding:0;margin:0;border:0;width:auto;overflow:auto;display:block;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">5
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">6
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">7
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">8
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-scala" data-lang="scala">  <span style="color:#ff79c6">override</span> <span style="color:#ff79c6">def</span> parsePlan<span style="color:#ff79c6">(</span>sqlText<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">String</span><span style="color:#ff79c6">)</span><span style="color:#ff79c6">:</span> <span style="color:#8be9fd">LogicalPlan</span> <span style="color:#ff79c6">=</span> parse<span style="color:#ff79c6">(</span>sqlText<span style="color:#ff79c6">)</span> <span style="color:#ff79c6">{</span> parser <span style="color:#ff79c6">=&gt;</span>
+    astBuilder<span style="color:#ff79c6">.</span>visitSingleStatement<span style="color:#ff79c6">(</span>parser<span style="color:#ff79c6">.</span>singleStatement<span style="color:#ff79c6">())</span> <span style="color:#ff79c6">match</span> <span style="color:#ff79c6">{</span>
+      <span style="color:#ff79c6">case</span> plan<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">LogicalPlan</span> <span style="color:#ff79c6">=&gt;</span> plan
+      <span style="color:#ff79c6">case</span> <span style="color:#ff79c6">_</span> <span style="color:#ff79c6">=&gt;</span>
+        <span style="color:#ff79c6">val</span> position <span style="color:#ff79c6">=</span> <span style="color:#50fa7b">Origin</span><span style="color:#ff79c6">(</span><span style="color:#50fa7b">None</span><span style="color:#ff79c6">,</span> <span style="color:#50fa7b">None</span><span style="color:#ff79c6">)</span>
+        <span style="color:#ff79c6">throw</span> <span style="color:#50fa7b">QueryParsingErrors</span><span style="color:#ff79c6">.</span>sqlStatementUnsupportedError<span style="color:#ff79c6">(</span>sqlText<span style="color:#ff79c6">,</span> position<span style="color:#ff79c6">)</span>
+    <span style="color:#ff79c6">}</span>
+  <span style="color:#ff79c6">}</span>
+</code></pre></td></tr></table>
+</div>
+</div><p>其中 parse() 就是解析过程，这是调用 ANTLR 去做的</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4">
+<table style="border-spacing:0;padding:0;margin:0;border:0;width:auto;overflow:auto;display:block;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">15
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">16
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">17
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">18
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">19
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">20
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">21
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">22
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">23
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">24
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-scala" data-lang="scala">  <span style="color:#ff79c6">protected</span> <span style="color:#ff79c6">def</span> parse<span style="color:#ff79c6">[</span><span style="color:#8be9fd">T</span><span style="color:#ff79c6">](</span>command<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">String</span><span style="color:#ff79c6">)(</span>toResult<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">SqlBaseParser</span> <span style="color:#ff79c6">=&gt;</span> T<span style="color:#ff79c6">)</span><span style="color:#ff79c6">:</span> <span style="color:#8be9fd">T</span> <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">{</span>
+    logDebug<span style="color:#ff79c6">(</span><span style="color:#f1fa8c">s&#34;Parsing command: </span><span style="color:#f1fa8c">$command</span><span style="color:#f1fa8c">&#34;</span><span style="color:#ff79c6">)</span>
+
+    <span style="color:#ff79c6">val</span> lexer <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">new</span> <span style="color:#50fa7b">SqlBaseLexer</span><span style="color:#ff79c6">(</span><span style="color:#ff79c6">new</span> <span style="color:#50fa7b">UpperCaseCharStream</span><span style="color:#ff79c6">(</span><span style="color:#50fa7b">CharStreams</span><span style="color:#ff79c6">.</span>fromString<span style="color:#ff79c6">(</span>command<span style="color:#ff79c6">)))</span>
+    lexer<span style="color:#ff79c6">.</span>removeErrorListeners<span style="color:#ff79c6">()</span>
+    lexer<span style="color:#ff79c6">.</span>addErrorListener<span style="color:#ff79c6">(</span><span style="color:#50fa7b">ParseErrorListener</span><span style="color:#ff79c6">)</span>
+
+    <span style="color:#ff79c6">val</span> tokenStream <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">new</span> <span style="color:#50fa7b">CommonTokenStream</span><span style="color:#ff79c6">(</span>lexer<span style="color:#ff79c6">)</span>
+    <span style="color:#ff79c6">val</span> parser <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">new</span> <span style="color:#50fa7b">SqlBaseParser</span><span style="color:#ff79c6">(</span>tokenStream<span style="color:#ff79c6">)</span>
+    parser<span style="color:#ff79c6">.</span>addParseListener<span style="color:#ff79c6">(</span><span style="color:#50fa7b">PostProcessor</span><span style="color:#ff79c6">)</span>
+    parser<span style="color:#ff79c6">.</span>addParseListener<span style="color:#ff79c6">(</span><span style="color:#50fa7b">UnclosedCommentProcessor</span><span style="color:#ff79c6">(</span>command<span style="color:#ff79c6">,</span> tokenStream<span style="color:#ff79c6">))</span>
+    parser<span style="color:#ff79c6">.</span>removeErrorListeners<span style="color:#ff79c6">()</span>
+    parser<span style="color:#ff79c6">.</span>addErrorListener<span style="color:#ff79c6">(</span><span style="color:#50fa7b">ParseErrorListener</span><span style="color:#ff79c6">)</span>
+    parser<span style="color:#ff79c6">.</span>legacy_setops_precedence_enabled <span style="color:#ff79c6">=</span> conf<span style="color:#ff79c6">.</span>setOpsPrecedenceEnforced
+    parser<span style="color:#ff79c6">.</span>legacy_exponent_literal_as_decimal_enabled <span style="color:#ff79c6">=</span> conf<span style="color:#ff79c6">.</span>exponentLiteralAsDecimalEnabled
+    parser<span style="color:#ff79c6">.</span><span style="color:#50fa7b">SQL_standard_keyword_behavior</span> <span style="color:#ff79c6">=</span> conf<span style="color:#ff79c6">.</span>ansiEnabled
+
+    <span style="color:#ff79c6">try</span> <span style="color:#ff79c6">{</span>
+      <span style="color:#ff79c6">try</span> <span style="color:#ff79c6">{</span>
+        <span style="color:#6272a4">// first, try parsing with potentially faster SLL mode
+</span><span style="color:#6272a4"></span>        parser<span style="color:#ff79c6">.</span>getInterpreter<span style="color:#ff79c6">.</span>setPredictionMode<span style="color:#ff79c6">(</span><span style="color:#50fa7b">PredictionMode</span><span style="color:#ff79c6">.</span><span style="color:#50fa7b">SLL</span><span style="color:#ff79c6">)</span>
+        toResult<span style="color:#ff79c6">(</span>parser<span style="color:#ff79c6">)</span>
+。。。
+。。。
+</code></pre></td></tr></table>
+</div>
+</div><h2 id="注入规则">注入规则</h2>
+<p>这里以 <code>org.apache.spark.sql.delta.DeltaAnalysis</code>为列，它是 DeltaLake 扩展了 Spark 的功能，注入了很多规则，代码如下：</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4">
+<table style="border-spacing:0;padding:0;margin:0;border:0;width:auto;overflow:auto;display:block;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">15
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">16
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">17
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">18
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">19
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">20
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">21
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">22
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">23
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">24
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">25
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-scala" data-lang="scala"><span style="color:#ff79c6">class</span> <span style="color:#50fa7b">DeltaSparkSessionExtension</span> <span style="color:#ff79c6">extends</span> <span style="color:#ff79c6">(</span><span style="color:#50fa7b">SparkSessionExtensions</span> <span style="color:#ff79c6">=&gt;</span> <span style="color:#50fa7b">Unit</span><span style="color:#ff79c6">)</span> <span style="color:#ff79c6">{</span>
+  <span style="color:#ff79c6">override</span> <span style="color:#ff79c6">def</span> apply<span style="color:#ff79c6">(</span>extensions<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">SparkSessionExtensions</span><span style="color:#ff79c6">)</span><span style="color:#ff79c6">:</span> <span style="color:#8be9fd">Unit</span> <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">{</span>
+    extensions<span style="color:#ff79c6">.</span>injectParser <span style="color:#ff79c6">{</span> <span style="color:#ff79c6">(</span>session<span style="color:#ff79c6">,</span> parser<span style="color:#ff79c6">)</span> <span style="color:#ff79c6">=&gt;</span>
+      <span style="color:#ff79c6">new</span> <span style="color:#50fa7b">DeltaSqlParser</span><span style="color:#ff79c6">(</span>parser<span style="color:#ff79c6">)</span>
+    <span style="color:#ff79c6">}</span>
+    extensions<span style="color:#ff79c6">.</span>injectResolutionRule <span style="color:#ff79c6">{</span> session <span style="color:#ff79c6">=&gt;</span>
+      <span style="color:#ff79c6">new</span> <span style="color:#50fa7b">DeltaAnalysis</span><span style="color:#ff79c6">(</span>session<span style="color:#ff79c6">)</span>
+    <span style="color:#ff79c6">}</span>
+    extensions<span style="color:#ff79c6">.</span>injectCheckRule <span style="color:#ff79c6">{</span> session <span style="color:#ff79c6">=&gt;</span>
+      <span style="color:#ff79c6">new</span> <span style="color:#50fa7b">DeltaUnsupportedOperationsCheck</span><span style="color:#ff79c6">(</span>session<span style="color:#ff79c6">)</span>
+    <span style="color:#ff79c6">}</span>
+    extensions<span style="color:#ff79c6">.</span>injectPostHocResolutionRule <span style="color:#ff79c6">{</span> session <span style="color:#ff79c6">=&gt;</span>
+      <span style="color:#ff79c6">new</span> <span style="color:#50fa7b">PreprocessTableUpdate</span><span style="color:#ff79c6">(</span>session<span style="color:#ff79c6">.</span>sessionState<span style="color:#ff79c6">.</span>conf<span style="color:#ff79c6">)</span>
+    <span style="color:#ff79c6">}</span>
+    extensions<span style="color:#ff79c6">.</span>injectPostHocResolutionRule <span style="color:#ff79c6">{</span> session <span style="color:#ff79c6">=&gt;</span>
+      <span style="color:#ff79c6">new</span> <span style="color:#50fa7b">PreprocessTableMerge</span><span style="color:#ff79c6">(</span>session<span style="color:#ff79c6">.</span>sessionState<span style="color:#ff79c6">.</span>conf<span style="color:#ff79c6">)</span>
+    <span style="color:#ff79c6">}</span>
+    extensions<span style="color:#ff79c6">.</span>injectPostHocResolutionRule <span style="color:#ff79c6">{</span> session <span style="color:#ff79c6">=&gt;</span>
+      <span style="color:#ff79c6">new</span> <span style="color:#50fa7b">PreprocessTableDelete</span><span style="color:#ff79c6">(</span>session<span style="color:#ff79c6">.</span>sessionState<span style="color:#ff79c6">.</span>conf<span style="color:#ff79c6">)</span>
+    <span style="color:#ff79c6">}</span>
+    extensions<span style="color:#ff79c6">.</span>injectOptimizerRule <span style="color:#ff79c6">{</span> session <span style="color:#ff79c6">=&gt;</span>
+      <span style="color:#ff79c6">new</span> <span style="color:#50fa7b">ActiveOptimisticTransactionRule</span><span style="color:#ff79c6">(</span>session<span style="color:#ff79c6">)</span>
+    <span style="color:#ff79c6">}</span>
+  <span style="color:#ff79c6">}</span>
+<span style="color:#ff79c6">}</span>
+</code></pre></td></tr></table>
+</div>
+</div><p>Spark 的注入规则如下：</p>
+<ul>
+<li>injectParser – 添加parser自定义规则，parser负责SQL解析</li>
+<li>injectResolutionRule – 添加Analyzer自定义规则到Resolution阶段，analyzer负责逻辑执行计划生成</li>
+<li>injectCheckRule – 添加Analyzer自定义Check规则</li>
+<li>injectPostHocResolutionRule – 添加Analyzer自定义规则到Post Resolution阶段</li>
+<li>injectOptimizerRule – 添加optimizer自定义规则，optimizer负责逻辑执行计划的优化,我们例子中就是扩展了逻辑优化规则</li>
+<li>injectPlannerStrategy – 添加planner strategy自定义规则，planner负责物理执行计划的生成</li>
+</ul>
+<p>
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1//post/2022/03/Spark%E7%9A%84%E6%B3%A8%E5%85%A5%E8%A7%84%E5%88%99/1.png">
+            <img class="mx-auto" alt="image" src="https://woquhaha.gitee.io/pic_tech_1//post/2022/03/Spark%E7%9A%84%E6%B3%A8%E5%85%A5%E8%A7%84%E5%88%99/1.png" />
+        </a>
+    </p>
+<h2 id="扩展规则的调用">扩展规则的调用</h2>
+<p>这里的调用过程是：</p>
+<pre tabindex="0"><code>Analyzer -&gt; RuleExecutor
+</code></pre><p>在 RuleExecutor 里面，会调用一些注入的规则，其中很多是默认的，有些是可以自行注入的<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1//post/2022/03/Spark%E7%9A%84%E6%B3%A8%E5%85%A5%E8%A7%84%E5%88%99/2.png">
+            <img class="mx-auto" alt="image" src="https://woquhaha.gitee.io/pic_tech_1//post/2022/03/Spark%E7%9A%84%E6%B3%A8%E5%85%A5%E8%A7%84%E5%88%99/2.png" />
+        </a>
+    <br>
+如上，MyAnalysis 就是自行注入的</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4">
+<table style="border-spacing:0;padding:0;margin:0;border:0;width:auto;overflow:auto;display:block;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-scala" data-lang="scala"><span style="color:#ff79c6">class</span> <span style="color:#50fa7b">MyAnalysis</span> <span style="color:#ff79c6">(</span>session<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">SparkSession</span><span style="color:#ff79c6">)</span>
+  <span style="color:#ff79c6">extends</span> <span style="color:#50fa7b">Rule</span><span style="color:#ff79c6">[</span><span style="color:#8be9fd">LogicalPlan</span><span style="color:#ff79c6">]</span> <span style="color:#ff79c6">with</span> <span style="color:#50fa7b">AnalysisHelper</span> <span style="color:#ff79c6">{</span>
+  <span style="color:#ff79c6">override</span> <span style="color:#ff79c6">def</span> apply<span style="color:#ff79c6">(</span>plan<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">LogicalPlan</span><span style="color:#ff79c6">)</span><span style="color:#ff79c6">:</span> <span style="color:#8be9fd">LogicalPlan</span> <span style="color:#ff79c6">=</span> plan<span style="color:#ff79c6">.</span>resolveOperatorsDown <span style="color:#ff79c6">{</span>
+    <span style="color:#ff79c6">case</span> u <span style="color:#ff79c6">@</span> <span style="color:#50fa7b">UpdateTable</span><span style="color:#ff79c6">(</span>table<span style="color:#ff79c6">,</span> assignments<span style="color:#ff79c6">,</span> condition<span style="color:#ff79c6">)</span> <span style="color:#ff79c6">if</span> u<span style="color:#ff79c6">.</span>childrenResolved <span style="color:#ff79c6">=&gt;</span>
+      <span style="color:#ff79c6">val</span> <span style="color:#ff79c6">(</span>cols<span style="color:#ff79c6">,</span> expressions<span style="color:#ff79c6">)</span> <span style="color:#ff79c6">=</span> assignments<span style="color:#ff79c6">.</span>map<span style="color:#ff79c6">(</span>a <span style="color:#ff79c6">=&gt;</span> a<span style="color:#ff79c6">.</span>key <span style="color:#ff79c6">-&gt;</span> a<span style="color:#ff79c6">.</span>value<span style="color:#ff79c6">).</span>unzip
+      table<span style="color:#ff79c6">.</span>collectLeaves<span style="color:#ff79c6">().</span>headOption <span style="color:#ff79c6">match</span> <span style="color:#ff79c6">{</span>
+        <span style="color:#ff79c6">case</span> <span style="color:#50fa7b">Some</span><span style="color:#ff79c6">(</span><span style="color:#50fa7b">DataSourceV2Relation</span><span style="color:#ff79c6">(</span><span style="color:#ff79c6">_</span><span style="color:#ff79c6">,</span><span style="color:#ff79c6">_</span><span style="color:#ff79c6">,</span><span style="color:#ff79c6">_</span><span style="color:#ff79c6">,</span><span style="color:#ff79c6">_</span><span style="color:#ff79c6">,</span><span style="color:#ff79c6">_</span><span style="color:#ff79c6">))</span> <span style="color:#ff79c6">=&gt;</span> <span style="color:#ff79c6">{</span>
+          <span style="color:#50fa7b">UpdataTableV2</span><span style="color:#ff79c6">(</span>table<span style="color:#ff79c6">,</span> cols<span style="color:#ff79c6">,</span> expressions<span style="color:#ff79c6">,</span> condition<span style="color:#ff79c6">)</span>
+        <span style="color:#ff79c6">}</span>
+        <span style="color:#ff79c6">case</span> o <span style="color:#ff79c6">=&gt;</span>
+          <span style="color:#ff79c6">throw</span> <span style="color:#50fa7b">DeltaErrors</span><span style="color:#ff79c6">.</span>notADeltaSourceException<span style="color:#ff79c6">(</span><span style="color:#f1fa8c">&#34;UPDATE&#34;</span><span style="color:#ff79c6">,</span> o<span style="color:#ff79c6">)</span>
+      <span style="color:#ff79c6">}</span>
+  <span style="color:#ff79c6">}</span>
+<span style="color:#ff79c6">}</span>
+</code></pre></td></tr></table>
+</div>
+</div><p>之后是 调用 ipostHocResolutionRule
+这里是生成物理执行逻辑：</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4">
+<table style="border-spacing:0;padding:0;margin:0;border:0;width:auto;overflow:auto;display:block;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">15
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">16
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">17
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">18
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">19
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">20
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-scala" data-lang="scala"><span style="color:#ff79c6">class</span> <span style="color:#50fa7b">LakeHousePreprocessTableUpdate</span> <span style="color:#ff79c6">(</span>sqlConf<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">SQLConf</span><span style="color:#ff79c6">)</span>
+  <span style="color:#ff79c6">extends</span> <span style="color:#50fa7b">Rule</span><span style="color:#ff79c6">[</span><span style="color:#8be9fd">LogicalPlan</span><span style="color:#ff79c6">]</span> <span style="color:#ff79c6">with</span> <span style="color:#50fa7b">UpdateExpressionsSupport</span> <span style="color:#ff79c6">{</span>
+
+  <span style="color:#ff79c6">override</span> <span style="color:#ff79c6">def</span> conf<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">SQLConf</span> <span style="color:#ff79c6">=</span> sqlConf
+
+  <span style="color:#ff79c6">override</span> <span style="color:#ff79c6">def</span> apply<span style="color:#ff79c6">(</span>plan<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">LogicalPlan</span><span style="color:#ff79c6">)</span><span style="color:#ff79c6">:</span> <span style="color:#8be9fd">LogicalPlan</span> <span style="color:#ff79c6">=</span> plan<span style="color:#ff79c6">.</span>resolveOperators <span style="color:#ff79c6">{</span>
+    <span style="color:#ff79c6">case</span> u<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">UpdataTableV2</span> <span style="color:#8be9fd">if</span> <span style="color:#8be9fd">u.resolved</span> <span style="color:#ff79c6">=&gt;</span> <span style="color:#ff79c6">{</span>
+      u<span style="color:#ff79c6">.</span>condition<span style="color:#ff79c6">.</span>foreach <span style="color:#ff79c6">{</span> cond <span style="color:#ff79c6">=&gt;</span>
+        <span style="color:#ff79c6">if</span> <span style="color:#ff79c6">(</span><span style="color:#50fa7b">SubqueryExpression</span><span style="color:#ff79c6">.</span>hasSubquery<span style="color:#ff79c6">(</span>cond<span style="color:#ff79c6">))</span> <span style="color:#ff79c6">{</span>
+          <span style="color:#ff79c6">throw</span> <span style="color:#50fa7b">DeltaErrors</span><span style="color:#ff79c6">.</span>subqueryNotSupportedException<span style="color:#ff79c6">(</span><span style="color:#f1fa8c">&#34;UPDATE&#34;</span><span style="color:#ff79c6">,</span> cond<span style="color:#ff79c6">)</span>
+        <span style="color:#ff79c6">}</span>
+      <span style="color:#ff79c6">}</span>
+      toCommand<span style="color:#ff79c6">(</span>u<span style="color:#ff79c6">)</span>
+    <span style="color:#ff79c6">}</span>
+  <span style="color:#ff79c6">}</span>
+
+  <span style="color:#ff79c6">def</span> toCommand<span style="color:#ff79c6">(</span>update<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">UpdataTableV2</span><span style="color:#ff79c6">)</span><span style="color:#ff79c6">:</span> <span style="color:#8be9fd">UpdateTableCommand</span> <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">{</span>
+    <span style="color:#50fa7b">UpdateTableCommand</span><span style="color:#ff79c6">(</span>update<span style="color:#ff79c6">,</span> update<span style="color:#ff79c6">.</span>expressions<span style="color:#ff79c6">,</span> update<span style="color:#ff79c6">.</span>updateColumns<span style="color:#ff79c6">,</span> update<span style="color:#ff79c6">.</span>condition<span style="color:#ff79c6">)</span>
+  <span style="color:#ff79c6">}</span>
+<span style="color:#ff79c6">}</span>
+</code></pre></td></tr></table>
+</div>
+</div><h2 id="优化规则">优化规则</h2>
+<p>假设在 spark-shell中输入如下内容：</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4">
+<table style="border-spacing:0;padding:0;margin:0;border:0;width:auto;overflow:auto;display:block;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-scala" data-lang="scala"><span style="color:#50fa7b">List</span><span style="color:#ff79c6">(</span><span style="color:#bd93f9">1</span><span style="color:#ff79c6">,</span><span style="color:#bd93f9">2</span><span style="color:#ff79c6">,</span><span style="color:#bd93f9">3</span><span style="color:#ff79c6">,</span><span style="color:#bd93f9">4</span><span style="color:#ff79c6">,</span><span style="color:#bd93f9">5</span><span style="color:#ff79c6">).</span>toDF<span style="color:#ff79c6">(</span><span style="color:#f1fa8c">&#34;a&#34;</span><span style="color:#ff79c6">).</span>createOrReplaceTempView<span style="color:#ff79c6">(</span><span style="color:#f1fa8c">&#34;t&#34;</span><span style="color:#ff79c6">)</span>
+<span style="color:#ff79c6">val</span> q <span style="color:#ff79c6">=</span> spark<span style="color:#ff79c6">.</span>sql<span style="color:#ff79c6">(</span><span style="color:#f1fa8c">&#34;select a * 1 from t&#34;</span><span style="color:#ff79c6">).</span>queryExecution
+</code></pre></td></tr></table>
+</div>
+</div><p>打印出来的执行计划如下：</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4">
+<table style="border-spacing:0;padding:0;margin:0;border:0;width:auto;overflow:auto;display:block;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">15
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">16
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">17
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-scala" data-lang="scala">q<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">org.apache.spark.sql.execution.QueryExecution</span> <span style="color:#ff79c6">=</span>
+<span style="color:#ff79c6">==</span> <span style="color:#50fa7b">Parsed</span> <span style="color:#50fa7b">Logical</span> <span style="color:#50fa7b">Plan</span> <span style="color:#ff79c6">==</span>
+&#39;Project <span style="color:#ff79c6">[</span><span style="color:#8be9fd">unresolvedalias</span><span style="color:#ff79c6">((</span>&#39;<span style="color:#8be9fd">a</span> <span style="color:#8be9fd">*</span> 1<span style="color:#ff79c6">)</span>, <span style="color:#8be9fd">None</span><span style="color:#ff79c6">)]</span>
+<span style="color:#ff79c6">+-</span> &#39;UnresolvedRelation <span style="color:#ff79c6">[</span><span style="color:#8be9fd">t</span><span style="color:#ff79c6">],</span> <span style="color:#ff79c6">[],</span> <span style="color:#ff79c6">false</span>
+
+<span style="color:#ff79c6">==</span> <span style="color:#50fa7b">Analyzed</span> <span style="color:#50fa7b">Logical</span> <span style="color:#50fa7b">Plan</span> <span style="color:#ff79c6">==</span>
+<span style="color:#ff79c6">(</span>a <span style="color:#ff79c6">*</span> <span style="color:#bd93f9">1</span><span style="color:#ff79c6">)</span><span style="color:#ff79c6">:</span> <span style="color:#8be9fd">int</span>
+<span style="color:#50fa7b">Project</span> <span style="color:#ff79c6">[(</span><span style="color:#8be9fd">a</span><span style="color:#ff79c6">#</span>29 <span style="color:#8be9fd">*</span> 1<span style="color:#ff79c6">)</span> <span style="color:#8be9fd">AS</span> <span style="color:#ff79c6">(</span><span style="color:#8be9fd">a</span> <span style="color:#8be9fd">*</span> 1<span style="color:#ff79c6">)</span><span style="color:#ff79c6">#</span>37<span style="color:#ff79c6">]</span>
+<span style="color:#ff79c6">+-</span> <span style="color:#50fa7b">SubqueryAlias</span> t
+   <span style="color:#ff79c6">+-</span> <span style="color:#50fa7b">Project</span> <span style="color:#ff79c6">[</span><span style="color:#8be9fd">value</span><span style="color:#ff79c6">#</span>26 <span style="color:#8be9fd">AS</span> <span style="color:#8be9fd">a</span><span style="color:#ff79c6">#</span>29<span style="color:#ff79c6">]</span>
+      <span style="color:#ff79c6">+-</span> <span style="color:#50fa7b">LocalRelation</span> <span style="color:#ff79c6">[</span><span style="color:#8be9fd">value</span><span style="color:#ff79c6">#</span>26<span style="color:#ff79c6">]</span>
+
+<span style="color:#ff79c6">==</span> <span style="color:#50fa7b">Optimized</span> <span style="color:#50fa7b">Logical</span> <span style="color:#50fa7b">Plan</span> <span style="color:#ff79c6">==</span>
+<span style="color:#50fa7b">LocalRelation</span> <span style="color:#ff79c6">[(</span><span style="color:#8be9fd">a</span> <span style="color:#8be9fd">*</span> 1<span style="color:#ff79c6">)</span><span style="color:#ff79c6">#</span>37<span style="color:#ff79c6">]</span>
+
+<span style="color:#ff79c6">==</span> <span style="color:#50fa7b">Physical</span> <span style="color:#50fa7b">Plan</span> <span style="color:#ff79c6">==</span>
+<span style="color:#50fa7b">LocalTableScan</span> <span style="color:#ff79c6">[(</span><span style="color:#8be9fd">a</span> <span style="color:#8be9fd">*</span> 1<span style="color:#ff79c6">)</span><span style="color:#ff79c6">#</span>37<span style="color:#ff79c6">]</span>
+</code></pre></td></tr></table>
+</div>
+</div><p>通过逻辑计划能看出：
+Project [(a#29 * 1) AS (a * 1)#37]<br>
+这里没有做优化，就是 <code>a * 1</code></p>
+<p>此时，可以增加一个优化规则<br>
+代码如下：</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4">
+<table style="border-spacing:0;padding:0;margin:0;border:0;width:auto;overflow:auto;display:block;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-scala" data-lang="scala"><span style="color:#ff79c6">object</span> <span style="color:#50fa7b">MyOptimizer</span> <span style="color:#ff79c6">extends</span> <span style="color:#50fa7b">Rule</span><span style="color:#ff79c6">[</span><span style="color:#8be9fd">LogicalPlan</span><span style="color:#ff79c6">]</span> <span style="color:#ff79c6">{</span>
+  <span style="color:#ff79c6">def</span> apply<span style="color:#ff79c6">(</span>plan<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">LogicalPlan</span><span style="color:#ff79c6">)</span><span style="color:#ff79c6">:</span> <span style="color:#8be9fd">LogicalPlan</span> <span style="color:#ff79c6">=</span> plan transform <span style="color:#ff79c6">{</span>
+    <span style="color:#ff79c6">case</span> q<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">LogicalPlan</span> <span style="color:#ff79c6">=&gt;</span> q transformExpressionsDown <span style="color:#ff79c6">{</span>
+      <span style="color:#ff79c6">case</span> mul@Multiply<span style="color:#ff79c6">(</span>left<span style="color:#ff79c6">,</span>right<span style="color:#ff79c6">,</span><span style="color:#ff79c6">_</span><span style="color:#ff79c6">)</span> <span style="color:#ff79c6">if</span><span style="color:#ff79c6">(</span>right<span style="color:#ff79c6">.</span>isInstanceOf<span style="color:#ff79c6">[</span><span style="color:#8be9fd">Literal</span><span style="color:#ff79c6">]</span> <span style="color:#ff79c6">&amp;&amp;</span>
+        right<span style="color:#ff79c6">.</span>asInstanceOf<span style="color:#ff79c6">[</span><span style="color:#8be9fd">Literal</span><span style="color:#ff79c6">].</span>value<span style="color:#ff79c6">.</span>asInstanceOf<span style="color:#ff79c6">[</span><span style="color:#8be9fd">Integer</span><span style="color:#ff79c6">]</span> <span style="color:#ff79c6">==</span> <span style="color:#bd93f9">1</span><span style="color:#ff79c6">)</span> <span style="color:#ff79c6">=&gt;</span> <span style="color:#ff79c6">{</span>
+        left
+      <span style="color:#ff79c6">}</span>
+    <span style="color:#ff79c6">}</span>
+  <span style="color:#ff79c6">}</span>
+<span style="color:#ff79c6">}</span>
+</code></pre></td></tr></table>
+</div>
+</div><p>执行后，显示如下：</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4">
+<table style="border-spacing:0;padding:0;margin:0;border:0;width:auto;overflow:auto;display:block;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">5
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">6
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-scala" data-lang="scala">scala<span style="color:#ff79c6">&gt;</span> <span style="color:#50fa7b">MyOptimizer</span><span style="color:#ff79c6">(</span>q<span style="color:#ff79c6">.</span>analyzed<span style="color:#ff79c6">)</span>
+res5<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">org.apache.spark.sql.catalyst.plans.logical.LogicalPlan</span> <span style="color:#ff79c6">=</span>
+<span style="color:#50fa7b">Project</span> <span style="color:#ff79c6">[</span><span style="color:#8be9fd">a</span><span style="color:#ff79c6">#</span>29 <span style="color:#8be9fd">AS</span> <span style="color:#ff79c6">(</span><span style="color:#8be9fd">a</span> <span style="color:#8be9fd">*</span> 1<span style="color:#ff79c6">)</span><span style="color:#ff79c6">#</span>37<span style="color:#ff79c6">]</span>
+<span style="color:#ff79c6">+-</span> <span style="color:#50fa7b">SubqueryAlias</span> t
+   <span style="color:#ff79c6">+-</span> <span style="color:#50fa7b">Project</span> <span style="color:#ff79c6">[</span><span style="color:#8be9fd">value</span><span style="color:#ff79c6">#</span>26 <span style="color:#8be9fd">AS</span> <span style="color:#8be9fd">a</span><span style="color:#ff79c6">#</span>29<span style="color:#ff79c6">]</span>
+      <span style="color:#ff79c6">+-</span> <span style="color:#50fa7b">LocalRelation</span> <span style="color:#ff79c6">[</span><span style="color:#8be9fd">value</span><span style="color:#ff79c6">#</span>26<span style="color:#ff79c6">]</span>
+</code></pre></td></tr></table>
+</div>
+</div><p>这时候，可以发现其逻辑计划：
+Project [a#29 AS (a * 1)#37]<br>
+由<code>a * 1</code> 变成了<code>a</code>，说明优化有效果了</p>
+<h2 id="具体执行">具体执行</h2>
+<p>这里需要实现一个 更新类：</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4">
+<table style="border-spacing:0;padding:0;margin:0;border:0;width:auto;overflow:auto;display:block;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">15
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">16
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-scala" data-lang="scala"><span style="color:#ff79c6">case</span> <span style="color:#ff79c6">class</span> <span style="color:#50fa7b">UpdateTableCommand</span><span style="color:#ff79c6">(</span>logical<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">LogicalPlan</span><span style="color:#ff79c6">,</span>
+    updateExpressions<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">Seq</span><span style="color:#ff79c6">[</span><span style="color:#8be9fd">Expression</span><span style="color:#ff79c6">],</span>
+    updateColumns<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">Seq</span><span style="color:#ff79c6">[</span><span style="color:#8be9fd">Expression</span><span style="color:#ff79c6">],</span>
+    condition<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">Option</span><span style="color:#ff79c6">[</span><span style="color:#8be9fd">Expression</span><span style="color:#ff79c6">])</span>
+  <span style="color:#ff79c6">extends</span> <span style="color:#50fa7b">LeafRunnableCommand</span> <span style="color:#ff79c6">{</span>
+
+    <span style="color:#ff79c6">override</span> <span style="color:#ff79c6">def</span> run<span style="color:#ff79c6">(</span>sparkSession<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">SparkSession</span><span style="color:#ff79c6">)</span><span style="color:#ff79c6">:</span> <span style="color:#8be9fd">Seq</span><span style="color:#ff79c6">[</span><span style="color:#8be9fd">Row</span><span style="color:#ff79c6">]</span> <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">{</span>
+        <span style="color:#6272a4">//spark没有对update做处理，这里需要自己拼接出SQL
+</span><span style="color:#6272a4"></span>        <span style="color:#ff79c6">val</span> tableName <span style="color:#ff79c6">=</span> <span style="color:#f1fa8c">&#34;处理 table name&#34;</span>
+        <span style="color:#ff79c6">val</span> express <span style="color:#ff79c6">=</span> <span style="color:#f1fa8c">&#34;拼接 SET 后面的表达式&#34;</span>
+        <span style="color:#ff79c6">val</span> filter <span style="color:#ff79c6">=</span> <span style="color:#50fa7b">JDBCRDD</span><span style="color:#ff79c6">.</span>compileFilter<span style="color:#ff79c6">(</span>condition<span style="color:#ff79c6">,</span> dialect<span style="color:#ff79c6">)</span>
+        <span style="color:#ff79c6">val</span> sql <span style="color:#ff79c6">=</span> <span style="color:#f1fa8c">&#34;UPDATE &#34;</span> <span style="color:#ff79c6">+</span> tableName <span style="color:#ff79c6">+</span> <span style="color:#f1fa8c">&#34; SET &#34;</span> <span style="color:#ff79c6">+</span> express <span style="color:#ff79c6">+</span> <span style="color:#f1fa8c">&#34; WHERE &#34;</span> <span style="color:#ff79c6">+</span> filter
+        <span style="color:#6272a4">//执行SQL
+</span><span style="color:#6272a4"></span>        <span style="color:#50fa7b">Seq</span><span style="color:#ff79c6">.</span>empty<span style="color:#ff79c6">[</span><span style="color:#8be9fd">Row</span><span style="color:#ff79c6">]</span>
+    <span style="color:#ff79c6">}</span>
+  <span style="color:#ff79c6">}</span>
+</code></pre></td></tr></table>
+</div>
+</div><p>最后在<code>QueryExecution#eagerlyExecuteCommands</code>中触发的：</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4">
+<table style="border-spacing:0;padding:0;margin:0;border:0;width:auto;overflow:auto;display:block;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">15
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-scala" data-lang="scala"><span style="color:#ff79c6">override</span> <span style="color:#ff79c6">def</span> executeCollect<span style="color:#ff79c6">()</span><span style="color:#ff79c6">:</span> <span style="color:#8be9fd">Array</span><span style="color:#ff79c6">[</span><span style="color:#8be9fd">InternalRow</span><span style="color:#ff79c6">]</span> <span style="color:#ff79c6">=</span> sideEffectResult<span style="color:#ff79c6">.</span>toArray
+
+  <span style="color:#ff79c6">private</span> <span style="color:#ff79c6">def</span> eagerlyExecuteCommands<span style="color:#ff79c6">(</span>p<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">LogicalPlan</span><span style="color:#ff79c6">)</span> <span style="color:#ff79c6">=</span> p transformDown <span style="color:#ff79c6">{</span>
+    <span style="color:#ff79c6">case</span> c<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">Command</span> <span style="color:#ff79c6">=&gt;</span>
+      <span style="color:#ff79c6">val</span> qe <span style="color:#ff79c6">=</span> sparkSession<span style="color:#ff79c6">.</span>sessionState<span style="color:#ff79c6">.</span>executePlan<span style="color:#ff79c6">(</span>c<span style="color:#ff79c6">,</span> <span style="color:#50fa7b">CommandExecutionMode</span><span style="color:#ff79c6">.</span><span style="color:#50fa7b">NON_ROOT</span><span style="color:#ff79c6">)</span>
+      <span style="color:#ff79c6">val</span> result <span style="color:#ff79c6">=</span> <span style="color:#50fa7b">SQLExecution</span><span style="color:#ff79c6">.</span>withNewExecutionId<span style="color:#ff79c6">(</span>qe<span style="color:#ff79c6">,</span> <span style="color:#50fa7b">Some</span><span style="color:#ff79c6">(</span>commandExecutionName<span style="color:#ff79c6">(</span>c<span style="color:#ff79c6">)))</span> <span style="color:#ff79c6">{</span>
+        qe<span style="color:#ff79c6">.</span>executedPlan<span style="color:#ff79c6">.</span>executeCollect<span style="color:#ff79c6">()</span>
+      <span style="color:#ff79c6">}</span>
+      <span style="color:#50fa7b">CommandResult</span><span style="color:#ff79c6">(</span>
+        qe<span style="color:#ff79c6">.</span>analyzed<span style="color:#ff79c6">.</span>output<span style="color:#ff79c6">,</span>
+        qe<span style="color:#ff79c6">.</span>commandExecuted<span style="color:#ff79c6">,</span>
+        qe<span style="color:#ff79c6">.</span>executedPlan<span style="color:#ff79c6">,</span>
+        result<span style="color:#ff79c6">)</span>
+    <span style="color:#ff79c6">case</span> other <span style="color:#ff79c6">=&gt;</span> other
+  <span style="color:#ff79c6">}</span>
+</code></pre></td></tr></table>
+</div>
+</div><p>最后在 commands.scala 中</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4">
+<table style="border-spacing:0;padding:0;margin:0;border:0;width:auto;overflow:auto;display:block;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-scala" data-lang="scala">  <span style="color:#ff79c6">protected</span><span style="color:#ff79c6">[</span><span style="color:#8be9fd">sql</span><span style="color:#ff79c6">]</span> <span style="color:#ff79c6">lazy</span> <span style="color:#ff79c6">val</span> sideEffectResult<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">Seq</span><span style="color:#ff79c6">[</span><span style="color:#8be9fd">InternalRow</span><span style="color:#ff79c6">]</span> <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">{</span>
+    <span style="color:#ff79c6">val</span> converter <span style="color:#ff79c6">=</span> <span style="color:#50fa7b">CatalystTypeConverters</span><span style="color:#ff79c6">.</span>createToCatalystConverter<span style="color:#ff79c6">(</span>schema<span style="color:#ff79c6">)</span>
+    cmd<span style="color:#ff79c6">.</span>run<span style="color:#ff79c6">(</span>session<span style="color:#ff79c6">).</span>map<span style="color:#ff79c6">(</span>converter<span style="color:#ff79c6">(</span><span style="color:#ff79c6">_</span><span style="color:#ff79c6">).</span>asInstanceOf<span style="color:#ff79c6">[</span><span style="color:#8be9fd">InternalRow</span><span style="color:#ff79c6">])</span>
+  <span style="color:#ff79c6">}</span>
+</code></pre></td></tr></table>
+</div>
+</div><p>执行 com.run() 然后调用<code>RunnableCommand</code>的实现类，完整最后的物理执行动作</p>
+
+			<script type="text/javascript"
+        async
+        src="https://cdn.bootcss.com/mathjax/2.7.3/MathJax.js?config=TeX-AMS-MML_HTMLorMML">
+MathJax.Hub.Config({
+  tex2jax: {
+    inlineMath: [['$','$'], ['\\(','\\)']],
+    displayMath: [['$$','$$'], ['\[\[','\]\]']],
+    processEscapes: true,
+    processEnvironments: true,
+    skipTags: ['script', 'noscript', 'style', 'textarea', 'pre'],
+    TeX: { equationNumbers: { autoNumber: "AMS" },
+         extensions: ["AMSmath.js", "AMSsymbols.js"] }
+  }
+});
+
+MathJax.Hub.Queue(function() {
+    
+    
+    
+    var all = MathJax.Hub.getAllJax(), i;
+    for(i = 0; i < all.length; i += 1) {
+        all[i].SourceElement().parentNode.className += ' has-jax';
+    }
+});
+</script>
+
+<style>
+code.has-jax {
+    font: inherit;
+    font-size: 100%;
+    background: inherit;
+    border: inherit;
+    color: #515151;
+}
+</style>
+        </div>
+
+        
+
+
+        
+
+<div class="post-archive">
+    <h2>相关文章</h2>
+    <ul class="listing">
+        
+        <li><a href="/post/2021/11/spark%E8%AE%BA%E6%96%87/">Spark论文</a></li>
+        
+    </ul>
+</div>
+
+
+        <div class="post-meta meta-tags">
+            
+            <ul class="clearfix">
+                
+                <li><a href='/tags/spark'>spark</a></li>
+                
+            </ul>
+            
+        </div>
+    </article>
+    
+    
+
+    
+    
+</div>
+
+
+                </div>
+
+                <div id="secondary">
+    <section class="widget">
+        <form id="search" action='https://code0xff.cn/search/' method="get" accept-charset="utf-8" target="_blank" _lpchecked="1">
+      
+      <input type="text" name="q" maxlength="20" placeholder="Search">
+      <input type="hidden" name="sitesearch" value="https://code0xff.cn/">
+      <button type="submit" class="submit icon-search"></button>
+</form>
+    </section>
+    
+    <section class="widget">
+        <h3 class="widget-title">最近文章</h3>
+<ul class="widget-list">
+    
+    <li>
+        <a href="https://code0xff.cn/post/2022/03/spark%E7%9A%84%E6%B3%A8%E5%85%A5%E8%A7%84%E5%88%99/" title="Spark的注入规则">Spark的注入规则</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.cn/post/2022/02/%E7%94%A8javacc%E5%AE%9E%E7%8E%B0%E5%9B%9B%E5%88%99%E8%BF%90%E7%AE%97/" title="用javacc实现四则运算">用javacc实现四则运算</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.cn/post/2022/02/scala%E7%9A%84%E4%B8%80%E4%BA%9B%E7%89%B9%E6%80%A7/" title="scala的一些特性">scala的一些特性</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.cn/post/2022/02/kudu%E8%AE%BA%E6%96%87%E7%BF%BB%E8%AF%91/" title="Kudu论文翻译">Kudu论文翻译</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.cn/post/2022/02/%E5%BE%AE%E6%9C%8D%E5%8A%A1%E7%9A%84%E8%AE%BE%E8%AE%A1%E7%9A%84ideals/" title="微服务的设计的IDEALS">微服务的设计的IDEALS</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.cn/post/2022/02/kudu%E7%9A%84%E6%A8%A1%E5%9E%8B%E8%AE%BE%E8%AE%A1/" title="Kudu的模型设计">Kudu的模型设计</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.cn/post/2022/01/lr%E7%AE%97%E6%B3%95/" title="LR算法">LR算法</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.cn/post/2022/01/%E5%AF%B9%E6%B0%B8%E4%B9%85%E7%BB%84%E5%90%88%E7%9A%84%E5%AE%9E%E8%B7%B5/" title="对永久组合的实践">对永久组合的实践</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.cn/post/2022/01/%E7%94%A8dfa%E9%AA%8C%E8%AF%81%E5%AD%97%E7%AC%A6%E4%B8%B2%E4%B8%AD%E7%9A%84%E6%95%B0%E5%AD%97/" title="用DFA验证字符串中的数字">用DFA验证字符串中的数字</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.cn/post/2021/12/%E5%88%86%E5%B8%83%E5%BC%8F%E6%95%B0%E6%8D%AE%E5%BA%93%E8%AF%BE%E7%A8%8B%E4%B8%AD%E7%9A%84%E8%AE%BA%E6%96%87/" title="分布式数据库课程中的论文">分布式数据库课程中的论文</a>
+    </li>
+    
+</ul>
+    </section>
+
+    
+
+    <section class="widget">
+        <h3 class="widget-title"><a href='/categories/'>分类</a></h3>
+<ul class="widget-list">
+    
+    <li><a href="https://code0xff.cn/categories/%E5%95%86%E4%B8%9A/">商业 (2)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E5%A4%A7%E6%95%B0%E6%8D%AE/">大数据 (2)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E6%97%85%E8%A1%8C/">旅行 (10)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E6%9E%B6%E6%9E%84/">架构 (1)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E7%94%9F%E6%B4%BB/">生活 (4)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E7%AE%97%E6%B3%95/">算法 (7)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E7%BB%8F%E6%B5%8E/">经济 (1)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E7%BC%96%E7%A8%8B%E8%AF%AD%E8%A8%80/">编程语言 (1)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E8%AE%A1%E7%AE%97%E6%9C%BA%E5%8E%9F%E7%90%86/">计算机原理 (2)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E8%AE%BA%E6%96%87/">论文 (5)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E8%AF%BB%E4%B9%A6%E7%AC%94%E8%AE%B0/">读书笔记 (3)</a></li>
+    
+</ul>
+    </section>
+
+    <section class="widget">
+        <h3 class="widget-title">归档</a></h3>
+<ul class="widget-list">
+    
+    <li><a href="https://code0xff.cn/years/2021%E5%B9%B4/">2021年 (29)</a></li>
+    
+    <li><a href="https://code0xff.cn/years/2022%E5%B9%B4/">2022年 (9)</a></li>
+    
+</ul>
+    </section>
+
+    <section class="widget">
+        <h3 class="widget-title"><a href='/tags/'>标签</a></h3>
+<div class="tagcloud">
+    
+    <a href="https://code0xff.cn/tags/kudu/">kudu </a>
+    
+    <a href="https://code0xff.cn/tags/manacher/">Manacher </a>
+    
+    <a href="https://code0xff.cn/tags/scala/">scala </a>
+    
+    <a href="https://code0xff.cn/tags/spark/">spark </a>
+    
+    <a href="https://code0xff.cn/tags/unix/">unix </a>
+    
+    <a href="https://code0xff.cn/tags/%E4%BA%8C%E5%88%86%E6%9F%A5%E6%89%BE/">二分查找 </a>
+    
+    <a href="https://code0xff.cn/tags/%E4%BA%8C%E5%8F%89%E6%A0%91%E9%81%8D%E5%8E%86/">二叉树遍历 </a>
+    
+    <a href="https://code0xff.cn/tags/%E5%88%86%E5%B8%83%E5%BC%8F/">分布式 </a>
+    
+    <a href="https://code0xff.cn/tags/%E5%8E%86%E5%8F%B2/">历史 </a>
+    
+    <a href="https://code0xff.cn/tags/%E5%9B%9E%E6%BA%AF/">回溯 </a>
+    
+    <a href="https://code0xff.cn/tags/%E5%9B%BD%E5%86%85%E6%97%85%E8%A1%8C/">国内旅行 </a>
+    
+    <a href="https://code0xff.cn/tags/%E5%9B%BD%E5%A4%96%E6%97%85%E8%A1%8C/">国外旅行 </a>
+    
+    <a href="https://code0xff.cn/tags/%E5%AD%98%E5%82%A8/">存储 </a>
+    
+    <a href="https://code0xff.cn/tags/%E5%BE%AE%E6%9C%8D%E5%8A%A1/">微服务 </a>
+    
+    <a href="https://code0xff.cn/tags/%E6%95%B0%E6%8D%AE%E5%BA%93/">数据库 </a>
+    
+    <a href="https://code0xff.cn/tags/%E6%B1%87%E7%BC%96/">汇编 </a>
+    
+    <a href="https://code0xff.cn/tags/%E7%94%9F%E6%B4%BB/">生活 </a>
+    
+    <a href="https://code0xff.cn/tags/%E7%94%B5%E5%BD%B1/">电影 </a>
+    
+    <a href="https://code0xff.cn/tags/%E7%AE%97%E6%B3%95/">算法 </a>
+    
+    <a href="https://code0xff.cn/tags/%E7%BB%8F%E6%B5%8E/">经济 </a>
+    
+    <a href="https://code0xff.cn/tags/%E7%BC%93%E5%AD%98/">缓存 </a>
+    
+    <a href="https://code0xff.cn/tags/%E7%BC%96%E8%AF%91%E5%8E%9F%E7%90%86/">编译原理 </a>
+    
+    <a href="https://code0xff.cn/tags/%E8%AE%A1%E7%AE%97%E6%A1%86%E6%9E%B6/">计算框架 </a>
+    
+    <a href="https://code0xff.cn/tags/%E8%AF%BB%E4%B9%A6%E7%AC%94%E8%AE%B0/">读书笔记 </a>
+    
+</div>
+    </section>
+
+    
+
+    <section class="widget">
+        <h3 class="widget-title">RSS</h3>
+        <ul class="widget-list">
+            <li><a href="https://code0xff.cn/index.xml">文章 RSS</a></li>
+        </ul>
+    </section>
+</div>
+            </div>
+        </div>
+    </div>
+    <footer id="footer">
+    <div>
+        &copy; 2022 <a href="https://code0xff.cn/">记录每个瞬间 By 老王</a>
+        
+    </div>
+    <br />
+    <div>
+        <div class="github-badge">
+            <a href="https://gohugo.io/" target="_black" rel="nofollow"><span class="badge-subject">Powered by</span><span class="badge-value bg-blue">Hugo</span></a>
+        </div>
+        <div class="github-badge">
+            <a href="https://github.com/flysnow-org/maupassant-hugo" target="_black"><span class="badge-subject">Theme</span><span class="badge-value bg-yellowgreen">Maupassant</span></a>
+        </div>
+    </div>
+    <div>
+        <a href="http://www.beian.miit.gov.cn/">京ICP备19014975号</a>
+    </div>
+</footer>
+
+
+    
+    <script type="text/javascript">
+        window.MathJax = {
+            tex2jax: {
+                inlineMath: [['$', '$']],
+                processEscapes: true
+                }
+            };
+    </script>
+    <script src='https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.5/MathJax.js?config=TeX-MML-AM_CHTML' async></script><script src="https://cdn.bootcdn.net/ajax/libs/fancybox/3.5.7/jquery.fancybox.min.js"></script>
+
+<a id="rocket" href="#top"></a>
+<script type="text/javascript" src='/js/totop.js?v=0.0.0' async=""></script>
+
+<script type="application/javascript">
+var doNotTrack = false;
+if (!doNotTrack) {
+	window.ga=window.ga||function(){(ga.q=ga.q||[]).push(arguments)};ga.l=+new Date;
+	ga('create', 'GA ID', 'auto');
+	
+	ga('send', 'pageview');
+}
+</script>
+<script async src='https://www.google-analytics.com/analytics.js'></script>
+
+
+
+    <script type="text/javascript" src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js" async></script>
+
+
+
+
+</body>
+
+</html>
