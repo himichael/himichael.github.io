@@ -1,0 +1,635 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    
+    <meta name="referrer" content="no-referrer-when-downgrade">
+    
+
+    <title>Hive论文 | 记录每个瞬间</title>
+    <meta property="og:title" content="Hive论文 - 记录每个瞬间">
+    <meta property="og:type" content="article">
+        
+    <meta property="article:published_time" content='2022-03-20T08:54:37&#43;08:00'>
+        
+        
+    <meta property="article:modified_time" content='2022-03-20T08:54:37&#43;08:00'>
+        
+    <meta name="Keywords" content="">
+    <meta name="description" content="Hive论文&#34;">
+        <meta name="author" content="隔壁老王">
+        
+    <meta property="og:url" content="https://code0xff.cn/post/2022/03/hive%E8%AE%BA%E6%96%87/">
+    <link rel="shortcut icon" href='/favicon.ico'  type="image/x-icon">
+
+    <link rel="stylesheet" href='/css/normalize.css'>
+    <link rel="stylesheet" href='/css/style.css'>
+    <script type="text/javascript" src="//cdn.bootcdn.net/ajax/libs/jquery/3.4.1/jquery.min.js"></script>
+
+    
+    
+    
+        <link href="https://cdn.bootcdn.net/ajax/libs/fancybox/3.5.7/jquery.fancybox.min.css" rel="stylesheet">
+    
+    
+    
+    
+</head>
+
+
+<body>
+    <header id="header" class="clearfix">
+    <div class="container">
+        <div class="col-group">
+            <div class="site-name ">
+                
+                    <a id="logo" href="https://code0xff.cn/">
+                        记录每个瞬间
+                    </a>
+                
+                
+            </div>
+            <div>
+                <nav id="nav-menu" class="clearfix">
+                    <a class="current" href="https://code0xff.cn/">首页</a>
+                    
+                    <a  href="https://code0xff.cn/linked/" title="链接">链接</a>
+                    
+                    <a  href="https://code0xff.cn/archives/" title="归档">归档</a>
+                    
+                    <a  href="https://code0xff.cn/about/" title="关于">关于</a>
+                    
+                </nav>
+            </div>
+        </div>
+    </div>
+</header>
+
+    <div id="body">
+        <div class="container">
+            <div class="col-group">
+
+                <div class="col-8" id="main">
+                    
+<div class="res-cons">
+    
+    <article class="post">
+        <header>
+            <h1 class="post-title">Hive论文</h1>
+        </header>
+        <date class="post-meta meta-date">
+            2022年3月20日
+        </date>
+<nav id="TableOfContents">
+  <ul>
+    <li>
+      <ul>
+        <li><a href="#背景">背景</a></li>
+        <li><a href="#数据模型">数据模型</a></li>
+        <li><a href="#数据存储序列化和文件格式">数据存储、序列化和文件格式</a></li>
+      </ul>
+    </li>
+  </ul>
+</nav>
+        
+        <div class="post-meta">
+            
+            <span class="post-meta meta-tags">
+                <ul class="clearfix">
+                    <a href='/categories/%E8%AE%BA%E6%96%87'>论文</a>
+                </ul>
+            </span>
+            
+        </div>
+        
+        
+        <div class="post-meta">
+            <span id="busuanzi_container_page_pv">|<span id="busuanzi_value_page_pv"></span><span>
+                    阅读</span></span>
+        </div>
+        
+        
+        <div class="post-content">
+            <h2 id="背景">背景</h2>
+<p><code>Hive</code>是Facebook推出的一个基于Hadoop的开源项目。<br>
+为什么Facebook会开发这么一款产品，根据论文和相关背景，大概能得到这么一些信息：</p>
+<ul>
+<li>数据量是越来越大了，而商用的解决方案太贵了</li>
+<li>因为数据量的增多，用户的增多，相应的BI、机器学习、数据分析的需求也变得更多了</li>
+<li>Facebook就靠广告业务来赚钱的，所以数据分析对他们来说很重要</li>
+<li>Facebook当时已经有<code>PB</code>数据规模了，用传统的存储对他们不合适，所以也上了Hadoop</li>
+<li>Hadoop的Map-Reduce确实不错，但是太底层了，连简单的<code>count</code>、<code>avg</code>都没有</li>
+<li>Facebook内部的分析人员使用最多的可能是<code>SQL</code>，这是他们最熟悉的</li>
+<li>既然Map-Recue太底层，而很多分析人员对<code>SQL</code>又很熟悉，所以就想做一个类SQL的系统</li>
+<li>这个系统基于Hadoop，可以享受Hadoop的扩展性，同时又有SQL的一些特性</li>
+</ul>
+<p>根据背景能发现，Facebook做的Hive并不是拍脑门弄出来的，而是真的有实际场景的。 <br>
+Facebook的体量决定了它们必须上Hadoop，而他们的商业模式使得对数据分析非常依赖，但是Map-Recue太底层不合适分析人员。<br>
+像<code>pig</code>也是基于Map-Reduce，提供了更高层的接口，但是<code>pig</code>有自己的语法，跟<code>SQL</code>完全不同。<br>
+而<code>Hive</code>就是给公司内部分析人员使用的，所以场景其实很明确，就是谷歌的<code>GFS</code>一样，最初也是解决公司内部需求的。<br>
+所以<code>Hive</code>的出现提示了我们，好的产品应该是有明确的定位，能真正解决一些典型的问题<br>
+同时，这个产品最好能在已经成熟的基础方案之上，比如<code>Hive</code>很多重要的组件和思想都是基于成熟产品的：</p>
+<ul>
+<li>元数据库的关系型数据库</li>
+<li>底层的分布式文件系统、Map-Reduce</li>
+<li>SQL</li>
+</ul>
+<p><strong>基于现有成熟技术，找准产品定位，解决典型用户的需求，做微小创新</strong></p>
+<h2 id="数据模型">数据模型</h2>
+<p><code>Hive</code>支持基本类型，以及复杂类型：</p>
+<ul>
+<li>Integers
+<ul>
+<li>bigint(8 bytes)</li>
+<li>int(4 bytes)</li>
+<li>smallint(2 bytes),</li>
+<li>tinyint(1 byte)</li>
+<li>All integer types are signed.</li>
+</ul>
+</li>
+<li>Floating point numbers
+– float(single precision),
+<ul>
+<li>double(double precision)</li>
+</ul>
+</li>
+<li>String</li>
+<li>Associative arrays – map&lt;key-type, value-type&gt;</li>
+<li>Lists – list<!-- raw HTML omitted --></li>
+<li>Structs – struct&lt;file-name: field-type, &hellip; &gt;</li>
+</ul>
+<p>复杂类型还可以继续组合成更复杂的类型，比如：</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4">
+<table style="border-spacing:0;padding:0;margin:0;border:0;width:auto;overflow:auto;display:block;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-c++" data-lang="c++">list<span style="color:#ff79c6">&lt;</span>map<span style="color:#ff79c6">&lt;</span>string, <span style="color:#ff79c6">struct</span>&lt;<span style="color:#50fa7b">p1</span><span style="color:#ff79c6">:</span><span style="color:#8be9fd">int</span>, <span style="color:#8be9fd;font-style:italic">p2</span>:<span style="color:#8be9fd">int</span><span style="color:#ff79c6">&gt;&gt;</span>
+</code></pre></td></tr></table>
+</div>
+</div><p>这就是 list 里面可以嵌套 map，而map的value又是 struct类型<br>
+struct本身由两个基本类型组成，这样 Hive 就可以组合成任意复杂的数据结构了</p>
+<p>创建复杂结构的建表语句如下：</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4">
+<table style="border-spacing:0;padding:0;margin:0;border:0;width:auto;overflow:auto;display:block;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">5
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-sql" data-lang="sql"><span style="color:#ff79c6">CREATE</span> <span style="color:#ff79c6">TABLE</span> t1(
+    st string, 
+    fl <span style="color:#8be9fd;font-style:italic">float</span>, 
+    li list<span style="color:#ff79c6">&lt;</span><span style="color:#ff79c6">map</span><span style="color:#ff79c6">&lt;</span>string,struct<span style="color:#ff79c6">&lt;</span>p1:<span style="color:#8be9fd;font-style:italic">int</span>, p2:<span style="color:#8be9fd;font-style:italic">int</span><span style="color:#ff79c6">&gt;&gt;</span>
+);
+</code></pre></td></tr></table>
+</div>
+</div><p>t1.li[0] 可以引用 list里面的元素，也就是map<br>
+t1.li[0][&lsquo;key&rsquo;] 可以引用 map里面嵌套的 struct<br>
+y t1.li[0][&lsquo;key&rsquo;].p2 可以引用 最里面的struct</p>
+<p>Hive 需要处理一些遗留的数据，那么就需要 序列化、反序列化
+对此Hive提供了序列化接口：</p>
+<ul>
+<li>SerDe</li>
+<li>ObjectInspector</li>
+</ul>
+<p>Hive内置的SerDe和复杂结构也是实现了上述接口，当实现了这些接口后，可以以jar包的形式导入<br>
+比如这样：</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4">
+<table style="border-spacing:0;padding:0;margin:0;border:0;width:auto;overflow:auto;display:block;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-sql" data-lang="sql"><span style="color:#ff79c6">add</span> jar <span style="color:#ff79c6">/</span>jars<span style="color:#ff79c6">/</span>myformat.jar;
+<span style="color:#ff79c6">CREATE</span> <span style="color:#ff79c6">TABLE</span> t2
+<span style="color:#ff79c6">ROW</span> FORMAT SERDE <span style="color:#f1fa8c">&#39;com.myformat.MySerDe&#39;</span>;
+</code></pre></td></tr></table>
+</div>
+</div><p>Hive的查询语言非常类似SQL，但有一些限制，此外还增加了很多针对企业内部特点的功能<br>
+像子查询、左右连接、笛卡尔积、union，group by、聚合都是支持的
+所以任何对SQL熟悉的人(Facebook内部就有很多这样的分析人员)，上手Hive就很快<br>
+Hive还提供了元数据展示，比如 <code>show tables</code>、<code>desc</code>、分析查询计划这样的功能</p>
+<p>论文中给出了Hive的一些限制<br>
+比如，在join中有相等判断的谓词时需要这么写：</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4">
+<table style="border-spacing:0;padding:0;margin:0;border:0;width:auto;overflow:auto;display:block;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">5
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">6
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">7
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-sql" data-lang="sql"><span style="color:#ff79c6">SELECT</span> t1.a1 <span style="color:#ff79c6">as</span> c1, t2.b1 <span style="color:#ff79c6">as</span> c2
+<span style="color:#ff79c6">FROM</span> t1 <span style="color:#ff79c6">JOIN</span> t2 <span style="color:#ff79c6">ON</span> (t1.a2 <span style="color:#ff79c6">=</span> t2.b2);
+
+<span style="color:#ff79c6">#</span> 传统关系型数据库可以这么写：
+<span style="color:#ff79c6">SELECT</span> t1.a1 <span style="color:#ff79c6">as</span> c1, t2.b1 <span style="color:#ff79c6">as</span> c2
+<span style="color:#ff79c6">FROM</span> t1, t2
+<span style="color:#ff79c6">WHERE</span> t1.a2 <span style="color:#ff79c6">=</span> t2.b2;
+</code></pre></td></tr></table>
+</div>
+</div><p>另一个显示就是 插入，可能是底层的HDFS本身只有append，并不支持随机的插入<br>
+所以Hive的插入实际是覆盖：</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4">
+<table style="border-spacing:0;padding:0;margin:0;border:0;width:auto;overflow:auto;display:block;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-sql" data-lang="sql"><span style="color:#ff79c6">INSERT</span> OVERWRITE <span style="color:#ff79c6">TABLE</span> t1 <span style="color:#ff79c6">SELECT</span> <span style="color:#ff79c6">*</span> <span style="color:#ff79c6">FROM</span> t2;
+</code></pre></td></tr></table>
+</div>
+</div><p>不过论文中也提到了，随着数据量的增加，这种折中的 insert，update都会有性能问题<br>
+所以未来会支持真正的 增删改</p>
+<p>Hive还可以在SQL中嵌入map-readuce：</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4">
+<table style="border-spacing:0;padding:0;margin:0;border:0;width:auto;overflow:auto;display:block;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">5
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">6
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-sql" data-lang="sql"><span style="color:#ff79c6">FROM</span> (
+ <span style="color:#ff79c6">MAP</span> doctext <span style="color:#ff79c6">USING</span> <span style="color:#f1fa8c">&#39;python wc_mapper.py&#39;</span> <span style="color:#ff79c6">AS</span> (word, cnt)
+ <span style="color:#ff79c6">FROM</span> docs
+ <span style="color:#ff79c6">CLUSTER</span> <span style="color:#ff79c6">BY</span> word
+) a
+REDUCE word, cnt <span style="color:#ff79c6">USING</span> <span style="color:#f1fa8c">&#39;python wc_reduce.py&#39;</span>;
+</code></pre></td></tr></table>
+</div>
+</div><p>这里的输入是通过自定义的程序(map)转为 doctext的，然后输出也是通过自定义的reduce做处理的</p>
+<p>SQL中可以只包含 map 部分没有reduce，反之也一样，如下就是一个例子：</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4">
+<table style="border-spacing:0;padding:0;margin:0;border:0;width:auto;overflow:auto;display:block;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">5
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">6
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-sql" data-lang="sql"><span style="color:#ff79c6">FROM</span> (
+ <span style="color:#ff79c6">FROM</span> session_table
+ <span style="color:#ff79c6">SELECT</span> sessionid, tstamp, <span style="color:#ff79c6">data</span>
+ DISTRIBUTE <span style="color:#ff79c6">BY</span> sessionid SORT <span style="color:#ff79c6">BY</span> tstamp
+) a
+REDUCE sessionid, tstamp, <span style="color:#ff79c6">data</span> <span style="color:#ff79c6">USING</span> <span style="color:#f1fa8c">&#39;session_reducer.sh&#39;</span>;
+</code></pre></td></tr></table>
+</div>
+</div><p>Hive 对于 insert的目标端也支持多种类型<br>
+可以插入到表中，也可以写到HDFS，或者本地文件中，如下：</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4">
+<table style="border-spacing:0;padding:0;margin:0;border:0;width:auto;overflow:auto;display:block;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">15
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">16
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">17
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">18
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-sql" data-lang="sql"><span style="color:#ff79c6">FROM</span> t1
+ <span style="color:#ff79c6">INSERT</span> OVERWRITE <span style="color:#ff79c6">TABLE</span> t2
+ <span style="color:#ff79c6">SELECT</span> t3.c2, <span style="color:#ff79c6">count</span>(<span style="color:#bd93f9">1</span>)
+ <span style="color:#ff79c6">FROM</span> t3
+ <span style="color:#ff79c6">WHERE</span> t3.c1 <span style="color:#ff79c6">&lt;=</span> <span style="color:#bd93f9">20</span>
+ <span style="color:#ff79c6">GROUP</span> <span style="color:#ff79c6">BY</span> t3.c2
+ 
+ <span style="color:#ff79c6">INSERT</span> OVERWRITE DIRECTORY <span style="color:#f1fa8c">&#39;/output_dir&#39;</span>
+ <span style="color:#ff79c6">SELECT</span> t3.c2, <span style="color:#ff79c6">avg</span>(t3.c1)
+ <span style="color:#ff79c6">FROM</span> t3
+ <span style="color:#ff79c6">WHERE</span> t3.c1 <span style="color:#ff79c6">&gt;</span> <span style="color:#bd93f9">20</span> <span style="color:#ff79c6">AND</span> t3.c1 <span style="color:#ff79c6">&lt;=</span> <span style="color:#bd93f9">30</span>
+ <span style="color:#ff79c6">GROUP</span> <span style="color:#ff79c6">BY</span> t3.c2
+ 
+ <span style="color:#ff79c6">INSERT</span> OVERWRITE <span style="color:#ff79c6">LOCAL</span> DIRECTORY <span style="color:#f1fa8c">&#39;/home/dir&#39;</span>
+ <span style="color:#ff79c6">SELECT</span> t3.c2, <span style="color:#ff79c6">sum</span>(t3.c1)
+ <span style="color:#ff79c6">FROM</span> t3
+ <span style="color:#ff79c6">WHERE</span> t3.c1 <span style="color:#ff79c6">&gt;</span> <span style="color:#bd93f9">30</span>
+ <span style="color:#ff79c6">GROUP</span> <span style="color:#ff79c6">BY</span> t3.c2;
+</code></pre></td></tr></table>
+</div>
+</div><p>Hive这个产品在设计的时候，考虑到了公司的遗留数据处理问题，而把处理数据的细节(序列化、反序列化)交给用户了<br>
+并以jar包的形式导入，这么设计整个产品就更开放了 <br>
+另外为了照顾到更高级的用户，在SQL中也可以嵌入map-reduce的脚本<br>
+因为Hive本身是基于Map-Reduce的，但是做了更高层的封装，但它并没有完全关上，而是提供了一个入口，让用户也可以直接执行M-R
+Hive的字段类型是任意嵌套结构的，这种结构设计比较有意思，可以支持非常复杂的数据结构<br>
+从Hive的设计看</p>
+<ul>
+<li>应该是在公司层面做了大量的调研</li>
+<li>主要是面向使用SQL的分析人员(大部分用户)，也照顾了小部分用户(使用MapReduce的用户)</li>
+<li>还考虑了遗留数据和复杂结构的处理</li>
+<li>从技术上来说很难，可能也不需要完全兼容标准SQL，所以这个SQL就不是标准SQL了</li>
+</ul>
+<h2 id="数据存储序列化和文件格式">数据存储、序列化和文件格式</h2>
+
+			<script type="text/javascript"
+        async
+        src="https://cdn.bootcss.com/mathjax/2.7.3/MathJax.js?config=TeX-AMS-MML_HTMLorMML">
+MathJax.Hub.Config({
+  tex2jax: {
+    inlineMath: [['$','$'], ['\\(','\\)']],
+    displayMath: [['$$','$$'], ['\[\[','\]\]']],
+    processEscapes: true,
+    processEnvironments: true,
+    skipTags: ['script', 'noscript', 'style', 'textarea', 'pre'],
+    TeX: { equationNumbers: { autoNumber: "AMS" },
+         extensions: ["AMSmath.js", "AMSsymbols.js"] }
+  }
+});
+
+MathJax.Hub.Queue(function() {
+    
+    
+    
+    var all = MathJax.Hub.getAllJax(), i;
+    for(i = 0; i < all.length; i += 1) {
+        all[i].SourceElement().parentNode.className += ' has-jax';
+    }
+});
+</script>
+
+<style>
+code.has-jax {
+    font: inherit;
+    font-size: 100%;
+    background: inherit;
+    border: inherit;
+    color: #515151;
+}
+</style>
+        </div>
+
+        
+
+
+        
+
+
+        <div class="post-meta meta-tags">
+            
+            <ul class="clearfix">
+                
+                <li><a href='/tags/hive'>Hive</a></li>
+                
+            </ul>
+            
+        </div>
+    </article>
+    
+    
+
+    
+    
+</div>
+
+
+                </div>
+
+                <div id="secondary">
+    <section class="widget">
+        <form id="search" action='https://code0xff.cn/search/' method="get" accept-charset="utf-8" target="_blank" _lpchecked="1">
+      
+      <input type="text" name="q" maxlength="20" placeholder="Search">
+      <input type="hidden" name="sitesearch" value="https://code0xff.cn/">
+      <button type="submit" class="submit icon-search"></button>
+</form>
+    </section>
+    
+    <section class="widget">
+        <h3 class="widget-title">最近文章</h3>
+<ul class="widget-list">
+    
+    <li>
+        <a href="https://code0xff.cn/post/2022/03/hive%E8%AE%BA%E6%96%87/" title="Hive论文">Hive论文</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.cn/post/2022/03/spark%E9%80%BB%E8%BE%91%E8%AE%A1%E5%88%92%E7%9A%84%E8%A7%A3%E6%9E%90/" title="Spark逻辑计划的解析">Spark逻辑计划的解析</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.cn/post/2022/03/spark%E7%9A%84%E6%B3%A8%E5%85%A5%E8%A7%84%E5%88%99/" title="Spark的注入规则">Spark的注入规则</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.cn/post/2022/02/%E7%94%A8javacc%E5%AE%9E%E7%8E%B0%E5%9B%9B%E5%88%99%E8%BF%90%E7%AE%97/" title="用javacc实现四则运算">用javacc实现四则运算</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.cn/post/2022/02/scala%E7%9A%84%E4%B8%80%E4%BA%9B%E7%89%B9%E6%80%A7/" title="scala的一些特性">scala的一些特性</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.cn/post/2022/02/kudu%E8%AE%BA%E6%96%87%E7%BF%BB%E8%AF%91/" title="Kudu论文翻译">Kudu论文翻译</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.cn/post/2022/02/%E5%BE%AE%E6%9C%8D%E5%8A%A1%E7%9A%84%E8%AE%BE%E8%AE%A1%E7%9A%84ideals/" title="微服务的设计的IDEALS">微服务的设计的IDEALS</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.cn/post/2022/02/kudu%E7%9A%84%E6%A8%A1%E5%9E%8B%E8%AE%BE%E8%AE%A1/" title="Kudu的模型设计">Kudu的模型设计</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.cn/post/2022/01/lr%E7%AE%97%E6%B3%95/" title="LR算法">LR算法</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.cn/post/2022/01/%E5%AF%B9%E6%B0%B8%E4%B9%85%E7%BB%84%E5%90%88%E7%9A%84%E5%AE%9E%E8%B7%B5/" title="对永久组合的实践">对永久组合的实践</a>
+    </li>
+    
+</ul>
+    </section>
+
+    
+
+    <section class="widget">
+        <h3 class="widget-title"><a href='/categories/'>分类</a></h3>
+<ul class="widget-list">
+    
+    <li><a href="https://code0xff.cn/categories/%E5%95%86%E4%B8%9A/">商业 (2)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E5%A4%A7%E6%95%B0%E6%8D%AE/">大数据 (3)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E6%97%85%E8%A1%8C/">旅行 (10)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E6%9E%B6%E6%9E%84/">架构 (1)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E7%94%9F%E6%B4%BB/">生活 (4)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E7%AE%97%E6%B3%95/">算法 (7)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E7%BB%8F%E6%B5%8E/">经济 (1)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E7%BC%96%E7%A8%8B%E8%AF%AD%E8%A8%80/">编程语言 (1)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E8%AE%A1%E7%AE%97%E6%9C%BA%E5%8E%9F%E7%90%86/">计算机原理 (2)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E8%AE%BA%E6%96%87/">论文 (6)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E8%AF%BB%E4%B9%A6%E7%AC%94%E8%AE%B0/">读书笔记 (3)</a></li>
+    
+</ul>
+    </section>
+
+    <section class="widget">
+        <h3 class="widget-title">归档</a></h3>
+<ul class="widget-list">
+    
+    <li><a href="https://code0xff.cn/years/2021%E5%B9%B4/">2021年 (29)</a></li>
+    
+    <li><a href="https://code0xff.cn/years/2022%E5%B9%B4/">2022年 (11)</a></li>
+    
+</ul>
+    </section>
+
+    <section class="widget">
+        <h3 class="widget-title"><a href='/tags/'>标签</a></h3>
+<div class="tagcloud">
+    
+    <a href="https://code0xff.cn/tags/hive/">Hive </a>
+    
+    <a href="https://code0xff.cn/tags/kudu/">kudu </a>
+    
+    <a href="https://code0xff.cn/tags/manacher/">Manacher </a>
+    
+    <a href="https://code0xff.cn/tags/scala/">scala </a>
+    
+    <a href="https://code0xff.cn/tags/spark/">spark </a>
+    
+    <a href="https://code0xff.cn/tags/unix/">unix </a>
+    
+    <a href="https://code0xff.cn/tags/%E4%BA%8C%E5%88%86%E6%9F%A5%E6%89%BE/">二分查找 </a>
+    
+    <a href="https://code0xff.cn/tags/%E4%BA%8C%E5%8F%89%E6%A0%91%E9%81%8D%E5%8E%86/">二叉树遍历 </a>
+    
+    <a href="https://code0xff.cn/tags/%E5%88%86%E5%B8%83%E5%BC%8F/">分布式 </a>
+    
+    <a href="https://code0xff.cn/tags/%E5%8E%86%E5%8F%B2/">历史 </a>
+    
+    <a href="https://code0xff.cn/tags/%E5%9B%9E%E6%BA%AF/">回溯 </a>
+    
+    <a href="https://code0xff.cn/tags/%E5%9B%BD%E5%86%85%E6%97%85%E8%A1%8C/">国内旅行 </a>
+    
+    <a href="https://code0xff.cn/tags/%E5%9B%BD%E5%A4%96%E6%97%85%E8%A1%8C/">国外旅行 </a>
+    
+    <a href="https://code0xff.cn/tags/%E5%AD%98%E5%82%A8/">存储 </a>
+    
+    <a href="https://code0xff.cn/tags/%E5%BE%AE%E6%9C%8D%E5%8A%A1/">微服务 </a>
+    
+    <a href="https://code0xff.cn/tags/%E6%95%B0%E6%8D%AE%E5%BA%93/">数据库 </a>
+    
+    <a href="https://code0xff.cn/tags/%E6%B1%87%E7%BC%96/">汇编 </a>
+    
+    <a href="https://code0xff.cn/tags/%E7%94%9F%E6%B4%BB/">生活 </a>
+    
+    <a href="https://code0xff.cn/tags/%E7%94%B5%E5%BD%B1/">电影 </a>
+    
+    <a href="https://code0xff.cn/tags/%E7%AE%97%E6%B3%95/">算法 </a>
+    
+    <a href="https://code0xff.cn/tags/%E7%BB%8F%E6%B5%8E/">经济 </a>
+    
+    <a href="https://code0xff.cn/tags/%E7%BC%93%E5%AD%98/">缓存 </a>
+    
+    <a href="https://code0xff.cn/tags/%E7%BC%96%E8%AF%91%E5%8E%9F%E7%90%86/">编译原理 </a>
+    
+    <a href="https://code0xff.cn/tags/%E8%AE%A1%E7%AE%97%E6%A1%86%E6%9E%B6/">计算框架 </a>
+    
+    <a href="https://code0xff.cn/tags/%E8%AF%BB%E4%B9%A6%E7%AC%94%E8%AE%B0/">读书笔记 </a>
+    
+</div>
+    </section>
+
+    
+
+    <section class="widget">
+        <h3 class="widget-title">RSS</h3>
+        <ul class="widget-list">
+            <li><a href="https://code0xff.cn/index.xml">文章 RSS</a></li>
+        </ul>
+    </section>
+</div>
+            </div>
+        </div>
+    </div>
+    <footer id="footer">
+    <div>
+        &copy; 2022 <a href="https://code0xff.cn/">记录每个瞬间 By 老王</a>
+        
+    </div>
+    <br />
+    <div>
+        <div class="github-badge">
+            <a href="https://gohugo.io/" target="_black" rel="nofollow"><span class="badge-subject">Powered by</span><span class="badge-value bg-blue">Hugo</span></a>
+        </div>
+        <div class="github-badge">
+            <a href="https://github.com/flysnow-org/maupassant-hugo" target="_black"><span class="badge-subject">Theme</span><span class="badge-value bg-yellowgreen">Maupassant</span></a>
+        </div>
+    </div>
+    <div>
+        <a href="http://www.beian.miit.gov.cn/">京ICP备19014975号</a>
+    </div>
+</footer>
+
+
+    
+    <script type="text/javascript">
+        window.MathJax = {
+            tex2jax: {
+                inlineMath: [['$', '$']],
+                processEscapes: true
+                }
+            };
+    </script>
+    <script src='https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.5/MathJax.js?config=TeX-MML-AM_CHTML' async></script><script src="https://cdn.bootcdn.net/ajax/libs/fancybox/3.5.7/jquery.fancybox.min.js"></script>
+
+<a id="rocket" href="#top"></a>
+<script type="text/javascript" src='/js/totop.js?v=0.0.0' async=""></script>
+
+<script type="application/javascript">
+var doNotTrack = false;
+if (!doNotTrack) {
+	window.ga=window.ga||function(){(ga.q=ga.q||[]).push(arguments)};ga.l=+new Date;
+	ga('create', 'GA ID', 'auto');
+	
+	ga('send', 'pageview');
+}
+</script>
+<script async src='https://www.google-analytics.com/analytics.js'></script>
+
+
+
+    <script type="text/javascript" src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js" async></script>
+
+
+
+
+</body>
+
+</html>
