@@ -600,10 +600,83 @@ Fig. 2: Flowchart for typical transformation during optimization</p>
 <li>列裁剪</li>
 <li>谓词下推</li>
 <li>分区裁剪</li>
-<li>map端join</li>
+<li>map端join，对于小表就直接复制到所有的map端做join</li>
 <li>join重排序</li>
 </ul>
-<p>
+<p>map端join的可以通过一个提示来触发</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4">
+<table style="border-spacing:0;padding:0;margin:0;border:0;width:auto;overflow:auto;display:block;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-sql" data-lang="sql"><span style="color:#ff79c6">SELECT</span> <span style="color:#6272a4">/*+ MAPJOIN(t2) */</span> t1.c1, t2.c1
+<span style="color:#ff79c6">FROM</span> t1 <span style="color:#ff79c6">JOIN</span> t2 <span style="color:#ff79c6">ON</span>(t1.c2 <span style="color:#ff79c6">=</span> t2.c2);
+</code></pre></td></tr></table>
+</div>
+</div><p>map端join可以通过参数设置</p>
+<ul>
+<li>hive.mapjoin.size.key</li>
+<li>hive.mapjoin.cache.numrows</li>
+</ul>
+<p>除了 map端join的提示，Hive还有下面一些提示</p>
+<ul>
+<li>处理 group by，真实世界的数据可能分布的不均匀导致效率低，可以通过 2个阶段的map/reduce来优化</li>
+<li>首先将 数据随机分布到 reduce端并计算部分聚合</li>
+<li>在第二阶段，这些部分聚合数据被分布到 group by列的reduce</li>
+<li>由于部分聚合的的数量比 数据集要小很多，所以性能会有大幅提升</li>
+</ul>
+<p>使用下面方式来触发：</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4">
+<table style="border-spacing:0;padding:0;margin:0;border:0;width:auto;overflow:auto;display:block;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-sql" data-lang="sql"><span style="color:#ff79c6">set</span> hive.groupby.skewindata<span style="color:#ff79c6">=</span><span style="color:#ff79c6">true</span>;
+<span style="color:#ff79c6">SELECT</span> t1.c1, <span style="color:#ff79c6">sum</span>(t1.c2)
+<span style="color:#ff79c6">FROM</span> t1
+<span style="color:#ff79c6">GROUP</span> <span style="color:#ff79c6">BY</span> t1;
+</code></pre></td></tr></table>
+</div>
+</div><p>map端基于 hash的部分聚合</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4">
+<table style="border-spacing:0;padding:0;margin:0;border:0;width:auto;overflow:auto;display:block;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-sql" data-lang="sql"><span style="color:#ff79c6">FROM</span> (<span style="color:#ff79c6">SELECT</span> a.status, b.school, b.gender
+ <span style="color:#ff79c6">FROM</span> status_updates a <span style="color:#ff79c6">JOIN</span> profiles b
+ <span style="color:#ff79c6">ON</span> (a.userid <span style="color:#ff79c6">=</span> b.userid
+ <span style="color:#ff79c6">AND</span> a.ds<span style="color:#ff79c6">=</span><span style="color:#f1fa8c">&#39;2009-03-20&#39;</span> )) subq1
+ 
+<span style="color:#ff79c6">INSERT</span> OVERWRITE <span style="color:#ff79c6">TABLE</span> gender_summary
+ PARTITION(ds<span style="color:#ff79c6">=</span><span style="color:#f1fa8c">&#39;2009-03-20&#39;</span>)
+<span style="color:#ff79c6">SELECT</span> subq1.gender, <span style="color:#ff79c6">COUNT</span>(<span style="color:#bd93f9">1</span>)
+<span style="color:#ff79c6">GROUP</span> <span style="color:#ff79c6">BY</span> subq1.gender
+
+<span style="color:#ff79c6">INSERT</span> OVERWRITE <span style="color:#ff79c6">TABLE</span> school_summary
+ PARTITION(ds<span style="color:#ff79c6">=</span><span style="color:#f1fa8c">&#39;2009-03-20&#39;</span>)
+<span style="color:#ff79c6">SELECT</span> subq1.school, <span style="color:#ff79c6">COUNT</span>(<span style="color:#bd93f9">1</span>)
+<span style="color:#ff79c6">GROUP</span> <span style="color:#ff79c6">BY</span> subq1.school 
+</code></pre></td></tr></table>
+</div>
+</div><p>
         <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2022/03/Hive%E8%AE%BA%E6%96%87/3.jpg">
             <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2022/03/Hive%E8%AE%BA%E6%96%87/3.jpg" />
         </a>
