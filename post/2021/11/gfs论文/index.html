@@ -285,6 +285,48 @@ master维护了系统的元数据，功能包括：</p>
 <li>自我识别记录</li>
 </ul>
 <h2 id="系统交互">系统交互</h2>
+<p>变更就是：</p>
+<ul>
+<li>通过append，或者wirte 改变chunk的内容</li>
+<li>或者通过append、write改变chunk的元数据</li>
+</ul>
+<p>为了减轻master的负担，master会分配一个租约给一个主分片，然后主分片按顺序变更所有的其他分片<br>
+租约是通过心跳来管理的<br>
+master也可能会回收租约，比如租约超时，rename，通讯中断
+租约可能会超时，也可能因为rename被master主动关闭</p>
+<p>写入流程如下：<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2021/11/GFS%E8%AE%BA%E6%96%87/2.png">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2021/11/GFS%E8%AE%BA%E6%96%87/2.png" />
+        </a>
+    </p>
+<p>执行步骤如下：</p>
+<ol>
+<li>客户端向master要chunk对应的chunk-server租约，并获取其他chunk的位置</li>
+<li>master返回主副本和其他副本的位置，客户端缓存这些信息，待租约失效或副本不可达时会再次联系master</li>
+<li>客户端将数据写入所有chunk-server，每个server都有LRU缓存，为了解耦合优化，GFS还改变了一些部署拓扑</li>
+<li>当所有副本都接收到数据后，客户端发写请求到主副本，主副本为所有变更分配序号，并按序号顺序变更本地状态</li>
+<li>主副本发送给所有从副本，按同样顺序变更状态</li>
+<li>从副本发送完成请求给主副本</li>
+<li>主副本响应客户端，如果成功可能是 主和从任意副本出现失败，如果返回失败，意味着主副本根本没分配过序号，失败后客户端可以继续(3)-(7)重试</li>
+</ol>
+<p>如果文件很大，会被分成多个chunk写入<br>
+共享的文件区域可能会包含来自多个不同客户端的文件片段</p>
+<p>数据流：</p>
+<ul>
+<li>GFS对数据做了管道化处理</li>
+<li>客户端写入最新的S1，然后S1 -&gt; S2，S2到最近的S3</li>
+<li>交换机是全双工，所以S1 直接写到S2，是没有TCP拥塞的</li>
+<li>网络是足够简单的，所以通过IP就能找到最近的机器</li>
+<li>假设要发送 B字节 到 R个副本，那么总延迟为 B/T + RL，T是带宽，L是两个机器延迟</li>
+</ul>
+<p>原子append</p>
+<ul>
+<li>普通的写入，如果是并发情况下，可能一个区域内会有多个客户端的写入片段</li>
+<li>GFS提供了append的原子写入到文件末尾，保证至少一次的语义</li>
+<li>类似于unix 的O_APPEND 模式，但是没有条件竞争</li>
+<li>这种特性在谷歌内部非常有用，这种场景包括：多个生产者/一个消费者，或者是从多个客户端做合并</li>
+</ul>
 
 			<script type="text/javascript"
         async
