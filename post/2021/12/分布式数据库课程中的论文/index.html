@@ -714,6 +714,57 @@ Using Distributed Transactions and Notifications</a></li>
 <li>VoltDB的基础就是存储过程这种预定义事务方式，存储过程、内存存储、单线程相互影响，使其性能优越</li>
 </ul>
 </li>
+<li>不用使用自增主键
+<ul>
+<li>MySQL无法保证自增，事务异常后就会导致出现空洞</li>
+<li>无法保证单调递增</li>
+<li>海量并发下性能不行，高位数据库自增控制，低若干位机器自己生成</li>
+<li>分布式情况下 TSO会有单点性能问题</li>
+<li>range分区下会有尾部热点问题</li>
+<li>随机主键
+<ul>
+<li>UUID</li>
+<li>TiDB的AutoRandom， 1个符号位+5个事务时间+58个序列号，可以保证表内主键唯一</li>
+<li>snowflake，1个符号位+41个本地毫秒时间+10个长度机器编码+12位序列号</li>
+<li>snowflake支持的TPS为 2 ^22 * 1000，为 419W</li>
+<li>snowflake的问题，要注意时间回拨，可能会导致重复</li>
+</ul>
+</li>
+</ul>
+</li>
+<li>HTAP数据库
+<ul>
+<li>通过ETL在OLTP和OLAP之间导数据，可能会有T+1问题，时效性太差</li>
+<li>重建OLAP体系
+<ul>
+<li>流计算无法替代批计算，kafka+flink</li>
+<li>serving DB也无法满足各种类型的分析查询需求，，clickhouse</li>
+</ul>
+</li>
+<li>HTAP hybrid Transaction/Analytical Processing 混合事务分析处理
+<ul>
+<li>由于数据出现在OLTP以免，HTAP往往偏向OLTP了</li>
+<li>目前号称支持HTAP的： TiDB、TBase、OceanBase</li>
+</ul>
+</li>
+<li>HTAP的实现方式
+<ul>
+<li>分布式数据库是存储计算分离的，一个HTAP内可以有多个计算引擎</li>
+<li>行存和列存才是OLTP和OLAP最根本的区别，所以HTAP的难点在存储</li>
+<li>Spanner的存储合一</li>
+<li>NSM，n-ary storage model行存储</li>
+<li>decomposition storage model 列式存储，C-store、Vertica，很难将不同列高效关联</li>
+<li>PAX增加了minipage概念，是原有数据页下的二级单位，一行数据页上的基本分布不会破坏</li>
+<li>相同数据被集中存在一起，本质更偏向行存</li>
+<li>类似的思路还有 HyPer的 DatBlock，独有的数据结构，同时面向OLTP和OLAP</li>
+<li>TiDB存储分离，TiKV行存，TiFlash列存</li>
+<li>learner每次都会拿事务的时间戳向leader发起请求，获得最新的commit index，一直等待直到超时</li>
+<li>TiFlash的存储层是Delta Tree，分为Delta Layer和Stable Layer，对列存储做了优化，类似LSM</li>
+<li>TiFlash是OLAP系统，所以读比写优先级更高，要优先做读优化</li>
+</ul>
+</li>
+</ul>
+</li>
 </ul>
 <p>F1的架构<br>
 
@@ -721,9 +772,32 @@ Using Distributed Transactions and Notifications</a></li>
             <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2021/12/%E5%88%86%E5%B8%83%E5%BC%8F%E6%95%B0%E6%8D%AE%E5%BA%93%E8%AF%BE%E7%A8%8B%E4%B8%AD%E7%9A%84%E8%AE%BA%E6%96%87/c-1.jpg" />
         </a>
     </p>
+<p>重建OLAP体系
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2021/12/%E5%88%86%E5%B8%83%E5%BC%8F%E6%95%B0%E6%8D%AE%E5%BA%93%E8%AF%BE%E7%A8%8B%E4%B8%AD%E7%9A%84%E8%AE%BA%E6%96%87/c-2.png">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2021/12/%E5%88%86%E5%B8%83%E5%BC%8F%E6%95%B0%E6%8D%AE%E5%BA%93%E8%AF%BE%E7%A8%8B%E4%B8%AD%E7%9A%84%E8%AE%BA%E6%96%87/c-2.png" />
+        </a>
+    </p>
+<p>行列混存PAX结构
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2021/12/%E5%88%86%E5%B8%83%E5%BC%8F%E6%95%B0%E6%8D%AE%E5%BA%93%E8%AF%BE%E7%A8%8B%E4%B8%AD%E7%9A%84%E8%AE%BA%E6%96%87/c-3.png">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2021/12/%E5%88%86%E5%B8%83%E5%BC%8F%E6%95%B0%E6%8D%AE%E5%BA%93%E8%AF%BE%E7%A8%8B%E4%B8%AD%E7%9A%84%E8%AE%BA%E6%96%87/c-3.png" />
+        </a>
+    </p>
+<p>TiDB的HTAP架构
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2021/12/%E5%88%86%E5%B8%83%E5%BC%8F%E6%95%B0%E6%8D%AE%E5%BA%93%E8%AF%BE%E7%A8%8B%E4%B8%AD%E7%9A%84%E8%AE%BA%E6%96%87/c-4.png">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2021/12/%E5%88%86%E5%B8%83%E5%BC%8F%E6%95%B0%E6%8D%AE%E5%BA%93%E8%AF%BE%E7%A8%8B%E4%B8%AD%E7%9A%84%E8%AE%BA%E6%96%87/c-4.png" />
+        </a>
+    </p>
 <h3 id="论文-2">论文</h3>
 <ul>
 <li><a href="http://vldb.org/pvldb/vol11/p1835-samwel.pdf">http://vldb.org/pvldb/vol11/p1835-samwel.pdf</a></li>
+<li><a href="https://www.cockroachlabs.com/blog/unpacking-competitive-benchmarks/">Yugabyte vs CockroachDB: Unpacking Competitive Benchmark Claims</a></li>
+<li><a href="https://research.cs.wisc.edu/multifacet/papers/vldbj02_pax.pdf">Data Page Layouts for Relational Databases on Deep Memory Hierarchies</a></li>
+<li><a href="http://db.in.tum.de/downloads/publications/datablocks.pdf">Data Blocks</a></li>
+<li><a href="https://www.oreilly.com/radar/questioning-the-lambda-architecture/">Questiong the lambda Architecture</a></li>
+<li><a href="https://www.gartner.com/en/documents/2657815">Gartner的HTAP分析报告</a></li>
 </ul>
 <h2 id="实践部分">实践部分</h2>
 <h3 id="总结-3">总结</h3>
