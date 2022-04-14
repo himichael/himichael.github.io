@@ -225,11 +225,34 @@ reduce(k2,list(v2))  →      list(v2)
 <li>存储由廉价的磁盘组成，数据存储在内部开发的分布式文件系统之上，并使用副本来保存高可靠</li>
 <li>用户提交job到调度系统，每个job由一系列task组成，调度器会将其映射到集群的一组机器上</li>
 </ul>
-<p>
+<p>执行概览</p>
+<ul>
+<li>输入文件会自动拆分为M个子集，map函数并行的在多个机器上执行</li>
+<li>reduce也是并行的，通过分区函数，将中间结果划分为R个区域</li>
+<li>hash(key) mod R，分区数量R和分区函数都是可以被指定的</li>
+</ul>
+<p>当用户调用 MapReduce函数时，就会触发下面动作
+
         <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2022/04/MapReduce%E8%AE%BA%E6%96%87/1.png">
             <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2022/04/MapReduce%E8%AE%BA%E6%96%87/1.png" />
         </a>
     </p>
+<p>执行过程：</p>
+<ul>
+<li>用户程序中的MapReduce函数首先将输入文件split，一般为16M-64M为单位做拆分，然后在多台机器上同时启动程序</li>
+<li>其中一个程序副本是master，其余是master分配到了work上，有M个map任务和R各reduce任务</li>
+<li>master挑选空闲的work分配map和reduce</li>
+<li>worker上的map任务首先读取一个split文件，然后解析key/value，并将每个key/value交给用户编写的map程序处理</li>
+<li>之后map程序会产生中间结果key/value，将他们缓存到内存中</li>
+<li>之后key/value对会被写到本地磁盘，被分区函数划分到R个不同的分区中</li>
+<li>本地磁盘上的key/value对位置被master转发给reduce程序</li>
+<li>之后reduce程序通过RPC调用，从远程的work机器上读取中间缓存结果</li>
+<li>当reduce读取完所有数据后，就根据key对中间结果排序，这样所有相同的key都会被分组到一起</li>
+<li>排序是必须的，因为不同的key会被映射到相同的reduce任务中，如果内存不够则触发外排序</li>
+<li>reduce执行iterator，将每个key和对应的list(value)传递给用户编写的reduce函数</li>
+<li>reduce函数的输出会append到这个reduce分区的最终文件中</li>
+<li>当所有的map和reduce任务完成后master唤醒用户程序，用户程序中的mapreduce函数就返回了</li>
+</ul>
 <h2 id="细节">细节</h2>
 <h2 id="性能">性能</h2>
 <h2 id="经验和总结">经验和总结</h2>
