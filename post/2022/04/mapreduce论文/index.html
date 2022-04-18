@@ -330,7 +330,64 @@ reduce(k2,list(v2))  →      list(v2)
 <li>用户也可以自己定义输入类型和输出类型</li>
 <li>输入类型不一定要从文件中读取，也可以从数据库，内存中读取，输出也是一样</li>
 </ul>
-<h2 id="性能">性能</h2>
+<p>副作用</p>
+<ul>
+<li>map端和reduce端都会产生文件，等文件写完后做rename，这种是原子和冥等的</li>
+<li>单个task只有一个输出，这样只会对一个文件做rename</li>
+<li>单个task产生多个文件不支持，因为需要原子的两阶段提交</li>
+</ul>
+<p>跳过错误记录</p>
+<ul>
+<li>map/reduce程序可能有bug，导致执行失败</li>
+<li>而如果代码来自第三方库失败，没有源码则很难解决</li>
+<li>对此可以忽略掉过这些错误</li>
+<li>map/reduce程序会安装一个signal用于捕获错误，当信号被触发后就发送UDP包通知master</li>
+<li>master发现某个记录频繁出错后，就让其跳过这些记录</li>
+</ul>
+<p>本地执行</p>
+<ul>
+<li>由于map/reduce真实环境上前台机器，而且是动态分配的，很难调试</li>
+<li>于是出现了一个本地版的map/reduce实现</li>
+<li>可以顺序执行一系列的map/reduce，并可以限制某些map/reduce的执行</li>
+<li>用户可以通过flag打开这些调试命令，并使用类似 gdb 方式调试</li>
+</ul>
+<p>状态信息</p>
+<ul>
+<li>master有一个HTTP服务，可以展示一些内部的状态信息</li>
+<li>如多个任务成功、失败、读取/写入字节数、写入中间状态字节数、执行速率等</li>
+<li>对每个任务都有一个标准输出、错误文件</li>
+<li>对于任务诊断时，这些信息非常有用，还可以帮助用户预估程序所需的机器规模，完成时间等</li>
+</ul>
+<p>计数器</p>
+<ul>
+<li>提供了一个计数器，用于计算各种事件，比如统计处理单词总数、索引的德语文档数量等</li>
+<li>map/reduce会独立的统计这些信息，然后通过ping的方式交给master</li>
+<li>master的监控页面会实时看到这些数据，当map/reduce任务执行完后，master就将结果返回给用户</li>
+<li>有些是内置的，比如处理的输入key/键值对的数量，产生的输出文件数量等</li>
+<li>用户可以利用这个功能，来检测输入文件数量是否 == 输出文件数量</li>
+</ul>
+<p>计数器代码如下：</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4">
+<table style="border-spacing:0;padding:0;margin:0;border:0;width:auto;overflow:auto;display:block;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">5
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">6
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">7
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-cpp" data-lang="cpp">Counter<span style="color:#ff79c6">*</span> uppercase;
+uppercase <span style="color:#ff79c6">=</span> GetCounter(<span style="color:#f1fa8c">&#34;uppercase&#34;</span>);
+map(String name, String contents)<span style="color:#ff79c6">:</span>
+    <span style="color:#ff79c6">for</span> each word w in <span style="color:#8be9fd;font-style:italic">contents</span>:
+        <span style="color:#ff79c6">if</span> (IsCapitalized(w))<span style="color:#ff79c6">:</span>
+            uppercase<span style="color:#ff79c6">-&gt;</span>Increment();
+        EmitIntermediate(w, <span style="color:#f1fa8c">&#34;1&#34;</span>);
+</code></pre></td></tr></table>
+</div>
+</div><h2 id="性能">性能</h2>
 <h2 id="经验和总结">经验和总结</h2>
 
 			<script type="text/javascript"
