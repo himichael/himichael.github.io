@@ -388,6 +388,74 @@ map(String name, String contents)<span style="color:#ff79c6">:</span>
 </code></pre></td></tr></table>
 </div>
 </div><h2 id="性能">性能</h2>
+<p>这里使用两个测试场景</p>
+<ul>
+<li>对1TB的数据做grep，这表示从一个大数据集中提取一小部分数据</li>
+<li>对1TB数据做排序，这表示对一类数据做shuffle然后转换成另一类数据</li>
+<li>这两种类型都是比较典型的真实场景的例子</li>
+<li>机器配置是2Gcpu、4G内存、160G磁盘、100M网络，两层树状网络，顶层100-200G带宽</li>
+<li>1800台机器，任意两个机器之间延迟小于1ms，4G内存中大约1-1.5G被其他任务保留</li>
+</ul>
+<p>Grep</p>
+<ul>
+<li>搜索10亿条记录，比较少见的三字符模式，该模式出现在92337条记录中</li>
+<li>输入为M=15000，64M分片，输出为R=1</li>
+<li>figure 2展示了这个计算时间，Y轴是数据规模，随着机器的增加速度加快，峰值为1764个work，30G/s</li>
+<li>当所有的map执行完后大概在80秒后将为0</li>
+<li>整个计算任务大概花费150秒，包括1分钟的启动开销</li>
+<li>开销是将程序分发到所有机器上，延迟交互GFS打开1000个文件，并做数据本地优化</li>
+</ul>
+<p>
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2022/04/MapReduce%E8%AE%BA%E6%96%87/2.png">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2022/04/MapReduce%E8%AE%BA%E6%96%87/2.png" />
+        </a>
+      <br>
+Figure 2: Data transfer rate over time</p>
+<p>排序</p>
+<ul>
+<li>大约是10亿条记录，1TB数据量，使用TeraSort benchmark做测试</li>
+<li>排序程序总共不到50行代码，3行map函数从一行文本中提取10个字节的排序key</li>
+<li>将排序好的key和文本行作为key/value作为中间结果</li>
+<li>使用内置的 Identity函数作为reduce的操作符，将中间结果作为传递过去</li>
+<li>最终的排序输出写入一组双向复制的GFS文件中，也就总共 2TB</li>
+<li>之后按照64M作为分片拆分，M=15000，R=4000，使用分区函数将其分给reduce程序</li>
+<li>增加了一个pre-pass的map/reduce操作，收集采用的key，这个key是分布式计算排序时的分裂点</li>
+<li>figure3(a)展示了整个处理过程，最上方的是处理输入数据，其峰值大约是13G/s</li>
+<li>这个处理速度比例比 Grep 程序要小，因为map程序要花费一半的时间用来做I/O操作(写中间结果)</li>
+<li>中间的是map将结果传递给reduce(通过网络)，第一个峰值是reduce，第二个是reduce的shuffle</li>
+<li>下方图是sort，因为正在对结果做排序，第一个shuffle周期结束和写周期开始之间存在延迟</li>
+<li>因为本地性优化，输入数据比列高于shuffle比列</li>
+<li>shuffle比列高于sort后的写入速率，因为存在两副原因，要保证高可用和可靠性</li>
+<li>如果底层的系统使用了纠删码，则写入数据会减少</li>
+</ul>
+<p>备份任务的效果</p>
+<ul>
+<li>figure3(b)展示了关闭备份task后的效果</li>
+<li>总体跟(a)差不多，但有很长的尾巴，此时没有任何写入活动</li>
+<li>大概有5个straggler任务把整个map/reduce任务拖长了，增加了44%的时间</li>
+</ul>
+<p>机器失效</p>
+<ul>
+<li>在figure3(c)展示了排序算法，执行中有200个任务被人为的kill了(一共有1746个worker)</li>
+<li>被杀掉后的任务立刻重启执行了(只有任务被杀，机器还是好的)</li>
+<li>这里显示了负的输入比列，因为之前完成的task被杀了，任务需要重新执行</li>
+<li>整个计算时间比正常时间只增加了 5%</li>
+</ul>
+<p>
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2022/04/MapReduce%E8%AE%BA%E6%96%87/3.png">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2022/04/MapReduce%E8%AE%BA%E6%96%87/3.png" />
+        </a>
+    </p>
+<p>
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2022/04/MapReduce%E8%AE%BA%E6%96%87/4.png">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2022/04/MapReduce%E8%AE%BA%E6%96%87/4.png" />
+        </a>
+    </p>
+<p>
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2022/04/MapReduce%E8%AE%BA%E6%96%87/5.png">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2022/04/MapReduce%E8%AE%BA%E6%96%87/5.png" />
+        </a>
+    </p>
 <h2 id="经验和总结">经验和总结</h2>
 
 			<script type="text/javascript"
