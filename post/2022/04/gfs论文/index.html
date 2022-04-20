@@ -1,0 +1,859 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    
+    <meta name="referrer" content="no-referrer-when-downgrade">
+    
+
+    <title>GFS论文 | 记录每个瞬间</title>
+    <meta property="og:title" content="GFS论文 - 记录每个瞬间">
+    <meta property="og:type" content="article">
+        
+    <meta property="article:published_time" content='2022-04-13T08:54:19&#43;08:00'>
+        
+        
+    <meta property="article:modified_time" content='2022-04-13T08:54:19&#43;08:00'>
+        
+    <meta name="Keywords" content="">
+    <meta name="description" content="读GFS论文">
+        <meta name="author" content="隔壁老王">
+        
+    <meta property="og:url" content="https://code0xff.cn/post/2022/04/gfs%E8%AE%BA%E6%96%87/">
+    <link rel="shortcut icon" href='/favicon.ico'  type="image/x-icon">
+
+    <link rel="stylesheet" href='/css/normalize.css'>
+    <link rel="stylesheet" href='/css/style.css'>
+    <script type="text/javascript" src="//cdn.bootcdn.net/ajax/libs/jquery/3.4.1/jquery.min.js"></script>
+
+    
+    
+    
+        <link href="https://cdn.bootcdn.net/ajax/libs/fancybox/3.5.7/jquery.fancybox.min.css" rel="stylesheet">
+    
+    
+    
+    
+</head>
+
+
+<body>
+    <header id="header" class="clearfix">
+    <div class="container">
+        <div class="col-group">
+            <div class="site-name ">
+                
+                    <a id="logo" href="https://code0xff.cn/">
+                        记录每个瞬间
+                    </a>
+                
+                
+            </div>
+            <div>
+                <nav id="nav-menu" class="clearfix">
+                    <a class="current" href="https://code0xff.cn/">首页</a>
+                    
+                    <a  href="https://code0xff.cn/linked/" title="链接">链接</a>
+                    
+                    <a  href="https://code0xff.cn/archives/" title="归档">归档</a>
+                    
+                    <a  href="https://code0xff.cn/about/" title="关于">关于</a>
+                    
+                </nav>
+            </div>
+        </div>
+    </div>
+</header>
+
+    <div id="body">
+        <div class="container">
+            <div class="col-group">
+
+                <div class="col-8" id="main">
+                    
+<div class="res-cons">
+    
+    <article class="post">
+        <header>
+            <h1 class="post-title">GFS论文</h1>
+        </header>
+        <date class="post-meta meta-date">
+            2022年4月13日
+        </date>
+<nav id="TableOfContents">
+  <ul>
+    <li>
+      <ul>
+        <li><a href="#设计目标">设计目标</a></li>
+        <li><a href="#设置概览">设置概览</a>
+          <ul>
+            <li><a href="#architecture">architecture</a></li>
+            <li><a href="#chunk-size">chunk size</a></li>
+            <li><a href="#meta-data">meta-data</a></li>
+            <li><a href="#consistency-model">consistency-model</a></li>
+          </ul>
+        </li>
+        <li><a href="#系统交互">系统交互</a></li>
+        <li><a href="#master操作">master操作</a></li>
+        <li><a href="#容错和诊断">容错和诊断</a></li>
+        <li><a href="#测试">测试</a></li>
+        <li><a href="#总结">总结</a></li>
+      </ul>
+    </li>
+  </ul>
+</nav>
+        
+        <div class="post-meta">
+            
+            <span class="post-meta meta-tags">
+                <ul class="clearfix">
+                    <a href='/categories/%E8%AE%BA%E6%96%87'>论文</a>
+                </ul>
+            </span>
+            
+        </div>
+        
+        
+        <div class="post-meta">
+            <span id="busuanzi_container_page_pv">|<span id="busuanzi_value_page_pv"></span><span>
+                    阅读</span></span>
+        </div>
+        
+        
+        <div class="post-content">
+            <blockquote>
+<p>原文：   <br>
+<a href="http://static.googleusercontent.com/media/research.google.com/en/us/archive/gfs-sosp2003.pdf">The Google File System</a></p>
+</blockquote>
+<h2 id="设计目标">设计目标</h2>
+<p><code>GFS</code>文件系统设计时候，也是考虑了性能、扩展性、可用性、可靠性等。<br>
+跟传统文件系统不一样，<code>GFS</code>在设计时，是基于自身的业务需求来的，有点点像是基于自由的业务属性，针对性的开发了一套文件系统。<br>
+论文的开头就指出了<code>GFS</code>设计时的 <strong>四个</strong> 目标：</p>
+<ul>
+<li>因为机器很多，而且都是<code>x86</code>机器，所以失败是常态，因此在软件层面必须能自动处理失败的情况</li>
+<li>当时存储的文件基本上都是<code>GB</code>级别的，对于这种级别尺寸的文件，设计时就要重新考量了，比如针对<code>I/O</code>
+<ul>
+<li>块的大小需要定制设计，小文件也有但不多，不用特别考虑</li>
+<li>吞吐量优先，很少有应用对读写的响应时间有要求</li>
+</ul>
+</li>
+<li>文件基本都是追加写的，极少有覆盖或者随机写入的，这对于文件系统优化和原子性也是有优势</li>
+<li>设计通用的<code>API</code>，放宽了一致性的要求，多个客户端并行写可以不用加锁</li>
+</ul>
+<h2 id="设置概览">设置概览</h2>
+<p>按照之前介绍的需求，再重新审视一下：</p>
+<ul>
+<li>系统是由廉价机器组成的，失败是常态，必须包含监控，并能从故障中快速恢复</li>
+<li>系统主要存储大文件，通常是100M或更多，几个G的也经常出现，小文件需要支持单无需优化</li>
+<li>主要包含大量的连续读、小量的随机读，读一般是几百KB或1M，客户端可以批量读来优化</li>
+<li>写主要是连续的追加，大小跟读差不多，随机写的场景很小，可以支持但无需优化</li>
+<li>文件被当做生产者-消费者来读写，或者多个合并，会有多个客户端append，需要用锁来保证原子性</li>
+<li>几乎都是批量读场景，需要保证高吞吐量，低延迟几乎不用</li>
+</ul>
+<h3 id="architecture">architecture</h3>
+<p>GFS集群包括一个master，和多个chunkserver，每个服务器都是普通的linux机器，进程运行在用户态，单master的设计会简化整体架构<br>
+文件被分割为固定大小的chunks，每个chunk都对应一个 64位，全局唯一的标志，这个标志由master维护<br>
+chunkserver将文件存储在本地磁盘上，所以底层用的是Linux文件系统，读写chunk通过标识符来定位，默认提供了3个副本来保证高可靠<br>
+master维护了系统的元数据，功能包括：</p>
+<ul>
+<li>namespace</li>
+<li>访问控制信息</li>
+<li>文件 到 chunk的映射</li>
+<li>当前chunks的具体位置</li>
+<li>chunk的租约管理</li>
+<li>回收垃圾chunk</li>
+<li>chunk的迁移</li>
+<li>跟chunk-server的心跳</li>
+</ul>
+<p>客户端通过master找到chunk，然后就直接跟chunk-server通讯了<br>
+客户端会缓存chunk-server的位置信息，但chunk-server和客户端都不会缓存数据<br>
+因为文件都比较大，而且是顺序读取的，缓存意义不大<br>
+另外底层使用的是linxu文件系统，对于频繁读取的文件，本身就会被放入到 cache 中</p>
+<p>
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2021/11/GFS%E8%AE%BA%E6%96%87/1.png">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2021/11/GFS%E8%AE%BA%E6%96%87/1.png" />
+        </a>
+    </p>
+<p>客户端首先根据文件名，offset，转换为 chunk index，然后跟master通讯(发送文件名和chunk index)，获得具体的chunk-server信息</p>
+<h3 id="chunk-size">chunk size</h3>
+<p>默认为 64M，而底层使用的是linux文件系统<br>
+选择这么大的原因：</p>
+<ul>
+<li>文件大了，集群总量不变的情况下元数据就会减少，master在内存中就可以完全放下</li>
+<li>公司内部的需求看，大部分都是大文件读写</li>
+<li>减少了频繁的TCP创建</li>
+<li>客户端和master的交互也减少了</li>
+</ul>
+<p>论文里面也说了，小文件的情况下会出现浪费<br>
+另外可能会出现热点，谷歌内部曾经碰到这么一个场景：<br>
+大量的客户端同时读取单个文件导致热点，解决办法是调大复制因子，并将客户端读取的启动时间错开<br>
+更好的方式是：允许客户端读取其他客户端的数据，有点像树状结构了，这样可以彻底解决热点问题，不过整个架构都需要调整</p>
+<h3 id="meta-data">meta-data</h3>
+<p>master主要存储三类元数据：</p>
+<ul>
+<li>文件和chunk的namespace</li>
+<li>文件到chunks的映射</li>
+<li>每个chunk副本的具体位置信息</li>
+</ul>
+<p>第一、第二个需要持久化存储的，存储到master的本地磁盘上，然后复制到远程机器上<br>
+这样是防止master挂掉<br>
+第三种不用持久化，当master启动时候会主动询问每个chunk-server获取具体数据信息，或者是新的chunk-server加入集群后也会主动上报</p>
+<p>元数据的设计要点：</p>
+<ul>
+<li>元数据是全部放在内存中的，可以周期性的快速的扫描整个数据状态</li>
+<li>发现过期数据，对于挂掉的chunk-server做元数据修复，迁移数据等等</li>
+<li>元数据全部放在内存也不算太大限制，因为大多数文件都很大，一个元数据不到64字节就可以映射到一个chunk</li>
+<li>文件名是前缀压缩的，也是少于64字节，所以整体占用空间都不大</li>
+<li>如果想扩大内存，就直接加内存条即可</li>
+<li>通过单master，元数据常驻内存，就可以获得很好的性能、高可靠、灵活性，而且设计也不会很复杂</li>
+</ul>
+<p>chunk位置</p>
+<ul>
+<li>chunks的映射关键已经保存在master的内存中了，只是具体对应到哪个chunk-server没保存，而是等chunk-server主动上报</li>
+<li>这么做的好处是避免了master的记录、和chunk-server存储的不一致，因为数据是存储在chunk-server端的，而chunk-server可能因为各种问题导致数据丢失</li>
+<li>而master很难维护这种一致性，所以主动上报就解决了这种问题，实际是简化了一致性设计</li>
+</ul>
+<p>操作日志</p>
+<ul>
+<li>元数据的持久记录，也包含了并发操作排序的逻辑时间</li>
+<li>文件和chunk，都是在他们被创建时通过逻辑时间唯一标识的</li>
+<li>元数据非常重要，即使chunk-server本身存活，元数据丢了会导致整个系统的文件丢失、或者丢失最近的操作</li>
+<li>需要将master的操作复制到远端 <strong>多个</strong>机器上，等本地和远端机器都flush到磁盘后才返回给客户端成功</li>
+<li>为了提高吞吐，master会一次操作多个日志</li>
+<li>checkpoint采用了 压缩的B树结构，可以直接映射到内存，无需额外解析</li>
+<li>master会新开一个线程处理checkpoint，然后将新来的日志 写入到新文件中</li>
+<li>等到本地和远程机器都成功flush磁盘，这个checkpint就算成功了</li>
+<li>如果checkpoint失败可以安全删除，而checkpint成功后，只需最近一次的checkpoint+之后的日志文件即可</li>
+</ul>
+<h3 id="consistency-model">consistency-model</h3>
+<p>文件的namespace变更时原子的，由master加锁来保证原子性<br>
+根据是否变更成功、是否为并发，可以组合成不同的结果：是否为<strong>确定的</strong>，文件区域是否一致</p>
+<ul>
+<li>变更后，所有的客户端都能看到变更后的全部写入内容，那就是确定的，否则就是不确定的</li>
+<li>变更成功 且没有并发情况，那就是确定的</li>
+<li>并发变更成功会导致 不确定但可以保证一致性，所有客户端都能看到一样的内容，但可能反映不了任何一个变更的写入</li>
+<li>变更失败就是不一致，当然也是不确定的，所有客户端在不同时间会看到不同结果</li>
+</ul>
+<p>上述情况总结的表格如下：</p>
+<table>
+<thead>
+<tr>
+<th></th>
+<th>Write</th>
+<th>Record Append</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Serial success</td>
+<td>defined</td>
+<td>defined interspersed with inconsistent</td>
+</tr>
+<tr>
+<td>Concurrent successes</td>
+<td>consistent but undefined</td>
+<td>defined interspersed with inconsistent</td>
+</tr>
+<tr>
+<td>Failure</td>
+<td>inconsistent</td>
+<td>inconsistent</td>
+</tr>
+</tbody>
+</table>
+<p>变更包含两种：</p>
+<ul>
+<li>write：应用程序指定写入文件的offset</li>
+<li>append：被原子的append，即使在并发情况下也能保证至少一次的语义</li>
+</ul>
+<p>客户端认为的append，其offset是文件的末尾处，返回客户端的<code>offset</code>是一个确定区域的开始处，GFS可以插入填充、或者记录副本，这里可能就会出现不一致<br>
+在一系列成功的变更之后，变更的文件区域就是：确定的，并包含最后一次变更的内容，GFS为了实现这个目标：</p>
+<ul>
+<li>将这个变更按顺序应用到所有的chunk副本上</li>
+<li>使用chunk 版本来检查是否变成过期</li>
+</ul>
+<p>过期的副本不会牵涉到变更中，在客户端询问master具体文件位置时，也不会触发到过期副本<br>
+所有的客户端都会缓存chunk位置，在refresh之前可能会读到过期数据  <br>
+大多数客户端都是append操作，所以过期副本返回的是<strong>过早的</strong>数据，而不是<strong>过期的</strong>数据<br>
+客户端可以通过重新检索位置，立即获取到最新的位置<br>
+由于组件的故障，会导致数据的损坏，GFS master会定期联系chunk-server，并检查数据，一旦发现问题，就会从其他副本中恢复数据<br>
+如果所有的副本都损坏了，那这个chunk就真的不可用了</p>
+<p>GFS应用程序可以通过一简单的技术来实现宽松的一致性</p>
+<ul>
+<li>依靠append，而不是覆盖写</li>
+<li>checkpoint</li>
+<li>自我验证</li>
+<li>自我识别记录</li>
+</ul>
+<h2 id="系统交互">系统交互</h2>
+<p>变更就是：</p>
+<ul>
+<li>通过append，或者wirte 改变chunk的内容</li>
+<li>或者通过append、write改变chunk的元数据</li>
+</ul>
+<p>为了减轻master的负担，master会分配一个租约给一个主分片，然后主分片按顺序变更所有的其他分片<br>
+租约是通过心跳来管理的<br>
+master也可能会回收租约，比如租约超时，rename，通讯中断
+租约可能会超时，也可能因为rename被master主动关闭</p>
+<p>写入流程如下：<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2021/11/GFS%E8%AE%BA%E6%96%87/2.png">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2021/11/GFS%E8%AE%BA%E6%96%87/2.png" />
+        </a>
+    </p>
+<p>执行步骤如下：</p>
+<ol>
+<li>客户端向master要chunk对应的chunk-server租约，并获取其他chunk的位置</li>
+<li>master返回主副本和其他副本的位置，客户端缓存这些信息，待租约失效或副本不可达时会再次联系master</li>
+<li>客户端将数据写入所有chunk-server，每个server都有LRU缓存，为了解耦合优化，GFS还改变了一些部署拓扑</li>
+<li>当所有副本都接收到数据后，客户端发写请求到主副本，主副本为所有变更分配序号，并按序号顺序变更本地状态</li>
+<li>主副本发送给所有从副本，按同样顺序变更状态</li>
+<li>从副本发送完成请求给主副本</li>
+<li>主副本响应客户端，如果成功可能是 主和从任意副本出现失败，如果返回失败，意味着主副本根本没分配过序号，失败后客户端可以继续(3)-(7)重试</li>
+</ol>
+<p>如果文件很大，会被分成多个chunk写入<br>
+共享的文件区域可能会包含来自多个不同客户端的文件片段</p>
+<p>数据流：</p>
+<ul>
+<li>GFS对数据做了管道化处理</li>
+<li>客户端写入最新的S1，然后S1 -&gt; S2，S2到最近的S3</li>
+<li>交换机是全双工，所以S1 直接写到S2，是没有TCP拥塞的</li>
+<li>网络是足够简单的，所以通过IP就能找到最近的机器</li>
+<li>假设要发送 B字节 到 R个副本，那么总延迟为 B/T + RL，T是带宽，L是两个机器延迟</li>
+</ul>
+<p>原子append</p>
+<ul>
+<li>普通的写入，如果是并发情况下，可能一个区域内会有多个客户端的写入片段</li>
+<li>GFS提供了append的原子写入到文件末尾，保证至少一次的语义</li>
+<li>类似于unix 的O_APPEND 模式，但是没有条件竞争</li>
+<li>这种特性在谷歌内部非常有用，这种场景包括：多个生产者/一个消费者，或者是从多个客户端做合并</li>
+<li>主副本会检查append到当前chunk是否会超过默认64M，如果是则返回错误，让客户端去另一个chunk重试</li>
+<li>append的限制写入量为最大快(64M)的 1/4</li>
+<li>GFS不保证所有副本写入的内容一样，只保证append至少一次的原子语义</li>
+<li>append成功后某个快的所有副本的offset都是相同的</li>
+<li>成功的append后这块区域就是 确定的，否则就是 不确定的</li>
+<li>客户端需要处理这些不一致的区域</li>
+</ul>
+<p>快照</p>
+<ul>
+<li>创建快照很快，对正在进行的变更影响很小，用户可以使用这个功能做文件、目录的拷贝，做checkpoint</li>
+<li>GFS使用copy-on-write方式实现snapshot</li>
+<li>master收到快照请求后，将回收所有租约，这样客户端就需要再次跟master交互获取chunk的位置</li>
+<li>回收租约后，master将记录flush到磁盘，然后在内存中copy一份新的元数据(源可能是文件/目录)，两个元数据都指向同一个chunk</li>
+<li>之后客户端会对chunk C做一个写请求，master注意到这个chunk引用数 &gt; 1，然后就推出回复客户端</li>
+<li>master找到拥有 chunk C的chunk-server，要求他们在本地创建一个C‘，这样就避免了网络I/O</li>
+<li>完成这些之后就响应客户端，后面的操作都是正常流程了</li>
+</ul>
+<h2 id="master操作">master操作</h2>
+<p>锁的管理：</p>
+<ul>
+<li>GFS没有inode，symbolic和hard link这些</li>
+<li>namespace类似一个查找表 全路径 -&gt; metadata</li>
+<li>使用了前缀压缩，这样可以节省很多空间</li>
+<li>namespace是一个树结构，如 /d1/d2/&hellip;/dn/leaf 这样的</li>
+</ul>
+<p>假设有一个快照操作将 /home/user 复制为 /save/user，它需要组织一个创建文件的操作： /home/user/foo</p>
+<ul>
+<li>快照首先获取 /home、/save的读锁</li>
+<li>然后获取/home/user 和 /save/user的写锁</li>
+<li>创建文件(写操作)需要两个操作(按顺序执行)</li>
+<li>先是获取/home读锁，再获取/home/user读取，最后执行/home/user/foo写锁</li>
+<li>创建文件是允许并发操作的</li>
+<li>好的文件策略应该是尽量允许并发，比如目录/home/user做读锁，对创建文件/home/user/foo做写锁，这样尽可能允许并发，并限制了foo文件的快照、删除、重命名</li>
+<li>锁的顺序也很重要，这样可以防止死锁，先获得高层级目录的锁，同级目录获取锁时候按字典排序</li>
+</ul>
+<p>副本的位置</p>
+<ul>
+<li>副本位置要满足两个目标：最大化数据的可靠性、可用性，以及带宽利用率</li>
+<li>为了利用率需要将数据放到机架内，但为了可靠性需将数据跨机架存放</li>
+<li>机架内的带宽要远大于机架顶部的交换机的in/out带宽</li>
+<li>因为跨机架存储，所以写就必须跨机架做复制了，这也是一种权衡</li>
+</ul>
+<p>创建、重复制、再平衡</p>
+<ul>
+<li>创建的原因：选择低磁盘使用率的；想限制最近创建文件的数量，写文件意味着未来即将会有流量；为了高可用跨机架复制</li>
+<li>如果副本数低于用户指定的，或者提高了副本数量</li>
+<li>丢失2个副本(如果一共有3个副本)的chunk，优先级比丢失1个的高</li>
+<li>优先重复制最近活跃的，而不是最近删除的chunk</li>
+<li>master选择优先级最高的，然后指定某个chunk-server来clone这个chunk</li>
+<li>为了不影响用户，master限制了集群，以及chunk-server的活跃clone数量</li>
+<li>chunk-server本身也限制了读chunk的带宽</li>
+<li>周期性的检查当前集群的副本分布，然后选择更好的分布</li>
+<li>对于新上线的机器，master会周期性的往新机器上添加数据，而不是瞬间填满</li>
+<li>master也会删除一些副本，通常是使用率比较高的，以达到平衡使用率</li>
+</ul>
+<p>垃圾收集</p>
+<ul>
+<li>文件被删除后并不是立即被删除，而是等待一段时间，等执行垃圾收集时再删除，这可以使设计简单，并使系统更可靠</li>
+<li>当删除文件后，master立刻记录删除log，并将文件rename放到隐藏文件区域</li>
+<li>当超过三天后文件就会删除(并删除所有chunk-server上的chunk)，三天内还可以继续读取并恢复</li>
+<li>master和chunk-server会定期发心跳，当master发现某个chunk不在meta-data列表中就可以删除了，之后chunk-server也可以删除这个chunk</li>
+<li>分布式垃圾收集是很困难的实现，但GFS的实现很简单，任何master不知道的chunk都是垃圾</li>
+<li>提供垃圾收集的好处是：分布式环境下master立即删除的指定可能会丢失，chunk-server也一样，而统一的垃圾收集可以提供更可靠的保证</li>
+<li>垃圾收集属于master的后台任务，可以批量执行，这样就平摊了每次的开销，master可以在低峰期运行，这样可以即时响应客户端</li>
+<li>延迟回收提供了一种保护机制，防止误删除</li>
+<li>延迟回收的问题是，如果有大量临时创建并删除的文件，并不会真的删除，导致磁盘资源使用紧张</li>
+<li>解决办法是，如果被删除的文件被再次调用删除命令，后台会加速删除进度</li>
+<li>另外用户可以指定某些文件的复制和回收策略，可以指定某目录下的文件不复制，删除后就真的立刻删除</li>
+</ul>
+<p>过期副本的检查</p>
+<ul>
+<li>当chunk-server宕机后，就不会接收变更，导致某个chunk变成过期的</li>
+<li>当master分配租约时，就会增加chunk的版本号</li>
+<li>master和副本都会记录这个版本号到持久存储中</li>
+<li>当chunk-server重启后会向master汇报状态，此时master就可以检测出过期副本</li>
+<li>master会删除过期副本，如果发现chunk-server的版本号&gt;自己的，就更新这个版本号(可能是分配租约失败导致的)</li>
+<li>客户端或者chunk-server在读数据，或者clone时，都会验证版本号，保证读的是最新数据</li>
+</ul>
+<h2 id="容错和诊断">容错和诊断</h2>
+<p>高可用<br>
+对于大规模集群来说，要认为失败是常态，而要保持整个集群的高可用也是一个挑战，对此常用的方式为：</p>
+<ul>
+<li>快速恢复，不区分是怎么失败的，只要失败了就kill进程然后重启服务</li>
+<li>chunk-复制，未来可能会增加奇偶校验和纠删码，由于整个系统主要是读和append所以整个复杂度是可控的</li>
+<li>master复制，需要将操作log复制到多个机器，并且远端都回复了本地也写盘成功了才算提交成功</li>
+<li>master宕机后只需要简单重启就可以了，新的master就会继续拿到log继续操作</li>
+<li>客户端可以通过DNS名字来访问master</li>
+<li>GFS还提供了 影子master功能，跟master会有一些延迟</li>
+<li>影子master提供了更好的可用性，但不能处理写，另外会读到一些过期数据</li>
+</ul>
+<p>数据完整性</p>
+<ul>
+<li>对于损坏的数据可以从其他副本读取，为了检查当前副本是否损坏，不能从其他机器读数据，而要增加校验功能</li>
+<li>原子的append，在不同副本中可能就是不一致的，因此每个chunk-server都需要保证自己的数据是一致的</li>
+<li>每个chunk按64K划分，每64K都有一个32位的chunsum，可以被持久化</li>
+<li>当其他chunk-server或client读取本chunk-server的一段数据时，会先做chunksum，如果有误则返回错误，这样就不会把损坏的数据传播出去</li>
+<li>此chunk-server会把这个信息上报master，master会指示它去其他chunk-server再获取正确的数据，并把错误的副本删除</li>
+<li>checksum对于读的影响很小，因为并没有I/O操作</li>
+<li>对于写也做了优化，因为大多数场景都是append，这时候只要更新最后一个checksum即可</li>
+<li>即使最后的的这个check-sum有问题，在下一次读取的时候也会被发现</li>
+<li>如果是覆盖写，就得将覆盖的这段范围做一次读取，然后计算校验和，再写入，最后计算校验和并写入，如果读取时少读了一段，那么校验就不对了</li>
+<li>对于那些很少被读到，但损坏的副本，chunk-server在后台会定期扫描，当发现有不正确的，就重新生成正确的副本，并删除损坏的</li>
+</ul>
+<p>诊断工具</p>
+<ul>
+<li>GFS提供了一套完整的日志记录，用于发现问题，负载测试、性能测试观察</li>
+<li>日志中包含chunk-server启动、停止等事件，所有的RPC请求和响应</li>
+<li>日志可以随意删除，不影响线上服务</li>
+<li>通过对比RPC请求的读和写，可以重构整个交互历史，并发现问题</li>
+<li>日志是顺序写，并支持异步，所以对性能影响非常小</li>
+</ul>
+<h2 id="测试">测试</h2>
+<p>基准测试  <br>
+测试环境使用了 1个master，2个备master，16个chunk-server，以及16个客户端<br>
+1.4G的CPU、2G内存、80G 5400转磁盘、100M全双工交换机<br>
+19个机器都在一个交换机下，16个客户端在另一个交换机下，他们两者通过一个顶层交换机连接1G带宽</p>
+<p>读</p>
+<ul>
+<li>每个客户端端随机读 320G数据集的4M内容，重复256次</li>
+<li>chunk-server一共有32G内存，linux的 buffer cache差不多是 10%的使用量</li>
+<li>对于读来说，最大带宽就是125M/秒，或者是12.5M/每个机器</li>
+<li>一个客户端读的时候，差不多是 10M/秒，相当于是峰值的80%</li>
+<li>16个客户端同时读，速度是6M/s，差不多是峰值的75%，因为多个客户端可能在同时读一个chunk-server</li>
+</ul>
+<p>写</p>
+<ul>
+<li>N个客户端并行写入N个文件，每批次1M一共写1G</li>
+<li>理论上限是 67/秒，因为有副本复制的情况</li>
+<li>单个客户端写时6.3M/秒，主要是push数据到chunk部分的管道交互这块使用的不好</li>
+<li>导致延迟从一个副本传到另一个副本</li>
+<li>16个客户端聚合写的速率是35M/秒，随着客户端数量增加冲突也在增加(同时写一个server)</li>
+<li>写需要操作副本，所以比读的影响更大</li>
+<li>不过总体看对于聚合写影响没有那么大</li>
+</ul>
+<p>append</p>
+<ul>
+<li>N个客户端并发append到一个文件</li>
+<li>性能受chunk-server的带宽影响，而跟客户端数量无关</li>
+<li>单个客户端时 6M/秒，16个是4.8M/秒</li>
+<li>实际情况是 N个客户端写M个文件，N和M都是几十到几百不等</li>
+<li>因此chunk-server的带宽和冲突不是大问题</li>
+<li>不同客户端可能写一个chunk-server的不同文件</li>
+</ul>
+<p>
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2021/11/GFS%E8%AE%BA%E6%96%87/4.png">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2021/11/GFS%E8%AE%BA%E6%96%87/4.png" />
+        </a>
+      <br>
+Figure 3: Aggregate Throughputs. Top curves show theoretical limits imposed by our networktopology. Bottom curves<br>
+show measured throughputs. They have error bars that show 95% confidence intervals, which are illegible in some cases<br>
+because of low variance in measurements.</p>
+<p>真实世界的数据<br>
+目前有A、B两个集群</p>
+<ul>
+<li>A集群给研究人员和开发使用，用于数据分析，并将结果写回chunk-server</li>
+<li>B集群用于产生数据，期间很少人工干预</li>
+<li>集群的总元数据大概 几十G，大多数是chunk-server的64K的checksum</li>
+<li>master的元数据总量很小，只有几十M，所以内存不是问题</li>
+<li>每个元数据包括：拥有者、权限、文件-&gt;chunk映射、chunk版本</li>
+<li>chunk-server恢复很快，大概几秒，master会慢些大概30-60秒</li>
+<li>写入大概是30M/s，读的速度要比写的快</li>
+<li>master的QPS 大概是  200-500</li>
+<li>早期版本master也有瓶颈，后来加入了 二分查找就好了，如果想进一步提速，还可以增加一个hash表</li>
+<li>对于1.5W个chunk，600G数据，为了不影响集群正常业务做了限速恢复，大概23.2分钟可以恢复完，速度大概440M/s</li>
+<li>对于丢失两个副本的，会有更高优先级，266个chunk只有一个副本，可以在 2分钟内复制完</li>
+</ul>
+<p>
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2021/11/GFS%E8%AE%BA%E6%96%87/3.png">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2021/11/GFS%E8%AE%BA%E6%96%87/3.png" />
+        </a>
+    <br>
+Table 2: Characteristics of two GFS clusters</p>
+<p>
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2021/11/GFS%E8%AE%BA%E6%96%87/5.png">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2021/11/GFS%E8%AE%BA%E6%96%87/5.png" />
+        </a>
+    <br>
+Table 3: Performance Metrics for Two GFS Clusters</p>
+<p>实际的读取情况，如下图</p>
+<ul>
+<li>读分为两种，小数量(小于64K)读，一般是大文件的随机读取，或者是大量读(大于512K)，也就是顺序读</li>
+<li>写也有两种，小量的写(小于64K)，或者大量写(大于256K)，一般是buffer满了在flush</li>
+<li>Table5展示了各种读写情况</li>
+<li>append和write比例大概是108:1，另一个集群大概是8:1</li>
+<li>覆盖占变更数量的0.0001%以下</li>
+</ul>
+<p>
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2021/11/GFS%E8%AE%BA%E6%96%87/6.png">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2021/11/GFS%E8%AE%BA%E6%96%87/6.png" />
+        </a>
+    </p>
+<p>master</p>
+<ul>
+<li>大多是查找chunk位置的</li>
+<li>FindMatchingFiles 是一个模式匹配操作，比较耗费资源
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2021/11/GFS%E8%AE%BA%E6%96%87/7.png">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2021/11/GFS%E8%AE%BA%E6%96%87/7.png" />
+        </a>
+    </li>
+</ul>
+<h2 id="总结">总结</h2>
+<p>经验</p>
+<ul>
+<li>最初的GFS只是作为后台文件系统使用的</li>
+<li>之后不断增加了需求，现在可以应对各种场景</li>
+<li>原先权限、配额几乎都没有，现在都完善了</li>
+<li>比较大的问题跟linux内核和磁盘有关，有的磁盘号称支撑各种IDE协议，但只支持最新的</li>
+<li>这些问题很难发现，会导致偶尔不兼容出现数据损坏</li>
+<li>之后增加了checksum，又修改了内核</li>
+<li>linux内核早期的问题，fsync()的时间跟文件大小成比例，而不是修改的大小，之后升级了版本</li>
+<li>linux的读写锁问题，从磁盘读数据页，或者修改mmap中对应的磁盘数据时会持有锁</li>
+<li>当磁盘线程对之前映射的数据进行分页时，会阻塞网络线程将新数据映射到内存中</li>
+<li>主要限制是网络接口而不是内存拷贝，所以用pread来代替mmap，但会有一些内存拷贝开销</li>
+</ul>
+<p>相关工作</p>
+<ul>
+<li>GFS有点类似AFS，但提供了透明的文件移动来实现容错，这点类似xFS</li>
+<li>考虑到存储越来越便宜，GFS不用RAID这种复杂方式，而是多副本复制，消耗的空间比xFS和Swift大</li>
+<li>GFS不使用任何缓存，因为实际的场景用不到</li>
+<li>不适用共识算法，而用一个master，这样可以大幅度简化设计</li>
+<li>GFS的架构跟NASD最为相似</li>
+<li>GFS的生产者消费者模型有点类似 River</li>
+<li>River是内存级别的，容错不行，支持N * M，而GFS是一个生产多个消费</li>
+<li>GFS只考虑普通硬件</li>
+</ul>
+<p>总结</p>
+<ul>
+<li>GFS在设计的时候就考虑到了规模和成本问题，有一些场景是针对谷歌特有的</li>
+<li>在设计之前也参考过传统的分布式文件系统，但跟我们预想的有很大偏差</li>
+<li>将失败作为常态，优化那些大部分被追加(并发的)，之后在顺序读取的场景</li>
+<li>设计了失败容错机制，并可以实时检测修复损坏数据、复制丢失的副本</li>
+<li>增加了checksum，以应对磁盘驱动问题</li>
+<li>单个master的设计也不是瓶颈</li>
+<li>目前在谷歌运行良好</li>
+</ul>
+
+			<script type="text/javascript"
+        async
+        src="https://cdn.bootcss.com/mathjax/2.7.3/MathJax.js?config=TeX-AMS-MML_HTMLorMML">
+MathJax.Hub.Config({
+  tex2jax: {
+    inlineMath: [['$','$'], ['\\(','\\)']],
+    displayMath: [['$$','$$'], ['\[\[','\]\]']],
+    processEscapes: true,
+    processEnvironments: true,
+    skipTags: ['script', 'noscript', 'style', 'textarea', 'pre'],
+    TeX: { equationNumbers: { autoNumber: "AMS" },
+         extensions: ["AMSmath.js", "AMSsymbols.js"] }
+  }
+});
+
+MathJax.Hub.Queue(function() {
+    
+    
+    
+    var all = MathJax.Hub.getAllJax(), i;
+    for(i = 0; i < all.length; i += 1) {
+        all[i].SourceElement().parentNode.className += ' has-jax';
+    }
+});
+</script>
+
+<style>
+code.has-jax {
+    font: inherit;
+    font-size: 100%;
+    background: inherit;
+    border: inherit;
+    color: #515151;
+}
+</style>
+        </div>
+
+        
+
+
+        
+
+
+        <div class="post-meta meta-tags">
+            
+            <ul class="clearfix">
+                
+                <li><a href='/tags/%E5%AD%98%E5%82%A8'>存储</a></li>
+                
+                <li><a href='/tags/%E5%88%86%E5%B8%83%E5%BC%8F'>分布式</a></li>
+                
+            </ul>
+            
+        </div>
+    </article>
+    
+    
+
+    
+    
+</div>
+
+
+                </div>
+
+                <div id="secondary">
+    <section class="widget">
+        <form id="search" action='https://code0xff.cn/search/' method="get" accept-charset="utf-8" target="_blank" _lpchecked="1">
+      
+      <input type="text" name="q" maxlength="20" placeholder="Search">
+      <input type="hidden" name="sitesearch" value="https://code0xff.cn/">
+      <button type="submit" class="submit icon-search"></button>
+</form>
+    </section>
+    
+    <section class="widget">
+        <h3 class="widget-title">最近文章</h3>
+<ul class="widget-list">
+    
+    <li>
+        <a href="https://code0xff.cn/post/2022/04/mapreduce%E8%AE%BA%E6%96%87/" title="MapReduce论文">MapReduce论文</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.cn/post/2022/04/gfs%E8%AE%BA%E6%96%87/" title="GFS论文">GFS论文</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.cn/post/2022/03/mapredue%E6%98%AF%E4%B8%80%E4%B8%AA%E5%B7%A8%E5%A4%A7%E7%9A%84%E9%80%80%E6%AD%A5/" title="MapRedue是一个巨大的退步">MapRedue是一个巨大的退步</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.cn/post/2022/03/hive%E8%AE%BA%E6%96%87/" title="Hive论文">Hive论文</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.cn/post/2022/03/spark%E9%80%BB%E8%BE%91%E8%AE%A1%E5%88%92%E7%9A%84%E8%A7%A3%E6%9E%90/" title="Spark逻辑计划的解析">Spark逻辑计划的解析</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.cn/post/2022/03/spark%E7%9A%84%E6%B3%A8%E5%85%A5%E8%A7%84%E5%88%99/" title="Spark的注入规则">Spark的注入规则</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.cn/post/2022/02/%E7%94%A8javacc%E5%AE%9E%E7%8E%B0%E5%9B%9B%E5%88%99%E8%BF%90%E7%AE%97/" title="用javacc实现四则运算">用javacc实现四则运算</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.cn/post/2022/02/scala%E7%9A%84%E4%B8%80%E4%BA%9B%E7%89%B9%E6%80%A7/" title="scala的一些特性">scala的一些特性</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.cn/post/2022/02/kudu%E8%AE%BA%E6%96%87%E7%BF%BB%E8%AF%91/" title="Kudu论文翻译">Kudu论文翻译</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.cn/post/2022/02/%E5%BE%AE%E6%9C%8D%E5%8A%A1%E7%9A%84%E8%AE%BE%E8%AE%A1%E7%9A%84ideals/" title="微服务的设计的IDEALS">微服务的设计的IDEALS</a>
+    </li>
+    
+</ul>
+    </section>
+
+    
+
+    <section class="widget">
+        <h3 class="widget-title"><a href='/categories/'>分类</a></h3>
+<ul class="widget-list">
+    
+    <li><a href="https://code0xff.cn/categories/%E5%95%86%E4%B8%9A/">商业 (2)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E5%A4%A7%E6%95%B0%E6%8D%AE/">大数据 (4)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E6%97%85%E8%A1%8C/">旅行 (10)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E6%9E%B6%E6%9E%84/">架构 (1)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E7%94%9F%E6%B4%BB/">生活 (4)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E7%AE%97%E6%B3%95/">算法 (7)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E7%BB%8F%E6%B5%8E/">经济 (1)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E7%BC%96%E7%A8%8B%E8%AF%AD%E8%A8%80/">编程语言 (1)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E8%AE%A1%E7%AE%97%E6%9C%BA%E5%8E%9F%E7%90%86/">计算机原理 (2)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E8%AE%BA%E6%96%87/">论文 (7)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E8%AF%BB%E4%B9%A6%E7%AC%94%E8%AE%B0/">读书笔记 (3)</a></li>
+    
+</ul>
+    </section>
+
+    <section class="widget">
+        <h3 class="widget-title">归档</a></h3>
+<ul class="widget-list">
+    
+    <li><a href="https://code0xff.cn/years/2021%E5%B9%B4/">2021年 (29)</a></li>
+    
+    <li><a href="https://code0xff.cn/years/2022%E5%B9%B4/">2022年 (13)</a></li>
+    
+</ul>
+    </section>
+
+    <section class="widget">
+        <h3 class="widget-title"><a href='/tags/'>标签</a></h3>
+<div class="tagcloud">
+    
+    <a href="https://code0xff.cn/tags/hive/">Hive </a>
+    
+    <a href="https://code0xff.cn/tags/kudu/">kudu </a>
+    
+    <a href="https://code0xff.cn/tags/manacher/">Manacher </a>
+    
+    <a href="https://code0xff.cn/tags/mapreduce/">MapReduce </a>
+    
+    <a href="https://code0xff.cn/tags/scala/">scala </a>
+    
+    <a href="https://code0xff.cn/tags/spark/">spark </a>
+    
+    <a href="https://code0xff.cn/tags/unix/">unix </a>
+    
+    <a href="https://code0xff.cn/tags/%E4%BA%8C%E5%88%86%E6%9F%A5%E6%89%BE/">二分查找 </a>
+    
+    <a href="https://code0xff.cn/tags/%E4%BA%8C%E5%8F%89%E6%A0%91%E9%81%8D%E5%8E%86/">二叉树遍历 </a>
+    
+    <a href="https://code0xff.cn/tags/%E5%88%86%E5%B8%83%E5%BC%8F/">分布式 </a>
+    
+    <a href="https://code0xff.cn/tags/%E5%8E%86%E5%8F%B2/">历史 </a>
+    
+    <a href="https://code0xff.cn/tags/%E5%9B%9E%E6%BA%AF/">回溯 </a>
+    
+    <a href="https://code0xff.cn/tags/%E5%9B%BD%E5%86%85%E6%97%85%E8%A1%8C/">国内旅行 </a>
+    
+    <a href="https://code0xff.cn/tags/%E5%9B%BD%E5%A4%96%E6%97%85%E8%A1%8C/">国外旅行 </a>
+    
+    <a href="https://code0xff.cn/tags/%E5%AD%98%E5%82%A8/">存储 </a>
+    
+    <a href="https://code0xff.cn/tags/%E5%BE%AE%E6%9C%8D%E5%8A%A1/">微服务 </a>
+    
+    <a href="https://code0xff.cn/tags/%E6%95%B0%E6%8D%AE%E5%BA%93/">数据库 </a>
+    
+    <a href="https://code0xff.cn/tags/%E6%B1%87%E7%BC%96/">汇编 </a>
+    
+    <a href="https://code0xff.cn/tags/%E7%94%9F%E6%B4%BB/">生活 </a>
+    
+    <a href="https://code0xff.cn/tags/%E7%94%B5%E5%BD%B1/">电影 </a>
+    
+    <a href="https://code0xff.cn/tags/%E7%AE%97%E6%B3%95/">算法 </a>
+    
+    <a href="https://code0xff.cn/tags/%E7%BB%8F%E6%B5%8E/">经济 </a>
+    
+    <a href="https://code0xff.cn/tags/%E7%BC%93%E5%AD%98/">缓存 </a>
+    
+    <a href="https://code0xff.cn/tags/%E7%BC%96%E8%AF%91%E5%8E%9F%E7%90%86/">编译原理 </a>
+    
+    <a href="https://code0xff.cn/tags/%E8%AE%A1%E7%AE%97%E6%A1%86%E6%9E%B6/">计算框架 </a>
+    
+    <a href="https://code0xff.cn/tags/%E8%AF%BB%E4%B9%A6%E7%AC%94%E8%AE%B0/">读书笔记 </a>
+    
+</div>
+    </section>
+
+    
+
+    <section class="widget">
+        <h3 class="widget-title">RSS</h3>
+        <ul class="widget-list">
+            <li><a href="https://code0xff.cn/index.xml">文章 RSS</a></li>
+        </ul>
+    </section>
+</div>
+            </div>
+        </div>
+    </div>
+    <footer id="footer">
+    <div>
+        &copy; 2022 <a href="https://code0xff.cn/">记录每个瞬间 By 老王</a>
+        
+    </div>
+    <br />
+    <div>
+        <div class="github-badge">
+            <a href="https://gohugo.io/" target="_black" rel="nofollow"><span class="badge-subject">Powered by</span><span class="badge-value bg-blue">Hugo</span></a>
+        </div>
+        <div class="github-badge">
+            <a href="https://github.com/flysnow-org/maupassant-hugo" target="_black"><span class="badge-subject">Theme</span><span class="badge-value bg-yellowgreen">Maupassant</span></a>
+        </div>
+    </div>
+    <div>
+        <a href="http://www.beian.miit.gov.cn/">京ICP备19014975号</a>
+    </div>
+</footer>
+
+
+    
+    <script type="text/javascript">
+        window.MathJax = {
+            tex2jax: {
+                inlineMath: [['$', '$']],
+                processEscapes: true
+                }
+            };
+    </script>
+    <script src='https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.5/MathJax.js?config=TeX-MML-AM_CHTML' async></script><script src="https://cdn.bootcdn.net/ajax/libs/fancybox/3.5.7/jquery.fancybox.min.js"></script>
+
+<a id="rocket" href="#top"></a>
+<script type="text/javascript" src='/js/totop.js?v=0.0.0' async=""></script>
+
+<script type="application/javascript">
+var doNotTrack = false;
+if (!doNotTrack) {
+	window.ga=window.ga||function(){(ga.q=ga.q||[]).push(arguments)};ga.l=+new Date;
+	ga('create', 'GA ID', 'auto');
+	
+	ga('send', 'pageview');
+}
+</script>
+<script async src='https://www.google-analytics.com/analytics.js'></script>
+
+
+
+    <script type="text/javascript" src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js" async></script>
+
+
+
+
+</body>
+
+</html>
