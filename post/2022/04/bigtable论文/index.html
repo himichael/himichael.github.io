@@ -147,6 +147,11 @@ BigTable提供了高性能、灵活的解决方案</p>
 <li>需要保存被不同项目使用的大量网页和相关信息的copy，假设叫他为 web-table</li>
 <li>在web-table中使用URL作为row key，将网页的特种特点保存在 column name中</li>
 <li>将网页内存存储在 contents:clumn 中，并有时间戳概念</li>
+<li>figure1 的这种模型 反转的URL相当于主键</li>
+<li>有两个列，一个是 content，用于存储内容</li>
+<li>另一个是 anchor，这是一个列簇，anchor:cnnsi.com 表示 cnnsi.com 指向cnn</li>
+<li>anchor:my.look.ca 表示 my.look.ca指向 CNN.com</li>
+<li>contents有三个版本， anchor有一个版本</li>
 </ul>
 <p>
         <a data-fancybox="gallery" href="http://woquhaha.gitee.io/pic_tech_1/post/2022/04/BigTable%E8%AE%BA%E6%96%87/1.png">
@@ -157,7 +162,72 @@ Figure 1: A slice of an example table that stores Web pages. The row name is a r
 the page contents, and the anchor column family contains the text of any anchors that reference the page. CNN’s home page<br>
 is referenced by both the Sports Illustrated and the MY-look home pages, so the row contains columns named anchor:cnnsi.com <br>
 and anchor:my.look.ca. Each anchor cell has one version; the contents column has three versions, at timestamps t3, t5, and t6.</p>
-
+<p>行</p>
+<ul>
+<li>可以是任意的stirng内容，最大为64K，大部分用户的key为10-100字节</li>
+<li>读写单行内容是原子的</li>
+<li>BigTable的数据是按字典排序的，一段范围的row key组成了tablet，它是分发和重平衡的最小单位</li>
+<li>读取一段范围的数据只需要跟少数机器通讯</li>
+<li>客户端可以利用这个特性来分布他们的rowkey，比如将URL做倒排序</li>
+<li>map.google.com/index.html变成了 com.google.maps/index.html，相同域名下的网页存储在一起使得查询分析更高效</li>
+</ul>
+<p>列簇</p>
+<ul>
+<li>列簇是将一系列的列分组在一起，并存储在一起，通过他们类型相同</li>
+<li>数据在存储之前，必须先创建列簇</li>
+<li>列簇最多只能有几百个，但列的数量不限制</li>
+<li>语法是 family:qualifier，列簇的名字必须是可打印的string，而qualifier可以是任意字符串</li>
+<li>列簇的一个例子是网页的语言，另一个是anchor，表示哪些网页指向 x</li>
+<li>访问控制和磁盘、内存都是在列簇这个级别执行的</li>
+<li>允许我们管理不同类型的应用程序，一些添加基本数据、一些读取数据并创建衍生的列簇、一些是只读(甚至没有查看其他列簇的权限)</li>
+</ul>
+<p>Figure 2: Writing to Bigtable</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4">
+<table style="border-spacing:0;padding:0;margin:0;border:0;width:auto;overflow:auto;display:block;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">5
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">6
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">7
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">8
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-cpp" data-lang="cpp"><span style="color:#6272a4">// Open the table
+</span><span style="color:#6272a4"></span>Table <span style="color:#ff79c6">*</span>T <span style="color:#ff79c6">=</span> OpenOrDie(<span style="color:#f1fa8c">&#34;/bigtable/web/webtable&#34;</span>);
+<span style="color:#6272a4">// Write a new anchor and delete an old anchor
+</span><span style="color:#6272a4"></span>RowMutation <span style="color:#50fa7b">r1</span>(T, <span style="color:#f1fa8c">&#34;com.cnn.www&#34;</span>);
+r1.Set(<span style="color:#f1fa8c">&#34;anchor:www.c-span.org&#34;</span>, <span style="color:#f1fa8c">&#34;CNN&#34;</span>);
+r1.Delete(<span style="color:#f1fa8c">&#34;anchor:www.abc.com&#34;</span>);
+Operation op;
+Apply(<span style="color:#ff79c6">&amp;</span>op, <span style="color:#ff79c6">&amp;</span>r1);
+</code></pre></td></tr></table>
+</div>
+</div><p>Figure 3: Reading from Bigtable.</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4">
+<table style="border-spacing:0;padding:0;margin:0;border:0;width:auto;overflow:auto;display:block;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">5
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">6
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">7
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">8
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-cpp" data-lang="cpp">Scanner <span style="color:#50fa7b">scanner</span>(T);
+ScanStream <span style="color:#ff79c6">*</span>stream;
+stream <span style="color:#ff79c6">=</span> scanner.FetchColumnFamily(<span style="color:#f1fa8c">&#34;anchor&#34;</span>);
+stream<span style="color:#ff79c6">-&gt;</span>SetReturnAllVersions();
+scanner.Lookup(<span style="color:#f1fa8c">&#34;com.cnn.www&#34;</span>);
+<span style="color:#ff79c6">for</span> (; <span style="color:#ff79c6">!</span>stream<span style="color:#ff79c6">-&gt;</span>Done(); stream<span style="color:#ff79c6">-&gt;</span>Next()) {
+    printf(<span style="color:#f1fa8c">&#34;%s %s %lld %s</span><span style="color:#f1fa8c">\n</span><span style="color:#f1fa8c">&#34;</span>, scanner.RowName(), stream<span style="color:#ff79c6">-&gt;</span>ColumnName(), stream<span style="color:#ff79c6">-&gt;</span>MicroTimestamp(), stream<span style="color:#ff79c6">-&gt;</span>Value());
+}
+</code></pre></td></tr></table>
+</div>
+</div>
 			<script type="text/javascript"
         async
         src="https://cdn.bootcss.com/mathjax/2.7.3/MathJax.js?config=TeX-AMS-MML_HTMLorMML">
