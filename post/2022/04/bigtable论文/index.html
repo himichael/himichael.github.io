@@ -89,6 +89,13 @@
       <ul>
         <li><a href="#背景">背景</a></li>
         <li><a href="#数据模型">数据模型</a></li>
+        <li><a href="#api">API</a></li>
+        <li><a href="#构建块">构建块</a></li>
+        <li><a href="#实现">实现</a></li>
+        <li><a href="#细节">细节</a></li>
+        <li><a href="#性能评估">性能评估</a></li>
+        <li><a href="#真实场景的应用">真实场景的应用</a></li>
+        <li><a href="#经验-相关工作-总结">经验-相关工作-总结</a></li>
       </ul>
     </li>
   </ul>
@@ -181,6 +188,32 @@ and anchor:my.look.ca. Each anchor cell has one version; the contents column has
 <li>访问控制和磁盘、内存都是在列簇这个级别执行的</li>
 <li>允许我们管理不同类型的应用程序，一些添加基本数据、一些读取数据并创建衍生的列簇、一些是只读(甚至没有查看其他列簇的权限)</li>
 </ul>
+<p>Timestamp</p>
+<ul>
+<li>BigTable中的每个cell 包含相同数据的多个版本</li>
+<li>每个版本都是64bit的整数</li>
+<li>时间戳可以由BigTalbe分配，这样就代表了真实的时间；也可以由用户指定</li>
+<li>用于指定的时间版本必须保证唯一性</li>
+<li>时间按照降序排列，这样最近的就是最新的版本</li>
+<li>为使版本管理的数据尽可能少，BigTable支持自动垃圾收集</li>
+<li>客户端可以指定最近n个版本，或者只保留足够新的版本(如最近7天的)</li>
+<li>在webtable例子中，将爬虫存储的网页保存在contents列中，设置3个版本，页面是实际被抓取的时间</li>
+<li>这样垃圾收集机制就允许我们只保存每个页面的三个最新版本</li>
+</ul>
+<h2 id="api">API</h2>
+<p>BigTable API 提供如下：</p>
+<ul>
+<li>创建、删除表列簇的函数</li>
+<li>改变集群、表、列簇元数据的函数</li>
+<li>客户端可以在BigTable之上写、删除数据，查找数据，以及迭代数据</li>
+<li>figure2 展示了一系列变更操作，增加一个 anchor 到 <a href="http://www.cnn.com">www.cnn.com</a>，以及删除另一个 anchor</li>
+<li>figure3 展示了在特定row上迭代所有的anchors，也可以限制行、列、时间戳的范围</li>
+<li>如限制只产生 anchor:*.cnn.com 或者时间戳低于当前时间10天的数据</li>
+<li>支持原子的 读-修改-写 这样的事务处理，但只对但行有效，目前还不支持多行事务</li>
+<li>允许将单元格用作整数计数器</li>
+<li>支持在线服务器的地址空间中执行客户端脚本，脚本语言是用 Sawzall 写的</li>
+<li>支持map/reduce，map/reduce的输入端、输出端都可以是BigTable</li>
+</ul>
 <p>Figure 2: Writing to Bigtable</p>
 <div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4">
 <table style="border-spacing:0;padding:0;margin:0;border:0;width:auto;overflow:auto;display:block;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
@@ -227,7 +260,31 @@ scanner.Lookup(<span style="color:#f1fa8c">&#34;com.cnn.www&#34;</span>);
 }
 </code></pre></td></tr></table>
 </div>
-</div>
+</div><h2 id="构建块">构建块</h2>
+<p>BigTable是在其他几个谷歌产品之上构建的</p>
+<ul>
+<li>底层是基于GFS的，BigTable集群在一个共享的机器池中运行，执行各种分布式应用</li>
+<li>也依赖一个集群调度系统，基于共享的机器之上去调度job、管理资源，处理机器失败、监控机器状态等</li>
+<li>BigTable内部使用 SSTable来存储数据，它是一个不可变map，key/value都是任意字符串</li>
+<li>SSTable按64K划分每个块，块索引存储在SSTable末尾，用于定位其他数据块</li>
+<li>当SSTable被打开时，这个索引就被加载到内存，用于seek磁盘，通过二分查找去找到合适的块并读取</li>
+<li>SSTable也可以完全加载到内存，这样就没有I/O了</li>
+</ul>
+<p>BigTable还需要依赖高可用以及持久化的分布式锁服务</p>
+<ul>
+<li>Chubby分布式锁，由5个活跃部分组成</li>
+<li>使用Paxos算法来实现容错，当前只有一个节点被选举为master</li>
+<li>当大多数节点都在运行，并可以相互通信时，整个服务就是可用的</li>
+<li>Chubby提供了类似UNIX的名称空间方式，文件和目录都可以加锁，读写文件是原子的</li>
+<li>客户端维护一个session，并缓存它，直到会话过期了</li>
+<li>也支持回调函数，当目录更改或者会话过期就会触发回调函数</li>
+</ul>
+<h2 id="实现">实现</h2>
+<h2 id="细节">细节</h2>
+<h2 id="性能评估">性能评估</h2>
+<h2 id="真实场景的应用">真实场景的应用</h2>
+<h2 id="经验-相关工作-总结">经验-相关工作-总结</h2>
+
 			<script type="text/javascript"
         async
         src="https://cdn.bootcss.com/mathjax/2.7.3/MathJax.js?config=TeX-AMS-MML_HTMLorMML">
