@@ -1,0 +1,545 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    
+    <meta name="referrer" content="no-referrer-when-downgrade">
+    
+
+    <title>Paxos Made Simple论文 | 记录每个瞬间</title>
+    <meta property="og:title" content="Paxos Made Simple论文 - 记录每个瞬间">
+    <meta property="og:type" content="article">
+        
+    <meta property="article:published_time" content='2022-04-29T20:43:19&#43;08:00'>
+        
+        
+    <meta property="article:modified_time" content='2022-04-29T20:43:19&#43;08:00'>
+        
+    <meta name="Keywords" content="">
+    <meta name="description" content="Paxos Made Simple论文">
+        <meta name="author" content="隔壁老王">
+        
+    <meta property="og:url" content="https://code0xff.cn/post/2022/05/paxos-made-simple%E8%AE%BA%E6%96%87/">
+    <link rel="shortcut icon" href='/favicon.ico'  type="image/x-icon">
+
+    <link rel="stylesheet" href='/css/normalize.css'>
+    <link rel="stylesheet" href='/css/style.css'>
+    <script type="text/javascript" src="//cdn.bootcdn.net/ajax/libs/jquery/3.4.1/jquery.min.js"></script>
+
+    
+    
+    
+        <link href="https://cdn.bootcdn.net/ajax/libs/fancybox/3.5.7/jquery.fancybox.min.css" rel="stylesheet">
+    
+    
+    
+    
+</head>
+
+
+<body>
+    <header id="header" class="clearfix">
+    <div class="container">
+        <div class="col-group">
+            <div class="site-name ">
+                
+                    <a id="logo" href="https://code0xff.cn/">
+                        记录每个瞬间
+                    </a>
+                
+                
+            </div>
+            <div>
+                <nav id="nav-menu" class="clearfix">
+                    <a class="current" href="https://code0xff.cn/">首页</a>
+                    
+                    <a  href="https://code0xff.cn/linked/" title="链接">链接</a>
+                    
+                    <a  href="https://code0xff.cn/archives/" title="归档">归档</a>
+                    
+                    <a  href="https://code0xff.cn/about/" title="关于">关于</a>
+                    
+                </nav>
+            </div>
+        </div>
+    </div>
+</header>
+
+    <div id="body">
+        <div class="container">
+            <div class="col-group">
+
+                <div class="col-8" id="main">
+                    
+<div class="res-cons">
+    
+    <article class="post">
+        <header>
+            <h1 class="post-title">Paxos Made Simple论文</h1>
+        </header>
+        <date class="post-meta meta-date">
+            2022年4月29日
+        </date>
+<nav id="TableOfContents">
+  <ul>
+    <li>
+      <ul>
+        <li><a href="#背景">背景</a></li>
+        <li><a href="#共识算法">共识算法</a>
+          <ul>
+            <li><a href="#问题描述">问题描述</a></li>
+            <li><a href="#选择一个value">选择一个value</a>
+              <ul>
+                <li><a href="#p1">P1</a></li>
+                <li><a href="#p2-a">P2-a</a></li>
+                <li><a href="#p2-b">P2-b</a></li>
+                <li><a href="#p2-c">P2-c</a></li>
+              </ul>
+            </li>
+            <li><a href="#学习一个value">学习一个value</a></li>
+            <li><a href="#进展">进展</a></li>
+            <li><a href="#实现">实现</a></li>
+          </ul>
+        </li>
+        <li><a href="#状态机">状态机</a></li>
+        <li><a href="#参考">参考</a></li>
+      </ul>
+    </li>
+  </ul>
+</nav>
+        
+        <div class="post-meta">
+            
+            <span class="post-meta meta-tags">
+                <ul class="clearfix">
+                    <a href='/categories/%E8%AE%BA%E6%96%87'>论文</a>
+                </ul>
+            </span>
+            
+        </div>
+        
+        
+        <div class="post-meta">
+            <span id="busuanzi_container_page_pv">|<span id="busuanzi_value_page_pv"></span><span>
+                    阅读</span></span>
+        </div>
+        
+        
+        <div class="post-content">
+            <blockquote>
+<p>原文<br>
+<a href="https://www.microsoft.com/en-us/research/uploads/prod/2016/12/paxos-simple-Copy.pdf">Paxos Made Simple</a></p>
+</blockquote>
+<h2 id="背景">背景</h2>
+<p>大神 Leslie Lamport 最初的 PAXOS 论文发表于<code>1998</code>年，不过晦涩难懂<br>
+于是大神又在<code>2001</code>又写了一版，也就是这篇论文<br>
+这篇论文用尽量简洁的语言，描述复杂的共识算法</p>
+<h2 id="共识算法">共识算法</h2>
+<h3 id="问题描述">问题描述</h3>
+<p>假设一系列进程可以 <strong>提议</strong>一个值，一个<strong>共识算法</strong>可以确保： 只有一个被提议的value能被选择<br>
+如果没有提议值，那么就没有值被选择<br>
+如果一个value已经被选择，那么进程就可以学习这个被选择的值<br>
+一个安全的共识需要确保：</p>
+<ul>
+<li>只有被提议的value才能被选择</li>
+<li>只能选出一个值</li>
+<li>只有当一个value被真实的选择了，进程才会学习这个值</li>
+</ul>
+<p>这里没有指定活性要求，但是这个目标确保了如果一些提议最终被选择了，那么进程最终可以学习到这些值 <br>
+假设agent可以跟其他agent通讯，使用异步方式，且非拜占庭模式</p>
+<ul>
+<li>agent 的以任意的速率执行，可以会停止或者重启，由于agent会在选择一个value后重启或失败，那么只能让这个agent记录这个value</li>
+<li>消息被传递的时间是任意长的，并可能重复、丢失、但不会出现错误</li>
+</ul>
+<h3 id="选择一个value">选择一个value</h3>
+<p>一个最简单的方式是：只有一个<strong>接受者</strong><br>
+一个提议者发出一个提议后，接受者选择它接收到的第一个提议值，尽管很简单但有问题，因为一旦接受者挂了就没法接收提议了</p>
+<p>改进：</p>
+<ul>
+<li>使用多个 <strong>接受者</strong></li>
+<li>一个提议者发送 一个提议给 一系列的接受者，一个接受者可以接收这个提议的值</li>
+<li>只有当足够多的接受者 已经接收了这个值之后，这个值才能被选择</li>
+<li>足够多是多少呢？为确保只有一个值被选择，可以让 足够大的集合包含 大多数agent</li>
+<li>因为任何两个 多数派，都至少有一个共同的接受者</li>
+<li>如果一个接受者最多可以接收一个值，那么这个方式就是有效的</li>
+<li>对于多数派论证，在论文【3】中有描述</li>
+<li>面对偶然的失败和消息丢失，我们希望即使只有一个提议者提出了一个值，也能被选择</li>
+</ul>
+<h4 id="p1">P1</h4>
+<p><strong>一个接受者必须接受它收到的第一个提议</strong><br>
+这种方式有问题，如果 不同的提议者 同时提出了多个值，然后每个接受者都接收了一个value<br>
+但是没有一个value是被多数派接收<br>
+即使只有两个提议的value也是如此，如果每个value都被正好一半的接受者 接收了，一个接受者如果突然挂了，这会导致不知道哪个value被接收了  <br>
+P1 和需求说明了，只有多数派的接受者接收了这个值之后，它才能被选择；这也就是暗示了，一个接受者可以接收多个提议</p>
+<p>现在，我们给 每个提议分配一个自然数字，这样接受者就可以跟踪不同的提议了，所以提议是由：提议数、value  组成<br>
+为了防止冲突，我们需要确保不同的提议由不同的数<br>
+不过论文中并没有提到如何实现，因为者以来具体的实现细节，论文只是假设这里已经实现了</p>
+<p>当单个提议被多数派接受者接收后，这个value就被选择了；在这种情况下，我们就说这个提议被选择了<br>
+我们也允许多个提议被选择，但必须保证所有被选择的提案有相同的value，通过对提案编号做归纳，就可以充分的保证</p>
+<h4 id="p2-a">P2-a</h4>
+<p>如果一个有<code>v</code>的提案被选择了，那么被任何接受者接受的更高编号的议案都有<code>v</code>值<br>
+P1 确保了一些提案会被选择，因为通讯是异步的，一个提案可能被一个特殊的接受者选择，而这个接受者 甚至没有接受过任何提案   <br>
+假设一个新的提议者被唤醒，并发送一个更高编号的提案，此提案带有一个不同的值<br>
+P1 则要求 c 接受这个提案，但是 违反为 P2-a<br>
+同时维持 P1和P2-a，需要加强P2-a</p>
+<h4 id="p2-b">P2-b</h4>
+<p>如果选择了带有<code>v</code>值的提案，则任何提议者发出的更高编号提案都有<code>v</code>值 <br>
+因为一个提案被任何接受者接受之前，都必须由一个提议者发起<br>
+所以 P2-b 意味着 P2-a，也就意味着 P2</p>
+<p>为了发现如何才能满足 P2-b，让我们先考虑如何证明它是成立的</p>
+<ul>
+<li>我们假设选了编号为 m，值是 v 的提案，并且任何编号 n &gt; m 的提案也具有值 v</li>
+<li>我们可以证明提案号 n 有值 v，另外假设每个提案编号在 m &hellip; (n - 1)有值 v，其中 i &hellip; j 表示从 i 到 j 的数字集合</li>
+</ul>
+<p>如果要选择编号为 m 的提案，必须有一个集合 C，由大多数的接受者组成，集合中的每个接受者都接受了它 <br>
+把这个和归纳假设结合起来，选择 m 的假设就意味着 ：
+C 中的每个接受者都接受了 一个 m &hellip;(n - 1)的提案，并且任何接受者接受的每个 m &hellip;(n - 1)的提案值都是 v<br>
+因为任何集合 S 包含了大多数的接受者，它至少包含了C中的一个成员，我们可以得出结论，编号为 n 的提议的值为 v，通过确保保持以下不变式成立</p>
+<h4 id="p2-c">P2-c</h4>
+<p>对于任何<code>v</code>和<code>n</code>，如果一个提案具体有值 v 和编号 n，一个集合 S 包含了多数派的接受者</p>
+<ul>
+<li>S中没有接受者接受任何小于编号 n 的提案</li>
+<li>v是：集合 S 中被接受者接受的 小于n 的所有提案中 编号最高的提议值</li>
+</ul>
+<p>因此，可以通过维持 P2-c 的不变性来满足 P2-b <br>
+为了保持 P2-c 的不变性，要发布编号为 n 的提案，提案者必须知道 小于 n 的最大提案编号  <br>
+如果有这种提案的话，那么它 已经、或者将被 多数派中的每个分接受者接受了</p>
+<p>学习已经接受的提案是很简单的；而预测未来的接受情况则很难<br>
+并非直接预测未来，提案者是通过控制一个承诺来实现的，这个承诺就是不会有任何的接受<br>
+提案者请求 接受者不再接受 任何小于 n 的提案编号，这是导致了以下关于发布提案的算法：</p>
+<ol>
+<li>一个提案者 选择了一个新的提案编号 n，然后发送一个请求给 某集合中的每个接受者，要求响应如下：</li>
+</ol>
+<ul>
+<li>保证不再接受小于 n 的提案编号</li>
+<li>已经接受的最大提案编号 小于 n</li>
+<li>将上述这样的请求成为：准备请求</li>
+</ul>
+<ol start="2">
+<li>呵呵</li>
+</ol>
+<h3 id="学习一个value">学习一个value</h3>
+<h3 id="进展">进展</h3>
+<h3 id="实现">实现</h3>
+<h2 id="状态机">状态机</h2>
+<h2 id="参考">参考</h2>
+<ul>
+<li>[1] Michael J. Fischer, Nancy Lynch, and Michael S. Paterson. Impossibility
+of distributed consensus with one faulty process. Journal of the ACM,
+32(2):374–382, April 1985.</li>
+<li>[2] Idit Keidar and Sergio Rajsbaum. On the cost of fault-tolerant consensus
+when there are no faults—a tutorial. TechnicalReport MIT-LCS-TR-821,
+Laboratory for Computer Science, Massachusetts Institute Technology,
+Cambridge, MA, 02139, May 2001. also published in SIGACT News
+32(2) (June 2001).</li>
+<li>[3] Leslie Lamport. The implementation of reliable distributed multiprocess
+systems. Computer Networks, 2:95–114, 1978.</li>
+<li>[4] Leslie Lamport. Time, clocks, and the ordering of events in a distributed
+system. Communications of the ACM, 21(7):558–565, July 1978.</li>
+<li>[5] Leslie Lamport. The part-time parliament. ACM Transactions on Computer Systems, 16(2):133–169, May 1998.</li>
+</ul>
+
+			<script type="text/javascript"
+        async
+        src="https://cdn.bootcss.com/mathjax/2.7.3/MathJax.js?config=TeX-AMS-MML_HTMLorMML">
+MathJax.Hub.Config({
+  tex2jax: {
+    inlineMath: [['$','$'], ['\\(','\\)']],
+    displayMath: [['$$','$$'], ['\[\[','\]\]']],
+    processEscapes: true,
+    processEnvironments: true,
+    skipTags: ['script', 'noscript', 'style', 'textarea', 'pre'],
+    TeX: { equationNumbers: { autoNumber: "AMS" },
+         extensions: ["AMSmath.js", "AMSsymbols.js"] }
+  }
+});
+
+MathJax.Hub.Queue(function() {
+    
+    
+    
+    var all = MathJax.Hub.getAllJax(), i;
+    for(i = 0; i < all.length; i += 1) {
+        all[i].SourceElement().parentNode.className += ' has-jax';
+    }
+});
+</script>
+
+<style>
+code.has-jax {
+    font: inherit;
+    font-size: 100%;
+    background: inherit;
+    border: inherit;
+    color: #515151;
+}
+</style>
+        </div>
+
+        
+
+
+        
+
+<div class="post-archive">
+    <h2>相关文章</h2>
+    <ul class="listing">
+        
+        <li><a href="/post/2022/04/gfs%E8%AE%BA%E6%96%87/">GFS论文</a></li>
+        
+    </ul>
+</div>
+
+
+        <div class="post-meta meta-tags">
+            
+            <ul class="clearfix">
+                
+                <li><a href='/tags/%E5%88%86%E5%B8%83%E5%BC%8F'>分布式</a></li>
+                
+            </ul>
+            
+        </div>
+    </article>
+    
+    
+
+    
+    
+</div>
+
+
+                </div>
+
+                <div id="secondary">
+    <section class="widget">
+        <form id="search" action='https://code0xff.cn/search/' method="get" accept-charset="utf-8" target="_blank" _lpchecked="1">
+      
+      <input type="text" name="q" maxlength="20" placeholder="Search">
+      <input type="hidden" name="sitesearch" value="https://code0xff.cn/">
+      <button type="submit" class="submit icon-search"></button>
+</form>
+    </section>
+    
+    <section class="widget">
+        <h3 class="widget-title">最近文章</h3>
+<ul class="widget-list">
+    
+    <li>
+        <a href="https://code0xff.cn/post/2022/05/java%E7%9A%84apm%E5%B7%A5%E5%85%B7%E5%8E%9F%E7%90%86/" title="Java的APM工具原理">Java的APM工具原理</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.cn/post/2022/05/paxos-made-simple%E8%AE%BA%E6%96%87/" title="Paxos Made Simple论文">Paxos Made Simple论文</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.cn/post/2022/04/bigtable%E8%AE%BA%E6%96%87/" title="BigTable论文">BigTable论文</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.cn/post/2022/04/mapreduce%E8%AE%BA%E6%96%87/" title="MapReduce论文">MapReduce论文</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.cn/post/2022/04/gfs%E8%AE%BA%E6%96%87/" title="GFS论文">GFS论文</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.cn/post/2022/03/mapredue%E6%98%AF%E4%B8%80%E4%B8%AA%E5%B7%A8%E5%A4%A7%E7%9A%84%E9%80%80%E6%AD%A5/" title="MapRedue是一个巨大的退步">MapRedue是一个巨大的退步</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.cn/post/2022/03/hive%E8%AE%BA%E6%96%87/" title="Hive论文">Hive论文</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.cn/post/2022/03/spark%E9%80%BB%E8%BE%91%E8%AE%A1%E5%88%92%E7%9A%84%E8%A7%A3%E6%9E%90/" title="Spark逻辑计划的解析">Spark逻辑计划的解析</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.cn/post/2022/03/spark%E7%9A%84%E6%B3%A8%E5%85%A5%E8%A7%84%E5%88%99/" title="Spark的注入规则">Spark的注入规则</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.cn/post/2022/02/%E7%94%A8javacc%E5%AE%9E%E7%8E%B0%E5%9B%9B%E5%88%99%E8%BF%90%E7%AE%97/" title="用javacc实现四则运算">用javacc实现四则运算</a>
+    </li>
+    
+</ul>
+    </section>
+
+    
+
+    <section class="widget">
+        <h3 class="widget-title"><a href='/categories/'>分类</a></h3>
+<ul class="widget-list">
+    
+    <li><a href="https://code0xff.cn/categories/%E5%95%86%E4%B8%9A/">商业 (2)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E5%A4%A7%E6%95%B0%E6%8D%AE/">大数据 (4)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E6%97%85%E8%A1%8C/">旅行 (10)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E6%9E%B6%E6%9E%84/">架构 (1)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E7%94%9F%E6%B4%BB/">生活 (4)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E7%AE%97%E6%B3%95/">算法 (7)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E7%BB%8F%E6%B5%8E/">经济 (1)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E7%BC%96%E7%A8%8B%E8%AF%AD%E8%A8%80/">编程语言 (2)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E8%AE%A1%E7%AE%97%E6%9C%BA%E5%8E%9F%E7%90%86/">计算机原理 (2)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E8%AE%BA%E6%96%87/">论文 (9)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E8%AF%BB%E4%B9%A6%E7%AC%94%E8%AE%B0/">读书笔记 (3)</a></li>
+    
+</ul>
+    </section>
+
+    <section class="widget">
+        <h3 class="widget-title">归档</a></h3>
+<ul class="widget-list">
+    
+    <li><a href="https://code0xff.cn/years/2021%E5%B9%B4/">2021年 (29)</a></li>
+    
+    <li><a href="https://code0xff.cn/years/2022%E5%B9%B4/">2022年 (16)</a></li>
+    
+</ul>
+    </section>
+
+    <section class="widget">
+        <h3 class="widget-title"><a href='/tags/'>标签</a></h3>
+<div class="tagcloud">
+    
+    <a href="https://code0xff.cn/tags/hive/">Hive </a>
+    
+    <a href="https://code0xff.cn/tags/kudu/">kudu </a>
+    
+    <a href="https://code0xff.cn/tags/manacher/">Manacher </a>
+    
+    <a href="https://code0xff.cn/tags/mapreduce/">MapReduce </a>
+    
+    <a href="https://code0xff.cn/tags/scala/">scala </a>
+    
+    <a href="https://code0xff.cn/tags/spark/">spark </a>
+    
+    <a href="https://code0xff.cn/tags/unix/">unix </a>
+    
+    <a href="https://code0xff.cn/tags/%E4%BA%8C%E5%88%86%E6%9F%A5%E6%89%BE/">二分查找 </a>
+    
+    <a href="https://code0xff.cn/tags/%E4%BA%8C%E5%8F%89%E6%A0%91%E9%81%8D%E5%8E%86/">二叉树遍历 </a>
+    
+    <a href="https://code0xff.cn/tags/%E5%88%86%E5%B8%83%E5%BC%8F/">分布式 </a>
+    
+    <a href="https://code0xff.cn/tags/%E5%8A%A8%E6%80%81%E6%B3%A8%E5%85%A5/">动态注入 </a>
+    
+    <a href="https://code0xff.cn/tags/%E5%8E%86%E5%8F%B2/">历史 </a>
+    
+    <a href="https://code0xff.cn/tags/%E5%9B%9E%E6%BA%AF/">回溯 </a>
+    
+    <a href="https://code0xff.cn/tags/%E5%9B%BD%E5%86%85%E6%97%85%E8%A1%8C/">国内旅行 </a>
+    
+    <a href="https://code0xff.cn/tags/%E5%9B%BD%E5%A4%96%E6%97%85%E8%A1%8C/">国外旅行 </a>
+    
+    <a href="https://code0xff.cn/tags/%E5%A4%A7%E6%95%B0%E6%8D%AE/">大数据 </a>
+    
+    <a href="https://code0xff.cn/tags/%E5%AD%98%E5%82%A8/">存储 </a>
+    
+    <a href="https://code0xff.cn/tags/%E5%BE%AE%E6%9C%8D%E5%8A%A1/">微服务 </a>
+    
+    <a href="https://code0xff.cn/tags/%E6%95%B0%E6%8D%AE%E5%BA%93/">数据库 </a>
+    
+    <a href="https://code0xff.cn/tags/%E6%B1%87%E7%BC%96/">汇编 </a>
+    
+    <a href="https://code0xff.cn/tags/%E7%94%9F%E6%B4%BB/">生活 </a>
+    
+    <a href="https://code0xff.cn/tags/%E7%94%B5%E5%BD%B1/">电影 </a>
+    
+    <a href="https://code0xff.cn/tags/%E7%AE%97%E6%B3%95/">算法 </a>
+    
+    <a href="https://code0xff.cn/tags/%E7%BB%8F%E6%B5%8E/">经济 </a>
+    
+    <a href="https://code0xff.cn/tags/%E7%BC%93%E5%AD%98/">缓存 </a>
+    
+    <a href="https://code0xff.cn/tags/%E7%BC%96%E8%AF%91%E5%8E%9F%E7%90%86/">编译原理 </a>
+    
+    <a href="https://code0xff.cn/tags/%E8%AE%A1%E7%AE%97%E6%A1%86%E6%9E%B6/">计算框架 </a>
+    
+    <a href="https://code0xff.cn/tags/%E8%AF%BB%E4%B9%A6%E7%AC%94%E8%AE%B0/">读书笔记 </a>
+    
+</div>
+    </section>
+
+    
+
+    <section class="widget">
+        <h3 class="widget-title">RSS</h3>
+        <ul class="widget-list">
+            <li><a href="https://code0xff.cn/index.xml">文章 RSS</a></li>
+        </ul>
+    </section>
+</div>
+            </div>
+        </div>
+    </div>
+    <footer id="footer">
+    <div>
+        &copy; 2022 <a href="https://code0xff.cn/">记录每个瞬间 By 老王</a>
+        
+    </div>
+    <br />
+    <div>
+        <div class="github-badge">
+            <a href="https://gohugo.io/" target="_black" rel="nofollow"><span class="badge-subject">Powered by</span><span class="badge-value bg-blue">Hugo</span></a>
+        </div>
+        <div class="github-badge">
+            <a href="https://github.com/flysnow-org/maupassant-hugo" target="_black"><span class="badge-subject">Theme</span><span class="badge-value bg-yellowgreen">Maupassant</span></a>
+        </div>
+    </div>
+    <div>
+        <a href="http://www.beian.miit.gov.cn/">京ICP备19014975号</a>
+    </div>
+</footer>
+
+
+    
+    <script type="text/javascript">
+        window.MathJax = {
+            tex2jax: {
+                inlineMath: [['$', '$']],
+                processEscapes: true
+                }
+            };
+    </script>
+    <script src='https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.5/MathJax.js?config=TeX-MML-AM_CHTML' async></script><script src="https://cdn.bootcdn.net/ajax/libs/fancybox/3.5.7/jquery.fancybox.min.js"></script>
+
+<a id="rocket" href="#top"></a>
+<script type="text/javascript" src='/js/totop.js?v=0.0.0' async=""></script>
+
+<script type="application/javascript">
+var doNotTrack = false;
+if (!doNotTrack) {
+	window.ga=window.ga||function(){(ga.q=ga.q||[]).push(arguments)};ga.l=+new Date;
+	ga('create', 'GA ID', 'auto');
+	
+	ga('send', 'pageview');
+}
+</script>
+<script async src='https://www.google-analytics.com/analytics.js'></script>
+
+
+
+    <script type="text/javascript" src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js" async></script>
+
+
+
+
+</body>
+
+</html>
