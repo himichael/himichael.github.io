@@ -1,0 +1,781 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    
+    <meta name="referrer" content="no-referrer-when-downgrade">
+    
+
+    <title>Basic Paxos总结 | 记录每个瞬间</title>
+    <meta property="og:title" content="Basic Paxos总结 - 记录每个瞬间">
+    <meta property="og:type" content="article">
+        
+    <meta property="article:published_time" content='2022-05-14T09:43:19&#43;08:00'>
+        
+        
+    <meta property="article:modified_time" content='2022-05-14T09:43:19&#43;08:00'>
+        
+    <meta name="Keywords" content="">
+    <meta name="description" content="Implemening Replicated Logs with Paxos 中的Basic Paxos部分">
+        <meta name="author" content="隔壁老王">
+        
+    <meta property="og:url" content="https://code0xff.cn/post/2022/05/basic-paxos/">
+    <link rel="shortcut icon" href='/favicon.ico'  type="image/x-icon">
+
+    <link rel="stylesheet" href='/css/normalize.css'>
+    <link rel="stylesheet" href='/css/style.css'>
+    <script type="text/javascript" src="//cdn.bootcdn.net/ajax/libs/jquery/3.4.1/jquery.min.js"></script>
+
+    
+    
+    
+        <link href="https://cdn.bootcdn.net/ajax/libs/fancybox/3.5.7/jquery.fancybox.min.css" rel="stylesheet">
+    
+    
+    
+    
+</head>
+
+
+<body>
+    <header id="header" class="clearfix">
+    <div class="container">
+        <div class="col-group">
+            <div class="site-name ">
+                
+                    <a id="logo" href="https://code0xff.cn/">
+                        记录每个瞬间
+                    </a>
+                
+                
+            </div>
+            <div>
+                <nav id="nav-menu" class="clearfix">
+                    <a class="current" href="https://code0xff.cn/">首页</a>
+                    
+                    <a  href="https://code0xff.cn/linked/" title="链接">链接</a>
+                    
+                    <a  href="https://code0xff.cn/archives/" title="归档">归档</a>
+                    
+                    <a  href="https://code0xff.cn/about/" title="关于">关于</a>
+                    
+                </nav>
+            </div>
+        </div>
+    </div>
+</header>
+
+    <div id="body">
+        <div class="container">
+            <div class="col-group">
+
+                <div class="col-8" id="main">
+                    
+<div class="res-cons">
+    
+    <article class="post">
+        <header>
+            <h1 class="post-title">Basic Paxos总结</h1>
+        </header>
+        <date class="post-meta meta-date">
+            2022年5月14日
+        </date>
+<nav id="TableOfContents">
+  <ul>
+    <li>
+      <ul>
+        <li><a href="#the-basic-paxos">The Basic Paxos</a>
+          <ul>
+            <li><a href="#basic-paxos-算法执行过程">Basic Paxos 算法执行过程</a></li>
+            <li><a href="#example">example</a></li>
+          </ul>
+        </li>
+        <li><a href="#references">References</a></li>
+      </ul>
+    </li>
+  </ul>
+</nav>
+        
+        <div class="post-meta">
+            
+            <span class="post-meta meta-tags">
+                <ul class="clearfix">
+                    <a href='/categories/%E5%88%86%E5%B8%83%E5%BC%8F'>分布式</a>
+                </ul>
+            </span>
+            
+        </div>
+        
+        
+        <div class="post-meta">
+            <span id="busuanzi_container_page_pv">|<span id="busuanzi_value_page_pv"></span><span>
+                    阅读</span></span>
+        </div>
+        
+        
+        <div class="post-content">
+            <blockquote>
+<p>这是 Raft作者介绍 Paxos算法实现的一个视频，在youtube和B站上可以找到<br>
+<a href="https://www.youtube.com/channel/UCy1xUHx0OWo3gnBC8AbnUqg">Raft作者Diego Ongaro的youtube频道</a></p>
+</blockquote>
+<h2 id="the-basic-paxos">The Basic Paxos</h2>
+<p>
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2022/05/Implemening%20Replicated%20Logs%20with%20Paxos%E8%AE%B0%E5%BD%95/1.png">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2022/05/Implemening%20Replicated%20Logs%20with%20Paxos%E8%AE%B0%E5%BD%95/1.png" />
+        </a>
+    <br>
+通过实现复制系统的方式来实现Paxos，目标就是维持各个服务器副本相同，从而实现分布式一致性 <br>
+而保持各个副本的一致性，就是复制状态机，也就是所有的服务器会以相同的顺序执行客户端输入的指令</p>
+<p>状态机就是一个程序、应用 然后产生一个输出<br>
+之后在所有的机器上运行相同的<strong>状态机</strong></p>
+<p>假设 客户端发送一个命令，内容为<code>x</code><br>
+然后收到的机器就在它的本地 持久化这个<code>x</code>，并将消息传给其他机器<br>
+其他机器也会记录这个<code>x</code>，并执行同样的状态机<br>
+等多数派收到反馈后，这个服务端就向 客户端返回响应</p>
+<p>为保证系统能正确运行，需要收到多数派的反馈</p>
+<p>失败模型</p>
+<ul>
+<li>消息会丢失，延迟</li>
+<li>机器会停止、重启等</li>
+<li>但是所有消息都会正确的传递，不会出现 拜占庭错误</li>
+</ul>
+<p>
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2022/05/Implemening%20Replicated%20Logs%20with%20Paxos%E8%AE%B0%E5%BD%95/2.png">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2022/05/Implemening%20Replicated%20Logs%20with%20Paxos%E8%AE%B0%E5%BD%95/2.png" />
+        </a>
+     
+如果将问题分析，那么 multi-paxos 其实就是执行多次的 basic paxos<br>
+而 basic paxos需要有多台机器参与，最多只能选择一个值</p>
+<p>
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2022/05/Implemening%20Replicated%20Logs%20with%20Paxos%E8%AE%B0%E5%BD%95/3.png">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2022/05/Implemening%20Replicated%20Logs%20with%20Paxos%E8%AE%B0%E5%BD%95/3.png" />
+        </a>
+    <br>
+Basic Paxos必须满足两个要求</p>
+<ul>
+<li>安全性
+<ul>
+<li>只能选择出一个值</li>
+<li>如果某个进程认为一个值被选择了，那么这个提案值必须是真的被选择的那个</li>
+</ul>
+</li>
+<li>活性
+<ul>
+<li>提案最终会被选择</li>
+<li>其他服务最终会学习到被选择的值</li>
+</ul>
+</li>
+</ul>
+<p>
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2022/05/Implemening%20Replicated%20Logs%20with%20Paxos%E8%AE%B0%E5%BD%95/4.png">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2022/05/Implemening%20Replicated%20Logs%20with%20Paxos%E8%AE%B0%E5%BD%95/4.png" />
+        </a>
+    
+在Paxos论文中，实际是有三个角色</p>
+<ul>
+<li>proposer，接收客户端的请求，然后对一个值做提案</li>
+<li>acceptor，被动接收消息，并响应共识的投票结果，并将进程的处理状态、选择的值持久化</li>
+<li>leaner，学习哪些提案被接受了</li>
+</ul>
+<p>为了简化实现，假设只有两个角色，提案者和接受者，并且每个实例都可以同时为这两个角色</p>
+<p>
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2022/05/Implemening%20Replicated%20Logs%20with%20Paxos%E8%AE%B0%E5%BD%95/5.png">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2022/05/Implemening%20Replicated%20Logs%20with%20Paxos%E8%AE%B0%E5%BD%95/5.png" />
+        </a>
+    
+单个acceptor实现非常简单，接受多个proposer的提案后做出选择即可<br>
+但这种实现也很明显，一旦宕机就不行了<br>
+所以为了应对可靠性，必须要有多个acceptor，比如3、5、7等等<br>
+这样的话，即使部分节点失效，整个集群仍然可以工作</p>
+<p>
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2022/05/Implemening%20Replicated%20Logs%20with%20Paxos%E8%AE%B0%E5%BD%95/6.png">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2022/05/Implemening%20Replicated%20Logs%20with%20Paxos%E8%AE%B0%E5%BD%95/6.png" />
+        </a>
+    
+split votes问题</p>
+<ul>
+<li>这里假设了，如果acceptor 接受它收到的第一个值</li>
+<li>在这种情况下，无法达成多数派</li>
+<li>上图中就出现了 三派，没有一派是满足的</li>
+<li>所以，acceptor必须能接受多个值，也就不同的value</li>
+</ul>
+<p>
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2022/05/Implemening%20Replicated%20Logs%20with%20Paxos%E8%AE%B0%E5%BD%95/7.png">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2022/05/Implemening%20Replicated%20Logs%20with%20Paxos%E8%AE%B0%E5%BD%95/7.png" />
+        </a>
+    
+conflicting choices</p>
+<ul>
+<li>这里假设acceptor可以接受每次收到的值</li>
+<li>这样也会出现问题，第二次会把第一次的给覆盖掉</li>
+<li>这种方式不会出现split votes，但不满足<strong>安全性</strong></li>
+<li>如果一个值被选择了，那么后面的提案内容也必须是这个值</li>
+<li>从split votes、conflicting choices可以发现，必须使用<strong>两阶段</strong>协议</li>
+</ul>
+<p>
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2022/05/Implemening%20Replicated%20Logs%20with%20Paxos%E8%AE%B0%E5%BD%95/8.png">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2022/05/Implemening%20Replicated%20Logs%20with%20Paxos%E8%AE%B0%E5%BD%95/8.png" />
+        </a>
+    
+两阶段提交的问题</p>
+<ul>
+<li>单纯的两阶段提交也会有问题</li>
+<li>比如<code>s5</code>作为proposer提交了bule</li>
+<li>此时<code>s5</code>还没有发出accept请求，所以这些blue值还没被chosen</li>
+<li>之后<code>s1</code>发出了accept请求，内容是red，而<code>s3</code>的内容把前面的blue覆盖掉了</li>
+<li>所以必须要有一种机制，能让<code>s3</code>拒绝掉提交的值</li>
+<li>这就需将 提案号排序，拒绝掉 旧的提案号</li>
+</ul>
+<p>
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2022/05/Implemening%20Replicated%20Logs%20with%20Paxos%E8%AE%B0%E5%BD%95/9.png">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2022/05/Implemening%20Replicated%20Logs%20with%20Paxos%E8%AE%B0%E5%BD%95/9.png" />
+        </a>
+    
+为了能对proposal排序，我们就要生成一个唯一的ID</p>
+<ul>
+<li>ID由高低位组成；高位的优先级 &gt; 低位</li>
+<li>新的proosal编号必须大于 之前使用过的编号</li>
+<li>低位的ID，可以使用server id</li>
+<li>高位的ID使用 round number，这样高位可能会重复，但低位肯定不同</li>
+<li>同时要将 max round做持久化存储，是目前的最大轮次编号</li>
+<li>proposer宕机或者重启后，round number要增加，不能跟之前重复</li>
+<li>ID: Round Number + Server Id</li>
+</ul>
+<p>
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2022/05/Implemening%20Replicated%20Logs%20with%20Paxos%E8%AE%B0%E5%BD%95/10.png">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2022/05/Implemening%20Replicated%20Logs%20with%20Paxos%E8%AE%B0%E5%BD%95/10.png" />
+        </a>
+    
+Basic Paxos要做的事情</p>
+<ul>
+<li>第一阶段，广播 prepare RPC请求
+<ul>
+<li>通过这个请求，可以找到已经被chosen的value，这样后面再提交的时候就用这个chosen的value</li>
+<li>也可以阻止那些还么有完成的proposal，也就是提案号比当前小的</li>
+</ul>
+</li>
+<li>第二阶段，广播 accept RPC请求，让所有的接受者accept这个指定的value</li>
+</ul>
+<h3 id="basic-paxos-算法执行过程">Basic Paxos 算法执行过程</h3>
+<p>
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2022/05/Implemening%20Replicated%20Logs%20with%20Paxos%E8%AE%B0%E5%BD%95/11.png">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2022/05/Implemening%20Replicated%20Logs%20with%20Paxos%E8%AE%B0%E5%BD%95/11.png" />
+        </a>
+    
+Basix Paxos算法执行过程</p>
+<p><strong>第一阶段，prepare阶段</strong>：</p>
+<ol>
+<li>proposer要选择一个提案号，这个提案号应该是唯一的</li>
+<li>发送 prepare请求，将prepare(n) 广播给所有server(除了它自己)</li>
+<li>acceptor收到请求后，用 n 跟当前记录的max编号最对比</li>
+</ol>
+<ul>
+<li>if n &gt; max:   max = n，return(提案编号，value/如果有的话)</li>
+<li>if n &lt;= max: 不再接收小于等于n的parepare请求</li>
+<li>if n &lt; max:    不再接受小于n的acceptor请求</li>
+<li>max 需要持久化</li>
+</ul>
+<ol start="4">
+<li>当收到大多数响应后：</li>
+</ol>
+<ul>
+<li>if 返回的响应中有value，使用最高编号的value替换掉将要提案的value</li>
+</ul>
+<p><strong>第二阶段，accept阶段</strong>：<br>
+5. 广播 accept(n，value) 到所有的服务器(除了自己)<br>
+6. acceptor接受响应</p>
+<ul>
+<li>if n &gt;= max</li>
+<li>acceptedProposal = max = n</li>
+<li>acceptedValue = value</li>
+<li>else: 拒绝</li>
+<li>acceptedProposal、acceptedValue持久化</li>
+<li>return(max)</li>
+</ul>
+<ol start="7">
+<li>当收到了大多数响应后</li>
+</ol>
+<ul>
+<li>if result(n) &gt; n? 表示拒绝，goto(1)重试</li>
+<li>表示value已经被chosen</li>
+</ul>
+<p>为了可靠性，acceptor的max、acceptedProposal、acceptedValue 需要持久化<br>
+这样即使重启，也不会有问题</p>
+<p><strong>伪代码</strong><br>
+proposer部分：</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4">
+<table style="border-spacing:0;padding:0;margin:0;border:0;width:auto;overflow:auto;display:block;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-c" data-lang="c"><span style="color:#6272a4">// prepare   
+</span><span style="color:#6272a4"></span>send PREPARE(<span style="color:#ff79c6">++</span>n)   
+
+<span style="color:#6272a4">// prepare receive and send accept request
+</span><span style="color:#6272a4"></span>did I receive PROMISE responses from a majority of acceptors<span style="color:#ff79c6">?</span>
+<span style="color:#ff79c6">if</span> yes
+    <span style="color:#ff79c6">do</span> any responses contain accepted values (from other proposals)<span style="color:#ff79c6">?</span>
+    <span style="color:#ff79c6">if</span> yes
+        val <span style="color:#ff79c6">=</span> accepted_VALUE    <span style="color:#6272a4">// value from PROMISE message with the highest accepted ID
+</span><span style="color:#6272a4"></span>    <span style="color:#ff79c6">if</span> no
+        val <span style="color:#ff79c6">=</span> VALUE     <span style="color:#6272a4">// we can use our proposed value
+</span><span style="color:#6272a4"></span>    send Accept(ID, val) to at least a majority of acceptors
+</code></pre></td></tr></table>
+</div>
+</div><p>acceptor部分：</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4">
+<table style="border-spacing:0;padding:0;margin:0;border:0;width:auto;overflow:auto;display:block;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">15
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">16
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">17
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">18
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-c" data-lang="c"><span style="color:#6272a4">// response prepare
+</span><span style="color:#6272a4"></span><span style="color:#ff79c6">if</span> (n <span style="color:#ff79c6">&gt;</span> max_n)
+    max_n <span style="color:#ff79c6">=</span> n     <span style="color:#6272a4">// save highest n we&#39;ve seen so far
+</span><span style="color:#6272a4"></span>    <span style="color:#ff79c6">if</span> (proposal_accepted <span style="color:#ff79c6">==</span> <span style="color:#8be9fd;font-style:italic">true</span>) <span style="color:#6272a4">// was a proposal already accepted?
+</span><span style="color:#6272a4"></span>        <span style="color:#8be9fd;font-style:italic">respond</span>: PROMISE(n, accepted_N, accepted_VALUE)
+    <span style="color:#ff79c6">else</span>
+        <span style="color:#8be9fd;font-style:italic">respond</span>: PROMISE(n)
+<span style="color:#ff79c6">else</span>
+    <span style="color:#ff79c6">do</span> not respond (or respond with a <span style="color:#f1fa8c">&#34;fail&#34;</span> message)
+	
+<span style="color:#6272a4">// response accept 
+</span><span style="color:#6272a4"></span><span style="color:#ff79c6">if</span> (n <span style="color:#ff79c6">&gt;=</span> max_n) <span style="color:#6272a4">// is the n the largest I have seen so far?
+</span><span style="color:#6272a4"></span>    proposal_accepted <span style="color:#ff79c6">=</span> <span style="color:#8be9fd;font-style:italic">true</span>     <span style="color:#6272a4">// note that we accepted a proposal
+</span><span style="color:#6272a4"></span>    accepted_N <span style="color:#ff79c6">=</span> n             <span style="color:#6272a4">// save the accepted proposal number
+</span><span style="color:#6272a4"></span>    accepted_VALUE <span style="color:#ff79c6">=</span> VALUE       <span style="color:#6272a4">// save the accepted proposal data
+</span><span style="color:#6272a4"></span>    <span style="color:#8be9fd;font-style:italic">respond</span>: Accepted(N, VALUE) to the proposer and all learners
+<span style="color:#ff79c6">else</span>
+    <span style="color:#ff79c6">do</span> not respond (or respond with a <span style="color:#f1fa8c">&#34;fail&#34;</span> message)	
+</code></pre></td></tr></table>
+</div>
+</div><h3 id="example">example</h3>
+<p><strong>这里展示了 三种冲突情况</strong><br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2022/05/Implemening%20Replicated%20Logs%20with%20Paxos%E8%AE%B0%E5%BD%95/12.png">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2022/05/Implemening%20Replicated%20Logs%20with%20Paxos%E8%AE%B0%E5%BD%95/12.png" />
+        </a>
+    
+<strong>值已经被chosen</strong><br>
+比如 s1 先执行了prepare、然后又执行了accept，于是 n=3.1，value=x<br>
+之后 s5 又执行了一个prepare，对于 s3来说，4.5 &gt; 3.1 所以接受了这个请求<br>
+并将已经chosen的值 x 返回给 s5<br>
+这样，s5 第二次执行accept时，就会发送 accept(4.5,x)，然后多数派响应成功<br>
+n=4.5,value=x 就被chosen了</p>
+<p>需要注意的是，在上图中，出现了部分节点number不同的情况</p>
+<ul>
+<li>s1、s2的编号为 3.1，他们已经accept了</li>
+<li>而s3、s4、s5 也accept了， 这些的值都是一样，但是编号不同</li>
+<li>即使  s4、s5宕机了，集群仍然可以工作</li>
+<li>如果有一个新的编号更高的proposal出现了，然后发送给s3、s4、s5</li>
+<li>这样就会将 这3台机器的编号做更新，于是他们又保持一样了</li>
+</ul>
+<p>
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2022/05/Implemening%20Replicated%20Logs%20with%20Paxos%E8%AE%B0%E5%BD%95/13.png">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2022/05/Implemening%20Replicated%20Logs%20with%20Paxos%E8%AE%B0%E5%BD%95/13.png" />
+        </a>
+    
+<strong>之前的值没有被chosen，但是新的proposer看到了</strong></p>
+<ul>
+<li>比如 s1 提案了 3.1和 x，由网络延迟 s1和s2没有确定，所以这个值没有被chosen</li>
+<li>此时s5 也发送了提案 4.5和y，这时s3返回了响应，已经接受</li>
+<li>于是 s5 再次 accept时，就会使用之前chosen的value x</li>
+<li>最后返回多数派接受，于是n=4.5,value=x 就被chosen了</li>
+<li>跟前面一个例子类似，这里也出现了 vlaue一样，但是number不同的情况</li>
+<li>即使出现s3、s4宕机，编号最高的仍然是4.5，等下次proposer时这个编号就会被纠正</li>
+</ul>
+<p>
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2022/05/Implemening%20Replicated%20Logs%20with%20Paxos%E8%AE%B0%E5%BD%95/14.png">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2022/05/Implemening%20Replicated%20Logs%20with%20Paxos%E8%AE%B0%E5%BD%95/14.png" />
+        </a>
+    
+<strong>前面的值没有被chosen，新的proposer也没看到</strong></p>
+<ul>
+<li>在这种情况下，第二次会先prepare、然后accept</li>
+<li>注意上图中， s3的时间点上，A 4.5之前，s1提交了一个accept</li>
+<li>此时因为编号过低，被拒绝了，这样的话，s1的提案就被拒绝了</li>
+<li>而s5可以成功chosen，得到了多数派的响应</li>
+<li>在chosen之后，各个acceptor的值不相同s1、s2是x，而s3、s4、s5是y</li>
+<li>假设此时 s5宕机，那么有两个x、两个y，是否就无法形成多数派呢了？</li>
+<li>并非，因为acceptor是可以<strong>多次</strong>接受值的</li>
+<li>那么下次再提案，这4个机器都accepted了，所以会返回x、y</li>
+<li>因为4.5 编号更好，所以 提案者选择了<code>y</code>，这样再次提案后值就全部变成<code>y</code>了</li>
+<li>虽然短时间内可能不同的acceptor值不同，不过再次提案后，他们的值会变成一致</li>
+</ul>
+<p>
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2022/05/Implemening%20Replicated%20Logs%20with%20Paxos%E8%AE%B0%E5%BD%95/15.png">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2022/05/Implemening%20Replicated%20Logs%20with%20Paxos%E8%AE%B0%E5%BD%95/15.png" />
+        </a>
+    
+活锁问题</p>
+<ul>
+<li>s1的prepare成功了，然后s5又提交了一个编号更高的prepare</li>
+<li>于是s1再次accept时就会拒绝，之后s1又立刻准备了一个编号更高的提案去prepare</li>
+<li>而这样会把s5的accept拒绝掉，于是s5又立提交了一个更高编号的提案去prepare</li>
+<li>这样无穷无尽下去，就变成活锁了</li>
+<li>解决方案是，当提交被拒绝后，就等待一个随机的时间，这样可以让其他的机器可以有机会提交成功</li>
+<li>另一个方式是使用multi-paox，也就是只有一个 proposer</li>
+</ul>
+<p>
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2022/05/Implemening%20Replicated%20Logs%20with%20Paxos%E8%AE%B0%E5%BD%95/16.png">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2022/05/Implemening%20Replicated%20Logs%20with%20Paxos%E8%AE%B0%E5%BD%95/16.png" />
+        </a>
+    
+注意事项</p>
+<ul>
+<li>在basic paxos中，只有提案者才知道哪个值被选择了</li>
+<li>如果其他服务想知道某个值是否被选择了，它们就需要执行一个Paxos提案</li>
+<li>因为从上面例子能发现，有出现split value的情况，这样当多数派返回时，就能确定某个值被chosen</li>
+</ul>
+<h2 id="references">References</h2>
+<ul>
+<li>[1] Michael J. Fischer, Nancy Lynch, and Michael S. Paterson. Impossibility
+of distributed consensus with one faulty process. Journal of the ACM,
+32(2):374–382, April 1985.</li>
+<li>[2] Idit Keidar and Sergio Rajsbaum. On the cost of fault-tolerant consensus
+when there are no faults—a tutorial. TechnicalReport MIT-LCS-TR-821,
+Laboratory for Computer Science, Massachusetts Institute Technology,
+Cambridge, MA, 02139, May 2001. also published in SIGACT News
+32(2) (June 2001).</li>
+<li>[3] Leslie Lamport. The implementation of reliable distributed multiprocess
+systems. Computer Networks, 2:95–114, 1978.</li>
+<li>[4] Leslie Lamport. Time, clocks, and the ordering of events in a distributed
+system. Communications of the ACM, 21(7):558–565, July 1978.</li>
+<li>[5] Leslie Lamport. The part-time parliament. ACM Transactions on Computer Systems, 16(2):133–169, May 1998.</li>
+</ul>
+<p>文章</p>
+<ul>
+<li><a href="https://www.bilibili.com/video/BV1WW411a77S">Paxos &amp; Raft lecture, Diego Ongaro</a></li>
+<li><a href="https://zhuanlan.zhihu.com/p/268921711">Introduction to DDIA &amp; 6.824（七）：Raft作者眼中的Paxos</a></li>
+<li><a href="https://mp.weixin.qq.com/s/lbauCATMesqTEeIQuCsz9A">理解 Paxos（含伪代码）</a></li>
+<li><a href="https://zhuanlan.zhihu.com/p/341122718">分布式算法：Paxos及Multi-Paxos</a></li>
+</ul>
+
+			<script type="text/javascript"
+        async
+        src="https://cdn.bootcss.com/mathjax/2.7.3/MathJax.js?config=TeX-AMS-MML_HTMLorMML">
+MathJax.Hub.Config({
+  tex2jax: {
+    inlineMath: [['$','$'], ['\\(','\\)']],
+    displayMath: [['$$','$$'], ['\[\[','\]\]']],
+    processEscapes: true,
+    processEnvironments: true,
+    skipTags: ['script', 'noscript', 'style', 'textarea', 'pre'],
+    TeX: { equationNumbers: { autoNumber: "AMS" },
+         extensions: ["AMSmath.js", "AMSsymbols.js"] }
+  }
+});
+
+MathJax.Hub.Queue(function() {
+    
+    
+    
+    var all = MathJax.Hub.getAllJax(), i;
+    for(i = 0; i < all.length; i += 1) {
+        all[i].SourceElement().parentNode.className += ' has-jax';
+    }
+});
+</script>
+
+<style>
+code.has-jax {
+    font: inherit;
+    font-size: 100%;
+    background: inherit;
+    border: inherit;
+    color: #515151;
+}
+</style>
+        </div>
+
+        
+
+
+        
+
+
+        <div class="post-meta meta-tags">
+            
+            <ul class="clearfix">
+                
+                <li><a href='/tags/paxos'>paxos</a></li>
+                
+            </ul>
+            
+        </div>
+    </article>
+    
+    
+
+    
+    
+</div>
+
+
+                </div>
+
+                <div id="secondary">
+    <section class="widget">
+        <form id="search" action='https://code0xff.cn/search/' method="get" accept-charset="utf-8" target="_blank" _lpchecked="1">
+      
+      <input type="text" name="q" maxlength="20" placeholder="Search">
+      <input type="hidden" name="sitesearch" value="https://code0xff.cn/">
+      <button type="submit" class="submit icon-search"></button>
+</form>
+    </section>
+    
+    <section class="widget">
+        <h3 class="widget-title">最近文章</h3>
+<ul class="widget-list">
+    
+    <li>
+        <a href="https://code0xff.cn/post/2022/06/raft-a-consensus-algorithm-for-replicated-logs%E8%AE%B0%E5%BD%95/" title="Raft A Consensus Algorithm for Replicated Logs记录">Raft A Consensus Algorithm for Replicated Logs记录</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.cn/post/2022/05/raft%E8%AE%BA%E6%96%87/" title="Raft论文">Raft论文</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.cn/post/2022/05/multi-paxos/" title="Multi Paxos总结">Multi Paxos总结</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.cn/post/2022/05/basic-paxos/" title="Basic Paxos总结">Basic Paxos总结</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.cn/post/2022/05/java%E7%9A%84apm%E5%B7%A5%E5%85%B7%E5%8E%9F%E7%90%86/" title="Java的APM工具原理">Java的APM工具原理</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.cn/post/2022/05/paxos-made-simple%E8%AE%BA%E6%96%87/" title="Paxos Made Simple论文">Paxos Made Simple论文</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.cn/post/2022/04/bigtable%E8%AE%BA%E6%96%87/" title="BigTable论文">BigTable论文</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.cn/post/2022/04/mapreduce%E8%AE%BA%E6%96%87/" title="MapReduce论文">MapReduce论文</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.cn/post/2022/04/gfs%E8%AE%BA%E6%96%87/" title="GFS论文">GFS论文</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.cn/post/2022/03/mapredue%E6%98%AF%E4%B8%80%E4%B8%AA%E5%B7%A8%E5%A4%A7%E7%9A%84%E9%80%80%E6%AD%A5/" title="MapRedue是一个巨大的退步">MapRedue是一个巨大的退步</a>
+    </li>
+    
+</ul>
+    </section>
+
+    
+
+    <section class="widget">
+        <h3 class="widget-title"><a href='/categories/'>分类</a></h3>
+<ul class="widget-list">
+    
+    <li><a href="https://code0xff.cn/categories/%E5%88%86%E5%B8%83%E5%BC%8F/">分布式 (3)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E5%95%86%E4%B8%9A/">商业 (2)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E5%A4%A7%E6%95%B0%E6%8D%AE/">大数据 (5)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E6%97%85%E8%A1%8C/">旅行 (10)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E6%9E%B6%E6%9E%84/">架构 (1)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E7%94%9F%E6%B4%BB/">生活 (4)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E7%AE%97%E6%B3%95/">算法 (7)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E7%BB%8F%E6%B5%8E/">经济 (1)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E7%BC%96%E7%A8%8B%E8%AF%AD%E8%A8%80/">编程语言 (2)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E8%AE%A1%E7%AE%97%E6%9C%BA%E5%8E%9F%E7%90%86/">计算机原理 (2)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E8%AE%BA%E6%96%87/">论文 (10)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E8%AF%BB%E4%B9%A6%E7%AC%94%E8%AE%B0/">读书笔记 (3)</a></li>
+    
+</ul>
+    </section>
+
+    <section class="widget">
+        <h3 class="widget-title">归档</a></h3>
+<ul class="widget-list">
+    
+    <li><a href="https://code0xff.cn/years/2021%E5%B9%B4/">2021年 (30)</a></li>
+    
+    <li><a href="https://code0xff.cn/years/2022%E5%B9%B4/">2022年 (20)</a></li>
+    
+</ul>
+    </section>
+
+    <section class="widget">
+        <h3 class="widget-title"><a href='/tags/'>标签</a></h3>
+<div class="tagcloud">
+    
+    <a href="https://code0xff.cn/tags/hive/">Hive </a>
+    
+    <a href="https://code0xff.cn/tags/kudu/">kudu </a>
+    
+    <a href="https://code0xff.cn/tags/manacher/">Manacher </a>
+    
+    <a href="https://code0xff.cn/tags/mapreduce/">MapReduce </a>
+    
+    <a href="https://code0xff.cn/tags/paxos/">paxos </a>
+    
+    <a href="https://code0xff.cn/tags/raft/">raft </a>
+    
+    <a href="https://code0xff.cn/tags/scala/">scala </a>
+    
+    <a href="https://code0xff.cn/tags/spark/">spark </a>
+    
+    <a href="https://code0xff.cn/tags/unix/">unix </a>
+    
+    <a href="https://code0xff.cn/tags/%E4%BA%8C%E5%88%86%E6%9F%A5%E6%89%BE/">二分查找 </a>
+    
+    <a href="https://code0xff.cn/tags/%E4%BA%8C%E5%8F%89%E6%A0%91%E9%81%8D%E5%8E%86/">二叉树遍历 </a>
+    
+    <a href="https://code0xff.cn/tags/%E5%88%86%E5%B8%83%E5%BC%8F/">分布式 </a>
+    
+    <a href="https://code0xff.cn/tags/%E5%8A%A8%E6%80%81%E6%B3%A8%E5%85%A5/">动态注入 </a>
+    
+    <a href="https://code0xff.cn/tags/%E5%8E%86%E5%8F%B2/">历史 </a>
+    
+    <a href="https://code0xff.cn/tags/%E5%9B%9E%E6%BA%AF/">回溯 </a>
+    
+    <a href="https://code0xff.cn/tags/%E5%9B%BD%E5%86%85%E6%97%85%E8%A1%8C/">国内旅行 </a>
+    
+    <a href="https://code0xff.cn/tags/%E5%9B%BD%E5%A4%96%E6%97%85%E8%A1%8C/">国外旅行 </a>
+    
+    <a href="https://code0xff.cn/tags/%E5%A4%A7%E6%95%B0%E6%8D%AE/">大数据 </a>
+    
+    <a href="https://code0xff.cn/tags/%E5%AD%98%E5%82%A8/">存储 </a>
+    
+    <a href="https://code0xff.cn/tags/%E5%BE%AE%E6%9C%8D%E5%8A%A1/">微服务 </a>
+    
+    <a href="https://code0xff.cn/tags/%E6%95%B0%E6%8D%AE%E5%BA%93/">数据库 </a>
+    
+    <a href="https://code0xff.cn/tags/%E6%B1%87%E7%BC%96/">汇编 </a>
+    
+    <a href="https://code0xff.cn/tags/%E7%94%9F%E6%B4%BB/">生活 </a>
+    
+    <a href="https://code0xff.cn/tags/%E7%94%B5%E5%BD%B1/">电影 </a>
+    
+    <a href="https://code0xff.cn/tags/%E7%AE%97%E6%B3%95/">算法 </a>
+    
+    <a href="https://code0xff.cn/tags/%E7%BB%8F%E6%B5%8E/">经济 </a>
+    
+    <a href="https://code0xff.cn/tags/%E7%BC%93%E5%AD%98/">缓存 </a>
+    
+    <a href="https://code0xff.cn/tags/%E7%BC%96%E8%AF%91%E5%8E%9F%E7%90%86/">编译原理 </a>
+    
+    <a href="https://code0xff.cn/tags/%E8%AE%A1%E7%AE%97%E6%A1%86%E6%9E%B6/">计算框架 </a>
+    
+    <a href="https://code0xff.cn/tags/%E8%AF%BB%E4%B9%A6%E7%AC%94%E8%AE%B0/">读书笔记 </a>
+    
+</div>
+    </section>
+
+    
+
+    <section class="widget">
+        <h3 class="widget-title">RSS</h3>
+        <ul class="widget-list">
+            <li><a href="https://code0xff.cn/index.xml">文章 RSS</a></li>
+        </ul>
+    </section>
+</div>
+            </div>
+        </div>
+    </div>
+    <footer id="footer">
+    <div>
+        &copy; 2022 <a href="https://code0xff.cn/">记录每个瞬间 By 老王</a>
+        
+    </div>
+    <br />
+    <div>
+        <div class="github-badge">
+            <a href="https://gohugo.io/" target="_black" rel="nofollow"><span class="badge-subject">Powered by</span><span class="badge-value bg-blue">Hugo</span></a>
+        </div>
+        <div class="github-badge">
+            <a href="https://github.com/flysnow-org/maupassant-hugo" target="_black"><span class="badge-subject">Theme</span><span class="badge-value bg-yellowgreen">Maupassant</span></a>
+        </div>
+    </div>
+    <div>
+        <a href="http://www.beian.miit.gov.cn/">京ICP备19014975号</a>
+    </div>
+</footer>
+
+
+    
+    <script type="text/javascript">
+        window.MathJax = {
+            tex2jax: {
+                inlineMath: [['$', '$']],
+                processEscapes: true
+                }
+            };
+    </script>
+    <script src='https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.5/MathJax.js?config=TeX-MML-AM_CHTML' async></script><script src="https://cdn.bootcdn.net/ajax/libs/fancybox/3.5.7/jquery.fancybox.min.js"></script>
+
+<a id="rocket" href="#top"></a>
+<script type="text/javascript" src='/js/totop.js?v=0.0.0' async=""></script>
+
+<script type="application/javascript">
+var doNotTrack = false;
+if (!doNotTrack) {
+	window.ga=window.ga||function(){(ga.q=ga.q||[]).push(arguments)};ga.l=+new Date;
+	ga('create', 'GA ID', 'auto');
+	
+	ga('send', 'pageview');
+}
+</script>
+<script async src='https://www.google-analytics.com/analytics.js'></script>
+
+
+
+    <script type="text/javascript" src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js" async></script>
+
+
+
+
+</body>
+
+</html>
