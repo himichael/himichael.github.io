@@ -307,9 +307,81 @@ C 中的每个接受者都接受了 一个 m &hellip;(n - 1)的提案，并且�
 <li>提案者p回到阶段1，新发了一个编号n3(n3&gt;n2)，这会导致q的阶段2 的接收请求被忽略</li>
 <li>以此类推</li>
 </ul>
-<p>在分布式环境中，为了保证可以正常执行，需要选择一个master提案者来发布提案</p>
+<p>为了保证能正常运行，必须要选择一个master提案者来发布提案<br>
+如果master提案者跟多数派接受者通讯成功，并且它使用的提案编号 <strong>大于</strong>任务已接受的编号，那么这个提案就被成功的接受了<br>
+通过放弃和重试，它就会知道某些请求有着更高的提案编号，那么master提案者最终会选择了一足够高的提案编号<br>
+如果系统资源足够(提案者、接受者之间的网络工作正常)，可以一个单个的提案者可以满足活性<br>
+相关著作暗示了，选举提案者的可靠算法必须使用随机性、实时性，比如使用超时的方式<br>
+当然，不管选举成功或失败，安全性都可以保证</p>
 <h3 id="实现">实现</h3>
+<p>Paxos算法假设有一组网络进程，在其共识算法中，每个进程代表 提案者、接受者、学习者 这些角色<br>
+这个算法会选择一个 leader，这相当于 master提案者 以及master学习者<br>
+Paxos共识算法，就是前面描述的那样，请求和响应的消息都是普通消息，响应消息被标记了对应的提案编号以防止混淆 <br>
+为方式接受者宕机，消息需要被持久化保存，接受者在实际发送响应之前，需要先持久化保存</p>
+<p>剩下要做的事情是描述一种机制，保证没有两个提案会发布相同的编号<br>
+不同的提案者从不相交的数字集合中选择他们的编号，所以两个不同的提案者绝不会发布相同的编号<br>
+每个提案者试图发布的最高提案编号，会持久化保存<br>
+之后在 阶段一(也就是前面描述的)选择一个比曾使用过的 更高的提案编号来发布</p>
 <h2 id="状态机">状态机</h2>
+<p>实现一个分布式系统的简单方式是，一个客户端集合，可以向一个中央服务发送命令<br>
+服务端可以描述为以某种顺序执行客户端命令的状态机<br>
+状态机有一个当前状态；通过输入命令并产生输出和新状态，来执行步骤</p>
+<p>比如，分布式系统行的客户端可能是出纳员，状态机的状态由所有用户的账户余额组成<br>
+减少余额的操作通过状态机的命令来执行，当且仅当状态余额 大于 提取金额时，减少账户金额，并输出新的、旧的余额 <br>
+如果只用单台机器则这种实现会有问题，我们使用一组机器，每个机器独立的实现状态机<br>
+因为状态机是确定性的，如果所有的机器都执行相同的命令序列，则他们会产生相同的状态序列和输出<br>
+发出命令的客户端可以使用 任何服务器为其生成的输出</p>
+<p>为保证所有的服务器执行 相同的状态机命令序列，我们实现一系列Paxos共识算法的独立实例<br>
+第<code>i</code>个实例选择的值 是序列中第<code>i</code>个状态机命令
+每个服务 在算法的每个实例中都扮演所有角色(提案者、接受者、学习者) <br>
+现在，假设服务器的数量是固定的，那么 所有的共识算法实例都使用相同的代理集</p>
+<p>正常情况下，只有一个服务器会被选择为<code>leader</code>，也就是算法中的master提案者，它是唯一能发出提案的机器<br>
+客户端向<code>leader</code>发送命令，<code>leader</code>决定每个命令在序列中的哪个位置出现<br>
+如果<code>leader</code>决定某个客户端的命令是第<code>135</code>个命令，它就让这个命令被选为共识算法第<code>135</code>个实例的值  <br>
+可能会因为宕机而失败，或者另一个服务器认为自己也是<code>leader</code>，并对第<code>135</code>个命令有不同想法 <br>
+但共识算法，确保最多只能选择一条命令作为第<code>135</code>条命令</p>
+<p>这个方式的关键有效性在于，Paxos共识算法，它的值是 直到第二阶段才被选择的 <br>
+在完成共识算法的第一阶段之后，要么确定提案的值，要么提案者可以自由提议任何值 <br>
+现在来讨论一下Paxos的正常流程，稍后讨论异常的情况；比如一个leader突然挂了，然后一个新的leader被选举；对于系统启动是一种特殊的情况，此时没有命令被提议<br>
+新的leader，在共识算法的所有实例中，新的leader一开始都是学习者；它需要知道大多数已被选择的命令<br>
+假设它知道命令 1-134、138、139，也就是共识算法的实例1-134、138、139被选择的值 <br>
+稍后，我们会看到命令序列中，这种缺口是如何出现的 <br>
+之后，它会执行 135-137，以及所有大于139实例的阶段一<br>
+假设这些执行结果，决定了在实例135、140中提议的值；但是所有实例中余下的提案值都是未约束的<br>
+leader之后执行了实例 135、140的阶段二，于是选择了命令135、140</p>
+<p>leader，以及所有其他学习了leader所知道的命令的服务器，现在可以执行 1 - 135了<br>
+但是不能执行138-140，因为136和137还没被选择<br>
+leader 可以将客户端后面的两个请求命令变成 136、137，然后立刻填补上136、137的提案空缺<br>
+特殊的<code>no-op</code>命令不会改变状态(通过执行共识算法实例的136、137的第二阶段来实现这一点)<br>
+一旦<code>no-op</code>命令chosen，136、137就被执行了</p>
+<p>命令 1 - 140现在都被选择了，leader现在已经完成了所有共识算法实例 &gt; 140的阶段一，并可以在第二阶段对这些实例提议任何值<br>
+客户端传递的命令会被分配为141 编号，这就是下一个命令，并在共识算法实例141的阶段二提案一个值<br>
+而再下一个接受的命令就是142，以此类推</p>
+<p>在leader知道了 已提案的141命令已经被chosen后，就可以提案142命令了 <br>
+而在提案141命令的过程中，可能所有的消息都会丢失；但在142命令被chosen前，其他任何机器都会学习到，leader提案的141命令是什么<br>
+当leader 在收到141命令的阶段二响应时失败了，它会继续重试，如果一切都正常，那么这个提案的命令就被chosen<br>
+但是，leader可能在收到阶段二的响应之前就挂了，这就会给 chosen的命令序列留下一个方空洞 <br>
+通常来说，leader可以提前得到一个<code>a</code>指令，在<code>1</code>到<code>i</code>被chosen后，它就可以提案命令<code>i+1</code>到<code>i+a</code>了<br>
+而<code>i - a</code>命令就可能会留下一个空洞</p>
+<p>新的leader可以在阶段一执行共识算法的无限多的实例，也就是上面场景的13-137实例，以及所有大于139的实例<br>
+对于所有的实例使用相同的提案编号，可以回复一个简短的消息<br>
+假设，一个acceptor在阶段二接受过一个提案，那么在阶段一 就可以简短的回复一个消息(如135、137实例)<br>
+因此，acceptor可以用一个短消息回复所有的实例，在阶段一执行无限多的实例是没有问题的</p>
+<p>因为leader宕机，以及选举新leader，一般来说都是很少发生的，那么执行一个状态机命令的开销<br>
+也就是达成 命令/值 的共识，是共识算法第二阶段执行的开销<br>
+相比于任何存在失败可能情况下的，并且又要达成一致的算法来说，在Paxos共识算法的阶段二，是最小可能的开销<br>
+因此，Paxos算法实际上是最优的</p>
+<p>我们上面讨论的情况是，假设总是只有一个leader，除了短暂的leader失败，以及选举一个新leader<br>
+在非正常场景下，leader选举会失败，那么没有机器当选为leader，也就没有新的命令被提案<br>
+而如果多个机器都当选为leader，那么他们会在相同的实例上提议不同的提案，共识算法会保证不会有任何值被chosen<br>
+安全属性也会保护，两个不同的机器，对于 第i 个状态机命令的值，永远不会产生分歧<br>
+而选举单个leader才能确保算法的活性</p>
+<p>如果服务器的集合数量可以更改，那么必须有某种方式来确定， 哪些服务器实现了共识算法的哪些实例<br>
+最简答的方式是通过状态机本身来实现<br>
+当前服务器集合可以作为状态的一部分，可以像普通命令那样被改变 <br>
+我们可以让一组服务器实例，提案获取<code>a</code>个命令，这些服务器是通过执行共识算法的<code>i+a</code>来得到状态的<br>
+而这一切要在<code>i</code>状态机命令先执行<br>
+这允许任意复杂的重配置算法，用一个简单的方式来实现</p>
 <h2 id="参考">参考</h2>
 <ul>
 <li>[1] Michael J. Fischer, Nancy Lynch, and Michael S. Paterson. Impossibility
@@ -414,43 +486,43 @@ code.has-jax {
 <ul class="widget-list">
     
     <li>
-        <a href="https://code0xff.cn/post/2022/05/java%E7%9A%84apm%E5%B7%A5%E5%85%B7%E5%8E%9F%E7%90%86/" title="Java的APM工具原理">Java的APM工具原理</a>
+        <a href="https://code0xff.cn/post/2022/07/cmu%E6%95%B0%E6%8D%AE%E5%BA%93%E8%AF%BE%E7%A8%8B/" title="卡内基梅隆的数据库课程-1">卡内基梅隆的数据库课程-1</a>
     </li>
     
     <li>
-        <a href="https://code0xff.cn/post/2022/05/paxos-made-simple%E8%AE%BA%E6%96%87/" title="Paxos Made Simple论文">Paxos Made Simple论文</a>
+        <a href="https://code0xff.cn/post/2022/07/cmu%E6%95%B0%E6%8D%AE%E5%BA%93%E8%AF%BE%E7%A8%8B-2/" title="卡内基梅隆的数据库课程-2">卡内基梅隆的数据库课程-2</a>
     </li>
     
     <li>
-        <a href="https://code0xff.cn/post/2022/04/bigtable%E8%AE%BA%E6%96%87/" title="BigTable论文">BigTable论文</a>
+        <a href="https://code0xff.cn/post/2022/07/cmu%E6%95%B0%E6%8D%AE%E5%BA%93%E8%AF%BE%E7%A8%8B-3/" title="卡内基梅隆的数据库课程-3">卡内基梅隆的数据库课程-3</a>
     </li>
     
     <li>
-        <a href="https://code0xff.cn/post/2022/04/mapreduce%E8%AE%BA%E6%96%87/" title="MapReduce论文">MapReduce论文</a>
+        <a href="https://code0xff.cn/post/2022/07/cmu%E6%95%B0%E6%8D%AE%E5%BA%93%E8%AF%BE%E7%A8%8B-4/" title="卡内基梅隆的数据库课程-4">卡内基梅隆的数据库课程-4</a>
     </li>
     
     <li>
-        <a href="https://code0xff.cn/post/2022/04/gfs%E8%AE%BA%E6%96%87/" title="GFS论文">GFS论文</a>
+        <a href="https://code0xff.cn/post/2022/07/cmu%E6%95%B0%E6%8D%AE%E5%BA%93%E8%AF%BE%E7%A8%8B-5/" title="卡内基梅隆的数据库课程-5">卡内基梅隆的数据库课程-5</a>
     </li>
     
     <li>
-        <a href="https://code0xff.cn/post/2022/03/mapredue%E6%98%AF%E4%B8%80%E4%B8%AA%E5%B7%A8%E5%A4%A7%E7%9A%84%E9%80%80%E6%AD%A5/" title="MapRedue是一个巨大的退步">MapRedue是一个巨大的退步</a>
+        <a href="https://code0xff.cn/post/2022/07/whats-really-new-with-newsql%E8%AE%BA%E6%96%87/" title="What’s Really New with NewSQL论文">What’s Really New with NewSQL论文</a>
     </li>
     
     <li>
-        <a href="https://code0xff.cn/post/2022/03/hive%E8%AE%BA%E6%96%87/" title="Hive论文">Hive论文</a>
+        <a href="https://code0xff.cn/post/2022/07/pingcap%E6%8F%90%E4%BE%9B%E7%9A%84%E6%95%B0%E6%8D%AE%E5%BA%93%E5%AD%A6%E4%B9%A0%E8%B5%84%E6%96%99/" title="PingCAP提供的数据库学习资料">PingCAP提供的数据库学习资料</a>
     </li>
     
     <li>
-        <a href="https://code0xff.cn/post/2022/03/spark%E9%80%BB%E8%BE%91%E8%AE%A1%E5%88%92%E7%9A%84%E8%A7%A3%E6%9E%90/" title="Spark逻辑计划的解析">Spark逻辑计划的解析</a>
+        <a href="https://code0xff.cn/post/2022/07/snowflake%E8%AE%BA%E6%96%87/" title="Snowflake论文">Snowflake论文</a>
     </li>
     
     <li>
-        <a href="https://code0xff.cn/post/2022/03/spark%E7%9A%84%E6%B3%A8%E5%85%A5%E8%A7%84%E5%88%99/" title="Spark的注入规则">Spark的注入规则</a>
+        <a href="https://code0xff.cn/post/2022/07/spark-sql%E8%AE%BA%E6%96%87/" title="Spark SQL论文">Spark SQL论文</a>
     </li>
     
     <li>
-        <a href="https://code0xff.cn/post/2022/02/%E7%94%A8javacc%E5%AE%9E%E7%8E%B0%E5%9B%9B%E5%88%99%E8%BF%90%E7%AE%97/" title="用javacc实现四则运算">用javacc实现四则运算</a>
+        <a href="https://code0xff.cn/post/2022/06/delta-lake%E8%AE%BA%E6%96%87/" title="Delta Lake论文">Delta Lake论文</a>
     </li>
     
 </ul>
@@ -461,6 +533,8 @@ code.has-jax {
     <section class="widget">
         <h3 class="widget-title"><a href='/categories/'>分类</a></h3>
 <ul class="widget-list">
+    
+    <li><a href="https://code0xff.cn/categories/%E5%88%86%E5%B8%83%E5%BC%8F/">分布式 (3)</a></li>
     
     <li><a href="https://code0xff.cn/categories/%E5%95%86%E4%B8%9A/">商业 (2)</a></li>
     
@@ -480,9 +554,9 @@ code.has-jax {
     
     <li><a href="https://code0xff.cn/categories/%E8%AE%A1%E7%AE%97%E6%9C%BA%E5%8E%9F%E7%90%86/">计算机原理 (2)</a></li>
     
-    <li><a href="https://code0xff.cn/categories/%E8%AE%BA%E6%96%87/">论文 (9)</a></li>
+    <li><a href="https://code0xff.cn/categories/%E8%AE%BA%E6%96%87/">论文 (15)</a></li>
     
-    <li><a href="https://code0xff.cn/categories/%E8%AF%BB%E4%B9%A6%E7%AC%94%E8%AE%B0/">读书笔记 (3)</a></li>
+    <li><a href="https://code0xff.cn/categories/%E8%AF%BB%E4%B9%A6%E7%AC%94%E8%AE%B0/">读书笔记 (9)</a></li>
     
 </ul>
     </section>
@@ -493,7 +567,7 @@ code.has-jax {
     
     <li><a href="https://code0xff.cn/years/2021%E5%B9%B4/">2021年 (30)</a></li>
     
-    <li><a href="https://code0xff.cn/years/2022%E5%B9%B4/">2022年 (16)</a></li>
+    <li><a href="https://code0xff.cn/years/2022%E5%B9%B4/">2022年 (31)</a></li>
     
 </ul>
     </section>
@@ -510,7 +584,13 @@ code.has-jax {
     
     <a href="https://code0xff.cn/tags/mapreduce/">MapReduce </a>
     
+    <a href="https://code0xff.cn/tags/paxos/">paxos </a>
+    
+    <a href="https://code0xff.cn/tags/raft/">raft </a>
+    
     <a href="https://code0xff.cn/tags/scala/">scala </a>
+    
+    <a href="https://code0xff.cn/tags/snowflake/">snowflake </a>
     
     <a href="https://code0xff.cn/tags/spark/">spark </a>
     
@@ -541,6 +621,8 @@ code.has-jax {
     <a href="https://code0xff.cn/tags/%E6%95%B0%E6%8D%AE%E5%BA%93/">数据库 </a>
     
     <a href="https://code0xff.cn/tags/%E6%B1%87%E7%BC%96/">汇编 </a>
+    
+    <a href="https://code0xff.cn/tags/%E6%B9%96%E4%BB%93%E4%B8%80%E4%BD%93/">湖仓一体 </a>
     
     <a href="https://code0xff.cn/tags/%E7%94%9F%E6%B4%BB/">生活 </a>
     

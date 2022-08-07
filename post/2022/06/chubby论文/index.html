@@ -1,0 +1,978 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    
+    <meta name="referrer" content="no-referrer-when-downgrade">
+    
+
+    <title>Chubby论文 | 记录每个瞬间</title>
+    <meta property="og:title" content="Chubby论文 - 记录每个瞬间">
+    <meta property="og:type" content="article">
+        
+    <meta property="article:published_time" content='2022-06-16T09:43:19&#43;08:00'>
+        
+        
+    <meta property="article:modified_time" content='2022-06-16T09:43:19&#43;08:00'>
+        
+    <meta name="Keywords" content="">
+    <meta name="description" content="The Chubby lock service for loosely-coupled distributed systems 论文">
+        <meta name="author" content="隔壁老王">
+        
+    <meta property="og:url" content="https://code0xff.cn/post/2022/06/chubby%E8%AE%BA%E6%96%87/">
+    <link rel="shortcut icon" href='/favicon.ico'  type="image/x-icon">
+
+    <link rel="stylesheet" href='/css/normalize.css'>
+    <link rel="stylesheet" href='/css/style.css'>
+    <script type="text/javascript" src="//cdn.bootcdn.net/ajax/libs/jquery/3.4.1/jquery.min.js"></script>
+
+    
+    
+    
+        <link href="https://cdn.bootcdn.net/ajax/libs/fancybox/3.5.7/jquery.fancybox.min.css" rel="stylesheet">
+    
+    
+    
+    
+</head>
+
+
+<body>
+    <header id="header" class="clearfix">
+    <div class="container">
+        <div class="col-group">
+            <div class="site-name ">
+                
+                    <a id="logo" href="https://code0xff.cn/">
+                        记录每个瞬间
+                    </a>
+                
+                
+            </div>
+            <div>
+                <nav id="nav-menu" class="clearfix">
+                    <a class="current" href="https://code0xff.cn/">首页</a>
+                    
+                    <a  href="https://code0xff.cn/linked/" title="链接">链接</a>
+                    
+                    <a  href="https://code0xff.cn/archives/" title="归档">归档</a>
+                    
+                    <a  href="https://code0xff.cn/about/" title="关于">关于</a>
+                    
+                </nav>
+            </div>
+        </div>
+    </div>
+</header>
+
+    <div id="body">
+        <div class="container">
+            <div class="col-group">
+
+                <div class="col-8" id="main">
+                    
+<div class="res-cons">
+    
+    <article class="post">
+        <header>
+            <h1 class="post-title">Chubby论文</h1>
+        </header>
+        <date class="post-meta meta-date">
+            2022年6月16日
+        </date>
+<nav id="TableOfContents">
+  <ul>
+    <li>
+      <ul>
+        <li><a href="#背景">背景</a></li>
+        <li><a href="#设计">设计</a>
+          <ul>
+            <li><a href="#基本结构">基本结构</a></li>
+            <li><a href="#文件目录句柄">文件、目录、句柄</a></li>
+            <li><a href="#锁和序列器">锁和序列器</a></li>
+            <li><a href="#事件">事件</a></li>
+            <li><a href="#api">API</a></li>
+            <li><a href="#缓存">缓存</a></li>
+            <li><a href="#session和keep-alive">session和keep-alive</a></li>
+            <li><a href="#故障转移">故障转移</a></li>
+            <li><a href="#数据库实现">数据库实现</a></li>
+            <li><a href="#备份和镜像">备份和镜像</a></li>
+          </ul>
+        </li>
+        <li><a href="#扩展机制">扩展机制</a></li>
+        <li><a href="#使用惊喜错误的设计">使用、惊喜、错误的设计</a>
+          <ul>
+            <li><a href="#使用行为">使用行为</a></li>
+            <li><a href="#其他问题">其他问题</a></li>
+          </ul>
+        </li>
+      </ul>
+    </li>
+  </ul>
+</nav>
+        
+        <div class="post-meta">
+            
+            <span class="post-meta meta-tags">
+                <ul class="clearfix">
+                    <a href='/categories/%E8%AE%BA%E6%96%87'>论文</a>
+                </ul>
+            </span>
+            
+        </div>
+        
+        
+        <div class="post-meta">
+            <span id="busuanzi_container_page_pv">|<span id="busuanzi_value_page_pv"></span><span>
+                    阅读</span></span>
+        </div>
+        
+        
+        <div class="post-content">
+            <blockquote>
+<p>这个谷歌 Chubby 的论文  <br>
+<a href="http://static.googleusercontent.com/media/research.google.com/en/us/archive/chubby-osdi06.pdf">The Chubby lock service for loosely-coupled distributed systems</a></p>
+</blockquote>
+<h2 id="背景">背景</h2>
+<p>Chubby 是谷歌开发的锁服务，提供粗粒度的锁服务，以实现松耦合的分布式系统<br>
+Chubby提供了类似分布式文件系统的接口，以及锁服务<br>
+它的设计目标是高可靠、高可用，而不是高性能，它是由很多普通机器组成<br>
+目前已有很多部门在使用了，可以为1W个4C机器提供服务，网络为1G带宽<br>
+Chubby是部署在单机房内的，不过也能让一个实例跨机房部署</p>
+<p>Chubby提供的功能：</p>
+<ul>
+<li>允许客户端同步他们的活跃状态</li>
+<li>就他们环境的基本信息达成一致</li>
+<li>提供高可用、高可靠 并服务大量客户端</li>
+<li>提供易于理解的语义</li>
+<li>吞吐量和存储容量不是设计的主要目标</li>
+<li>提供了类似文件系统的接口，可以对整个文件读、写</li>
+<li>提供了锁查询服务、文件修改的各种事件的通知服务</li>
+</ul>
+<p>Chubby可以为开发者提供粗粒度的锁服务，以及领导者选举功能<br>
+BigTable、GFS用Chubby选举master，BigTable的master用Chuuby管理slaver，让客户端查找master<br>
+GFS和BigTable用Chubby存储一些少量的元数据信息，他们把Chubby当做分布式数据结构<br>
+一些服务提供了锁划分，将不同的服务做区分</p>
+<p>在使用Chubby之前，大多数分布式系统都使用了特殊方法处理，使得选举时不会造成危害；而其他一些非常重要的操作则需要人为干预<br>
+而Chubby则可以省去人工干预的成本，它提在可用性方面提供了重要的改进，使得系统失败时不再需要人为进行干预<br>
+Chubby的核心是基于Paxos的，并不是重新发明什么算法，而是基于已有的算法做工程上的实现<br>
+目的是为了满足上述的高可用需求，论文中也省略了一些细节，如RPC何共识算法</p>
+<h2 id="设计">设计</h2>
+<p>Chubby的作者并非设计了一个paxos的库，而是提供了一个客户端，这个客户端是独立于paxos服务的<br>
+并且什么服务也不依赖(除了DNS)，这样的做法有这么一些优势：</p>
+<ul>
+<li>像插件一样增加到现有系统中
+<ul>
+<li>很多服务一开始只是一个原型、不需要共识、不需要高可靠，随着服务成熟、用户增多才会考虑这些</li>
+<li>这时候提供一个锁服务，像插件一样增加到现有服务中，使的设计就变得很简单了</li>
+<li>比如选举只需要增加一些简单的代码，向一个服务写RPC然后变成主，其他服务因为编号低就会拒绝写入</li>
+<li>通过提供客户端的方式让使用者变得简单，比让用户的服务加入到共识服务中心要简单多了</li>
+</ul>
+</li>
+<li>提供锁服务，而不是name service
+<ul>
+<li>用户需要发布选举、分区数据这些信息，也就是客户端需要读、写一些小量的文件</li>
+<li>使用 name service是可以的，但用锁服务更合适</li>
+<li>这样可以减少客户端依赖的服务数量；协议的一致性也是通用的</li>
+<li>客户端没有使用像DNS那样的缓存时间策略，这样的超时时间设置不好，会导致DNS负载很高；或者过期时间很长</li>
+<li>而基于锁服务的一致性客户端缓存，效果是更好的</li>
+</ul>
+</li>
+<li>程序员对锁服务更熟悉
+<ul>
+<li>大部分程序员对使用锁服务来说，就像顺序编程那样</li>
+<li>不过很少有人能真正认识到分布式锁的难点</li>
+<li>而提供了基于锁的接口，让程序员在使用分布式系统就更有信心了</li>
+</ul>
+</li>
+<li>减少了客户端需要的服务器数量
+<ul>
+<li>共识算法需要一组机器来完成服务，那样的话客户端依赖的服务就会很多</li>
+<li>而作为锁服务嵌入到客户端，只需要一个机器，就能达到共识</li>
+<li>这个客户端，其实就相当于多数派的共识算法</li>
+</ul>
+</li>
+</ul>
+<p>总结一下设计的关键点：</p>
+<ul>
+<li>选择一个锁服务，而不是设计一个共识算法库</li>
+<li>选择服务一些小文件，允许选举的主可以发布它自身，以及它的参数；而不是维护第二套服务</li>
+</ul>
+<p>这些设计决定，是根据用户需求，以及我们的环境来决定的：</p>
+<ul>
+<li>发布主服务，是通过chubby的文件来实现的，并且要被几千个客户端访问</li>
+<li>客户端和副本服务，都想要知道主服务什么时候变更了，所以需要提供一种 通知机制</li>
+<li>即使客户端不需要定期抓取文件，提供文件缓存机制也是可取的</li>
+<li>开发人员对不一致的缓存语义使用起来会困惑，所以要提供一致性的语义</li>
+<li>为避免经济损失，也提供了安全机制，如访问控制</li>
+</ul>
+<p>Chubby使用的不是细粒度的锁，那样的话就需要锁住很短的时间<br>
+Chubby使用的是粗粒度的锁，比如用户只需要锁住一个选举的主，然后访问所有数据，这个动作可能会持续几个小时甚至几天</p>
+<p>比较下这两种方案：</p>
+<ul>
+<li>粗粒度
+<ul>
+<li>对服务的负载压力较小，跟客户端事务增长的比例关系不大</li>
+<li>短暂的中断也不会影响服务</li>
+<li>将锁状态从客户端转移到另一个客户端 需要很大代价，但粗粒度锁允许锁失败</li>
+<li>这样做实现起来就简单了，而且影响也不大</li>
+</ul>
+</li>
+<li>细粒度
+<ul>
+<li>即使短暂的不可用，也会影响到客户端</li>
+<li>随着新机器的增加，客户端的事务数量增加，锁服务的压力也会增大</li>
+<li>在锁失败时，可以减少维护锁负载的压力</li>
+<li>客户端要主动预防在网络分区中引发的锁丢失，而服务的故障恢复也不会使锁自动恢复</li>
+</ul>
+</li>
+</ul>
+<p>用户可以使用粗粒度锁，完成一些系列度锁的工作<br>
+比如将锁分配给一组机器，每组机器都管理一个锁，这样的维护成本很低，对锁服务压力也不大<br>
+这样的实现，等于是赋予用户一些使用权利，由他们自主决定使用锁的方式<br>
+从而降低了共识服务器的实现难度</p>
+<h3 id="基本结构">基本结构</h3>
+<p>包含两个基本组件，客户端和服务端，客户端可以内嵌到用户的应用中<br>
+服务端是一个master和多个slaver，本质是一个 分布式共识协议<br>
+master通过选举产生，master也会定期向slaver广播租约，证明自己还是leader<br>
+master自己维护了一个本地数据库，所有的读写都到这个数据库上，并将所有的更新发往其他的slaver，其他的slaver通过共识算法实现一致性<br>
+客户端通过 DNS 找到master，如果非mater，就重定向到master，之后客户端都跟master交互<br>
+一旦master宕机，其他slaver就会感知到，从而触发选举机制</p>
+<p>Chubby的下面可能还有其他的调度系统<br>
+论文中提到了，当一个副本挂了几个小时，就会有调度机制从空闲的机器池中选取一个机器，然后将数据分配给它<br>
+然后更新 DNS信息，替换IP地址，而master会定期跟DNS交互，最终会得到这些变更信息<br>
+master随后会更新的自己的数据库，将成员列表信息更新，并广播给其他slaver<br>
+新的机器从 backup机器上取得base数据，从活跃机器上取得delta数据，将两者合并就得到最新数据了</p>
+<h3 id="文件目录句柄">文件、目录、句柄</h3>
+<p>采用类似 unix 文件目录的形式</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-c" data-lang="c"><span style="display:flex;"><span><span style="color:#ff79c6">/</span>ls<span style="color:#ff79c6">/</span>foo<span style="color:#ff79c6">/</span>wombat<span style="color:#ff79c6">/</span>pouch
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>ls 是所有的 chubby的共同前缀，foo是通过DNS查询的
+后面的 /wombat/pouch 则是 chubby目录的名称，每个节点要不是一个目录，或者是一个文件<br>
+由于 chubby的名称结构类似文件系统，所以使用起来很方便，也容易跟现有的分布式文件系统GFS集成<br>
+通过不同的目录名，就可以区分不同的chubby的master<br>
+访问文件控制权限是由文件本身控制的，而不是由目录层级控制的<br>
+另外也不支持从一个目录导出到另一个目录，不支持目录的时间修改<br>
+节点分为两种</p>
+<ul>
+<li>持久的，需要显示的删除</li>
+<li>临时的，当客户端不再引用后悔自动删除，可以用于做临时目录，实现读写锁机制<br>
+每个节点都包含元数据，以及ACL，ACL控制了读、写、修改三个权限，权限由子集成父目录，也可以显示的覆盖<br>
+ACL是一套认证机制<br>
+节点包含了一个单调递增的64位整数</li>
+<li>当目录发现变更后，这个整数就会递增</li>
+<li>当生成一个锁后，如果锁状态变化了，如无锁变成锁定，则也会递增</li>
+<li>当内容发生变化，比如有写入，则会递增</li>
+<li>ACL内容发生变化，值也会递增</li>
+</ul>
+<p>客户端也会获得一个类似UNIX的句柄</p>
+<ul>
+<li>通过句柄数字，防止在创建期间的操作，至于在创建节点时才会检查，而unix是在打开时检查，读/写不检查</li>
+<li>允许master判断当前的句柄是他生成的，还是由其他master生成的</li>
+<li>如果旧的句柄出现在新的master 打开节点时，则master会重新创建这个句柄</li>
+</ul>
+<h3 id="锁和序列器">锁和序列器</h3>
+<p>chubby提供了两种锁</p>
+<ul>
+<li>写锁，排斥模式</li>
+<li>读锁，共享模式</li>
+</ul>
+<p>强制锁使的未持有锁的对象，无法访问锁定对象</p>
+<ul>
+<li>chubby经常保护由其他服务实现的资源，而不仅仅是与锁关联的文件</li>
+<li>当用户需要对文件做调试、或者管理时，不希望用户关闭应用，因为复杂系统跟本地实现不同</li>
+<li>开发人员以传统的断言方式检查： 是否持有锁，这样从强制检查中没有什么价值</li>
+</ul>
+<p>持有L锁的进程，发送了一个R请求，但是这个R请求但失败了；另一个进程获取了L锁，发送了R请求<br>
+这会导致数据不一致，目前可以通过 虚拟时间、虚拟同步来解决<br>
+直接在所有的交互中引入 序号代价很高，chubby是在持有锁期间使用序列器 <br>
+任何时候，持有锁的进程都可以发送一个不透明的 字节串，它描述了在获得锁之后的状态<br>
+包含了锁的名称、模式(排斥/共享)，锁的编号<br>
+如果客户端希望操作的资源被保护，就会将这个序号发给服务端，服务端会检查其序号是否有效<br>
+也可以通过这个序号来检查chubby的缓存有效性<br>
+可能由于时间为题，chubby未提供一个完美的解决方案，提供了一个失效的锁机制<br>
+当客户端挂掉后，锁服务会继续持有这个锁，直到超时，这样就包含了这个锁不会被其他人抢占</p>
+<h3 id="事件">事件</h3>
+<p>chubby的客户端可以订阅时间，当创建一个句柄后，就会异步的触发这个事件</p>
+<ul>
+<li>文件内容修改</li>
+<li>子节点的增加、删除、修改</li>
+<li>master失败</li>
+<li>句柄、或者锁变得无效了，比如通讯失败</li>
+<li>锁获取成功</li>
+<li>锁获取冲突</li>
+</ul>
+<p>后面两个操作，是跟选举有关的，比如通过排斥锁选举了一个主服务<br>
+锁冲突后就会卡住</p>
+<h3 id="api">API</h3>
+<p>类似 unix的各种操作
+比如，open()是打开一个文件描述符，close()是关闭<br>
+句柄与文件的实例相关联，而不是跟文件名关联
+客户端的各种操作：</p>
+<ul>
+<li>读、写、枷锁、修改ACL等</li>
+<li>事件通知</li>
+<li>锁延迟</li>
+<li>Poison()，导致后续的操作终止和失效，但不会释放资源</li>
+<li>GetContentsAndStat()，获取内容以及元数据</li>
+<li>SetContents()，设置内容</li>
+<li>GetStat()、ReadDir()、SetACL()</li>
+<li>Delete() 如果没有子节点，则删除</li>
+<li>Acquire(), TryAcquire(), Release() 获取和释放锁</li>
+<li>GetSequencer()、SetSequencer()、CheckSequencer() 设置、获取以及检查序列号</li>
+</ul>
+<p>所有的调用都可以传递一些参数</p>
+<ul>
+<li>支持回调函数</li>
+<li>等待一段时间</li>
+<li>获取错误和相关调试信息</li>
+</ul>
+<p>应用使用这个客户端做选举，只有一个机器能当选为主，获得了文件锁，其他为副本<br>
+主会写文件内容，而其他节点通过读取或者事件通知，就知道谁是主了</p>
+<h3 id="缓存">缓存</h3>
+<p>为了减少网络I/O，chubby的客户端使用了缓存，可以缓存文件数据和元数据<br>
+写入到内层中，底层是通过RPC协议维持了keep-alive<br>
+客户端会定期跟master通讯，这样就保证了数据一致性，如果通讯失败，则缓存失效<br>
+当文件或者元数据被修改后，master会通知所有的客户端，让其缓存的数据失效<br>
+尽管需要提供严格的一致性，但我们拒绝了较弱的模型，因为我们觉得程序员会发现它们更难使用。类似地<br>
+要求客户端在所有消息中交换序列号的虚拟同步等机制也被认为在具有不同的预先存在的通信协议的环境中是不合适的<br>
+chubby的客户端允许让其缓存锁，使其可以超过严格限制的时间，可以让一个客户端反复使用<br>
+如果出现锁冲突了，则会有通知机制提醒</p>
+<h3 id="session和keep-alive">session和keep-alive</h3>
+<p>chubby的服务端和客户端会一致维持一个会话，通过keep-alive方式实现<br>
+在缓存未失效时，客户端的句柄，锁，缓存数据都是有效的<br>
+每个session都会关联一个租约时间 <br>
+以下情况会使session提前超时</p>
+<ul>
+<li>创建一个新会话时</li>
+<li>master故障转移时</li>
+<li>当收到客户端的keep-avlie消息时</li>
+</ul>
+<p>master会阻塞RCP，不允许它返回，直到客户端段之前的租约接近到期<br>
+通过keep-alive将事件通知、缓存失效返回给客户端<br>
+在故障转移的情况下，如果客户端 和master一致支持通讯，之后master挂了<br>
+此时session不会立马断开，会维持默认45秒，等待新的master，如果在45秒能连接上新的master则sessin继续有效<br>
+否则session就失效了，master挂到，到重新选举这段时间，称为 危险期<br>
+会由事件通知给客户端，可以让客户端在这段时间主动终止会话</p>
+<h3 id="故障转移">故障转移</h3>
+<p>一旦master挂了，在内存中的句柄、锁、状态都没了；认证超时也会导致失败<br>
+客户端会在一段周期内尝试连接新的master，如果能成功就会继续持有这个锁<br>
+当老的master挂了之后，客户端会发送keep-alive，此时失败了，没有收到响应<br>
+于是客户端等待一段时间继续发送，这时候新的master选举成功了，客户端向新的master发送keep-alive<br>
+第一次请求不会成功，但是携带的 term是老的，所以失败了<br>
+但第二次会成功，而此时新master会判断出这个是一个安全的状态<br>
+因为其周期 小于 上一次租约结束，大于新租约的开始<br>
+于是在又一轮的keep-alive后，连接就建立起来了<br>
+此时新的master会根据磁盘上的状态，在内存中建立一个新的句柄，和状态信息，这些信息跟老master的一样<br>
+另一部分是从客户端那里获取的<br>
+新master处理过程：</p>
+<ol>
+<li>使用一个新的 epoch 编号并返回给客户端，拒绝掉老编号的客户端请求</li>
+<li>新的master可以响应master定位请求，但不会马上处理请求响应</li>
+<li>从数据库中重建会话状态，锁信息等，并延长最大的会话时间，也就是故障转移</li>
+<li>接受客户端的keep-alive，但不响应其他操作</li>
+<li>向所有的客户度发出 故障转移事件，这些客户端就会清空缓存(因为可能过期了)，跟客户端绑定的应用也会收到这个事件</li>
+<li>master等待每个每个session的响应，或者他们超时</li>
+<li>master开始接受请求</li>
+<li>如果客户端使用旧的句柄，则新master在内存中重建新句柄；如果重建的句柄已经关闭，则master会保存这个句柄，这样延迟和旧的客户端就不能再使用这个句柄了</li>
+<li>经过一段时间，master删除了不再打开的临时文件，客户端在故障转移后客户端可以重刷新临时文件；如果文件上的最后一个客户端在故障转移丢失，则此文件不会立刻消失</li>
+</ol>
+<p>跟系统其他组件相比，故障转移部分的代码不多，但是更容易产生bug</p>
+<h3 id="数据库实现">数据库实现</h3>
+<p>chubby最早是采用 berkeley db作为存储的<br>
+berkeley db采用了b+树的机制，key是字节string，value可以是任意的二进制<br>
+在berkeley db之上，增加了一个比较函数，用于排序路径上的名称数量，这样就把相邻的节点紧挨着了<br>
+berkeley db使用分布式共识算法，然后复制数据库日志<br>
+berkeley db的b+代码很成熟，但是复制功能是最近增加的，而且chubby只使用berkeley db很少的一些特性，比如原子性；而用不到它的事务特性<br>
+再加上复制特性可能有风险，于是chubby基于 WAL的方式重写了一个简单的数据库<br>
+这样就是基于 WAL的方式复制日志</p>
+<h3 id="备份和镜像">备份和镜像</h3>
+<p>备份提供了灾备以及初始化新副本数据库的方式，而不会影响到现有的服务<br>
+每过一个小时，chubby就会往GFS上写一个备份文件，每个备份文件都是独立的</p>
+<p>chubby允许将文件集合从一个镜像到另一个，在CUD时会通知镜像的代码<br>
+修改的文件会在不到一秒内反馈到世界范围内的各个镜像中，如果网络有问题则保持不变，等网络恢复后继续重连<br>
+更新文件是通过比较文件标识符和校验码实现的<br>
+镜像可以将配置的文件复制到全世界各个范围<br>
+一个特殊的单元，global，包含一个子树 /ls/global/master 镜像到每个 /ls/global/slave<br>
+全局镜像是特殊的，有5个副本，分散在全球各地，所有可以从大多数组织中获取</p>
+<p>从全局单元镜像的文件包括
+查比自己的访问控制列表，各种文件
+Chubby cell和其他系统向我们的监控服务发布它们的存在，允许客户端定位大数据集(如Bigtable cell)的指针，以及其他系统的许多配置文件</p>
+<h2 id="扩展机制">扩展机制</h2>
+<p>单个master可以服务 9W个客户端</p>
+<ul>
+<li>可以创建任意数量的chubby机器，按照地域分布部署，这样用户基于DNS可以就近查找，一个chubby可以服务</li>
+<li>调大keep-alive时间，可以减少master负载</li>
+<li>客户端可以缓存文件、元数据、缺失的文件、打开的句柄，这样可以减少master负载</li>
+<li>使用协议转换，把chubby的协议转为不太复杂的协议，如DNS这样的</li>
+</ul>
+<p>后面描述了两种实现方式，代理、分区，这两种方式还没有在生产环境部署过   <br>
+单个机房容纳的机器数量是有限的<br>
+客户端和服务端使用了类似的机器配置，所以增加客户端机器的硬件数量，也会增加服务端的处理能力</p>
+<p>代理</p>
+<ul>
+<li>chubby的协议可以被代理，代理连接了客户端和chubby master，两边保持协议一致即可</li>
+<li>的代理可以减少keep-alive，减少了chubby的负载，可以支持读，这样更能减少master负载</li>
+<li>但对写不管用，写的时候，proxy还是要写到chubby的，不过写流量大概只有 1%</li>
+<li>如果proxy能处理N个客户端，keep-alive流量就可以减少 1/N</li>
+<li>proxy增加了写，第一次连接的延迟，但是提高了可用性</li>
+<li>故障转移的场景下，proxy就不管用了</li>
+</ul>
+<p>分区</p>
+<ul>
+<li>选择chubby的接口是为了在服务器之间划分 名称空间，可以按目录对名称空间划分</li>
+<li>可以将chubby划分为 N 个分区，每个分区都是一个master + N个副本</li>
+<li>D目录下的每个节点 D/C 按照 hash(D) % N，存储分区 P(D/C)</li>
+<li>元数据不会划分，分区的目的是支持更大的集群，而分区之间几乎没有什么通讯</li>
+<li>chubby缺少硬链接、目录修改时间、跨目录重命名操作</li>
+<li>ACL本身是文件，因此一个访问一个分区需要依靠另一个分区做检查，而ACL很容易缓存，只有open和delete需要ACL</li>
+<li>当目录被删除时，需要跨分区删除里面的文件</li>
+<li>每个客户端都可以跟大多数分区联系，这也大大减少了流量</li>
+<li>如果要支持更多客户端，策略是 组合 代理 + 分区</li>
+</ul>
+<h2 id="使用惊喜错误的设计">使用、惊喜、错误的设计</h2>
+<h3 id="使用行为">使用行为</h3>
+<p>相关统计信息如下</p>
+<table>
+<thead>
+<tr>
+<th>name</th>
+<th>value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>time since last fail-over</td>
+<td>18 days</td>
+</tr>
+<tr>
+<td>fail-over duration</td>
+<td>14s</td>
+</tr>
+<tr>
+<td>active clients (direct)</td>
+<td>22k</td>
+</tr>
+<tr>
+<td>additional proxied clients</td>
+<td>32k</td>
+</tr>
+<tr>
+<td>files open</td>
+<td>12k</td>
+</tr>
+<tr>
+<td>naming-related</td>
+<td>60%</td>
+</tr>
+<tr>
+<td>client-is-caching-file entries</td>
+<td>230k</td>
+</tr>
+<tr>
+<td>distinct files cached</td>
+<td>24k</td>
+</tr>
+<tr>
+<td>names negatively cached</td>
+<td>32k</td>
+</tr>
+<tr>
+<td>exclusive locks</td>
+<td>1k</td>
+</tr>
+<tr>
+<td>shared locks</td>
+<td>0</td>
+</tr>
+<tr>
+<td>stored directories</td>
+<td>8k</td>
+</tr>
+<tr>
+<td>ephemeral</td>
+<td>0.1%</td>
+</tr>
+<tr>
+<td>stored files</td>
+<td>22k</td>
+</tr>
+<tr>
+<td>0-1k bytes</td>
+<td>90%</td>
+</tr>
+<tr>
+<td>1k-10k bytes</td>
+<td>10%</td>
+</tr>
+<tr>
+<td>&gt; 10k bytes</td>
+<td>0.2%</td>
+</tr>
+<tr>
+<td>naming-related</td>
+<td>46%</td>
+</tr>
+<tr>
+<td>mirrored ACLs &amp; config info</td>
+<td>27%</td>
+</tr>
+<tr>
+<td>GFS and Bigtable meta-data</td>
+<td>11%</td>
+</tr>
+<tr>
+<td>ephemeral</td>
+<td>3%</td>
+</tr>
+<tr>
+<td>RPC rate</td>
+<td>1-2k/s</td>
+</tr>
+<tr>
+<td>KeepAlive</td>
+<td>93%</td>
+</tr>
+<tr>
+<td>GetStat</td>
+<td>2%</td>
+</tr>
+<tr>
+<td>Open</td>
+<td>1%</td>
+</tr>
+<tr>
+<td>CreateSession</td>
+<td>1%</td>
+</tr>
+<tr>
+<td>GetContentsAndStat</td>
+<td>0.4%</td>
+</tr>
+<tr>
+<td>SetContents</td>
+<td>680ppm</td>
+</tr>
+<tr>
+<td>Acquire</td>
+<td>31ppm</td>
+</tr>
+</tbody>
+</table>
+<p>几周时间大概有<code>61</code>次停机，包含了 700天的数据<br>
+排查了机房维护的停机，剩下的故障包括：</p>
+<ul>
+<li>网络拥塞、连接问题</li>
+<li>正常维护</li>
+<li>高负载</li>
+<li>操作错误</li>
+<li>软件、硬件bug</li>
+</ul>
+<p>大部分故障在 15秒内可以恢复<br>
+出现过 6 次丢数据，包括 数据库软件错误、操作错误，但没有涉及到硬件问题<br>
+讽刺的是，操作错误是因为想升级软件，避免软件错误<br>
+还修复了 2次 非master部分的损坏<br>
+当会话数量超过 9W，就变成的负载很高了，可能是客户端库的一些错误导致的，比如错误的禁用了缓存<br>
+导致大量的会话连向服务端   <br>
+设计者甚至故意在 open的时候增加了一些延迟</p>
+<h3 id="其他问题">其他问题</h3>
+<p>java clent</p>
+<ul>
+<li>chubby的服务端大概 7K+代码</li>
+<li>java在谷歌也很受欢迎，但是要链接其他语言就要用 JNI，这个则很不受欢迎</li>
+<li>java客户端使用协议转换服务连接的，有点像一个代理的server</li>
+<li>不过这样就要额外的维护一套server</li>
+</ul>
+<p>名字服务</p>
+<ul>
+<li>dns是使用TTL，如果在过期前没有刷新，则会超时</li>
+<li>dns替换一个服务需要把过期时间设置很短，但是太短会对DNS服务器造成压力</li>
+<li>chubby除了锁，也充当名字服务</li>
+<li>在chubby没出现之前，都是访问DNS的，但大量的临时程序会对DNS造成很大压力</li>
+<li>单个master就可以提供9W个客户端，而需要代理</li>
+<li>因为大多数客户端都做了缓存，除非显示更新，否则客户端会一致缓存，直到失效</li>
+<li>所以chubby在谷歌内部也充当了名字服务器</li>
+<li>设计者们还搞了 chubby dns server，将dns客户端的数据存储到chubby中</li>
+</ul>
+<p>失败转移</p>
+<ul>
+<li>最开始的设计是，每创建一个session，就往 berkeley db中写数据</li>
+<li>后来改成延迟写入，只有修改、或者锁、创建临时文件时才会写入</li>
+<li>但是只读session就不会存到数据库中，如果出现故障转移，则客户端会读到过期数据</li>
+<li>解决办法是，新master上任后，需要等待一个最大过期时间</li>
+<li>新的master需要等待一个最大超时后，再以相同的方式重建这些会话</li>
+<li>客户端联系的一个proxy如果挂了，新的proxy可以继续维持这个会话</li>
+<li>只要master没有丢弃之前客户端的锁、临时文件，那么新的proxy就可以获得这些，从而继续提供服务</li>
+</ul>
+<p>滥用的客户端</p>
+<ul>
+<li>谷歌的项目团队可以自己申请资源，自己维护机器，来搭建chubby，不过这样很麻烦，一般都是共享的</li>
+<li>一些对行为不理解，滥用的几乎等同于攻击行为了</li>
+<li>很多软件都缺乏文档，一个团队可能开发了一个模块，然后另一个团队使用了它，带来了灾难后果</li>
+<li>缺乏主动的缓存
+<ul>
+<li>一开始对于不存在的文件、重用open都没有考虑</li>
+<li>开发人员使用无限循环来确认文件文件是否存在</li>
+<li>通过反复的open、close来实现poll，而他们可能只希望打开一次</li>
+<li>最终将open做改造，使的其打开不会引起多大开销</li>
+</ul>
+</li>
+<li>缺乏配额
+<ul>
+<li>chubby不是用来做存储系统的，也不时候存储大文件</li>
+<li>但有的项目人员，用chubby来存储用户上传行为数据，导致一个文件超过了1.5M，每次都要覆盖写</li>
+<li>chubby团队的人修改了配额，限制到最大265K，但需要那个团队的人修改代码</li>
+<li>结果花了一年的时间，才把数据迁移走</li>
+</ul>
+</li>
+<li>发布/订阅
+<ul>
+<li>有人就拿chubby的事件通知，当做发布/订阅使用</li>
+<li>但chubby需要维护很重的锁保证，使用无效而不是更新来维护缓存一致性</li>
+<li>这样就导致发布订阅这种方式很慢</li>
+<li>好在使用这种方式的人后来都发现问题，并重构了项目</li>
+</ul>
+</li>
+</ul>
+<p>学习到的经验</p>
+<ul>
+<li>开发人员很少考虑到 可用性
+<ul>
+<li>开发人员曾经申请了几百台机器，然后选举master初始化时花费了几十分钟</li>
+<li>chubby的全球部署时，同时有两个地理位置很远的机房同时宕掉极为罕见</li>
+<li>chubby对于故障转移提供了事件通知，不过很多开发人员得到这个通知后，就直接关闭应用了</li>
+<li>chubby的改进建议是，重新评审这个项目，不要把它们项目的可用性跟chubby的可用性 联系在一起，它们两是不相关的</li>
+<li>提供更高级的API，让其调用跟chubby的可用性独立开来</li>
+<li>事后复盘，总结操作问题、chubby的bug</li>
+</ul>
+</li>
+<li>忽略细粒度的锁
+<ul>
+<li>开发人员通常会优化它们的应用，消除不必要的通讯</li>
+<li>这样的结果是，它们需要一种粗粒度的锁</li>
+</ul>
+</li>
+</ul>
+
+			<script type="text/javascript"
+        async
+        src="https://cdn.bootcss.com/mathjax/2.7.3/MathJax.js?config=TeX-AMS-MML_HTMLorMML">
+MathJax.Hub.Config({
+  tex2jax: {
+    inlineMath: [['$','$'], ['\\(','\\)']],
+    displayMath: [['$$','$$'], ['\[\[','\]\]']],
+    processEscapes: true,
+    processEnvironments: true,
+    skipTags: ['script', 'noscript', 'style', 'textarea', 'pre'],
+    TeX: { equationNumbers: { autoNumber: "AMS" },
+         extensions: ["AMSmath.js", "AMSsymbols.js"] }
+  }
+});
+
+MathJax.Hub.Queue(function() {
+    
+    
+    
+    var all = MathJax.Hub.getAllJax(), i;
+    for(i = 0; i < all.length; i += 1) {
+        all[i].SourceElement().parentNode.className += ' has-jax';
+    }
+});
+</script>
+
+<style>
+code.has-jax {
+    font: inherit;
+    font-size: 100%;
+    background: inherit;
+    border: inherit;
+    color: #515151;
+}
+</style>
+        </div>
+
+        
+
+
+        
+
+<div class="post-archive">
+    <h2>相关文章</h2>
+    <ul class="listing">
+        
+        <li><a href="/post/2022/05/multi-paxos/">Multi Paxos总结</a></li>
+        
+        <li><a href="/post/2022/05/basic-paxos/">Basic Paxos总结</a></li>
+        
+    </ul>
+</div>
+
+
+        <div class="post-meta meta-tags">
+            
+            <ul class="clearfix">
+                
+                <li><a href='/tags/paxos'>paxos</a></li>
+                
+            </ul>
+            
+        </div>
+    </article>
+    
+    
+
+    
+    
+</div>
+
+
+                </div>
+
+                <div id="secondary">
+    <section class="widget">
+        <form id="search" action='https://code0xff.cn/search/' method="get" accept-charset="utf-8" target="_blank" _lpchecked="1">
+      
+      <input type="text" name="q" maxlength="20" placeholder="Search">
+      <input type="hidden" name="sitesearch" value="https://code0xff.cn/">
+      <button type="submit" class="submit icon-search"></button>
+</form>
+    </section>
+    
+    <section class="widget">
+        <h3 class="widget-title">最近文章</h3>
+<ul class="widget-list">
+    
+    <li>
+        <a href="https://code0xff.cn/post/2022/07/cmu%E6%95%B0%E6%8D%AE%E5%BA%93%E8%AF%BE%E7%A8%8B/" title="卡内基梅隆的数据库课程-1">卡内基梅隆的数据库课程-1</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.cn/post/2022/07/cmu%E6%95%B0%E6%8D%AE%E5%BA%93%E8%AF%BE%E7%A8%8B-2/" title="卡内基梅隆的数据库课程-2">卡内基梅隆的数据库课程-2</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.cn/post/2022/07/cmu%E6%95%B0%E6%8D%AE%E5%BA%93%E8%AF%BE%E7%A8%8B-3/" title="卡内基梅隆的数据库课程-3">卡内基梅隆的数据库课程-3</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.cn/post/2022/07/cmu%E6%95%B0%E6%8D%AE%E5%BA%93%E8%AF%BE%E7%A8%8B-4/" title="卡内基梅隆的数据库课程-4">卡内基梅隆的数据库课程-4</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.cn/post/2022/07/cmu%E6%95%B0%E6%8D%AE%E5%BA%93%E8%AF%BE%E7%A8%8B-5/" title="卡内基梅隆的数据库课程-5">卡内基梅隆的数据库课程-5</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.cn/post/2022/07/whats-really-new-with-newsql%E8%AE%BA%E6%96%87/" title="What’s Really New with NewSQL论文">What’s Really New with NewSQL论文</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.cn/post/2022/07/pingcap%E6%8F%90%E4%BE%9B%E7%9A%84%E6%95%B0%E6%8D%AE%E5%BA%93%E5%AD%A6%E4%B9%A0%E8%B5%84%E6%96%99/" title="PingCAP提供的数据库学习资料">PingCAP提供的数据库学习资料</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.cn/post/2022/07/snowflake%E8%AE%BA%E6%96%87/" title="Snowflake论文">Snowflake论文</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.cn/post/2022/07/spark-sql%E8%AE%BA%E6%96%87/" title="Spark SQL论文">Spark SQL论文</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.cn/post/2022/06/delta-lake%E8%AE%BA%E6%96%87/" title="Delta Lake论文">Delta Lake论文</a>
+    </li>
+    
+</ul>
+    </section>
+
+    
+
+    <section class="widget">
+        <h3 class="widget-title"><a href='/categories/'>分类</a></h3>
+<ul class="widget-list">
+    
+    <li><a href="https://code0xff.cn/categories/%E5%88%86%E5%B8%83%E5%BC%8F/">分布式 (3)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E5%95%86%E4%B8%9A/">商业 (2)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E5%A4%A7%E6%95%B0%E6%8D%AE/">大数据 (5)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E6%97%85%E8%A1%8C/">旅行 (10)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E6%9E%B6%E6%9E%84/">架构 (1)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E7%94%9F%E6%B4%BB/">生活 (4)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E7%AE%97%E6%B3%95/">算法 (7)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E7%BB%8F%E6%B5%8E/">经济 (1)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E7%BC%96%E7%A8%8B%E8%AF%AD%E8%A8%80/">编程语言 (2)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E8%AE%A1%E7%AE%97%E6%9C%BA%E5%8E%9F%E7%90%86/">计算机原理 (2)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E8%AE%BA%E6%96%87/">论文 (15)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E8%AF%BB%E4%B9%A6%E7%AC%94%E8%AE%B0/">读书笔记 (9)</a></li>
+    
+</ul>
+    </section>
+
+    <section class="widget">
+        <h3 class="widget-title">归档</a></h3>
+<ul class="widget-list">
+    
+    <li><a href="https://code0xff.cn/years/2021%E5%B9%B4/">2021年 (30)</a></li>
+    
+    <li><a href="https://code0xff.cn/years/2022%E5%B9%B4/">2022年 (31)</a></li>
+    
+</ul>
+    </section>
+
+    <section class="widget">
+        <h3 class="widget-title"><a href='/tags/'>标签</a></h3>
+<div class="tagcloud">
+    
+    <a href="https://code0xff.cn/tags/hive/">Hive </a>
+    
+    <a href="https://code0xff.cn/tags/kudu/">kudu </a>
+    
+    <a href="https://code0xff.cn/tags/manacher/">Manacher </a>
+    
+    <a href="https://code0xff.cn/tags/mapreduce/">MapReduce </a>
+    
+    <a href="https://code0xff.cn/tags/paxos/">paxos </a>
+    
+    <a href="https://code0xff.cn/tags/raft/">raft </a>
+    
+    <a href="https://code0xff.cn/tags/scala/">scala </a>
+    
+    <a href="https://code0xff.cn/tags/snowflake/">snowflake </a>
+    
+    <a href="https://code0xff.cn/tags/spark/">spark </a>
+    
+    <a href="https://code0xff.cn/tags/unix/">unix </a>
+    
+    <a href="https://code0xff.cn/tags/%E4%BA%8C%E5%88%86%E6%9F%A5%E6%89%BE/">二分查找 </a>
+    
+    <a href="https://code0xff.cn/tags/%E4%BA%8C%E5%8F%89%E6%A0%91%E9%81%8D%E5%8E%86/">二叉树遍历 </a>
+    
+    <a href="https://code0xff.cn/tags/%E5%88%86%E5%B8%83%E5%BC%8F/">分布式 </a>
+    
+    <a href="https://code0xff.cn/tags/%E5%8A%A8%E6%80%81%E6%B3%A8%E5%85%A5/">动态注入 </a>
+    
+    <a href="https://code0xff.cn/tags/%E5%8E%86%E5%8F%B2/">历史 </a>
+    
+    <a href="https://code0xff.cn/tags/%E5%9B%9E%E6%BA%AF/">回溯 </a>
+    
+    <a href="https://code0xff.cn/tags/%E5%9B%BD%E5%86%85%E6%97%85%E8%A1%8C/">国内旅行 </a>
+    
+    <a href="https://code0xff.cn/tags/%E5%9B%BD%E5%A4%96%E6%97%85%E8%A1%8C/">国外旅行 </a>
+    
+    <a href="https://code0xff.cn/tags/%E5%A4%A7%E6%95%B0%E6%8D%AE/">大数据 </a>
+    
+    <a href="https://code0xff.cn/tags/%E5%AD%98%E5%82%A8/">存储 </a>
+    
+    <a href="https://code0xff.cn/tags/%E5%BE%AE%E6%9C%8D%E5%8A%A1/">微服务 </a>
+    
+    <a href="https://code0xff.cn/tags/%E6%95%B0%E6%8D%AE%E5%BA%93/">数据库 </a>
+    
+    <a href="https://code0xff.cn/tags/%E6%B1%87%E7%BC%96/">汇编 </a>
+    
+    <a href="https://code0xff.cn/tags/%E6%B9%96%E4%BB%93%E4%B8%80%E4%BD%93/">湖仓一体 </a>
+    
+    <a href="https://code0xff.cn/tags/%E7%94%9F%E6%B4%BB/">生活 </a>
+    
+    <a href="https://code0xff.cn/tags/%E7%94%B5%E5%BD%B1/">电影 </a>
+    
+    <a href="https://code0xff.cn/tags/%E7%AE%97%E6%B3%95/">算法 </a>
+    
+    <a href="https://code0xff.cn/tags/%E7%BB%8F%E6%B5%8E/">经济 </a>
+    
+    <a href="https://code0xff.cn/tags/%E7%BC%93%E5%AD%98/">缓存 </a>
+    
+    <a href="https://code0xff.cn/tags/%E7%BC%96%E8%AF%91%E5%8E%9F%E7%90%86/">编译原理 </a>
+    
+    <a href="https://code0xff.cn/tags/%E8%AE%A1%E7%AE%97%E6%A1%86%E6%9E%B6/">计算框架 </a>
+    
+    <a href="https://code0xff.cn/tags/%E8%AF%BB%E4%B9%A6%E7%AC%94%E8%AE%B0/">读书笔记 </a>
+    
+</div>
+    </section>
+
+    
+
+    <section class="widget">
+        <h3 class="widget-title">RSS</h3>
+        <ul class="widget-list">
+            <li><a href="https://code0xff.cn/index.xml">文章 RSS</a></li>
+        </ul>
+    </section>
+</div>
+            </div>
+        </div>
+    </div>
+    <footer id="footer">
+    <div>
+        &copy; 2022 <a href="https://code0xff.cn/">记录每个瞬间 By 老王</a>
+        
+    </div>
+    <br />
+    <div>
+        <div class="github-badge">
+            <a href="https://gohugo.io/" target="_black" rel="nofollow"><span class="badge-subject">Powered by</span><span class="badge-value bg-blue">Hugo</span></a>
+        </div>
+        <div class="github-badge">
+            <a href="https://github.com/flysnow-org/maupassant-hugo" target="_black"><span class="badge-subject">Theme</span><span class="badge-value bg-yellowgreen">Maupassant</span></a>
+        </div>
+    </div>
+    <div>
+        <a href="http://www.beian.miit.gov.cn/">京ICP备19014975号</a>
+    </div>
+</footer>
+
+
+    
+    <script type="text/javascript">
+        window.MathJax = {
+            tex2jax: {
+                inlineMath: [['$', '$']],
+                processEscapes: true
+                }
+            };
+    </script>
+    <script src='https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.5/MathJax.js?config=TeX-MML-AM_CHTML' async></script><script src="https://cdn.bootcdn.net/ajax/libs/fancybox/3.5.7/jquery.fancybox.min.js"></script>
+
+<a id="rocket" href="#top"></a>
+<script type="text/javascript" src='/js/totop.js?v=0.0.0' async=""></script>
+
+<script type="application/javascript">
+var doNotTrack = false;
+if (!doNotTrack) {
+	window.ga=window.ga||function(){(ga.q=ga.q||[]).push(arguments)};ga.l=+new Date;
+	ga('create', 'GA ID', 'auto');
+	
+	ga('send', 'pageview');
+}
+</script>
+<script async src='https://www.google-analytics.com/analytics.js'></script>
+
+
+
+    <script type="text/javascript" src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js" async></script>
+
+
+
+
+</body>
+
+</html>
