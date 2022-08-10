@@ -1,0 +1,844 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    
+    <meta name="referrer" content="no-referrer-when-downgrade">
+    
+
+    <title>自定义HiveServer设计 | 记录每个瞬间</title>
+    <meta property="og:title" content="自定义HiveServer设计 - 记录每个瞬间">
+    <meta property="og:type" content="article">
+        
+    <meta property="article:published_time" content='2022-06-05T09:43:19&#43;08:00'>
+        
+        
+    <meta property="article:modified_time" content='2022-06-05T09:43:19&#43;08:00'>
+        
+    <meta name="Keywords" content="">
+    <meta name="description" content="自定义HiveServer设计">
+        <meta name="author" content="隔壁老王">
+        
+    <meta property="og:url" content="https://code0xff.cn/post/2022/06/%E8%87%AA%E5%AE%9A%E4%B9%89hiveserver%E8%AE%BE%E8%AE%A1/">
+    <link rel="shortcut icon" href='/favicon.ico'  type="image/x-icon">
+
+    <link rel="stylesheet" href='/css/normalize.css'>
+    <link rel="stylesheet" href='/css/style.css'>
+    <script type="text/javascript" src="//cdn.bootcdn.net/ajax/libs/jquery/3.4.1/jquery.min.js"></script>
+
+    
+    
+    
+        <link href="https://cdn.bootcdn.net/ajax/libs/fancybox/3.5.7/jquery.fancybox.min.css" rel="stylesheet">
+    
+    
+    
+    
+</head>
+
+
+<body>
+    <header id="header" class="clearfix">
+    <div class="container">
+        <div class="col-group">
+            <div class="site-name ">
+                
+                    <a id="logo" href="https://code0xff.cn/">
+                        记录每个瞬间
+                    </a>
+                
+                
+            </div>
+            <div>
+                <nav id="nav-menu" class="clearfix">
+                    <a class="current" href="https://code0xff.cn/">首页</a>
+                    
+                    <a  href="https://code0xff.cn/linked/" title="链接">链接</a>
+                    
+                    <a  href="https://code0xff.cn/archives/" title="归档">归档</a>
+                    
+                    <a  href="https://code0xff.cn/about/" title="关于">关于</a>
+                    
+                </nav>
+            </div>
+        </div>
+    </div>
+</header>
+
+    <div id="body">
+        <div class="container">
+            <div class="col-group">
+
+                <div class="col-8" id="main">
+                    
+<div class="res-cons">
+    
+    <article class="post">
+        <header>
+            <h1 class="post-title">自定义HiveServer设计</h1>
+        </header>
+        <date class="post-meta meta-date">
+            2022年6月5日
+        </date>
+<nav id="TableOfContents">
+  <ul>
+    <li>
+      <ul>
+        <li><a href="#背景">背景</a></li>
+        <li><a href="#实现原理">实现原理</a>
+          <ul>
+            <li><a href="#rpc扩展">RPC扩展</a></li>
+            <li><a href="#和原生的对比">和原生的对比</a></li>
+            <li><a href="#执行逻辑">执行逻辑</a></li>
+            <li><a href="#交互方式">交互方式</a></li>
+            <li><a href="#具体实现">具体实现</a></li>
+          </ul>
+        </li>
+        <li><a href="#测试说明">测试说明</a>
+          <ul>
+            <li><a href="#simple方式">Simple方式</a></li>
+            <li><a href="#kerberos-方式">kerberos 方式</a></li>
+          </ul>
+        </li>
+        <li><a href="#参考">参考</a></li>
+      </ul>
+    </li>
+  </ul>
+</nav>
+        
+        <div class="post-meta">
+            
+            <span class="post-meta meta-tags">
+                <ul class="clearfix">
+                    <a href='/categories/%E5%88%86%E5%B8%83%E5%BC%8F'>分布式</a>
+                </ul>
+            </span>
+            
+        </div>
+        
+        
+        <div class="post-meta">
+            <span id="busuanzi_container_page_pv">|<span id="busuanzi_value_page_pv"></span><span>
+                    阅读</span></span>
+        </div>
+        
+        
+        <div class="post-content">
+            <h2 id="背景">背景</h2>
+<p>jdbc 客户端需要支持 kerberos 认证，之前使用的jdbc客户端是 calcite-avatica，虽然它的官网上说是可以支持kerberos的<br>
+但文档比较旧了，相关资料也比较少<br>
+另一个问题是，他是基于HTTP方式实现kerberos的，不确定这块是否有坑，所以考虑换一个 客户端</p>
+<p>由于hive jdbc对kerberos支持的比较好，所以考虑使用原生hive server来实现<br>
+将原生hive server的RPC连接部分，单独抽出来，这样hive的客户端就不用动了，服务端只要能拿到SQL，后面的逻辑也不用动</p>
+<h2 id="实现原理">实现原理</h2>
+<h3 id="rpc扩展">RPC扩展</h3>
+<p>这里将 原生HiveServer的RPC部分单独拿了出来，不使用 session manager等其他组件，这样的话，客户端不用变，仍然是使用原生的hive client<br>
+client 和 server端的通讯使用 thrift完成，下图是 thrift的协议栈<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2022/06/%E8%87%AA%E5%AE%9A%E4%B9%89HiveServer%E8%AE%BE%E8%AE%A1/1.jpg">
+            <img class="mx-auto" alt="image" src="https://woquhaha.gitee.io/pic_tech_1/post/2022/06/%E8%87%AA%E5%AE%9A%E4%B9%89HiveServer%E8%AE%BE%E8%AE%A1/1.jpg" />
+        </a>
+    <br>
+上图中主要的三层：</p>
+<ul>
+<li>transport 是通讯协议，如HTTP、SASL IO、plain IO等等</li>
+<li>protocol 是传输协议，如json、binary等</li>
+<li>processor 是要处理的业务逻辑，其中骨架代码是 自动生成的，我们只需要 重写上图红色部分即可</li>
+</ul>
+<p>对于hive server的原生逻辑，上图红色部分就是 调用 session manager，然后解析sql，再调用map/reduce、tez等执行<br>
+将红色替换掉后，就可以自由发挥了，拿到 SQL之后，直接调用自定义的后端服务即可<br>
+在原生Hive中，红色部分 对应的是 TCLIService 接口，可以继承这个实现 自定义的 HiveCLI扩展</p>
+<h3 id="和原生的对比">和原生的对比</h3>
+<p>原生的hive-server、spark-thrift 不能直接使用<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2022/06/%E8%87%AA%E5%AE%9A%E4%B9%89HiveServer%E8%AE%BE%E8%AE%A1/2.jpg">
+            <img class="mx-auto" alt="image" src="https://woquhaha.gitee.io/pic_tech_1/post/2022/06/%E8%87%AA%E5%AE%9A%E4%B9%89HiveServer%E8%AE%BE%E8%AE%A1/2.jpg" />
+        </a>
+       <br>
+因为他们最后走hive逻辑，会生成 hive session manager，并去hive 元数据库中做查询<br>
+这不是我们想要的，我们只需要拿到 SQL 就可以了，后面就跟hive没任何关系了 <br>
+所以直接拿 原生的方式是不行的</p>
+<h3 id="执行逻辑">执行逻辑</h3>
+<p>下面是 Simple 方式的(基于用户名/密码验证)，跟原先的 JDBC-Server类似<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2022/06/%E8%87%AA%E5%AE%9A%E4%B9%89HiveServer%E8%AE%BE%E8%AE%A1/3.jpg">
+            <img class="mx-auto" alt="image" src="https://woquhaha.gitee.io/pic_tech_1/post/2022/06/%E8%87%AA%E5%AE%9A%E4%B9%89HiveServer%E8%AE%BE%E8%AE%A1/3.jpg" />
+        </a>
+    </p>
+<p>下面是 Kerberos 方式验证<br>
+首先要在 kerberos 环境上生成 keytab，并将 keytab和conf 放到服务端 <br>
+之后客户端用 同样的 keytab，conf就可以跟服务端交互了   <br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2022/06/%E8%87%AA%E5%AE%9A%E4%B9%89HiveServer%E8%AE%BE%E8%AE%A1/4.jpg">
+            <img class="mx-auto" alt="image" src="https://woquhaha.gitee.io/pic_tech_1/post/2022/06/%E8%87%AA%E5%AE%9A%E4%B9%89HiveServer%E8%AE%BE%E8%AE%A1/4.jpg" />
+        </a>
+    </p>
+<p>从kerberos协议来说，客户端 会跟 kerberos，以及服务端有交互，而服务端和 kerberos是没有交互的<br>
+Hive server本身已经包含了 kerberos认证，核心类是 HiveAuthFactory，通过这个类，可以到一个SASL的 transport、processor<br>
+也就是上层的代码不用动，只需要将传输层等部分，做一下包装，变成 SASL方式传输即可<br>
+安全部分的整体代码很少，基本都是复用了Hive的逻辑</p>
+<p>如果看 网易kyuubi，会发现它的安全部分代码会比较多，因为它对 原生Hive这块做了很多重写，有不少是直接把代码拿过来用的 <br>
+另外除了 Kerberos，hive还支持其他方式认证，如 LDAP、PAM、TOKEN等，这些，kyuubi都有支持所以代码会比较多</p>
+<h3 id="交互方式">交互方式</h3>
+<p>Hive jdbc的查询可以是异步的，一个查询分成了好几步完成</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4">
+<table style="border-spacing:0;padding:0;margin:0;border:0;width:auto;overflow:auto;display:block;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">5
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">6
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">7
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">8
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-java" data-lang="java">Connection conn <span style="color:#ff79c6">=</span> DriverManager<span style="color:#ff79c6">.</span><span style="color:#50fa7b">getConnection</span><span style="color:#ff79c6">(</span>url<span style="color:#ff79c6">,</span> <span style="color:#f1fa8c">&#34;test&#34;</span><span style="color:#ff79c6">,</span> <span style="color:#f1fa8c">&#34;123456&#34;</span><span style="color:#ff79c6">);</span>
+String sql <span style="color:#ff79c6">=</span> <span style="color:#f1fa8c">&#34;select * from hello.gg&#34;</span><span style="color:#ff79c6">;</span>
+PreparedStatement ps <span style="color:#ff79c6">=</span> conn<span style="color:#ff79c6">.</span><span style="color:#50fa7b">prepareStatement</span><span style="color:#ff79c6">(</span>sql<span style="color:#ff79c6">);</span>
+ResultSet rs <span style="color:#ff79c6">=</span> ps<span style="color:#ff79c6">.</span><span style="color:#50fa7b">executeQuery</span><span style="color:#ff79c6">();</span>
+<span style="color:#ff79c6">while</span><span style="color:#ff79c6">(</span>rs<span style="color:#ff79c6">.</span><span style="color:#50fa7b">next</span><span style="color:#ff79c6">())</span> <span style="color:#ff79c6">{</span>
+    <span style="color:#ff79c6">......</span>
+<span style="color:#ff79c6">}</span> 
+<span style="color:#6272a4">//close.....
+</span></code></pre></td></tr></table>
+</div>
+</div><p>整个执行过程如下： <br>
+1、首先是打开连接，当执行<code>DriverManager.getConnection</code>这段后，会触发到服务端的openSession函数<br>
+2、提交SQL，<code>ps.executeQuery()</code>只是提交一个SQL，但不会返回结果</p>
+<ul>
+<li>这一步会触发多个函数：</li>
+<li>(2.1)会触发 ExecuteStatement，这里函数会得到一个SQL，并通过Spark执行查询，并等待Spark执行完返回</li>
+<li>(2.2)Hive客户端支持异步查询，所以发送完SQL后，会检查执行状态，触发函数：GetOperationStatus</li>
+<li>(2.3)当检查到查询成功后，会获取查询数据的元数据信息(也就是表结构)，会触发函数：GetResultSetMetadata</li>
+</ul>
+<p>3、调用<code>rs.next</code>这时候会真正的获取数据</p>
+<p>在具体实现时，将上述逻辑全部改为 阻塞方式，在(2)中，拿到提交的SQL，然后传给查询引起执行，并等待 spark端执行完后，返回 data-frame<br>
+之后将 data-frame放到session中<br>
+后面再检查执行结果时，就直接返回 成功  <br>
+最后获取数据时，从session中拿到data-frame，真正的拿到数据并返回给客户端</p>
+<h3 id="具体实现">具体实现</h3>
+<p>Hive-Server的实现逻辑：</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4">
+<table style="border-spacing:0;padding:0;margin:0;border:0;width:auto;overflow:auto;display:block;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">15
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">16
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">17
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">18
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">19
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">20
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">21
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">22
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">23
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">24
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">25
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">26
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">27
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">28
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">29
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">30
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">31
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">32
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">33
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">34
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">35
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">36
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">37
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">38
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-scala" data-lang="scala">  <span style="color:#6272a4">// 启动类
+</span><span style="color:#6272a4"></span>  <span style="color:#ff79c6">def</span> start<span style="color:#ff79c6">()</span><span style="color:#ff79c6">:</span> <span style="color:#8be9fd">Unit</span> <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">{</span>
+    <span style="color:#ff79c6">val</span> processor<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">ThriftCLIService</span> <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">new</span> 定义自己的ThriftCLIService实现类<span style="color:#ff79c6">(</span><span style="color:#ff79c6">null</span><span style="color:#ff79c6">,</span> <span style="color:#f1fa8c">&#34;&#34;</span><span style="color:#ff79c6">)</span>
+    <span style="color:#ff79c6">val</span> serverSocket<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">TServerSocket</span> <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">new</span> <span style="color:#50fa7b">TServerSocket</span><span style="color:#ff79c6">(</span>port<span style="color:#ff79c6">)</span>
+    createThreadPoolServer<span style="color:#ff79c6">(</span>serverSocket<span style="color:#ff79c6">,</span> processor<span style="color:#ff79c6">)</span>
+  <span style="color:#ff79c6">}</span>
+  
+  <span style="color:#ff79c6">def</span> createThreadPoolServer<span style="color:#ff79c6">(</span>serverSocket<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">TServerSocket</span><span style="color:#ff79c6">,</span> processor<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">ThriftCLIService</span><span style="color:#ff79c6">)</span><span style="color:#ff79c6">:</span> <span style="color:#8be9fd">Unit</span> <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">{</span>
+    <span style="color:#ff79c6">val</span> executor<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">ThreadPoolExecutor</span> <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">new</span> <span style="color:#50fa7b">ThreadPoolExecutor</span><span style="color:#ff79c6">(</span><span style="color:#bd93f9">10</span><span style="color:#ff79c6">,</span> <span style="color:#bd93f9">100</span><span style="color:#ff79c6">,</span> <span style="color:#bd93f9">10</span><span style="color:#ff79c6">,</span> <span style="color:#50fa7b">TimeUnit</span><span style="color:#ff79c6">.</span><span style="color:#50fa7b">SECONDS</span><span style="color:#ff79c6">,</span>
+      <span style="color:#ff79c6">new</span> <span style="color:#50fa7b">SynchronousQueue</span><span style="color:#ff79c6">[</span><span style="color:#8be9fd">Runnable</span><span style="color:#ff79c6">](),</span>
+      <span style="color:#ff79c6">new</span> <span style="color:#50fa7b">NameTreadFactory</span><span style="color:#ff79c6">(</span><span style="color:#f1fa8c">&#34;name....&#34;</span><span style="color:#ff79c6">))</span>
+    <span style="color:#ff79c6">val</span> args<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">MyTThreadPoolServerArgs</span> <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">new</span> <span style="color:#50fa7b">MyTThreadPoolServerArgs</span><span style="color:#ff79c6">(</span>serverSocket<span style="color:#ff79c6">)</span>
+
+    <span style="color:#ff79c6">if</span><span style="color:#ff79c6">(</span>启动类安全<span style="color:#ff79c6">)</span> <span style="color:#ff79c6">{</span>
+      <span style="color:#ff79c6">val</span> conf<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">HiveConf</span> <span style="color:#ff79c6">=</span> 获取HiveConf<span style="color:#ff79c6">()</span>
+      <span style="color:#ff79c6">val</span> hiveAuthFactory <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">new</span> <span style="color:#50fa7b">MyAuthFactory</span><span style="color:#ff79c6">()</span>
+      hiveAuthFactory<span style="color:#ff79c6">.</span>init<span style="color:#ff79c6">(</span>conf<span style="color:#ff79c6">)</span>
+      <span style="color:#ff79c6">val</span> transportFactory<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">TTransportFactory</span> <span style="color:#ff79c6">=</span> hiveAuthFactory<span style="color:#ff79c6">.</span>getAuthTransFactory<span style="color:#ff79c6">()</span>
+      <span style="color:#ff79c6">val</span> processorFactory<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">TProcessorFactory</span> <span style="color:#ff79c6">=</span> hiveAuthFactory<span style="color:#ff79c6">.</span>getAuthProcFactory<span style="color:#ff79c6">(</span>processor<span style="color:#ff79c6">)</span>
+      args<span style="color:#ff79c6">.</span>transportFactory<span style="color:#ff79c6">(</span>transportFactory<span style="color:#ff79c6">).</span>processorFactory<span style="color:#ff79c6">(</span>processorFactory<span style="color:#ff79c6">)</span>
+    <span style="color:#ff79c6">}</span>
+    <span style="color:#ff79c6">else</span> <span style="color:#ff79c6">{</span>
+	  <span style="color:#6272a4">//这块就是创建 processor，对业务逻辑做一层封装
+</span><span style="color:#6272a4"></span>      <span style="color:#ff79c6">val</span> plainProcessor<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">TProcessor</span> <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">new</span> <span style="color:#50fa7b">TCLIService</span><span style="color:#ff79c6">.</span><span style="color:#50fa7b">Processor</span><span style="color:#ff79c6">[</span><span style="color:#8be9fd">TCLIService.Iface</span><span style="color:#ff79c6">](</span>processor<span style="color:#ff79c6">)</span>
+      args<span style="color:#ff79c6">.</span>transportFactory<span style="color:#ff79c6">(</span><span style="color:#ff79c6">new</span> <span style="color:#50fa7b">PlainScoketTransportFactroy</span><span style="color:#ff79c6">()).</span>processor<span style="color:#ff79c6">(</span>plainProcessor<span style="color:#ff79c6">)</span>
+    <span style="color:#ff79c6">}</span>
+
+	<span style="color:#6272a4">// 启动
+</span><span style="color:#6272a4"></span>    args
+      <span style="color:#ff79c6">.</span>protocolFactory<span style="color:#ff79c6">(</span><span style="color:#ff79c6">new</span> <span style="color:#50fa7b">TBinaryProtocol</span><span style="color:#ff79c6">.</span><span style="color:#50fa7b">Factory</span><span style="color:#ff79c6">)</span>
+      <span style="color:#ff79c6">.</span>requestTimeout<span style="color:#ff79c6">(</span><span style="color:#bd93f9">30</span><span style="color:#ff79c6">).</span>requestTimeoutUnit<span style="color:#ff79c6">(</span><span style="color:#50fa7b">TimeUnit</span><span style="color:#ff79c6">.</span><span style="color:#50fa7b">SECONDS</span><span style="color:#ff79c6">)</span>
+      <span style="color:#ff79c6">.</span>beBackoffSlotLength<span style="color:#ff79c6">(</span><span style="color:#bd93f9">100</span><span style="color:#ff79c6">)</span>
+      <span style="color:#ff79c6">.</span>beBackoffSlotLengthUnit<span style="color:#ff79c6">(</span><span style="color:#50fa7b">TimeUnit</span><span style="color:#ff79c6">.</span><span style="color:#50fa7b">MILLISECONDS</span><span style="color:#ff79c6">)</span>
+      <span style="color:#ff79c6">.</span>executorService<span style="color:#ff79c6">(</span>executor<span style="color:#ff79c6">)</span>
+    <span style="color:#ff79c6">val</span> threadPoolServer<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">MyTThreadPoolServer</span> <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">new</span> <span style="color:#50fa7b">MyTThreadPoolServer</span><span style="color:#ff79c6">(</span>args<span style="color:#ff79c6">)</span>
+    threadPoolServer<span style="color:#ff79c6">.</span>init<span style="color:#ff79c6">()</span>
+    threadPoolServer<span style="color:#ff79c6">.</span>serve<span style="color:#ff79c6">()</span>
+  <span style="color:#ff79c6">}</span>
+</code></pre></td></tr></table>
+</div>
+</div><p>TCLIService.Iface，服务端需要将这些函数都实现了</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4">
+<table style="border-spacing:0;padding:0;margin:0;border:0;width:auto;overflow:auto;display:block;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">15
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">16
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">17
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">18
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">19
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">20
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">21
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">22
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-java" data-lang="java">    <span style="color:#8be9fd;font-style:italic">public</span> TOpenSessionResp <span style="color:#50fa7b">OpenSession</span><span style="color:#ff79c6">(</span>TOpenSessionReq req<span style="color:#ff79c6">)</span> <span style="color:#8be9fd;font-style:italic">throws</span> org<span style="color:#ff79c6">.</span><span style="color:#50fa7b">apache</span><span style="color:#ff79c6">.</span><span style="color:#50fa7b">thrift</span><span style="color:#ff79c6">.</span><span style="color:#50fa7b">TException</span><span style="color:#ff79c6">;</span>
+    <span style="color:#8be9fd;font-style:italic">public</span> TCloseSessionResp <span style="color:#50fa7b">CloseSession</span><span style="color:#ff79c6">(</span>TCloseSessionReq req<span style="color:#ff79c6">)</span> <span style="color:#8be9fd;font-style:italic">throws</span> org<span style="color:#ff79c6">.</span><span style="color:#50fa7b">apache</span><span style="color:#ff79c6">.</span><span style="color:#50fa7b">thrift</span><span style="color:#ff79c6">.</span><span style="color:#50fa7b">TException</span><span style="color:#ff79c6">;</span>
+    <span style="color:#8be9fd;font-style:italic">public</span> TGetInfoResp <span style="color:#50fa7b">GetInfo</span><span style="color:#ff79c6">(</span>TGetInfoReq req<span style="color:#ff79c6">)</span> <span style="color:#8be9fd;font-style:italic">throws</span> org<span style="color:#ff79c6">.</span><span style="color:#50fa7b">apache</span><span style="color:#ff79c6">.</span><span style="color:#50fa7b">thrift</span><span style="color:#ff79c6">.</span><span style="color:#50fa7b">TException</span><span style="color:#ff79c6">;</span>
+    <span style="color:#8be9fd;font-style:italic">public</span> TExecuteStatementResp <span style="color:#50fa7b">ExecuteStatement</span><span style="color:#ff79c6">(</span>TExecuteStatementReq req<span style="color:#ff79c6">)</span> <span style="color:#8be9fd;font-style:italic">throws</span> org<span style="color:#ff79c6">.</span><span style="color:#50fa7b">apache</span><span style="color:#ff79c6">.</span><span style="color:#50fa7b">thrift</span><span style="color:#ff79c6">.</span><span style="color:#50fa7b">TException</span><span style="color:#ff79c6">;</span>
+    <span style="color:#8be9fd;font-style:italic">public</span> TGetTypeInfoResp <span style="color:#50fa7b">GetTypeInfo</span><span style="color:#ff79c6">(</span>TGetTypeInfoReq req<span style="color:#ff79c6">)</span> <span style="color:#8be9fd;font-style:italic">throws</span> org<span style="color:#ff79c6">.</span><span style="color:#50fa7b">apache</span><span style="color:#ff79c6">.</span><span style="color:#50fa7b">thrift</span><span style="color:#ff79c6">.</span><span style="color:#50fa7b">TException</span><span style="color:#ff79c6">;</span>
+    <span style="color:#8be9fd;font-style:italic">public</span> TGetCatalogsResp <span style="color:#50fa7b">GetCatalogs</span><span style="color:#ff79c6">(</span>TGetCatalogsReq req<span style="color:#ff79c6">)</span> <span style="color:#8be9fd;font-style:italic">throws</span> org<span style="color:#ff79c6">.</span><span style="color:#50fa7b">apache</span><span style="color:#ff79c6">.</span><span style="color:#50fa7b">thrift</span><span style="color:#ff79c6">.</span><span style="color:#50fa7b">TException</span><span style="color:#ff79c6">;</span>
+    <span style="color:#8be9fd;font-style:italic">public</span> TGetSchemasResp <span style="color:#50fa7b">GetSchemas</span><span style="color:#ff79c6">(</span>TGetSchemasReq req<span style="color:#ff79c6">)</span> <span style="color:#8be9fd;font-style:italic">throws</span> org<span style="color:#ff79c6">.</span><span style="color:#50fa7b">apache</span><span style="color:#ff79c6">.</span><span style="color:#50fa7b">thrift</span><span style="color:#ff79c6">.</span><span style="color:#50fa7b">TException</span><span style="color:#ff79c6">;</span>
+    <span style="color:#8be9fd;font-style:italic">public</span> TGetTablesResp <span style="color:#50fa7b">GetTables</span><span style="color:#ff79c6">(</span>TGetTablesReq req<span style="color:#ff79c6">)</span> <span style="color:#8be9fd;font-style:italic">throws</span> org<span style="color:#ff79c6">.</span><span style="color:#50fa7b">apache</span><span style="color:#ff79c6">.</span><span style="color:#50fa7b">thrift</span><span style="color:#ff79c6">.</span><span style="color:#50fa7b">TException</span><span style="color:#ff79c6">;</span>
+    <span style="color:#8be9fd;font-style:italic">public</span> TGetTableTypesResp <span style="color:#50fa7b">GetTableTypes</span><span style="color:#ff79c6">(</span>TGetTableTypesReq req<span style="color:#ff79c6">)</span> <span style="color:#8be9fd;font-style:italic">throws</span> org<span style="color:#ff79c6">.</span><span style="color:#50fa7b">apache</span><span style="color:#ff79c6">.</span><span style="color:#50fa7b">thrift</span><span style="color:#ff79c6">.</span><span style="color:#50fa7b">TException</span><span style="color:#ff79c6">;</span>
+    <span style="color:#8be9fd;font-style:italic">public</span> TGetColumnsResp <span style="color:#50fa7b">GetColumns</span><span style="color:#ff79c6">(</span>TGetColumnsReq req<span style="color:#ff79c6">)</span> <span style="color:#8be9fd;font-style:italic">throws</span> org<span style="color:#ff79c6">.</span><span style="color:#50fa7b">apache</span><span style="color:#ff79c6">.</span><span style="color:#50fa7b">thrift</span><span style="color:#ff79c6">.</span><span style="color:#50fa7b">TException</span><span style="color:#ff79c6">;</span>
+    <span style="color:#8be9fd;font-style:italic">public</span> TGetFunctionsResp <span style="color:#50fa7b">GetFunctions</span><span style="color:#ff79c6">(</span>TGetFunctionsReq req<span style="color:#ff79c6">)</span> <span style="color:#8be9fd;font-style:italic">throws</span> org<span style="color:#ff79c6">.</span><span style="color:#50fa7b">apache</span><span style="color:#ff79c6">.</span><span style="color:#50fa7b">thrift</span><span style="color:#ff79c6">.</span><span style="color:#50fa7b">TException</span><span style="color:#ff79c6">;</span>
+    <span style="color:#8be9fd;font-style:italic">public</span> TGetPrimaryKeysResp <span style="color:#50fa7b">GetPrimaryKeys</span><span style="color:#ff79c6">(</span>TGetPrimaryKeysReq req<span style="color:#ff79c6">)</span> <span style="color:#8be9fd;font-style:italic">throws</span> org<span style="color:#ff79c6">.</span><span style="color:#50fa7b">apache</span><span style="color:#ff79c6">.</span><span style="color:#50fa7b">thrift</span><span style="color:#ff79c6">.</span><span style="color:#50fa7b">TException</span><span style="color:#ff79c6">;</span>
+    <span style="color:#8be9fd;font-style:italic">public</span> TGetCrossReferenceResp <span style="color:#50fa7b">GetCrossReference</span><span style="color:#ff79c6">(</span>TGetCrossReferenceReq req<span style="color:#ff79c6">)</span> <span style="color:#8be9fd;font-style:italic">throws</span> org<span style="color:#ff79c6">.</span><span style="color:#50fa7b">apache</span><span style="color:#ff79c6">.</span><span style="color:#50fa7b">thrift</span><span style="color:#ff79c6">.</span><span style="color:#50fa7b">TException</span><span style="color:#ff79c6">;</span>
+    <span style="color:#8be9fd;font-style:italic">public</span> TGetOperationStatusResp <span style="color:#50fa7b">GetOperationStatus</span><span style="color:#ff79c6">(</span>TGetOperationStatusReq req<span style="color:#ff79c6">)</span> <span style="color:#8be9fd;font-style:italic">throws</span> org<span style="color:#ff79c6">.</span><span style="color:#50fa7b">apache</span><span style="color:#ff79c6">.</span><span style="color:#50fa7b">thrift</span><span style="color:#ff79c6">.</span><span style="color:#50fa7b">TException</span><span style="color:#ff79c6">;</span>
+    <span style="color:#8be9fd;font-style:italic">public</span> TCancelOperationResp <span style="color:#50fa7b">CancelOperation</span><span style="color:#ff79c6">(</span>TCancelOperationReq req<span style="color:#ff79c6">)</span> <span style="color:#8be9fd;font-style:italic">throws</span> org<span style="color:#ff79c6">.</span><span style="color:#50fa7b">apache</span><span style="color:#ff79c6">.</span><span style="color:#50fa7b">thrift</span><span style="color:#ff79c6">.</span><span style="color:#50fa7b">TException</span><span style="color:#ff79c6">;</span>
+    <span style="color:#8be9fd;font-style:italic">public</span> TCloseOperationResp <span style="color:#50fa7b">CloseOperation</span><span style="color:#ff79c6">(</span>TCloseOperationReq req<span style="color:#ff79c6">)</span> <span style="color:#8be9fd;font-style:italic">throws</span> org<span style="color:#ff79c6">.</span><span style="color:#50fa7b">apache</span><span style="color:#ff79c6">.</span><span style="color:#50fa7b">thrift</span><span style="color:#ff79c6">.</span><span style="color:#50fa7b">TException</span><span style="color:#ff79c6">;</span>
+    <span style="color:#8be9fd;font-style:italic">public</span> TGetResultSetMetadataResp <span style="color:#50fa7b">GetResultSetMetadata</span><span style="color:#ff79c6">(</span>TGetResultSetMetadataReq req<span style="color:#ff79c6">)</span> <span style="color:#8be9fd;font-style:italic">throws</span> org<span style="color:#ff79c6">.</span><span style="color:#50fa7b">apache</span><span style="color:#ff79c6">.</span><span style="color:#50fa7b">thrift</span><span style="color:#ff79c6">.</span><span style="color:#50fa7b">TException</span><span style="color:#ff79c6">;</span>
+    <span style="color:#8be9fd;font-style:italic">public</span> TFetchResultsResp <span style="color:#50fa7b">FetchResults</span><span style="color:#ff79c6">(</span>TFetchResultsReq req<span style="color:#ff79c6">)</span> <span style="color:#8be9fd;font-style:italic">throws</span> org<span style="color:#ff79c6">.</span><span style="color:#50fa7b">apache</span><span style="color:#ff79c6">.</span><span style="color:#50fa7b">thrift</span><span style="color:#ff79c6">.</span><span style="color:#50fa7b">TException</span><span style="color:#ff79c6">;</span>
+    <span style="color:#8be9fd;font-style:italic">public</span> TGetDelegationTokenResp <span style="color:#50fa7b">GetDelegationToken</span><span style="color:#ff79c6">(</span>TGetDelegationTokenReq req<span style="color:#ff79c6">)</span> <span style="color:#8be9fd;font-style:italic">throws</span> org<span style="color:#ff79c6">.</span><span style="color:#50fa7b">apache</span><span style="color:#ff79c6">.</span><span style="color:#50fa7b">thrift</span><span style="color:#ff79c6">.</span><span style="color:#50fa7b">TException</span><span style="color:#ff79c6">;</span>
+    <span style="color:#8be9fd;font-style:italic">public</span> TCancelDelegationTokenResp <span style="color:#50fa7b">CancelDelegationToken</span><span style="color:#ff79c6">(</span>TCancelDelegationTokenReq req<span style="color:#ff79c6">)</span> <span style="color:#8be9fd;font-style:italic">throws</span> org<span style="color:#ff79c6">.</span><span style="color:#50fa7b">apache</span><span style="color:#ff79c6">.</span><span style="color:#50fa7b">thrift</span><span style="color:#ff79c6">.</span><span style="color:#50fa7b">TException</span><span style="color:#ff79c6">;</span>
+    <span style="color:#8be9fd;font-style:italic">public</span> TRenewDelegationTokenResp <span style="color:#50fa7b">RenewDelegationToken</span><span style="color:#ff79c6">(</span>TRenewDelegationTokenReq req<span style="color:#ff79c6">)</span> <span style="color:#8be9fd;font-style:italic">throws</span> org<span style="color:#ff79c6">.</span><span style="color:#50fa7b">apache</span><span style="color:#ff79c6">.</span><span style="color:#50fa7b">thrift</span><span style="color:#ff79c6">.</span><span style="color:#50fa7b">TException</span><span style="color:#ff79c6">;</span>
+
+</code></pre></td></tr></table>
+</div>
+</div><h2 id="测试说明">测试说明</h2>
+<p>使用原生的 Hive客户端即可，<strong>之前的测试逻辑不用动</strong><br>
+改一下<strong>驱动</strong>和<strong>连接的URL</strong><br>
+再增加一个 maven配置：</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4">
+<table style="border-spacing:0;padding:0;margin:0;border:0;width:auto;overflow:auto;display:block;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">5
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-xml" data-lang="xml"><span style="color:#ff79c6">&lt;dependency&gt;</span>
+    <span style="color:#ff79c6">&lt;groupId&gt;</span>org.apache.hive<span style="color:#ff79c6">&lt;/groupId&gt;</span>
+    <span style="color:#ff79c6">&lt;artifactId&gt;</span>hive-jdbc<span style="color:#ff79c6">&lt;/artifactId&gt;</span>
+    <span style="color:#ff79c6">&lt;version&gt;</span>2.3.9<span style="color:#ff79c6">&lt;/version&gt;</span>
+<span style="color:#ff79c6">&lt;/dependency&gt;</span>
+</code></pre></td></tr></table>
+</div>
+</div><h3 id="simple方式">Simple方式</h3>
+<p>用户名/密码跟 之前的一致 <br>
+参考代码</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4">
+<table style="border-spacing:0;padding:0;margin:0;border:0;width:auto;overflow:auto;display:block;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">15
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">16
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">17
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">18
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-java" data-lang="java">    <span style="color:#8be9fd;font-style:italic">public</span> <span style="color:#8be9fd">void</span> <span style="color:#50fa7b">simple</span><span style="color:#ff79c6">()</span><span style="color:#8be9fd;font-style:italic">throws</span> Exception <span style="color:#ff79c6">{</span>
+        String url <span style="color:#ff79c6">=</span> <span style="color:#f1fa8c">&#34;jdbc:hive2://hive的ip:hive的port/default;useSSL=false;auth=noSasl&#34;</span><span style="color:#ff79c6">;</span>
+        initH2Kerberos<span style="color:#ff79c6">();</span>
+        Class<span style="color:#ff79c6">.</span><span style="color:#50fa7b">forName</span><span style="color:#ff79c6">(</span><span style="color:#f1fa8c">&#34;org.apache.hive.jdbc.HiveDriver&#34;</span><span style="color:#ff79c6">);</span>
+        String sql <span style="color:#ff79c6">=</span> <span style="color:#f1fa8c">&#34;select * from hello.gg&#34;</span><span style="color:#ff79c6">;</span>
+        Connection conn <span style="color:#ff79c6">=</span> DriverManager<span style="color:#ff79c6">.</span><span style="color:#50fa7b">getConnection</span><span style="color:#ff79c6">(</span>url<span style="color:#ff79c6">,</span> <span style="color:#f1fa8c">&#34;test&#34;</span><span style="color:#ff79c6">,</span> <span style="color:#f1fa8c">&#34;123456&#34;</span><span style="color:#ff79c6">)</span>
+        PreparedStatement ps <span style="color:#ff79c6">=</span> conn<span style="color:#ff79c6">.</span><span style="color:#50fa7b">prepareStatement</span><span style="color:#ff79c6">(</span>sql<span style="color:#ff79c6">);</span>
+        ResultSet rs <span style="color:#ff79c6">=</span> ps<span style="color:#ff79c6">.</span><span style="color:#50fa7b">executeQuery</span><span style="color:#ff79c6">();</span>
+        <span style="color:#ff79c6">while</span><span style="color:#ff79c6">(</span>rs<span style="color:#ff79c6">.</span><span style="color:#50fa7b">next</span><span style="color:#ff79c6">())</span> <span style="color:#ff79c6">{</span>
+            <span style="color:#8be9fd">int</span> id <span style="color:#ff79c6">=</span> rs<span style="color:#ff79c6">.</span><span style="color:#50fa7b">getInt</span><span style="color:#ff79c6">(</span><span style="color:#f1fa8c">&#34;id&#34;</span><span style="color:#ff79c6">);</span>
+            String sname <span style="color:#ff79c6">=</span> rs<span style="color:#ff79c6">.</span><span style="color:#50fa7b">getString</span><span style="color:#ff79c6">(</span><span style="color:#f1fa8c">&#34;sname&#34;</span><span style="color:#ff79c6">);</span>
+            String LastName <span style="color:#ff79c6">=</span> rs<span style="color:#ff79c6">.</span><span style="color:#50fa7b">getString</span><span style="color:#ff79c6">(</span><span style="color:#f1fa8c">&#34;LastName&#34;</span><span style="color:#ff79c6">);</span>
+            Timestamp t <span style="color:#ff79c6">=</span> rs<span style="color:#ff79c6">.</span><span style="color:#50fa7b">getTimestamp</span><span style="color:#ff79c6">(</span><span style="color:#f1fa8c">&#34;dob&#34;</span><span style="color:#ff79c6">);</span>
+            System<span style="color:#ff79c6">.</span><span style="color:#50fa7b">out</span><span style="color:#ff79c6">.</span><span style="color:#50fa7b">println</span><span style="color:#ff79c6">(</span><span style="color:#f1fa8c">&#34;id-&gt;&#34;</span> <span style="color:#ff79c6">+</span> id <span style="color:#ff79c6">+</span><span style="color:#f1fa8c">&#34;\tsname-&gt;&#34;</span><span style="color:#ff79c6">+</span> sname <span style="color:#ff79c6">+</span> <span style="color:#f1fa8c">&#34;\tlast_time-&gt;&#34;</span> <span style="color:#ff79c6">+</span> LastName <span style="color:#ff79c6">+</span><span style="color:#f1fa8c">&#34;\tODB-&gt;&#34;</span> <span style="color:#ff79c6">+</span> t<span style="color:#ff79c6">);</span>
+        <span style="color:#ff79c6">}</span>
+        rs<span style="color:#ff79c6">.</span><span style="color:#50fa7b">close</span><span style="color:#ff79c6">();</span>
+        ps<span style="color:#ff79c6">.</span><span style="color:#50fa7b">close</span><span style="color:#ff79c6">();</span>
+    <span style="color:#ff79c6">}</span>
+</code></pre></td></tr></table>
+</div>
+</div><h3 id="kerberos-方式">kerberos 方式</h3>
+<p>需要提前配置好 /etc/hosts</p>
+<p>参考代码：</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4">
+<table style="border-spacing:0;padding:0;margin:0;border:0;width:auto;overflow:auto;display:block;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">15
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">16
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">17
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">18
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">19
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">20
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">21
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">22
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">23
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">24
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">25
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">26
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">27
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">28
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">29
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">30
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">31
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">32
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">33
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">34
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">35
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">36
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">37
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">38
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">39
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">40
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-java" data-lang="java">    <span style="color:#8be9fd;font-style:italic">public</span> <span style="color:#8be9fd">void</span> <span style="color:#50fa7b">kerberos</span><span style="color:#ff79c6">()</span><span style="color:#8be9fd;font-style:italic">throws</span> Exception <span style="color:#ff79c6">{</span>
+        String url <span style="color:#ff79c6">=</span> <span style="color:#f1fa8c">&#34;jdbc:hive2://hive-server:port/default;principal=你的principal&#34;</span><span style="color:#ff79c6">;</span>
+        initH2Kerberos<span style="color:#ff79c6">();</span>
+        Class<span style="color:#ff79c6">.</span><span style="color:#50fa7b">forName</span><span style="color:#ff79c6">(</span><span style="color:#f1fa8c">&#34;org.apache.hive.jdbc.HiveDriver&#34;</span><span style="color:#ff79c6">);</span>
+        String sql <span style="color:#ff79c6">=</span> <span style="color:#f1fa8c">&#34;select * from hello.gg&#34;</span><span style="color:#ff79c6">;</span>
+        Connection conn <span style="color:#ff79c6">=</span> DriverManager<span style="color:#ff79c6">.</span><span style="color:#50fa7b">getConnection</span><span style="color:#ff79c6">(</span>url<span style="color:#ff79c6">,</span> <span style="color:#f1fa8c">&#34;test&#34;</span><span style="color:#ff79c6">,</span> <span style="color:#f1fa8c">&#34;123456&#34;</span><span style="color:#ff79c6">)</span>
+        PreparedStatement ps <span style="color:#ff79c6">=</span> conn<span style="color:#ff79c6">.</span><span style="color:#50fa7b">prepareStatement</span><span style="color:#ff79c6">(</span>sql<span style="color:#ff79c6">);</span>
+        ResultSet rs <span style="color:#ff79c6">=</span> ps<span style="color:#ff79c6">.</span><span style="color:#50fa7b">executeQuery</span><span style="color:#ff79c6">();</span>
+        <span style="color:#ff79c6">while</span><span style="color:#ff79c6">(</span>rs<span style="color:#ff79c6">.</span><span style="color:#50fa7b">next</span><span style="color:#ff79c6">())</span> <span style="color:#ff79c6">{</span>
+            <span style="color:#8be9fd">int</span> id <span style="color:#ff79c6">=</span> rs<span style="color:#ff79c6">.</span><span style="color:#50fa7b">getInt</span><span style="color:#ff79c6">(</span><span style="color:#f1fa8c">&#34;id&#34;</span><span style="color:#ff79c6">);</span>
+            String sname <span style="color:#ff79c6">=</span> rs<span style="color:#ff79c6">.</span><span style="color:#50fa7b">getString</span><span style="color:#ff79c6">(</span><span style="color:#f1fa8c">&#34;sname&#34;</span><span style="color:#ff79c6">);</span>
+            String LastName <span style="color:#ff79c6">=</span> rs<span style="color:#ff79c6">.</span><span style="color:#50fa7b">getString</span><span style="color:#ff79c6">(</span><span style="color:#f1fa8c">&#34;LastName&#34;</span><span style="color:#ff79c6">);</span>
+            Timestamp t <span style="color:#ff79c6">=</span> rs<span style="color:#ff79c6">.</span><span style="color:#50fa7b">getTimestamp</span><span style="color:#ff79c6">(</span><span style="color:#f1fa8c">&#34;dob&#34;</span><span style="color:#ff79c6">);</span>
+            System<span style="color:#ff79c6">.</span><span style="color:#50fa7b">out</span><span style="color:#ff79c6">.</span><span style="color:#50fa7b">println</span><span style="color:#ff79c6">(</span><span style="color:#f1fa8c">&#34;id-&gt;&#34;</span> <span style="color:#ff79c6">+</span> id <span style="color:#ff79c6">+</span><span style="color:#f1fa8c">&#34;\tsname-&gt;&#34;</span><span style="color:#ff79c6">+</span> sname <span style="color:#ff79c6">+</span> <span style="color:#f1fa8c">&#34;\tlast_time-&gt;&#34;</span> <span style="color:#ff79c6">+</span> LastName <span style="color:#ff79c6">+</span><span style="color:#f1fa8c">&#34;\tODB-&gt;&#34;</span> <span style="color:#ff79c6">+</span> t<span style="color:#ff79c6">);</span>
+        <span style="color:#ff79c6">}</span>
+        rs<span style="color:#ff79c6">.</span><span style="color:#50fa7b">close</span><span style="color:#ff79c6">();</span>
+        ps<span style="color:#ff79c6">.</span><span style="color:#50fa7b">close</span><span style="color:#ff79c6">();</span>
+    <span style="color:#ff79c6">}</span>
+
+
+    <span style="color:#8be9fd;font-style:italic">private</span> <span style="color:#8be9fd">void</span> <span style="color:#50fa7b">initH2Kerberos</span><span style="color:#ff79c6">()</span> <span style="color:#ff79c6">{</span>
+        org<span style="color:#ff79c6">.</span><span style="color:#50fa7b">apache</span><span style="color:#ff79c6">.</span><span style="color:#50fa7b">hadoop</span><span style="color:#ff79c6">.</span><span style="color:#50fa7b">conf</span><span style="color:#ff79c6">.</span><span style="color:#50fa7b">Configuration</span> conf <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">new</span> org<span style="color:#ff79c6">.</span><span style="color:#50fa7b">apache</span><span style="color:#ff79c6">.</span><span style="color:#50fa7b">hadoop</span><span style="color:#ff79c6">.</span><span style="color:#50fa7b">conf</span><span style="color:#ff79c6">.</span><span style="color:#50fa7b">Configuration</span><span style="color:#ff79c6">();</span>
+        <span style="color:#ff79c6">try</span> <span style="color:#ff79c6">{</span>
+            String krb5 <span style="color:#ff79c6">=</span> <span style="color:#f1fa8c">&#34;你的krb5.conf 文件的绝对路径&#34;</span><span style="color:#ff79c6">;</span>
+            String keytab <span style="color:#ff79c6">=</span> <span style="color:#f1fa8c">&#34;你的 krb5.keytab 文件的绝对路径&#34;</span><span style="color:#ff79c6">;</span>
+            String principelName <span style="color:#ff79c6">=</span> <span style="color:#f1fa8c">&#34;hive/gs-server-11919@ZETATEST.COM&#34;</span><span style="color:#ff79c6">;</span>
+            initKerberosEnv<span style="color:#ff79c6">(</span>conf<span style="color:#ff79c6">,</span> principelName<span style="color:#ff79c6">,</span> keytab<span style="color:#ff79c6">,</span> krb5<span style="color:#ff79c6">);</span>
+        <span style="color:#ff79c6">}</span> <span style="color:#ff79c6">catch</span> <span style="color:#ff79c6">(</span>Exception e<span style="color:#ff79c6">)</span> <span style="color:#ff79c6">{</span>
+            System<span style="color:#ff79c6">.</span><span style="color:#50fa7b">out</span><span style="color:#ff79c6">.</span><span style="color:#50fa7b">println</span><span style="color:#ff79c6">(</span><span style="color:#f1fa8c">&#34;初始化kerberosInitor失败&#34;</span><span style="color:#ff79c6">);</span>
+            e<span style="color:#ff79c6">.</span><span style="color:#50fa7b">printStackTrace</span><span style="color:#ff79c6">();</span>
+        <span style="color:#ff79c6">}</span>
+    <span style="color:#ff79c6">}</span>
+
+    <span style="color:#8be9fd;font-style:italic">public</span> <span style="color:#8be9fd;font-style:italic">static</span> <span style="color:#8be9fd">void</span> <span style="color:#50fa7b">initKerberosEnv</span><span style="color:#ff79c6">(</span>Configuration conf<span style="color:#ff79c6">,</span> String principalName<span style="color:#ff79c6">,</span> String keytabPath<span style="color:#ff79c6">,</span> String krb5ConfPath<span style="color:#ff79c6">)</span> <span style="color:#8be9fd;font-style:italic">throws</span> Exception <span style="color:#ff79c6">{</span>
+        System<span style="color:#ff79c6">.</span><span style="color:#50fa7b">setProperty</span><span style="color:#ff79c6">(</span><span style="color:#f1fa8c">&#34;java.security.krb5.conf&#34;</span><span style="color:#ff79c6">,</span> krb5ConfPath<span style="color:#ff79c6">);</span>
+        conf<span style="color:#ff79c6">.</span><span style="color:#50fa7b">set</span><span style="color:#ff79c6">(</span><span style="color:#f1fa8c">&#34;hadoop.security.authentication&#34;</span><span style="color:#ff79c6">,</span> <span style="color:#f1fa8c">&#34;Kerberos&#34;</span><span style="color:#ff79c6">);</span>
+        System<span style="color:#ff79c6">.</span><span style="color:#50fa7b">setProperty</span><span style="color:#ff79c6">(</span><span style="color:#f1fa8c">&#34;java.security.krb5.conf&#34;</span><span style="color:#ff79c6">,</span> krb5ConfPath<span style="color:#ff79c6">);</span>
+        UserGroupInformation<span style="color:#ff79c6">.</span><span style="color:#50fa7b">setConfiguration</span><span style="color:#ff79c6">(</span>conf<span style="color:#ff79c6">);</span>
+        UserGroupInformation<span style="color:#ff79c6">.</span><span style="color:#50fa7b">loginUserFromKeytab</span><span style="color:#ff79c6">(</span>principalName<span style="color:#ff79c6">,</span> keytabPath<span style="color:#ff79c6">);</span>
+    <span style="color:#ff79c6">}</span>
+</code></pre></td></tr></table>
+</div>
+</div><h2 id="参考">参考</h2>
+<ul>
+<li><a href="https://calcite.apache.org/avatica/docs/security.html">calcite security</a></li>
+<li><a href="https://xie.infoq.cn/article/02eff06913b8a64aa2f370712">Kyuubi: 网易数帆开源的企业级数据湖探索平台</a></li>
+<li><a href="https://thrift.apache.org/docs/">Apache Thrift Documentation</a></li>
+<li><a href="https://cwiki.apache.org/confluence/display/Hive//LanguageManual">Hive LanguageManual</a></li>
+<li><a href="https://cloudera.ericlin.me/2017/09/no-data-or-no-sasl-data-in-the-stream-error-in-hiveserver2-log/">NO DATA OR NO SASL DATA IN THE STREAM” ERROR IN HIVESERVER2 LOG</a></li>
+<li><a href="https://blog.cloudera.com/hadoop-delegation-tokens-explained/#comment-83166">Hadoop Delegation Tokens Explained</a></li>
+<li><a href="https://zh.m.wikipedia.org/zh-hans/%E7%AE%80%E5%8D%95%E8%AE%A4%E8%AF%81%E4%B8%8E%E5%AE%89%E5%85%A8%E5%B1%82">简单认证与安全层</a></li>
+<li><a href="https://www.roguelynn.com/words/explain-like-im-5-kerberos/">Explain like I’m 5: Kerberos</a></li>
+<li><a href="http://wzktravel.github.io/2016/03/01/how-to-use-kerberos-in-CDH/">kerberos使用手册</a></li>
+<li>Designing an Authentication System</li>
+<li><a href="https://docs.oracle.com/javase/7/docs/api/javax/security/sasl/package-summary.html">javax.security.sasl API</a></li>
+<li><a href="https://docs.oracle.com/javase/8/docs/technotes/guides/security/sasl/sasl-refguide.html">The Java SASL API Programming and Deployment Guide</a></li>
+<li><a href="https://www.cnblogs.com/yjt1993/p/11769553.html">hive集成kerberos</a></li>
+<li><a href="https://www.jianshu.com/p/d44ad4405ab1">HiveServer2-HA-安全架构</a></li>
+</ul>
+
+			<script type="text/javascript"
+        async
+        src="https://cdn.bootcss.com/mathjax/2.7.3/MathJax.js?config=TeX-AMS-MML_HTMLorMML">
+MathJax.Hub.Config({
+  tex2jax: {
+    inlineMath: [['$','$'], ['\\(','\\)']],
+    displayMath: [['$$','$$'], ['\[\[','\]\]']],
+    processEscapes: true,
+    processEnvironments: true,
+    skipTags: ['script', 'noscript', 'style', 'textarea', 'pre'],
+    TeX: { equationNumbers: { autoNumber: "AMS" },
+         extensions: ["AMSmath.js", "AMSsymbols.js"] }
+  }
+});
+
+MathJax.Hub.Queue(function() {
+    
+    
+    
+    var all = MathJax.Hub.getAllJax(), i;
+    for(i = 0; i < all.length; i += 1) {
+        all[i].SourceElement().parentNode.className += ' has-jax';
+    }
+});
+</script>
+
+<style>
+code.has-jax {
+    font: inherit;
+    font-size: 100%;
+    background: inherit;
+    border: inherit;
+    color: #515151;
+}
+</style>
+        </div>
+
+        
+
+
+        
+
+<div class="post-archive">
+    <h2>相关文章</h2>
+    <ul class="listing">
+        
+        <li><a href="/post/2022/06/raft-a-consensus-algorithm-for-replicated-logs%E8%AE%B0%E5%BD%95/">Raft A Consensus Algorithm for Replicated Logs记录</a></li>
+        
+        <li><a href="/post/2022/05/raft%E8%AE%BA%E6%96%87/">Raft论文</a></li>
+        
+    </ul>
+</div>
+
+
+        <div class="post-meta meta-tags">
+            
+            <ul class="clearfix">
+                
+                <li><a href='/tags/raft'>raft</a></li>
+                
+            </ul>
+            
+        </div>
+    </article>
+    
+    
+
+    
+    
+</div>
+
+
+                </div>
+
+                <div id="secondary">
+    <section class="widget">
+        <form id="search" action='https://code0xff.cn/search/' method="get" accept-charset="utf-8" target="_blank" _lpchecked="1">
+      
+      <input type="text" name="q" maxlength="20" placeholder="Search">
+      <input type="hidden" name="sitesearch" value="https://code0xff.cn/">
+      <button type="submit" class="submit icon-search"></button>
+</form>
+    </section>
+    
+    <section class="widget">
+        <h3 class="widget-title">最近文章</h3>
+<ul class="widget-list">
+    
+    <li>
+        <a href="https://code0xff.cn/post/2022/08/%E4%B8%BA%E4%BD%95uber%E8%A6%81%E5%B0%86postgresql%E8%BF%81%E5%88%B0mysql/" title="为何Uber要将PostgreSQL迁到MySQL">为何Uber要将PostgreSQL迁到MySQL</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.cn/post/2022/07/cmu%E6%95%B0%E6%8D%AE%E5%BA%93%E8%AF%BE%E7%A8%8B/" title="卡内基梅隆的数据库课程-1">卡内基梅隆的数据库课程-1</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.cn/post/2022/07/cmu%E6%95%B0%E6%8D%AE%E5%BA%93%E8%AF%BE%E7%A8%8B-2/" title="卡内基梅隆的数据库课程-2">卡内基梅隆的数据库课程-2</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.cn/post/2022/07/cmu%E6%95%B0%E6%8D%AE%E5%BA%93%E8%AF%BE%E7%A8%8B-3/" title="卡内基梅隆的数据库课程-3">卡内基梅隆的数据库课程-3</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.cn/post/2022/07/cmu%E6%95%B0%E6%8D%AE%E5%BA%93%E8%AF%BE%E7%A8%8B-4/" title="卡内基梅隆的数据库课程-4">卡内基梅隆的数据库课程-4</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.cn/post/2022/07/cmu%E6%95%B0%E6%8D%AE%E5%BA%93%E8%AF%BE%E7%A8%8B-5/" title="卡内基梅隆的数据库课程-5">卡内基梅隆的数据库课程-5</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.cn/post/2022/07/whats-really-new-with-newsql%E8%AE%BA%E6%96%87/" title="What’s Really New with NewSQL论文">What’s Really New with NewSQL论文</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.cn/post/2022/07/pingcap%E6%8F%90%E4%BE%9B%E7%9A%84%E6%95%B0%E6%8D%AE%E5%BA%93%E5%AD%A6%E4%B9%A0%E8%B5%84%E6%96%99/" title="PingCAP提供的数据库学习资料">PingCAP提供的数据库学习资料</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.cn/post/2022/07/snowflake%E8%AE%BA%E6%96%87/" title="Snowflake论文">Snowflake论文</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.cn/post/2022/07/spark-sql%E8%AE%BA%E6%96%87/" title="Spark SQL论文">Spark SQL论文</a>
+    </li>
+    
+</ul>
+    </section>
+
+    
+
+    <section class="widget">
+        <h3 class="widget-title"><a href='/categories/'>分类</a></h3>
+<ul class="widget-list">
+    
+    <li><a href="https://code0xff.cn/categories/%E5%88%86%E5%B8%83%E5%BC%8F/">分布式 (4)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E5%95%86%E4%B8%9A/">商业 (2)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E5%A4%A7%E6%95%B0%E6%8D%AE/">大数据 (5)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E6%95%B0%E6%8D%AE%E5%BA%93/">数据库 (1)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E6%97%85%E8%A1%8C/">旅行 (10)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E6%9E%B6%E6%9E%84/">架构 (1)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E7%94%9F%E6%B4%BB/">生活 (4)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E7%AE%97%E6%B3%95/">算法 (7)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E7%BB%8F%E6%B5%8E/">经济 (1)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E7%BC%96%E7%A8%8B%E8%AF%AD%E8%A8%80/">编程语言 (2)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E8%AE%A1%E7%AE%97%E6%9C%BA%E5%8E%9F%E7%90%86/">计算机原理 (2)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E8%AE%BA%E6%96%87/">论文 (15)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E8%AF%BB%E4%B9%A6%E7%AC%94%E8%AE%B0/">读书笔记 (9)</a></li>
+    
+</ul>
+    </section>
+
+    <section class="widget">
+        <h3 class="widget-title">归档</a></h3>
+<ul class="widget-list">
+    
+    <li><a href="https://code0xff.cn/years/2021%E5%B9%B4/">2021年 (30)</a></li>
+    
+    <li><a href="https://code0xff.cn/years/2022%E5%B9%B4/">2022年 (33)</a></li>
+    
+</ul>
+    </section>
+
+    <section class="widget">
+        <h3 class="widget-title"><a href='/tags/'>标签</a></h3>
+<div class="tagcloud">
+    
+    <a href="https://code0xff.cn/tags/hive/">Hive </a>
+    
+    <a href="https://code0xff.cn/tags/kudu/">kudu </a>
+    
+    <a href="https://code0xff.cn/tags/manacher/">Manacher </a>
+    
+    <a href="https://code0xff.cn/tags/mapreduce/">MapReduce </a>
+    
+    <a href="https://code0xff.cn/tags/paxos/">paxos </a>
+    
+    <a href="https://code0xff.cn/tags/raft/">raft </a>
+    
+    <a href="https://code0xff.cn/tags/scala/">scala </a>
+    
+    <a href="https://code0xff.cn/tags/snowflake/">snowflake </a>
+    
+    <a href="https://code0xff.cn/tags/spark/">spark </a>
+    
+    <a href="https://code0xff.cn/tags/unix/">unix </a>
+    
+    <a href="https://code0xff.cn/tags/%E4%BA%8C%E5%88%86%E6%9F%A5%E6%89%BE/">二分查找 </a>
+    
+    <a href="https://code0xff.cn/tags/%E4%BA%8C%E5%8F%89%E6%A0%91%E9%81%8D%E5%8E%86/">二叉树遍历 </a>
+    
+    <a href="https://code0xff.cn/tags/%E5%88%86%E5%B8%83%E5%BC%8F/">分布式 </a>
+    
+    <a href="https://code0xff.cn/tags/%E5%8A%A8%E6%80%81%E6%B3%A8%E5%85%A5/">动态注入 </a>
+    
+    <a href="https://code0xff.cn/tags/%E5%8E%86%E5%8F%B2/">历史 </a>
+    
+    <a href="https://code0xff.cn/tags/%E5%9B%9E%E6%BA%AF/">回溯 </a>
+    
+    <a href="https://code0xff.cn/tags/%E5%9B%BD%E5%86%85%E6%97%85%E8%A1%8C/">国内旅行 </a>
+    
+    <a href="https://code0xff.cn/tags/%E5%9B%BD%E5%A4%96%E6%97%85%E8%A1%8C/">国外旅行 </a>
+    
+    <a href="https://code0xff.cn/tags/%E5%A4%A7%E6%95%B0%E6%8D%AE/">大数据 </a>
+    
+    <a href="https://code0xff.cn/tags/%E5%AD%98%E5%82%A8/">存储 </a>
+    
+    <a href="https://code0xff.cn/tags/%E5%BE%AE%E6%9C%8D%E5%8A%A1/">微服务 </a>
+    
+    <a href="https://code0xff.cn/tags/%E6%95%B0%E6%8D%AE%E5%BA%93/">数据库 </a>
+    
+    <a href="https://code0xff.cn/tags/%E6%B1%87%E7%BC%96/">汇编 </a>
+    
+    <a href="https://code0xff.cn/tags/%E6%B9%96%E4%BB%93%E4%B8%80%E4%BD%93/">湖仓一体 </a>
+    
+    <a href="https://code0xff.cn/tags/%E7%94%9F%E6%B4%BB/">生活 </a>
+    
+    <a href="https://code0xff.cn/tags/%E7%94%B5%E5%BD%B1/">电影 </a>
+    
+    <a href="https://code0xff.cn/tags/%E7%AE%97%E6%B3%95/">算法 </a>
+    
+    <a href="https://code0xff.cn/tags/%E7%BB%8F%E6%B5%8E/">经济 </a>
+    
+    <a href="https://code0xff.cn/tags/%E7%BC%93%E5%AD%98/">缓存 </a>
+    
+    <a href="https://code0xff.cn/tags/%E7%BC%96%E8%AF%91%E5%8E%9F%E7%90%86/">编译原理 </a>
+    
+    <a href="https://code0xff.cn/tags/%E8%AE%A1%E7%AE%97%E6%A1%86%E6%9E%B6/">计算框架 </a>
+    
+    <a href="https://code0xff.cn/tags/%E8%AF%BB%E4%B9%A6%E7%AC%94%E8%AE%B0/">读书笔记 </a>
+    
+</div>
+    </section>
+
+    
+
+    <section class="widget">
+        <h3 class="widget-title">RSS</h3>
+        <ul class="widget-list">
+            <li><a href="https://code0xff.cn/index.xml">文章 RSS</a></li>
+        </ul>
+    </section>
+</div>
+            </div>
+        </div>
+    </div>
+    <footer id="footer">
+    <div>
+        &copy; 2022 <a href="https://code0xff.cn/">记录每个瞬间 By 老王</a>
+        
+    </div>
+    <br />
+    <div>
+        <div class="github-badge">
+            <a href="https://gohugo.io/" target="_black" rel="nofollow"><span class="badge-subject">Powered by</span><span class="badge-value bg-blue">Hugo</span></a>
+        </div>
+        <div class="github-badge">
+            <a href="https://github.com/flysnow-org/maupassant-hugo" target="_black"><span class="badge-subject">Theme</span><span class="badge-value bg-yellowgreen">Maupassant</span></a>
+        </div>
+    </div>
+    <div>
+        <a href="http://www.beian.miit.gov.cn/">京ICP备19014975号</a>
+    </div>
+</footer>
+
+
+    
+    <script type="text/javascript">
+        window.MathJax = {
+            tex2jax: {
+                inlineMath: [['$', '$']],
+                processEscapes: true
+                }
+            };
+    </script>
+    <script src='https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.5/MathJax.js?config=TeX-MML-AM_CHTML' async></script><script src="https://cdn.bootcdn.net/ajax/libs/fancybox/3.5.7/jquery.fancybox.min.js"></script>
+
+<a id="rocket" href="#top"></a>
+<script type="text/javascript" src='/js/totop.js?v=0.0.0' async=""></script>
+
+<script type="application/javascript">
+var doNotTrack = false;
+if (!doNotTrack) {
+	window.ga=window.ga||function(){(ga.q=ga.q||[]).push(arguments)};ga.l=+new Date;
+	ga('create', 'GA ID', 'auto');
+	
+	ga('send', 'pageview');
+}
+</script>
+<script async src='https://www.google-analytics.com/analytics.js'></script>
+
+
+
+    <script type="text/javascript" src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js" async></script>
+
+
+
+
+</body>
+
+</html>

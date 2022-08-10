@@ -1,0 +1,1130 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    
+    <meta name="referrer" content="no-referrer-when-downgrade">
+    
+
+    <title>为何Uber要将PostgreSQL迁到MySQL | 记录每个瞬间</title>
+    <meta property="og:title" content="为何Uber要将PostgreSQL迁到MySQL - 记录每个瞬间">
+    <meta property="og:type" content="article">
+        
+    <meta property="article:published_time" content='2022-08-08T12:12:19&#43;08:00'>
+        
+        
+    <meta property="article:modified_time" content='2022-08-08T12:12:19&#43;08:00'>
+        
+    <meta name="Keywords" content="">
+    <meta name="description" content="为何Uber要将PostgreSQL迁到MySQL">
+        <meta name="author" content="隔壁老王">
+        
+    <meta property="og:url" content="https://code0xff.cn/post/2022/08/%E4%B8%BA%E4%BD%95uber%E8%A6%81%E5%B0%86postgresql%E8%BF%81%E5%88%B0mysql/">
+    <link rel="shortcut icon" href='/favicon.ico'  type="image/x-icon">
+
+    <link rel="stylesheet" href='/css/normalize.css'>
+    <link rel="stylesheet" href='/css/style.css'>
+    <script type="text/javascript" src="//cdn.bootcdn.net/ajax/libs/jquery/3.4.1/jquery.min.js"></script>
+
+    
+    
+    
+        <link href="https://cdn.bootcdn.net/ajax/libs/fancybox/3.5.7/jquery.fancybox.min.css" rel="stylesheet">
+    
+    
+    
+    
+</head>
+
+
+<body>
+    <header id="header" class="clearfix">
+    <div class="container">
+        <div class="col-group">
+            <div class="site-name ">
+                
+                    <a id="logo" href="https://code0xff.cn/">
+                        记录每个瞬间
+                    </a>
+                
+                
+            </div>
+            <div>
+                <nav id="nav-menu" class="clearfix">
+                    <a class="current" href="https://code0xff.cn/">首页</a>
+                    
+                    <a  href="https://code0xff.cn/linked/" title="链接">链接</a>
+                    
+                    <a  href="https://code0xff.cn/archives/" title="归档">归档</a>
+                    
+                    <a  href="https://code0xff.cn/about/" title="关于">关于</a>
+                    
+                </nav>
+            </div>
+        </div>
+    </div>
+</header>
+
+    <div id="body">
+        <div class="container">
+            <div class="col-group">
+
+                <div class="col-8" id="main">
+                    
+<div class="res-cons">
+    
+    <article class="post">
+        <header>
+            <h1 class="post-title">为何Uber要将PostgreSQL迁到MySQL</h1>
+        </header>
+        <date class="post-meta meta-date">
+            2022年8月8日
+        </date>
+<nav id="TableOfContents">
+  <ul>
+    <li>
+      <ul>
+        <li><a href="#背景">背景</a></li>
+        <li><a href="#postgresql的架构">PostgreSQL的架构</a>
+          <ul>
+            <li><a href="#磁盘格式">磁盘格式</a></li>
+            <li><a href="#复制">复制</a></li>
+          </ul>
+        </li>
+        <li><a href="#postgresql的问题">PostgreSQL的问题</a>
+          <ul>
+            <li><a href="#写放大">写放大</a></li>
+            <li><a href="#复制-1">复制</a></li>
+            <li><a href="#数据损坏">数据损坏</a></li>
+            <li><a href="#复制mvcc">复制MVCC</a></li>
+            <li><a href="#postgresql升级">PostgreSQL升级</a></li>
+          </ul>
+        </li>
+        <li><a href="#mysql架构">MySQL架构</a>
+          <ul>
+            <li><a href="#innodb的磁盘存储">InnoDB的磁盘存储</a></li>
+            <li><a href="#复制-2">复制</a></li>
+            <li><a href="#mysql的其他优势">MySQL的其他优势</a></li>
+          </ul>
+        </li>
+        <li><a href="#结论">结论</a></li>
+      </ul>
+    </li>
+  </ul>
+</nav>
+        
+        <div class="post-meta">
+            
+            <span class="post-meta meta-tags">
+                <ul class="clearfix">
+                    <a href='/categories/%E6%95%B0%E6%8D%AE%E5%BA%93'>数据库</a>
+                </ul>
+            </span>
+            
+        </div>
+        
+        
+        <div class="post-meta">
+            <span id="busuanzi_container_page_pv">|<span id="busuanzi_value_page_pv"></span><span>
+                    阅读</span></span>
+        </div>
+        
+        
+        <div class="post-content">
+            <blockquote>
+<p>原文地址  <br>
+<a href="https://eng.uber.com/postgres-to-mysql-migration/">https://eng.uber.com/postgres-to-mysql-migration/</a></p>
+</blockquote>
+<h2 id="背景">背景</h2>
+<p>Uber早期的架构就是一个单体应用，用python写的，数据是存在PostgreSQL上的<br>
+之后为了跟随业务发展，改用了 微服务架构，并使用新的数据平台<br>
+现在使用的是 无模式 schemaless风格，在MySQL之上的一个数据共享层<br>
+这篇文章就介绍为何要将 PostgreSQL迁移到MySQL</p>
+<h2 id="postgresql的架构">PostgreSQL的架构</h2>
+<p>uber在使用过程中，发现PG的这么一些问题</p>
+<ul>
+<li>低效的写架构</li>
+<li>低效的数据复制</li>
+<li>数据损坏问题</li>
+<li>MVCC支持度不好</li>
+<li>升级到新版本很困难</li>
+</ul>
+<p>下面就来讨论这些问题，探讨一下PG内部的数据存储格式，并对比一下MySQL的格式<br>
+这篇文章时间比较久了，用的还是 PG9.3版本的，不过总体来说大的架构基本没怎么变</p>
+<h3 id="磁盘格式">磁盘格式</h3>
+<p>一个关系数据库需要提供如下功能：</p>
+<ul>
+<li>增、删、改的能力</li>
+<li>schema变更的能力</li>
+<li>多个事务并发执行下的事务视图，也就是MVCC实现</li>
+</ul>
+<p>首先来看PG是如何存储数据的<br>
+PG存储的数据是<strong>不可变</strong>的，一个不可变的行叫做 tuple<br>
+tuple有唯一的标识符，叫做 ctid，相当于磁盘位置的，也就是物理位置的偏移量</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4">
+<table style="border-spacing:0;padding:0;margin:0;border:0;width:auto;overflow:auto;display:block;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">5
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">6
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">7
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">8
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-sql" data-lang="sql">my_test<span style="color:#ff79c6">=#</span> <span style="color:#ff79c6">SELECT</span> ctid, <span style="color:#ff79c6">*</span> <span style="color:#ff79c6">FROM</span> orders <span style="color:#ff79c6">LIMIT</span>
+ ctid  <span style="color:#ff79c6">|</span> id <span style="color:#ff79c6">|</span> user_id <span style="color:#ff79c6">|</span>     create_time
+<span style="color:#6272a4">-------+----+---------+--------------------
+</span><span style="color:#6272a4"></span> (<span style="color:#bd93f9">0</span>,<span style="color:#bd93f9">1</span>) <span style="color:#ff79c6">|</span>  <span style="color:#bd93f9">1</span> <span style="color:#ff79c6">|</span>    <span style="color:#bd93f9">1000</span> <span style="color:#ff79c6">|</span> <span style="color:#bd93f9">2020</span><span style="color:#ff79c6">-</span><span style="color:#bd93f9">01</span><span style="color:#ff79c6">-</span><span style="color:#bd93f9">01</span> <span style="color:#bd93f9">00</span>:<span style="color:#bd93f9">00</span>:<span style="color:#bd93f9">00</span>
+ (<span style="color:#bd93f9">0</span>,<span style="color:#bd93f9">2</span>) <span style="color:#ff79c6">|</span>  <span style="color:#bd93f9">2</span> <span style="color:#ff79c6">|</span>    <span style="color:#bd93f9">1000</span> <span style="color:#ff79c6">|</span> <span style="color:#bd93f9">2020</span><span style="color:#ff79c6">-</span><span style="color:#bd93f9">01</span><span style="color:#ff79c6">-</span><span style="color:#bd93f9">01</span> <span style="color:#bd93f9">00</span>:<span style="color:#bd93f9">01</span>:<span style="color:#bd93f9">00</span>
+ (<span style="color:#bd93f9">0</span>,<span style="color:#bd93f9">3</span>) <span style="color:#ff79c6">|</span>  <span style="color:#bd93f9">3</span> <span style="color:#ff79c6">|</span>    <span style="color:#bd93f9">1000</span> <span style="color:#ff79c6">|</span> <span style="color:#bd93f9">2020</span><span style="color:#ff79c6">-</span><span style="color:#bd93f9">01</span><span style="color:#ff79c6">-</span><span style="color:#bd93f9">01</span> <span style="color:#bd93f9">00</span>:<span style="color:#bd93f9">02</span>:<span style="color:#bd93f9">00</span>
+ (<span style="color:#bd93f9">0</span>,<span style="color:#bd93f9">4</span>) <span style="color:#ff79c6">|</span>  <span style="color:#bd93f9">4</span> <span style="color:#ff79c6">|</span>    <span style="color:#bd93f9">1000</span> <span style="color:#ff79c6">|</span> <span style="color:#bd93f9">2020</span><span style="color:#ff79c6">-</span><span style="color:#bd93f9">01</span><span style="color:#ff79c6">-</span><span style="color:#bd93f9">01</span> <span style="color:#bd93f9">00</span>:<span style="color:#bd93f9">03</span>:<span style="color:#bd93f9">00</span>
+ (<span style="color:#bd93f9">0</span>,<span style="color:#bd93f9">5</span>) <span style="color:#ff79c6">|</span>  <span style="color:#bd93f9">5</span> <span style="color:#ff79c6">|</span>    <span style="color:#bd93f9">1000</span> <span style="color:#ff79c6">|</span> <span style="color:#bd93f9">2020</span><span style="color:#ff79c6">-</span><span style="color:#bd93f9">01</span><span style="color:#ff79c6">-</span><span style="color:#bd93f9">01</span> <span style="color:#bd93f9">00</span>:<span style="color:#bd93f9">04</span>:<span style="color:#bd93f9">00</span>
+</code></pre></td></tr></table>
+</div>
+</div><p>假设有这么一张表：</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4">
+<table style="border-spacing:0;padding:0;margin:0;border:0;width:auto;overflow:auto;display:block;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-sql" data-lang="sql">
+<span style="color:#ff79c6">CREATE</span> <span style="color:#ff79c6">TABLE</span> users (
+    id <span style="color:#8be9fd;font-style:italic">SERIAL</span>,
+    <span style="color:#ff79c6">first</span> <span style="color:#8be9fd;font-style:italic">TEXT</span>,
+    <span style="color:#ff79c6">last</span> <span style="color:#8be9fd;font-style:italic">TEXT</span>,
+    birth_year <span style="color:#8be9fd;font-style:italic">INTEGER</span>,
+    <span style="color:#ff79c6">PRIMARY</span> <span style="color:#ff79c6">KEY</span> (id)
+);
+ <span style="color:#ff79c6">CREATE</span> <span style="color:#ff79c6">INDEX</span> ix_users_first_last <span style="color:#ff79c6">ON</span> users (<span style="color:#ff79c6">first</span>, <span style="color:#ff79c6">last</span>);
+ <span style="color:#ff79c6">CREATE</span> <span style="color:#ff79c6">INDEX</span> ix_users_birth_year <span style="color:#ff79c6">ON</span> users (birth_year);
+</code></pre></td></tr></table>
+</div>
+</div><p>表的数据如下，都是一些历史著名数学家</p>
+<table>
+<thead>
+<tr>
+<th>id</th>
+<th>first</th>
+<th>last</th>
+<th>birth_year</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1</td>
+<td>Blaise</td>
+<td>Pascal</td>
+<td>1623</td>
+</tr>
+<tr>
+<td>2</td>
+<td>Gottfried</td>
+<td>Leibniz</td>
+<td>1646</td>
+</tr>
+<tr>
+<td>3</td>
+<td>Emmy</td>
+<td>Noether</td>
+<td>1882</td>
+</tr>
+<tr>
+<td>4</td>
+<td>Muhammad</td>
+<td>al-Khwārizmī</td>
+<td>780</td>
+</tr>
+<tr>
+<td>5</td>
+<td>Alan</td>
+<td>Turing</td>
+<td>1912</td>
+</tr>
+<tr>
+<td>6</td>
+<td>Srinivasa</td>
+<td>Ramanujan</td>
+<td>1887</td>
+</tr>
+<tr>
+<td>7</td>
+<td>Ada</td>
+<td>Lovelace</td>
+<td>1815</td>
+</tr>
+<tr>
+<td>8</td>
+<td>Henri</td>
+<td>Poincaré</td>
+<td>1854</td>
+</tr>
+</tbody>
+</table>
+<p>而这个表在实际存储的时候，内部会有 ctid 字段，所以看起来就像是这样的：</p>
+<table>
+<thead>
+<tr>
+<th>ctid</th>
+<th>id</th>
+<th>first</th>
+<th>last</th>
+<th>birth_year</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>A</td>
+<td>1</td>
+<td>Blaise</td>
+<td>Pascal</td>
+<td>1623</td>
+</tr>
+<tr>
+<td>B</td>
+<td>2</td>
+<td>Gottfried</td>
+<td>Leibniz</td>
+<td>1646</td>
+</tr>
+<tr>
+<td>C</td>
+<td>3</td>
+<td>Emmy</td>
+<td>Noether</td>
+<td>1882</td>
+</tr>
+<tr>
+<td>D</td>
+<td>4</td>
+<td>Muhammad</td>
+<td>al-Khwārizmī</td>
+<td>780</td>
+</tr>
+<tr>
+<td>E</td>
+<td>5</td>
+<td>Alan</td>
+<td>Turing</td>
+<td>1912</td>
+</tr>
+<tr>
+<td>F</td>
+<td>6</td>
+<td>Srinivasa</td>
+<td>Ramanujan</td>
+<td>1887</td>
+</tr>
+<tr>
+<td>G</td>
+<td>7</td>
+<td>Ada</td>
+<td>Lovelace</td>
+<td>1815</td>
+</tr>
+<tr>
+<td>H</td>
+<td>8</td>
+<td>Henri</td>
+<td>Poincaré</td>
+<td>1854</td>
+</tr>
+</tbody>
+</table>
+<p>而主键的物理布局大概就是这样：   </p>
+<table>
+<thead>
+<tr>
+<th>id</th>
+<th>ctid</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1</td>
+<td>A</td>
+</tr>
+<tr>
+<td>2</td>
+<td>B</td>
+</tr>
+<tr>
+<td>3</td>
+<td>C</td>
+</tr>
+<tr>
+<td>4</td>
+<td>D</td>
+</tr>
+<tr>
+<td>5</td>
+<td>E</td>
+</tr>
+<tr>
+<td>6</td>
+<td>F</td>
+</tr>
+<tr>
+<td>7</td>
+<td>G</td>
+</tr>
+<tr>
+<td>8</td>
+<td>H</td>
+</tr>
+</tbody>
+</table>
+<p>另外两个 二级索引的物理布局像这样：<br>
+主键索引的顺序跟 ctid的顺序正好一致<br>
+而 二级索引的顺序，跟 citd的顺就不一致了</p>
+<table>
+<thead>
+<tr>
+<th>first</th>
+<th>last</th>
+<th>ctid</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Ada</td>
+<td>Lovelace</td>
+<td>G</td>
+</tr>
+<tr>
+<td>Alan</td>
+<td>Turing</td>
+<td>E</td>
+</tr>
+<tr>
+<td>Blaise</td>
+<td>Pascal</td>
+<td>A</td>
+</tr>
+<tr>
+<td>Emmy</td>
+<td>Noether</td>
+<td>C</td>
+</tr>
+<tr>
+<td>Gottfried</td>
+<td>Leibniz</td>
+<td>B</td>
+</tr>
+<tr>
+<td>Henri</td>
+<td>Poincaré</td>
+<td>H</td>
+</tr>
+<tr>
+<td>Muhammad</td>
+<td>al-Khwārizmī</td>
+<td>D</td>
+</tr>
+<tr>
+<td>Srinivasa</td>
+<td>Ramanujan</td>
+<td>F</td>
+</tr>
+</tbody>
+</table>
+<table>
+<thead>
+<tr>
+<th>birth_year</th>
+<th>ctid</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>780</td>
+<td>D</td>
+</tr>
+<tr>
+<td>1623</td>
+<td>A</td>
+</tr>
+<tr>
+<td>1646</td>
+<td>B</td>
+</tr>
+<tr>
+<td>1815</td>
+<td>G</td>
+</tr>
+<tr>
+<td>1854</td>
+<td>H</td>
+</tr>
+<tr>
+<td>1887</td>
+<td>F</td>
+</tr>
+<tr>
+<td>1882</td>
+<td>C</td>
+</tr>
+<tr>
+<td>1912</td>
+<td>E</td>
+</tr>
+</tbody>
+</table>
+<p>假设我们要更新<code>Muhammad	al-Khwārizmī</code>的出生年份，按照之前说的，PG的tuple都是不可变的<br>
+所以这里的更新是新增一行，新的行的 <code>prev</code>指向前一个版本<br>
+这里的 pre 是PG的一个内部字段</p>
+<table>
+<thead>
+<tr>
+<th>ctid</th>
+<th>prev</th>
+<th>id</th>
+<th>first</th>
+<th>last</th>
+<th>birth_year</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>A</td>
+<td>null</td>
+<td>1</td>
+<td>Blaise</td>
+<td>Pascal</td>
+<td>1623</td>
+</tr>
+<tr>
+<td>B</td>
+<td>null</td>
+<td>2</td>
+<td>Gottfried</td>
+<td>Leibniz</td>
+<td>1646</td>
+</tr>
+<tr>
+<td>C</td>
+<td>null</td>
+<td>3</td>
+<td>Emmy</td>
+<td>Noether</td>
+<td>1882</td>
+</tr>
+<tr>
+<td>D</td>
+<td>null</td>
+<td>4</td>
+<td>Muhammad</td>
+<td>al-Khwārizmī</td>
+<td>780</td>
+</tr>
+<tr>
+<td>I</td>
+<td>D</td>
+<td>4</td>
+<td>Muhammad</td>
+<td>al-Khwārizmī</td>
+<td>770</td>
+</tr>
+</tbody>
+</table>
+<p>这里就多了<code>I</code>，它的前一个版本指向<code>D</code><br>
+而这种情况下，实际是两个 二级索引也不是 update，而是又新增了一行</p>
+<table>
+<thead>
+<tr>
+<th>first</th>
+<th>last</th>
+<th>ctid</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Muhammad</td>
+<td>al-Khwārizmī</td>
+<td>D</td>
+</tr>
+<tr>
+<td>Muhammad</td>
+<td>al-Khwārizmī</td>
+<td>I</td>
+</tr>
+</tbody>
+</table>
+<table>
+<thead>
+<tr>
+<th>birth_year</th>
+<th>ctid</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>770</td>
+<td>I</td>
+</tr>
+<tr>
+<td>780</td>
+<td>D</td>
+</tr>
+</tbody>
+</table>
+<p>PG 需要确定哪个版本是最新的，在执行事务时，也需要确定 哪些版本可以被事务看到<br>
+
+        <a data-fancybox="gallery" href="https://1fykyq3mdn5r21tpna3wkdyi-wpengine.netdna-ssl.com/wp-content/uploads/2016/07/Postgres_Tuple_Property_-1024x487.png">
+            <img class="mx-auto" alt="" src="https://1fykyq3mdn5r21tpna3wkdyi-wpengine.netdna-ssl.com/wp-content/uploads/2016/07/Postgres_Tuple_Property_-1024x487.png" />
+        </a>
+    <br>
+从上图中可以看到，PG的主索引、二级索引 都是直接指向了 物理磁盘的 ctid，也就是指向了实际的物理布局   <br>
+而当 一个tuple的位置变更时，主索引、二级索引也需要跟着改变</p>
+<h3 id="复制">复制</h3>
+<p>PG 使用WAL来保证事务的原子性，如果开启了流复制，则会将一台机器的变更发送到另一台<br>
+即使没有开启流复制，WAL也会自动开启，因为这是保证事务ACID语义的</p>
+<p>当数据库崩溃再启动时，会首先读取WAL的内容<br>
+然后将WAL的内容，跟磁盘上的数据内容作比较，如果两者不一致，则以WAL的为准，将WAL的内容反应到磁盘上<br>
+如果出现了事务未提交，则需要回滚，将WAL的数据反向变更做回滚<br>
+流复制是将数据复制到 副本中，这样副本就可以实现只读事务了<br>
+WAL是物理级别的操作，它记录了磁盘具体位置的偏移量，就像 ctid 那样<br>
+如果在 主副本 -&gt; 从副本 同步的时候，突然暂停，那么会发现主副本和从副本的字节是一一匹配的<br>
+如果 rsync 也可以修复副本数据</p>
+<h2 id="postgresql的问题">PostgreSQL的问题</h2>
+<h3 id="写放大">写放大</h3>
+<p>由于PG的行是不可变的，更新时通过新增实现的<br>
+那么当更新<code>al-Khwārizmī</code>的出身年份时，虽然只更新了小部分内容，但会导致很多的物理层写入<br>
+一次更新会引发四次更新</p>
+<ul>
+<li>写一个新行tuple到表空间</li>
+<li>主索引增加一条记录</li>
+<li>二级索引(first,last)增加一条记录</li>
+<li>二级索引birth_year 增加一条记录</li>
+</ul>
+<p>注意，(2)、(3) 实际并没有更新，但主键索引还是多了一条操作，二级索引的(first,last)也多了一条操作<br>
+如果二级索引(first,last)内容比较长，这会导致很多冗余的内容<br>
+尤其是当索引比较多的时候，一次更新带来的开销很大</p>
+<h3 id="复制-1">复制</h3>
+<p>由于WAL是物理层操作，所以写放到在复制层也有影响<br>
+一次更新操作之后，会导致四次WAL复制，这些复制就从一个节点传播到了其他节点<br>
+在单机房内可能不是什么问题，因为带宽很高，机房内的带宽也都是免费的<br>
+但是跨机房，跨城市同步就会出现问题<br>
+Uber原先的机房在西海岸，现在为了容灾考虑，在东海岸增加了一个数据中心，于是就需要跨城市拷贝<br>
+这种跨城市之间的拷贝，不光带宽价格高，而且速度也很慢<br>
+此外Uber也用WAL作了归档处理，这是为了方便做副本上线，做快照处理的<br>
+但是WAL跨城市复制效率很低，而带宽不够快，跟不上WAL的写入速度</p>
+<h3 id="数据损坏">数据损坏</h3>
+<p>这是触发了 PG的一个bug</p>
+<ul>
+<li><a href="https://www.postgresql.org/docs/9.2/continuous-archiving.html">Continuous Archiving and Point-in-Time Recovery (PITR)</a></li>
+</ul>
+<p>因为这个bug，一些本应该被标记为 非活跃的记录，却没有标记成功<br>
+当执行这个SQL时</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4">
+<table style="border-spacing:0;padding:0;margin:0;border:0;width:auto;overflow:auto;display:block;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-sql" data-lang="sql"><span style="color:#ff79c6">SELECT</span> <span style="color:#ff79c6">*</span> <span style="color:#ff79c6">FROM</span> users <span style="color:#ff79c6">WHERE</span> id <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">4</span>;
+</code></pre></td></tr></table>
+</div>
+</div><p>这会出现两条记录，一个是原始的 780CE，一个是更新后的 770CE<br>
+如果查询时带了 ctid，则会看到他们的 物理偏移量不同</p>
+<p>这个损坏的数据，在所有的副本上出现了，所以Uber的人也不知道到底影响面试多少<br>
+他们只能用代码来做防御<br>
+不同的副本表现也不一样<br>
+比如有的副本是 X行不对，Y行是新的；而有的副本则是Y行旧的，X行是新的<br>
+虽然这种影响这是少数几行，但因为 索引引用的也是物理偏移量，所以实际影响范围非常大</p>
+<p>B+树会定期做 reblance，这样的话，会完全改变树的结构，这就好像一个子树移动到了新的位置<br>
+如果一个错误的数据被移动了，那么可能会导致树的大部分变得完全无效<br>
+虽然后续PG修复了这个问题，但是Uber团队仍然担心，因为这种问题是发生在物理层这个级别的<br>
+万一哪天又搞出一个bug，这样会导致整个数据库都出现问题，修复也会非常麻烦</p>
+<h3 id="复制mvcc">复制MVCC</h3>
+<p>PG并么有真正的支持MVCC<br>
+如果流复制时有一个事务，这个事务影响了这一行，而流需要复制这行<br>
+就会导致阻塞，直到这个事务完成<br>
+如果事务很长，则会导致主副本和从副本之间有很大的延迟<br>
+而如果一个事务阻塞了WAL一段时间，则PG会kill掉这个事务</p>
+<p>这种设计意味着，从副本通常会落后主副本几秒钟，而且事务很容易被kill掉</p>
+<h3 id="postgresql升级">PostgreSQL升级</h3>
+<p>由于复制是物理级别的，所以更新很难<br>
+如果主副本是9.2的，那么从副本就不能是9.3或者其他版本<br>
+一般来说升级步骤如下：</p>
+<ul>
+<li>关闭主副本</li>
+<li>在主节点上运行<code>pg_upgrade</code>，原地更新数据，这可能要几个小时</li>
+<li>启动master</li>
+<li>启动一个master快照，需要从master拷贝数据，这也需要几个小时</li>
+<li>清除副本，并将新快照从主副本恢复到从副本</li>
+<li>将所有的从副本应用到复制层级，并等待从副本追赶上主副本</li>
+</ul>
+<p>随着Uber数据量变大，这种升级就变得很难了<br>
+虽然也有一个基于逻辑层的复制<code>pglogical</code>，但一致没有合并到主线</p>
+<h2 id="mysql架构">MySQL架构</h2>
+<h3 id="innodb的磁盘存储">InnoDB的磁盘存储</h3>
+<p>完整的讨论磁盘布局，MVCC太多了，我们的焦点集中在跟PG的对比<br>
+InnoDB也支持MVCC，并支持可变数据<br>
+MySQL的二级索引并不是直接指向物理磁盘的，它指向了主索引<br>
+所以它的二级索引布局是这样的：</p>
+<table>
+<thead>
+<tr>
+<th>first</th>
+<th>last</th>
+<th>id (primary key)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Ada</td>
+<td>Lovelace</td>
+<td>7</td>
+</tr>
+<tr>
+<td>Alan</td>
+<td>Turing</td>
+<td>5</td>
+</tr>
+<tr>
+<td>Blaise</td>
+<td>Pascal</td>
+<td>1</td>
+</tr>
+<tr>
+<td>Emmy</td>
+<td>Noether</td>
+<td>3</td>
+</tr>
+<tr>
+<td>Gottfried</td>
+<td>Leibniz</td>
+<td>2</td>
+</tr>
+<tr>
+<td>Henri</td>
+<td>Poincaré</td>
+<td>8</td>
+</tr>
+<tr>
+<td>Muhammad</td>
+<td>al-Khwārizmī</td>
+<td>4</td>
+</tr>
+<tr>
+<td>Srinivasa</td>
+<td>Ramanujan</td>
+<td>6</td>
+</tr>
+</tbody>
+</table>
+<p>mysql的二级索引需要查找两次</p>
+<ul>
+<li>首先根据二级索引找到主索引</li>
+<li>再根据主索引定位到具体值</li>
+</ul>
+<p>这种设置相比PG在查询方面就是劣势，不过它的好处也很明显，数据更新只需要修改对应的索引<br>
+MySQL是原地更新的，如果需要支持MVCC，MySQL会拷贝 旧行的到特殊的 回滚段中操作</p>
+<ul>
+<li><a href="https://dev.mysql.com/doc/refman/5.7/en/innodb-undo-logs.html">rollback segment</a></li>
+</ul>
+<p>假设要更新<code>al-Khwārizmī’s</code>的出生年份，只需要原地更新对应的行，以及年份的二级索引<br>
+主索引不需要变更，(first,last)也不需要变更<br>
+如果有大量的索引，就可以节省很多开销<br>
+这种设计也让 vacuum 、压缩变得更有效，他们只在回滚段中，而PG需要做全表扫描</p>
+<p>MySQL的物理布局如下，二级索引 -&gt; 主索引，如果记录发生物理变动，只需要改变主索引<br>
+
+        <a data-fancybox="gallery" href="https://1fykyq3mdn5r21tpna3wkdyi-wpengine.netdna-ssl.com/wp-content/uploads/2016/07/MySQL_Index_Property_-1024x497.png">
+            <img class="mx-auto" alt="" src="https://1fykyq3mdn5r21tpna3wkdyi-wpengine.netdna-ssl.com/wp-content/uploads/2016/07/MySQL_Index_Property_-1024x497.png" />
+        </a>
+    </p>
+<h3 id="复制-2">复制</h3>
+<p>mysql有不同的复制模式</p>
+<ul>
+<li><a href="https://dev.mysql.com/doc/refman/5.7/en/replication-formats.html">replication modes</a></li>
+</ul>
+<p>如下：</p>
+<ul>
+<li>基于statement的复制，就是复制一个语句，如<code>UPDATE users SET birth_year=770 WHERE id = 4</code></li>
+<li>行复制</li>
+<li>混合复制</li>
+</ul>
+<p>statement复制，只需要复制少量的逻辑语句即可，但是需要副本执行很多物理层的工作<br>
+而 行复制，是基于物理层的，跟PG类似</p>
+<p>mysql中只有主索引是指向磁盘偏移量的，这点很重要<br>
+比如一个具体的复制，如将行 X从 t_1 变为 t_2<br>
+mysql只需要做逻辑变更，副本可以根据这些信息自动推断，更改索引<br>
+由于是逻辑复制，所以副本是真正的MVCC，因此在副本上读请求不会阻塞流更新<br>
+PG的流复制包含了磁盘物理变更，所以PG的副本在读时，会跟应用WAL变更冲突，无法实现MVCC<br>
+同时，这是逻辑层复制，所以即使出现问题、bug，也不会像PG那样影响很大<br>
+物理层错误之后，B+ 做了平衡，会影响整个数据库</p>
+<p>由于是逻辑复制，所以可以在不同版本的mysql之间之间做复制<br>
+因为存储层的格式变动不会影响到逻辑层<br>
+对mysql升级一般是一个一个的来，升级所有副本，然后将其中一个变成主副本，升级的时候可以平滑完成不用中断业务</p>
+<h3 id="mysql的其他优势">MySQL的其他优势</h3>
+<p>PG的Buffer Pool</p>
+<ul>
+<li>PG大量使用了操作系统的page cache</li>
+<li>比如，实际部署的PG实例有768G内存，但真正的驻留内存只有25G，剩下的都是page cache</li>
+<li>由于不是驻留内存访问这些数据需要通过 lseek、read 系统调用，增加了上下文切换开销</li>
+<li>那个时候PG还没有优化，这两个系统调用可以合并成一个 pread</li>
+</ul>
+<p>MySQL的Buffer Pool优势</p>
+<ul>
+<li>用户态的LRU，这样就可以实现一些自定义的操作，比如大量的scan可以绕过缓存</li>
+<li>避免了上下文切换，不会出现TLB miss 这种情况</li>
+</ul>
+<p>MySQL连接</p>
+<ul>
+<li>使用的是线程模式，开销更小</li>
+<li>可以很轻松的扩展到1W个链接</li>
+</ul>
+<p>PG的连接</p>
+<ul>
+<li>进程模式，这样会导致启动、切换的开销很高</li>
+<li>另外进程间通讯使用的是 System V IPC，而不是轻量级的 futex，后者通常没有什么竞争</li>
+<li>除了内存、IPC开销，PG对并发支持也很差，当内存足够时，PG的并发也就几百</li>
+<li>解决此问题的办法是用连接池：pgbouncer，不过出现了一些bug，打开了更多的连接</li>
+</ul>
+<p><a href="https://pgbouncer.github.io/">pgbouncer</a></p>
+<h2 id="结论">结论</h2>
+<p>Uber早期的时候，PG确实工作的很好，不过随着Uber规模的扩大，PG的问题就出现了<br>
+现在只有一些遗留的PG实现，其他的存储包括：</p>
+<ul>
+<li>基于Mysql之上的无模式层</li>
+<li>基于Cassandra的NoSQL</li>
+</ul>
+<p>关于 无模式的介绍</p>
+<ul>
+<li><a href="https://eng.uber.com/schemaless-part-one-mysql-datastore/">Designing Schemaless, Uber Engineering’s Scalable Datastore Using MySQL</a></li>
+</ul>
+
+			<script type="text/javascript"
+        async
+        src="https://cdn.bootcss.com/mathjax/2.7.3/MathJax.js?config=TeX-AMS-MML_HTMLorMML">
+MathJax.Hub.Config({
+  tex2jax: {
+    inlineMath: [['$','$'], ['\\(','\\)']],
+    displayMath: [['$$','$$'], ['\[\[','\]\]']],
+    processEscapes: true,
+    processEnvironments: true,
+    skipTags: ['script', 'noscript', 'style', 'textarea', 'pre'],
+    TeX: { equationNumbers: { autoNumber: "AMS" },
+         extensions: ["AMSmath.js", "AMSsymbols.js"] }
+  }
+});
+
+MathJax.Hub.Queue(function() {
+    
+    
+    
+    var all = MathJax.Hub.getAllJax(), i;
+    for(i = 0; i < all.length; i += 1) {
+        all[i].SourceElement().parentNode.className += ' has-jax';
+    }
+});
+</script>
+
+<style>
+code.has-jax {
+    font: inherit;
+    font-size: 100%;
+    background: inherit;
+    border: inherit;
+    color: #515151;
+}
+</style>
+        </div>
+
+        
+
+
+        
+
+<div class="post-archive">
+    <h2>相关文章</h2>
+    <ul class="listing">
+        
+        <li><a href="/post/2022/07/cmu%E6%95%B0%E6%8D%AE%E5%BA%93%E8%AF%BE%E7%A8%8B/">卡内基梅隆的数据库课程-1</a></li>
+        
+        <li><a href="/post/2022/07/cmu%E6%95%B0%E6%8D%AE%E5%BA%93%E8%AF%BE%E7%A8%8B-2/">卡内基梅隆的数据库课程-2</a></li>
+        
+        <li><a href="/post/2022/07/cmu%E6%95%B0%E6%8D%AE%E5%BA%93%E8%AF%BE%E7%A8%8B-3/">卡内基梅隆的数据库课程-3</a></li>
+        
+        <li><a href="/post/2022/07/cmu%E6%95%B0%E6%8D%AE%E5%BA%93%E8%AF%BE%E7%A8%8B-4/">卡内基梅隆的数据库课程-4</a></li>
+        
+        <li><a href="/post/2022/07/cmu%E6%95%B0%E6%8D%AE%E5%BA%93%E8%AF%BE%E7%A8%8B-5/">卡内基梅隆的数据库课程-5</a></li>
+        
+    </ul>
+</div>
+
+
+        <div class="post-meta meta-tags">
+            
+            <ul class="clearfix">
+                
+                <li><a href='/tags/%E6%95%B0%E6%8D%AE%E5%BA%93'>数据库</a></li>
+                
+            </ul>
+            
+        </div>
+    </article>
+    
+    
+
+    
+    
+</div>
+
+
+                </div>
+
+                <div id="secondary">
+    <section class="widget">
+        <form id="search" action='https://code0xff.cn/search/' method="get" accept-charset="utf-8" target="_blank" _lpchecked="1">
+      
+      <input type="text" name="q" maxlength="20" placeholder="Search">
+      <input type="hidden" name="sitesearch" value="https://code0xff.cn/">
+      <button type="submit" class="submit icon-search"></button>
+</form>
+    </section>
+    
+    <section class="widget">
+        <h3 class="widget-title">最近文章</h3>
+<ul class="widget-list">
+    
+    <li>
+        <a href="https://code0xff.cn/post/2022/08/%E4%B8%BA%E4%BD%95uber%E8%A6%81%E5%B0%86postgresql%E8%BF%81%E5%88%B0mysql/" title="为何Uber要将PostgreSQL迁到MySQL">为何Uber要将PostgreSQL迁到MySQL</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.cn/post/2022/07/cmu%E6%95%B0%E6%8D%AE%E5%BA%93%E8%AF%BE%E7%A8%8B/" title="卡内基梅隆的数据库课程-1">卡内基梅隆的数据库课程-1</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.cn/post/2022/07/cmu%E6%95%B0%E6%8D%AE%E5%BA%93%E8%AF%BE%E7%A8%8B-2/" title="卡内基梅隆的数据库课程-2">卡内基梅隆的数据库课程-2</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.cn/post/2022/07/cmu%E6%95%B0%E6%8D%AE%E5%BA%93%E8%AF%BE%E7%A8%8B-3/" title="卡内基梅隆的数据库课程-3">卡内基梅隆的数据库课程-3</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.cn/post/2022/07/cmu%E6%95%B0%E6%8D%AE%E5%BA%93%E8%AF%BE%E7%A8%8B-4/" title="卡内基梅隆的数据库课程-4">卡内基梅隆的数据库课程-4</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.cn/post/2022/07/cmu%E6%95%B0%E6%8D%AE%E5%BA%93%E8%AF%BE%E7%A8%8B-5/" title="卡内基梅隆的数据库课程-5">卡内基梅隆的数据库课程-5</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.cn/post/2022/07/whats-really-new-with-newsql%E8%AE%BA%E6%96%87/" title="What’s Really New with NewSQL论文">What’s Really New with NewSQL论文</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.cn/post/2022/07/pingcap%E6%8F%90%E4%BE%9B%E7%9A%84%E6%95%B0%E6%8D%AE%E5%BA%93%E5%AD%A6%E4%B9%A0%E8%B5%84%E6%96%99/" title="PingCAP提供的数据库学习资料">PingCAP提供的数据库学习资料</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.cn/post/2022/07/snowflake%E8%AE%BA%E6%96%87/" title="Snowflake论文">Snowflake论文</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.cn/post/2022/07/spark-sql%E8%AE%BA%E6%96%87/" title="Spark SQL论文">Spark SQL论文</a>
+    </li>
+    
+</ul>
+    </section>
+
+    
+
+    <section class="widget">
+        <h3 class="widget-title"><a href='/categories/'>分类</a></h3>
+<ul class="widget-list">
+    
+    <li><a href="https://code0xff.cn/categories/%E5%88%86%E5%B8%83%E5%BC%8F/">分布式 (4)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E5%95%86%E4%B8%9A/">商业 (2)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E5%A4%A7%E6%95%B0%E6%8D%AE/">大数据 (5)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E6%95%B0%E6%8D%AE%E5%BA%93/">数据库 (1)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E6%97%85%E8%A1%8C/">旅行 (10)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E6%9E%B6%E6%9E%84/">架构 (1)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E7%94%9F%E6%B4%BB/">生活 (4)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E7%AE%97%E6%B3%95/">算法 (7)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E7%BB%8F%E6%B5%8E/">经济 (1)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E7%BC%96%E7%A8%8B%E8%AF%AD%E8%A8%80/">编程语言 (2)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E8%AE%A1%E7%AE%97%E6%9C%BA%E5%8E%9F%E7%90%86/">计算机原理 (2)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E8%AE%BA%E6%96%87/">论文 (15)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E8%AF%BB%E4%B9%A6%E7%AC%94%E8%AE%B0/">读书笔记 (9)</a></li>
+    
+</ul>
+    </section>
+
+    <section class="widget">
+        <h3 class="widget-title">归档</a></h3>
+<ul class="widget-list">
+    
+    <li><a href="https://code0xff.cn/years/2021%E5%B9%B4/">2021年 (30)</a></li>
+    
+    <li><a href="https://code0xff.cn/years/2022%E5%B9%B4/">2022年 (33)</a></li>
+    
+</ul>
+    </section>
+
+    <section class="widget">
+        <h3 class="widget-title"><a href='/tags/'>标签</a></h3>
+<div class="tagcloud">
+    
+    <a href="https://code0xff.cn/tags/hive/">Hive </a>
+    
+    <a href="https://code0xff.cn/tags/kudu/">kudu </a>
+    
+    <a href="https://code0xff.cn/tags/manacher/">Manacher </a>
+    
+    <a href="https://code0xff.cn/tags/mapreduce/">MapReduce </a>
+    
+    <a href="https://code0xff.cn/tags/paxos/">paxos </a>
+    
+    <a href="https://code0xff.cn/tags/raft/">raft </a>
+    
+    <a href="https://code0xff.cn/tags/scala/">scala </a>
+    
+    <a href="https://code0xff.cn/tags/snowflake/">snowflake </a>
+    
+    <a href="https://code0xff.cn/tags/spark/">spark </a>
+    
+    <a href="https://code0xff.cn/tags/unix/">unix </a>
+    
+    <a href="https://code0xff.cn/tags/%E4%BA%8C%E5%88%86%E6%9F%A5%E6%89%BE/">二分查找 </a>
+    
+    <a href="https://code0xff.cn/tags/%E4%BA%8C%E5%8F%89%E6%A0%91%E9%81%8D%E5%8E%86/">二叉树遍历 </a>
+    
+    <a href="https://code0xff.cn/tags/%E5%88%86%E5%B8%83%E5%BC%8F/">分布式 </a>
+    
+    <a href="https://code0xff.cn/tags/%E5%8A%A8%E6%80%81%E6%B3%A8%E5%85%A5/">动态注入 </a>
+    
+    <a href="https://code0xff.cn/tags/%E5%8E%86%E5%8F%B2/">历史 </a>
+    
+    <a href="https://code0xff.cn/tags/%E5%9B%9E%E6%BA%AF/">回溯 </a>
+    
+    <a href="https://code0xff.cn/tags/%E5%9B%BD%E5%86%85%E6%97%85%E8%A1%8C/">国内旅行 </a>
+    
+    <a href="https://code0xff.cn/tags/%E5%9B%BD%E5%A4%96%E6%97%85%E8%A1%8C/">国外旅行 </a>
+    
+    <a href="https://code0xff.cn/tags/%E5%A4%A7%E6%95%B0%E6%8D%AE/">大数据 </a>
+    
+    <a href="https://code0xff.cn/tags/%E5%AD%98%E5%82%A8/">存储 </a>
+    
+    <a href="https://code0xff.cn/tags/%E5%BE%AE%E6%9C%8D%E5%8A%A1/">微服务 </a>
+    
+    <a href="https://code0xff.cn/tags/%E6%95%B0%E6%8D%AE%E5%BA%93/">数据库 </a>
+    
+    <a href="https://code0xff.cn/tags/%E6%B1%87%E7%BC%96/">汇编 </a>
+    
+    <a href="https://code0xff.cn/tags/%E6%B9%96%E4%BB%93%E4%B8%80%E4%BD%93/">湖仓一体 </a>
+    
+    <a href="https://code0xff.cn/tags/%E7%94%9F%E6%B4%BB/">生活 </a>
+    
+    <a href="https://code0xff.cn/tags/%E7%94%B5%E5%BD%B1/">电影 </a>
+    
+    <a href="https://code0xff.cn/tags/%E7%AE%97%E6%B3%95/">算法 </a>
+    
+    <a href="https://code0xff.cn/tags/%E7%BB%8F%E6%B5%8E/">经济 </a>
+    
+    <a href="https://code0xff.cn/tags/%E7%BC%93%E5%AD%98/">缓存 </a>
+    
+    <a href="https://code0xff.cn/tags/%E7%BC%96%E8%AF%91%E5%8E%9F%E7%90%86/">编译原理 </a>
+    
+    <a href="https://code0xff.cn/tags/%E8%AE%A1%E7%AE%97%E6%A1%86%E6%9E%B6/">计算框架 </a>
+    
+    <a href="https://code0xff.cn/tags/%E8%AF%BB%E4%B9%A6%E7%AC%94%E8%AE%B0/">读书笔记 </a>
+    
+</div>
+    </section>
+
+    
+
+    <section class="widget">
+        <h3 class="widget-title">RSS</h3>
+        <ul class="widget-list">
+            <li><a href="https://code0xff.cn/index.xml">文章 RSS</a></li>
+        </ul>
+    </section>
+</div>
+            </div>
+        </div>
+    </div>
+    <footer id="footer">
+    <div>
+        &copy; 2022 <a href="https://code0xff.cn/">记录每个瞬间 By 老王</a>
+        
+    </div>
+    <br />
+    <div>
+        <div class="github-badge">
+            <a href="https://gohugo.io/" target="_black" rel="nofollow"><span class="badge-subject">Powered by</span><span class="badge-value bg-blue">Hugo</span></a>
+        </div>
+        <div class="github-badge">
+            <a href="https://github.com/flysnow-org/maupassant-hugo" target="_black"><span class="badge-subject">Theme</span><span class="badge-value bg-yellowgreen">Maupassant</span></a>
+        </div>
+    </div>
+    <div>
+        <a href="http://www.beian.miit.gov.cn/">京ICP备19014975号</a>
+    </div>
+</footer>
+
+
+    
+    <script type="text/javascript">
+        window.MathJax = {
+            tex2jax: {
+                inlineMath: [['$', '$']],
+                processEscapes: true
+                }
+            };
+    </script>
+    <script src='https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.5/MathJax.js?config=TeX-MML-AM_CHTML' async></script><script src="https://cdn.bootcdn.net/ajax/libs/fancybox/3.5.7/jquery.fancybox.min.js"></script>
+
+<a id="rocket" href="#top"></a>
+<script type="text/javascript" src='/js/totop.js?v=0.0.0' async=""></script>
+
+<script type="application/javascript">
+var doNotTrack = false;
+if (!doNotTrack) {
+	window.ga=window.ga||function(){(ga.q=ga.q||[]).push(arguments)};ga.l=+new Date;
+	ga('create', 'GA ID', 'auto');
+	
+	ga('send', 'pageview');
+}
+</script>
+<script async src='https://www.google-analytics.com/analytics.js'></script>
+
+
+
+    <script type="text/javascript" src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js" async></script>
+
+
+
+
+</body>
+
+</html>
