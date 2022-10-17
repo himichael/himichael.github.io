@@ -1,0 +1,564 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    
+    <meta name="referrer" content="no-referrer-when-downgrade">
+    
+
+    <title>B&#43;树执行过程 | 记录每个瞬间</title>
+    <meta property="og:title" content="B&#43;树执行过程 - 记录每个瞬间">
+    <meta property="og:type" content="article">
+        
+    <meta property="article:published_time" content='2022-10-15T12:12:19&#43;08:00'>
+        
+        
+    <meta property="article:modified_time" content='2022-10-15T12:12:19&#43;08:00'>
+        
+    <meta name="Keywords" content="">
+    <meta name="description" content="B&#43;树执行过程">
+        <meta name="author" content="隔壁老王">
+        
+    <meta property="og:url" content="https://code0xff.cn/post/2022/10/b&#43;%E6%A0%91%E6%89%A7%E8%A1%8C%E8%BF%87%E7%A8%8B/">
+    <link rel="shortcut icon" href='/favicon.ico'  type="image/x-icon">
+
+    <link rel="stylesheet" href='/css/normalize.css'>
+    <link rel="stylesheet" href='/css/style.css'>
+    <script type="text/javascript" src="//cdn.bootcdn.net/ajax/libs/jquery/3.4.1/jquery.min.js"></script>
+
+    
+    
+    
+        <link href="https://cdn.bootcdn.net/ajax/libs/fancybox/3.5.7/jquery.fancybox.min.css" rel="stylesheet">
+    
+    
+    
+    
+</head>
+
+
+<body>
+    <header id="header" class="clearfix">
+    <div class="container">
+        <div class="col-group">
+            <div class="site-name ">
+                
+                    <a id="logo" href="https://code0xff.cn/">
+                        记录每个瞬间
+                    </a>
+                
+                
+            </div>
+            <div>
+                <nav id="nav-menu" class="clearfix">
+                    <a class="current" href="https://code0xff.cn/">首页</a>
+                    
+                    <a  href="https://code0xff.cn/linked/" title="链接">链接</a>
+                    
+                    <a  href="https://code0xff.cn/archives/" title="归档">归档</a>
+                    
+                    <a  href="https://code0xff.cn/about/" title="关于">关于</a>
+                    
+                </nav>
+            </div>
+        </div>
+    </div>
+</header>
+
+    <div id="body">
+        <div class="container">
+            <div class="col-group">
+
+                <div class="col-8" id="main">
+                    
+<div class="res-cons">
+    
+    <article class="post">
+        <header>
+            <h1 class="post-title">B&#43;树执行过程</h1>
+        </header>
+        <date class="post-meta meta-date">
+            2022年10月15日
+        </date>
+<nav id="TableOfContents">
+  <ul>
+    <li>
+      <ul>
+        <li><a href="#what-is-a-b-tree">What is a B+-tree?</a></li>
+        <li><a href="#insertion-algorithm">Insertion algorithm</a></li>
+        <li><a href="#deletion-algorithm">Deletion algorithm</a></li>
+        <li><a href="#reference">Reference</a></li>
+      </ul>
+    </li>
+  </ul>
+</nav>
+        
+        <div class="post-meta">
+            
+            <span class="post-meta meta-tags">
+                <ul class="clearfix">
+                    <a href='/categories/%E7%AE%97%E6%B3%95'>算法</a>
+                </ul>
+            </span>
+            
+        </div>
+        
+        
+        <div class="post-meta">
+            <span id="busuanzi_container_page_pv">|<span id="busuanzi_value_page_pv"></span><span>
+                    阅读</span></span>
+        </div>
+        
+        
+        <div class="post-content">
+            <blockquote>
+<p>演示地址：<br>
+<a href="https://dichchankinh.com/~galles/visualization/BPlusTree.html">https://dichchankinh.com/~galles/visualization/BPlusTree.html</a></p>
+</blockquote>
+<h2 id="what-is-a-b-tree">What is a B+-tree?</h2>
+<p>如果值是排序的，那么所有的查询都可以很快被执行，但这种想法不切实际<br>
+这需要对每个插入、删除行，重写整个表<br>
+这使得我们想象用树结构来存储，比如平衡二叉搜索树，如红黑树这样的，但是他们对磁盘场景不合适<br>
+因为磁盘都是一次读取一个数据块，比如 512字节、或者4K这样的，二叉搜索树的节点因子太小了，因此需要寻找各方核实的磁盘块的数据结构</p>
+<p>因此有了B+-树，其中每个节点最多存储<code>d</code>个对子节点的引用，最多存储<code>d−1</code>个键<br>
+每个引用被当做两个节点key的 中间，它指向了值在两个key之间的子树<br>
+下面是一个很小的树，用<code>4</code>作为<code>d</code>的值<br>
+
+        <a data-fancybox="gallery" href="https://dichchankinh.com/~galles/visualization/Images/bplustree/btree-6.png">
+            <img class="mx-auto" alt="" src="https://dichchankinh.com/~galles/visualization/Images/bplustree/btree-6.png" />
+        </a>
+    </p>
+<blockquote>
+<p>从动画来看，如果是顺插入，如：1、2、3、4、5。。。这样的<br>
+则每次分裂都会出现在最右边的叶子节点上
+这里实际上可以作为一个优化点</p>
+</blockquote>
+<h2 id="insertion-algorithm">Insertion algorithm</h2>
+<p>下降到合适的叶子节点上</p>
+<ul>
+<li>如果节点有空间，则插入 key/reference 对</li>
+<li>如果节点满了
+<ul>
+<li>则分裂成两个节点，并将key均匀的分布在两个节点上</li>
+<li>如果这个节点是叶节点，从两个节点中的第二个节点中获取最小值的拷贝，重复这个插入算法，将拷贝的值插入到父节点中</li>
+<li>如果这个节点是非叶节点，在分裂过程中排除中间值，然后重复这个插入算法，将排除的值插入到父节点</li>
+</ul>
+</li>
+</ul>
+<blockquote>
+<p>插入过程是递归的，可能会一直递归到 root，叶子节点分裂，然后递归往上，中间节点也不断分裂<br>
+最后到 root，也分裂，此时树高度 + 1</p>
+</blockquote>
+<p>Initial:<br>
+
+        <a data-fancybox="gallery" href="https://dichchankinh.com/~galles/visualization/Images/bplustree/btree-0.png">
+            <img class="mx-auto" alt="" src="https://dichchankinh.com/~galles/visualization/Images/bplustree/btree-0.png" />
+        </a>
+    </p>
+<p>Insert 20:	   <br>
+
+        <a data-fancybox="gallery" href="https://dichchankinh.com/~galles/visualization/Images/bplustree/btree-1.png">
+            <img class="mx-auto" alt="" src="https://dichchankinh.com/~galles/visualization/Images/bplustree/btree-1.png" />
+        </a>
+    </p>
+<p>Insert 13:	<br>
+
+        <a data-fancybox="gallery" href="https://dichchankinh.com/~galles/visualization/Images/bplustree/btree-2.png">
+            <img class="mx-auto" alt="" src="https://dichchankinh.com/~galles/visualization/Images/bplustree/btree-2.png" />
+        </a>
+    </p>
+<p>Insert 15:<br>
+
+        <a data-fancybox="gallery" href="https://dichchankinh.com/~galles/visualization/Images/bplustree/btree-3.png">
+            <img class="mx-auto" alt="" src="https://dichchankinh.com/~galles/visualization/Images/bplustree/btree-3.png" />
+        </a>
+    </p>
+<p>Insert 10:	
+
+        <a data-fancybox="gallery" href="https://dichchankinh.com/~galles/visualization/Images/bplustree/btree-4.png">
+            <img class="mx-auto" alt="" src="https://dichchankinh.com/~galles/visualization/Images/bplustree/btree-4.png" />
+        </a>
+    </p>
+<p>Insert 11:
+
+        <a data-fancybox="gallery" href="https://dichchankinh.com/~galles/visualization/Images/bplustree/btree-5.png">
+            <img class="mx-auto" alt="" src="https://dichchankinh.com/~galles/visualization/Images/bplustree/btree-5.png" />
+        </a>
+    </p>
+<p>Insert 12:<br>
+
+        <a data-fancybox="gallery" href="https://dichchankinh.com/~galles/visualization/Images/bplustree/btree-6.png">
+            <img class="mx-auto" alt="" src="https://dichchankinh.com/~galles/visualization/Images/bplustree/btree-6.png" />
+        </a>
+    </p>
+<h2 id="deletion-algorithm">Deletion algorithm</h2>
+<p>下降key所在的叶结点</p>
+<ul>
+<li>从节点上删除指定的key和关联的引用</li>
+<li>如果节点有足够空间使得kye和引用满足不变量，则停止</li>
+<li>如果当前节点key太少不满足不变量，但是同一层级的前后兄弟节点拥有更多节点，则重新分布这些节点的key，并修复这些节点的父节点，也就是修复分割点指针，这里只需要改变父节点的key即可，不需要插入/删除</li>
+<li>如果节点不满足不变量，前后的兄弟节点刚刚好满足最小的不变量，则将当前节点跟兄弟节点合并</li>
+<li>同上继续，如果当前是中间节点，需要将父节点的split key也合并进来</li>
+<li>继续，无论何种情况，都需要重复删除算法，从父节点上移除之前分割合并节点的split-key</li>
+<li>除非父节点是root，并且删除的是root的最后一个key，此时合并的节点会变成新的root，之后整个树会比之前矮了一层</li>
+</ul>
+<blockquote>
+<p>删除过程可能是递归的，一直到 root，叶子节点跟兄弟节点合并，父节点的split key删除，此时父节点可能就变成空了<br>
+于是中间节点再跟其兄弟节点合并，从其父节点上删除split-key，这个过程也是递归的，直到 root，而root最后一个split-key也会被删除<br>
+于是整个树的高度 - 1</p>
+</blockquote>
+<p>Initial:<br>
+
+        <a data-fancybox="gallery" href="https://dichchankinh.com/~galles/visualization/Images/bplustree/btree-6.png">
+            <img class="mx-auto" alt="" src="https://dichchankinh.com/~galles/visualization/Images/bplustree/btree-6.png" />
+        </a>
+    </p>
+<p>Delete 13:   <br>
+
+        <a data-fancybox="gallery" href="https://dichchankinh.com/~galles/visualization/Images/bplustree/btree-7.png">
+            <img class="mx-auto" alt="" src="https://dichchankinh.com/~galles/visualization/Images/bplustree/btree-7.png" />
+        </a>
+    </p>
+<p>Delete 15:<br>
+
+        <a data-fancybox="gallery" href="https://dichchankinh.com/~galles/visualization/Images/bplustree/btree-8.png">
+            <img class="mx-auto" alt="" src="https://dichchankinh.com/~galles/visualization/Images/bplustree/btree-8.png" />
+        </a>
+    </p>
+<p>Delete 1:<br>
+
+        <a data-fancybox="gallery" href="https://dichchankinh.com/~galles/visualization/Images/bplustree/btree-9.png">
+            <img class="mx-auto" alt="" src="https://dichchankinh.com/~galles/visualization/Images/bplustree/btree-9.png" />
+        </a>
+    </p>
+<h2 id="reference">Reference</h2>
+<ul>
+<li><a href="https://dl.acm.org/doi/10.1145/356770.356776">Ubiquitous B-Tree</a></li>
+<li><a href="https://dl.acm.org/doi/10.1145/319628.319663">Efficient locking for concurrent operations on B-trees</a></li>
+<li><a href="https://book.douban.com/subject/6852740/">书籍：Modern B-Tree Techniques</a></li>
+<li><a href="https://www.microsoft.com/en-us/research/wp-content/uploads/2005/01/p335-sun.pdf">Online B-Tree Merging</a></li>
+<li><a href="https://15721.courses.cs.cmu.edu/spring2017/papers/08-oltpindexes2/bwtree-icde2013.pdf">The Bw-Tree: A B-tree for New Hardware Platforms</a></li>
+<li><a href="http://ilpubs.stanford.edu:8090/85/1/1995-19.pdf">Implementing Deletion in B+ -Trees</a></li>
+<li><a href="http://supertech.csail.mit.edu/papers/BenderFaJa15.pdf">An Introduction to Bε-trees and Write-Optimizatio</a></li>
+<li><a href="https://www.cs.yale.edu/homes/aspnes/papers/opodis2005-b-trees.pdf">Skip B-Trees</a></li>
+<li><a href="https://dbgroup.cs.tsinghua.edu.cn/ligl/papers/tkde14-bptree.pdf">tkde14-bptree.pdf 打不开</a></li>
+<li><a href="https://www.microsoft.com/en-us/research/wp-content/uploads/2016/02/p64-lomet.pdf">The Evolution of Effective B-tree: Page Oraganization and Techniques: A Personal Account</a></li>
+<li><a href="http://citeseerx.ist.psu.edu/viewdoc/download?doi=10.1.1.92.7068&amp;rep=rep1&amp;type=pdf">A practical scalable distributed B-tree</a></li>
+<li><a href="https://zhuanlan.zhihu.com/p/526143517">一些有趣的B+树优化实验</a></li>
+<li><a href="https://www.postgresql.org/docs/15/btree.html">B-Tree Indexes</a></li>
+<li><a href="https://www.postgresql.org/docs/current/pageinspect.html#id-1.11.7.34.5">pageinspect</a></li>
+<li><a href="https://blog.csdn.net/sxqinjh/article/details/121060731">pageInspect插件查看btree索引页面结构</a></li>
+<li><a href="http://www.pingtaimeng.com/article/detail/id/481602">安装pageinspect extension</a></li>
+</ul>
+
+			<script type="text/javascript"
+        async
+        src="https://cdn.bootcss.com/mathjax/2.7.3/MathJax.js?config=TeX-AMS-MML_HTMLorMML">
+MathJax.Hub.Config({
+  tex2jax: {
+    inlineMath: [['$','$'], ['\\(','\\)']],
+    displayMath: [['$$','$$'], ['\[\[','\]\]']],
+    processEscapes: true,
+    processEnvironments: true,
+    skipTags: ['script', 'noscript', 'style', 'textarea', 'pre'],
+    TeX: { equationNumbers: { autoNumber: "AMS" },
+         extensions: ["AMSmath.js", "AMSsymbols.js"] }
+  }
+});
+
+MathJax.Hub.Queue(function() {
+    
+    
+    
+    var all = MathJax.Hub.getAllJax(), i;
+    for(i = 0; i < all.length; i += 1) {
+        all[i].SourceElement().parentNode.className += ' has-jax';
+    }
+});
+</script>
+
+<style>
+code.has-jax {
+    font: inherit;
+    font-size: 100%;
+    background: inherit;
+    border: inherit;
+    color: #515151;
+}
+</style>
+        </div>
+
+        
+
+
+        
+
+
+        <div class="post-meta meta-tags">
+            
+            <ul class="clearfix">
+                
+                <li><a href='/tags/b%E6%A0%91'>B树</a></li>
+                
+            </ul>
+            
+        </div>
+    </article>
+    
+    
+
+    
+    
+</div>
+
+
+                </div>
+
+                <div id="secondary">
+    <section class="widget">
+        <form id="search" action='https://code0xff.cn/search/' method="get" accept-charset="utf-8" target="_blank" _lpchecked="1">
+      
+      <input type="text" name="q" maxlength="20" placeholder="Search">
+      <input type="hidden" name="sitesearch" value="https://code0xff.cn/">
+      <button type="submit" class="submit icon-search"></button>
+</form>
+    </section>
+    
+    <section class="widget">
+        <h3 class="widget-title">最近文章</h3>
+<ul class="widget-list">
+    
+    <li>
+        <a href="https://code0xff.cn/post/2022/10/%E5%AE%B9%E5%99%A8%E7%BD%91%E7%BB%9C/" title="容器网络">容器网络</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.cn/post/2022/10/b&#43;%E6%A0%91%E6%89%A7%E8%A1%8C%E8%BF%87%E7%A8%8B/" title="B&#43;树执行过程">B&#43;树执行过程</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.cn/post/2022/09/k8s%E4%BD%BF%E7%94%A8/" title="k8s POD使用总结">k8s POD使用总结</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.cn/post/2022/09/architecture-of-a-database-system/" title="Architecture of a Database System论文翻译">Architecture of a Database System论文翻译</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.cn/post/2022/08/a-relational-model-of-data-for-large-shared-data-banks/" title="A Relational Model of Data for Large Shared Data Banks论文翻译">A Relational Model of Data for Large Shared Data Banks论文翻译</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.cn/post/2022/08/%E7%A1%AE%E5%AE%9A%E8%A6%81%E5%9C%A8dbms%E4%B8%AD%E7%94%A8mmap%E5%90%97/" title="确定要在DBMS中用mmap吗">确定要在DBMS中用mmap吗</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.cn/post/2022/08/%E4%B8%BA%E4%BD%95uber%E8%A6%81%E5%B0%86postgresql%E8%BF%81%E5%88%B0mysql/" title="为何Uber要将PostgreSQL迁到MySQL">为何Uber要将PostgreSQL迁到MySQL</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.cn/post/2022/07/cmu%E6%95%B0%E6%8D%AE%E5%BA%93%E8%AF%BE%E7%A8%8B/" title="卡内基梅隆的数据库课程-1">卡内基梅隆的数据库课程-1</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.cn/post/2022/07/cmu%E6%95%B0%E6%8D%AE%E5%BA%93%E8%AF%BE%E7%A8%8B-2/" title="卡内基梅隆的数据库课程-2">卡内基梅隆的数据库课程-2</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.cn/post/2022/07/cmu%E6%95%B0%E6%8D%AE%E5%BA%93%E8%AF%BE%E7%A8%8B-3/" title="卡内基梅隆的数据库课程-3">卡内基梅隆的数据库课程-3</a>
+    </li>
+    
+</ul>
+    </section>
+
+    
+
+    <section class="widget">
+        <h3 class="widget-title"><a href='/categories/'>分类</a></h3>
+<ul class="widget-list">
+    
+    <li><a href="https://code0xff.cn/categories/%E5%88%86%E5%B8%83%E5%BC%8F/">分布式 (6)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E5%95%86%E4%B8%9A/">商业 (3)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E5%A4%A7%E6%95%B0%E6%8D%AE/">大数据 (16)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E6%95%B0%E6%8D%AE%E5%BA%93/">数据库 (6)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E6%97%85%E8%A1%8C/">旅行 (10)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E6%9E%B6%E6%9E%84/">架构 (1)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E7%AE%97%E6%B3%95/">算法 (8)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E7%B3%BB%E7%BB%9F/">系统 (4)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E7%BC%96%E7%A8%8B%E8%AF%AD%E8%A8%80/">编程语言 (2)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E8%AF%BB%E4%B9%A6%E7%AC%94%E8%AE%B0/">读书笔记 (9)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E9%9A%8F%E4%BE%BF%E5%86%99%E5%86%99/">随便写写 (4)</a></li>
+    
+</ul>
+    </section>
+
+    <section class="widget">
+        <h3 class="widget-title">归档</a></h3>
+<ul class="widget-list">
+    
+    <li><a href="https://code0xff.cn/years/2021%E5%B9%B4/">2021年 (30)</a></li>
+    
+    <li><a href="https://code0xff.cn/years/2022%E5%B9%B4/">2022年 (39)</a></li>
+    
+</ul>
+    </section>
+
+    <section class="widget">
+        <h3 class="widget-title"><a href='/tags/'>标签</a></h3>
+<div class="tagcloud">
+    
+    <a href="https://code0xff.cn/tags/b%E6%A0%91/">B树 </a>
+    
+    <a href="https://code0xff.cn/tags/hive/">Hive </a>
+    
+    <a href="https://code0xff.cn/tags/k8s/">k8s </a>
+    
+    <a href="https://code0xff.cn/tags/kudu/">kudu </a>
+    
+    <a href="https://code0xff.cn/tags/manacher/">Manacher </a>
+    
+    <a href="https://code0xff.cn/tags/mapreduce/">MapReduce </a>
+    
+    <a href="https://code0xff.cn/tags/paxos/">paxos </a>
+    
+    <a href="https://code0xff.cn/tags/raft/">raft </a>
+    
+    <a href="https://code0xff.cn/tags/scala/">scala </a>
+    
+    <a href="https://code0xff.cn/tags/snowflake/">snowflake </a>
+    
+    <a href="https://code0xff.cn/tags/spark/">spark </a>
+    
+    <a href="https://code0xff.cn/tags/unix/">unix </a>
+    
+    <a href="https://code0xff.cn/tags/%E4%BA%8C%E5%88%86%E6%9F%A5%E6%89%BE/">二分查找 </a>
+    
+    <a href="https://code0xff.cn/tags/%E4%BA%8C%E5%8F%89%E6%A0%91%E9%81%8D%E5%8E%86/">二叉树遍历 </a>
+    
+    <a href="https://code0xff.cn/tags/%E5%88%86%E5%B8%83%E5%BC%8F/">分布式 </a>
+    
+    <a href="https://code0xff.cn/tags/%E5%8A%A8%E6%80%81%E6%B3%A8%E5%85%A5/">动态注入 </a>
+    
+    <a href="https://code0xff.cn/tags/%E5%8E%86%E5%8F%B2/">历史 </a>
+    
+    <a href="https://code0xff.cn/tags/%E5%9B%9E%E6%BA%AF/">回溯 </a>
+    
+    <a href="https://code0xff.cn/tags/%E5%9B%BD%E5%86%85%E6%97%85%E8%A1%8C/">国内旅行 </a>
+    
+    <a href="https://code0xff.cn/tags/%E5%9B%BD%E5%A4%96%E6%97%85%E8%A1%8C/">国外旅行 </a>
+    
+    <a href="https://code0xff.cn/tags/%E5%AD%98%E5%82%A8/">存储 </a>
+    
+    <a href="https://code0xff.cn/tags/%E5%B7%A5%E4%BD%9C%E8%AE%B0%E5%BD%95/">工作记录 </a>
+    
+    <a href="https://code0xff.cn/tags/%E5%BE%AE%E6%9C%8D%E5%8A%A1/">微服务 </a>
+    
+    <a href="https://code0xff.cn/tags/%E6%95%B0%E6%8D%AE%E5%BA%93/">数据库 </a>
+    
+    <a href="https://code0xff.cn/tags/%E6%B1%87%E7%BC%96/">汇编 </a>
+    
+    <a href="https://code0xff.cn/tags/%E6%B9%96%E4%BB%93%E4%B8%80%E4%BD%93/">湖仓一体 </a>
+    
+    <a href="https://code0xff.cn/tags/%E7%94%9F%E6%B4%BB/">生活 </a>
+    
+    <a href="https://code0xff.cn/tags/%E7%94%B5%E5%BD%B1/">电影 </a>
+    
+    <a href="https://code0xff.cn/tags/%E7%AE%97%E6%B3%95/">算法 </a>
+    
+    <a href="https://code0xff.cn/tags/%E7%BB%8F%E6%B5%8E/">经济 </a>
+    
+    <a href="https://code0xff.cn/tags/%E7%BC%93%E5%AD%98/">缓存 </a>
+    
+    <a href="https://code0xff.cn/tags/%E7%BC%96%E8%AF%91%E5%8E%9F%E7%90%86/">编译原理 </a>
+    
+    <a href="https://code0xff.cn/tags/%E7%BD%91%E7%BB%9C/">网络 </a>
+    
+    <a href="https://code0xff.cn/tags/%E8%AE%A1%E7%AE%97%E6%A1%86%E6%9E%B6/">计算框架 </a>
+    
+    <a href="https://code0xff.cn/tags/%E8%AE%BA%E6%96%87/">论文 </a>
+    
+    <a href="https://code0xff.cn/tags/%E8%AF%BB%E4%B9%A6%E7%AC%94%E8%AE%B0/">读书笔记 </a>
+    
+</div>
+    </section>
+
+    
+
+    <section class="widget">
+        <h3 class="widget-title">RSS</h3>
+        <ul class="widget-list">
+            <li><a href="https://code0xff.cn/index.xml">文章 RSS</a></li>
+        </ul>
+    </section>
+</div>
+            </div>
+        </div>
+    </div>
+    <footer id="footer">
+    <div>
+        &copy; 2022 <a href="https://code0xff.cn/">记录每个瞬间 By 老王</a>
+        
+    </div>
+    <br />
+    <div>
+        <div class="github-badge">
+            <a href="https://gohugo.io/" target="_black" rel="nofollow"><span class="badge-subject">Powered by</span><span class="badge-value bg-blue">Hugo</span></a>
+        </div>
+        <div class="github-badge">
+            <a href="https://github.com/flysnow-org/maupassant-hugo" target="_black"><span class="badge-subject">Theme</span><span class="badge-value bg-yellowgreen">Maupassant</span></a>
+        </div>
+    </div>
+    <div>
+        <a href="http://www.beian.miit.gov.cn/">京ICP备19014975号</a>
+    </div>
+</footer>
+
+
+    
+    <script type="text/javascript">
+        window.MathJax = {
+            tex2jax: {
+                inlineMath: [['$', '$']],
+                processEscapes: true
+                }
+            };
+    </script>
+    <script src='https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.5/MathJax.js?config=TeX-MML-AM_CHTML' async></script><script src="https://cdn.bootcdn.net/ajax/libs/fancybox/3.5.7/jquery.fancybox.min.js"></script>
+
+<a id="rocket" href="#top"></a>
+<script type="text/javascript" src='/js/totop.js?v=0.0.0' async=""></script>
+
+<script type="application/javascript">
+var doNotTrack = false;
+if (!doNotTrack) {
+	window.ga=window.ga||function(){(ga.q=ga.q||[]).push(arguments)};ga.l=+new Date;
+	ga('create', 'GA ID', 'auto');
+	
+	ga('send', 'pageview');
+}
+</script>
+<script async src='https://www.google-analytics.com/analytics.js'></script>
+
+
+
+    <script type="text/javascript" src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js" async></script>
+
+
+
+
+</body>
+
+</html>

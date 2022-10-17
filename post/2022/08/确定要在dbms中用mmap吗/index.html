@@ -1,0 +1,783 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    
+    <meta name="referrer" content="no-referrer-when-downgrade">
+    
+
+    <title>确定要在DBMS中用mmap吗 | 记录每个瞬间</title>
+    <meta property="og:title" content="确定要在DBMS中用mmap吗 - 记录每个瞬间">
+    <meta property="og:type" content="article">
+        
+    <meta property="article:published_time" content='2022-08-11T19:08:19&#43;08:00'>
+        
+        
+    <meta property="article:modified_time" content='2022-08-11T19:08:19&#43;08:00'>
+        
+    <meta name="Keywords" content="">
+    <meta name="description" content="确定要在DBMS中用mmap吗">
+        <meta name="author" content="隔壁老王">
+        
+    <meta property="og:url" content="https://code0xff.cn/post/2022/08/%E7%A1%AE%E5%AE%9A%E8%A6%81%E5%9C%A8dbms%E4%B8%AD%E7%94%A8mmap%E5%90%97/">
+    <link rel="shortcut icon" href='/favicon.ico'  type="image/x-icon">
+
+    <link rel="stylesheet" href='/css/normalize.css'>
+    <link rel="stylesheet" href='/css/style.css'>
+    <script type="text/javascript" src="//cdn.bootcdn.net/ajax/libs/jquery/3.4.1/jquery.min.js"></script>
+
+    
+    
+    
+        <link href="https://cdn.bootcdn.net/ajax/libs/fancybox/3.5.7/jquery.fancybox.min.css" rel="stylesheet">
+    
+    
+    
+    
+</head>
+
+
+<body>
+    <header id="header" class="clearfix">
+    <div class="container">
+        <div class="col-group">
+            <div class="site-name ">
+                
+                    <a id="logo" href="https://code0xff.cn/">
+                        记录每个瞬间
+                    </a>
+                
+                
+            </div>
+            <div>
+                <nav id="nav-menu" class="clearfix">
+                    <a class="current" href="https://code0xff.cn/">首页</a>
+                    
+                    <a  href="https://code0xff.cn/linked/" title="链接">链接</a>
+                    
+                    <a  href="https://code0xff.cn/archives/" title="归档">归档</a>
+                    
+                    <a  href="https://code0xff.cn/about/" title="关于">关于</a>
+                    
+                </nav>
+            </div>
+        </div>
+    </div>
+</header>
+
+    <div id="body">
+        <div class="container">
+            <div class="col-group">
+
+                <div class="col-8" id="main">
+                    
+<div class="res-cons">
+    
+    <article class="post">
+        <header>
+            <h1 class="post-title">确定要在DBMS中用mmap吗</h1>
+        </header>
+        <date class="post-meta meta-date">
+            2022年8月11日
+        </date>
+<nav id="TableOfContents">
+  <ul>
+    <li>
+      <ul>
+        <li><a href="#背景">背景</a></li>
+        <li><a href="#mmap介绍">mmap介绍</a></li>
+        <li><a href="#mmap的问题">mmap的问题</a>
+          <ul>
+            <li><a href="#问题1事务安全问题">问题1：事务安全问题</a></li>
+            <li><a href="#问题2io暂停">问题2：I/O暂停</a></li>
+            <li><a href="#问题3错误处理">问题3：错误处理</a></li>
+            <li><a href="#问题4性能问题">问题4：性能问题</a></li>
+          </ul>
+        </li>
+        <li><a href="#实验分析">实验分析</a></li>
+        <li><a href="#总结">总结</a></li>
+      </ul>
+    </li>
+  </ul>
+</nav>
+        
+        <div class="post-meta">
+            
+            <span class="post-meta meta-tags">
+                <ul class="clearfix">
+                    <a href='/categories/%E6%95%B0%E6%8D%AE%E5%BA%93'>数据库</a>
+                </ul>
+            </span>
+            
+        </div>
+        
+        
+        <div class="post-meta">
+            <span id="busuanzi_container_page_pv">|<span id="busuanzi_value_page_pv"></span><span>
+                    阅读</span></span>
+        </div>
+        
+        
+        <div class="post-content">
+            <blockquote>
+<p>原文地址  <br>
+<a href="https://db.cs.cmu.edu/mmap-cidr2022/">https://db.cs.cmu.edu/mmap-cidr2022/</a></p>
+</blockquote>
+<h2 id="背景">背景</h2>
+<p><code>mmap</code>是系统提供的一种特性，可以将磁盘上文件的地址映射到 程序的地址空间中，之后OS会透明的加载这些page，如果内存不够会主要驱逐page<br>
+<code>mmap</code>使用很方便，但会出现 正确性、性能方面的问题，而且很难发现<br>
+一些流行的DBMS一开始也使用<code>mmap</code>，后来他们出现了各种问题，就自己管理 文件I/O</p>
+<p>介绍</p>
+<ul>
+<li>面向磁盘的DBMS 可以支持大于 物理内存的数据，这就好像查询的时候整个数据都是在内存中一样</li>
+<li>这种方式是通过 page的换入、换出实现的，将page读入到内存中，如果不够，则清理那些不再使用的page</li>
+<li>传统方式下，DBMS使用 buffer pool实现 内存&lt;-&gt;磁盘的 page切换，用系统调用 read、write实现</li>
+<li>文件I/O机制将数据拷贝到用户态的buffer中，这样DBMS就可以完全控制它了</li>
+<li>另一种方式用<code>mmap</code>这个POSIX系统调用，将磁盘上的文件映射到调用者的虚拟地址空间中</li>
+<li>当DBMS访问page时，OS会采用懒惰的方式加载他们，这一切都是OS在幕后实现的</li>
+<li>理论上说，用<code>mmap</code>的性能应用比传统的buffer pool更好，因为免去了read、wirte系统调用</li>
+<li>也避免了将数据拷贝到用户态，DBMS可以直接访问OS的page cache</li>
+<li>1980年代早起，是有很多DBMS采用了这种方式，而且一些流行数据库也采用了，并一致沿用了这种方式</li>
+<li><code>mmap</code>其实有很多隐藏的问题，会导致安全性、性能问题，使用它增加了很多复杂性</li>
+</ul>
+<h2 id="mmap介绍">mmap介绍</h2>
+<p>mmap的工作方式，假设程序调用 mmap，加载 cidr.db</p>
+<ol>
+<li>调用mmap，返回一个指针，指向了文件的内存映射</li>
+<li>OS保留了程序的部分虚拟地址空间，但不加载任何文件内容</li>
+<li>程序使用指针访问 文件内容</li>
+<li>OS尝试去检索page</li>
+<li>由于映射的内容不在虚拟地址中，OS触发了缺页中断，从磁盘中加载文件部分内容到物理页中</li>
+<li>OS将一个条目增加到 page table，这条内容是 虚拟地址 -&gt; 物理地址的 映射</li>
+<li>将这个条目加载到CPU的 TLB translation lookaside buffer，为后续读取加速</li>
+</ol>
+<p>OS会负责加载需要访问的page，并驱逐旧的page，同时会</p>
+<ul>
+<li>从 page table中删除映射条目</li>
+<li>从 每个CPU的 TLB中删除映射条目</li>
+</ul>
+<p>虽然可以直接将当前CPU 核的cache刷新，但是没法通知远端CPU核<br>
+CPU也没有提供这种对于远端一致性的功能，所以只能触发：内部处理器中断<br>
+inter-processor interrupt<br>
+将结果刷新到所有远端CPU，这也叫：TLB shootdown   <br>
+从测试结果看，这种操作会带来严重的性能影响</p>
+<p>POSIX API<br>
+下面来介绍 内容映射文件I/O mmap的API</p>
+<ul>
+<li>mmap
+<ul>
+<li>OS会将文件内容映射到调用者的虚拟地址空间中</li>
+<li>MAP_SHARED会将更改最终写回到磁盘</li>
+<li>MAP_PRIVATE使用copy-on-write模式，并不会持久到磁盘文件中</li>
+</ul>
+</li>
+<li>madvise
+<ul>
+<li>告诉OS想要访问数据的模式，它提供了一种访问page的粒度，比如全部还是指定的page范围</li>
+<li>三个通用的指标：MADV_NORMAL, MADV_RANDOM, and MADV_SEQUENTIAL</li>
+<li>当出现缺页中断时，默认会使用MADV_NORMAL，此时OS将抓取将要访问的页，以及前面15个，后面16个页</li>
+<li>一共从磁盘读128K数据(即使调用者只需要一个page)，根据场景不同这种预抓取会损害性能、或也有帮助</li>
+<li>MADV_RANDOM只抓取一个也，对于OLTP场景比较合适</li>
+<li>MADV_SEQUENTIAL对于OLAP比较时候，会顺序扫描</li>
+</ul>
+</li>
+<li>mlock
+<ul>
+<li>OS将某个page钉在内存中，不会将其驱逐出去</li>
+<li>但是根据POSIX标准，linux实现，OS允许任何时刻刷新脏页到磁盘上，即使脏页被钉住</li>
+<li>所以DBMS不能确保使用mlock，脏页就不会写磁盘，这对事物安全有严重影响</li>
+</ul>
+</li>
+<li>msync
+<ul>
+<li>显示的将指定的内存范围刷新到磁盘上</li>
+<li>如果没有这个函数，DBMS就没有其他方式能保证更新被持久化</li>
+</ul>
+</li>
+</ul>
+<p>mmap的问题<br>
+最早使用mmap的是在1990年代，现在也有一批数据库在使用mmap</p>
+<table>
+<thead>
+<tr>
+<th>DBMS</th>
+<th>MMAP Use</th>
+<th>Details</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>MonetDB</td>
+<td>2002–</td>
+<td>[12, 21]</td>
+</tr>
+<tr>
+<td>MongoDB</td>
+<td>2009–2019</td>
+<td>[14, 3]</td>
+</tr>
+<tr>
+<td>LevelDB</td>
+<td>2011–</td>
+<td>[5]</td>
+</tr>
+<tr>
+<td>LMDB</td>
+<td>2011–</td>
+<td>[20]</td>
+</tr>
+<tr>
+<td>SQLite</td>
+<td>2013–</td>
+<td>[7]</td>
+</tr>
+<tr>
+<td>SingleStore</td>
+<td>2013–2015</td>
+<td>[32]</td>
+</tr>
+<tr>
+<td>QuestDB</td>
+<td>2014–</td>
+<td>[34]</td>
+</tr>
+<tr>
+<td>RavenDB</td>
+<td>2014–</td>
+<td>[4]</td>
+</tr>
+<tr>
+<td>InfluxDB</td>
+<td>2015–2020</td>
+<td>[8, 1]</td>
+</tr>
+<tr>
+<td>WiredTiger</td>
+<td>2020–</td>
+<td>[17]</td>
+</tr>
+</tbody>
+</table>
+<p>MoneDB 存储独立的列使用mmap，SQLite也提供了mmap，而不是read、write系统调用<br>
+其他如LMDB，完全使用mmap</p>
+<p>这里列举了 MongoDB的例子</p>
+<ul>
+<li>早期的时候，为了方便MongoDB也是用mmap的</li>
+<li>但是缺点是带来了复杂的拷贝模式，也没法对二级存储上的数据做压缩</li>
+<li>因为mmap 需要让 内存布局匹配磁盘上的物理布局，这就导致了空间浪费，低效的I/O</li>
+<li>2015年的时候，引入了<code>WiredTiger</code>，在2019年完全废弃了第一代的存储<code>MMAPv1</code></li>
+<li>不过在2020年，又重新引入了mmap作为 WiredTiger 的一个可选项</li>
+<li>但这个选项会有一些使用上的限制，避免在用户态 &lt;-&gt; 内核态之间转换的时候出现问题</li>
+</ul>
+<p>InfluxDB</p>
+<ul>
+<li>早期的时候也是用 mmap、</li>
+<li>当数据库大于几个G的时候，出现了I/O写入峰值，可能跟页驱逐有关</li>
+<li>当面临容器环境，或者主机没有直接挂载的磁盘时(云环境)，也暴露出了很多问题，不得不替换mmap</li>
+</ul>
+<p>其他</p>
+<ul>
+<li>SingleStore使用mmap时，发现每个查询时mmap调用需要10-20毫秒，差不多是查询的一半时间</li>
+<li>这是因为共享的mmap lock，引发的竞争导致的</li>
+<li>facebook fork了谷歌的levelDB，搞出了RocksDB，因为levelDB使用了mmap导致的性能问题</li>
+<li>TileDB发现使用mmap在SSD时，比raed系统调用</li>
+<li>Scylla，一个分布式NoSQL，评估了几种文件I/O方案后，拒绝了mmap，因为会失去系细粒度控制，比如驱逐策略，IO的操作调度</li>
+<li>VictoriaMetrics这个时序库发现，mmap在缺页中断时会阻塞</li>
+<li>RDF-3X，发现mmap在windows和POSIX的实现 并不兼容</li>
+</ul>
+<h2 id="mmap的问题">mmap的问题</h2>
+<p>使用<code>mmap</code>会带来很多严重的问题，下面来讨论</p>
+<h3 id="问题1事务安全问题">问题1：事务安全问题</h3>
+<p>OS可能在任何时候将脏页刷新到磁盘上，不管写入的事务是否提交<br>
+同样，DBMS也无法阻止OS这样做，并且在flush的时候也收不到任何警告<br>
+为了确保不违反事务的安全性保证，DBMS需要实现复制的协议，一般来说包括</p>
+<ul>
+<li>OS的写时拷贝</li>
+<li>用户态的写时拷贝</li>
+<li>影子页，shadow page</li>
+</ul>
+<p>这里假设，DBMS存储的数据都是单个页的<br>
+OS Copy-On-Write</p>
+<ul>
+<li>使用mmap创建两个数据库文件拷贝，初始的时候两个都指向相同的物理page</li>
+<li>首先使用主拷贝来处理服务</li>
+<li>当有事务更新时，副拷贝会在私有空间处理，创建私有空间使用 MAP_PRIVATE 选项</li>
+<li>这使用了OS的写时复制特性，只有MongoDB的MMAPv1存储引擎实现了这种方式</li>
+<li>DMBS之后在私有空间中更新这些page，OS会透明的将内容拷贝到物理页中</li>
+<li>重新映射虚拟内存地址 -&gt; 副本内容，主副本也看不到这些变更</li>
+<li>为了确保修改被持久化，需要WAL机制</li>
+<li>当事务提交时，刷新对应的WAL到磁盘，并在后台将提交的内容变更到主拷贝上</li>
+</ul>
+<p>管理这些独立的拷贝会有这么一些问题</p>
+<ul>
+<li>(1)DBMS需要确保，在允许冲突的事务运行之前，事务提交的最新更新传播到了主拷贝中</li>
+<li>这需要增加一个机制，能跟踪正在处理的page的更新</li>
+<li>(2)私有的拷贝随着不断的更新会越来越大，DBMS需要周期的收缩私有空间，调用mremap</li>
+<li>但是DBMS同样要确保，在销毁私有空间之前，正在处理的更新要传播到主拷贝中</li>
+<li>为了确保在 mremap时丢失所有的更新，DBMS需要锁住正处理的更新，直到完成了私有空间的压缩</li>
+</ul>
+<p>User Space Copy-On-Write</p>
+<ul>
+<li>跟OS copy-on-write差不多，这个更偏手动一些，把影响的page拷贝到用户态的buffer pool中</li>
+<li>SQLite、MonetDB、RaventDB等都使用了这个方式的变种</li>
+<li>为完成更新，DBMS需要对更改做拷贝，并创建对应的WAL记录</li>
+<li>通过写入WAL到持久存储，完成提交</li>
+<li>在这个点上，可以安全的拷贝修改的page到mmap的后端内存</li>
+<li>拷贝整个page太浪费了，一些DBMS仅将WAL修改的直接应用到mmap后端内存中</li>
+</ul>
+<p>Shadow Paging</p>
+<ul>
+<li>LMDB是这个方式的最著名的实现着，它是一款嵌入式内存数据库</li>
+<li>最早的实现是 System R</li>
+<li>DBMS需要管理主page和影子拷贝，他们两都是用mmap来管理的</li>
+<li>为实现更新，DBMS将影响的page从主拷贝到 影子拷贝，然后应用更新</li>
+<li>提交变更牵涉到flush影子页的修改到 磁盘中，使用了 msync函数</li>
+<li>然后把指针指向影子页，当做新的主page；而原先的主page现在当做影子页</li>
+<li>这个实现不复制，但DBMS需要确保事务没有冲突，并且不会看到部分更新</li>
+<li>LMDB的解决方案是，只允许单个写入者</li>
+</ul>
+<h3 id="问题2io暂停">问题2：I/O暂停</h3>
+<p>可能发生阻塞的情况</p>
+<ul>
+<li>传统的DBMS可以用异步I/O，比如 libaio、io_uring避免查询中的线程阻塞</li>
+<li>对于B+树要扫描页节点，DBMS可以异步处理读请求，对于不连续的页 不会引起延迟</li>
+<li>但是 mmap 不支持异步读</li>
+<li>访问任何页都可能会触发未知的I/O停住，因为DBMS访问的页不在内存中，导致了缺页中断</li>
+<li>为避免这种问题，DBMS采用了 mlock函数，将某个page钉在内存中，避免去驱逐</li>
+<li>但是OS限制了每个处理器可以钉住的page数量，因为钉住太多page会导致并发访问的问题，甚至OS本身都会有问题</li>
+<li>DBMS需要小心的处理并跟踪这些page，需要对那些不再使用的page，取消钉住</li>
+<li>另一个问题是 madvise，告诉OS需要的访问模式</li>
+<li>比如MADV_SEQUENTIAL，对于顺序扫描的情况，它告诉OS对于已经读取的page将其驱逐，并预加载连续的将要访问的page</li>
+<li>这种方式比mlock简单，但是OS可能会忽略这些提示</li>
+<li>如果用错地方了，比如对于随机访问的场景，用了MADV_SEQUENTIAL，会导致性能问题</li>
+</ul>
+<p>可以创建新线程来处于预抓取，这样就只会阻塞在独立的线程中，不会影响主线程了<br>
+尽管这种方式可以部分解决一些问题，但是也引入了额外的复杂性，这就跟引入 mmap的目的相违背了<br>
+毕竟，用 mmap只是考虑其简洁、便利的</p>
+<h3 id="问题3错误处理">问题3：错误处理</h3>
+<p>问题描述</p>
+<ul>
+<li>DBMS需要确保数据的完整性，所以像SQL Server，会在页级别增加checksum</li>
+<li>当从磁盘读取page时，DMBS会根据page的头中的checksum对内容做校验</li>
+<li>但是使用mmap时，OS可能会在上一次访问之后，就将这个page驱逐到磁盘中了</li>
+<li>这样不得不每次访问page都要做一次checksum</li>
+<li>很多数据库都使用了内存不安全的语言，指针可能会破坏内存中的page</li>
+<li>带有防御性检查的buffer pool在写入磁盘之前会做检查，但是mmap就很难做到了</li>
+<li>优雅的处理I/O错误很重要，传统的buffer pool处理I/O错误可能是在单个模块中</li>
+<li>而使用了mmap之后，可能会需要跨模块处理，这样就需要处理信号 singnal了，代价比较高</li>
+</ul>
+<h3 id="问题4性能问题">问题4：性能问题</h3>
+<p>mmap的最大问题是影响性能，尽管DBMS的开发者可能会认为这些都可以克服<br>
+不过论文的作者们认为，如果不对OS级别做重新设计，mmap的瓶颈问题很难解决<br>
+通常认为mmap比传统的文件I/O性能更好</p>
+<ul>
+<li>避免了显示的read、write系统调用，OS来处理文件映射和缺页中断</li>
+<li>mmap可以返回一个指针，指向内核态的page存储，因此避免了额外的拷贝到用户态这个过程</li>
+</ul>
+<p>在这种优势情况下，如果使用了性能更好的硬件设备，如 PCIe 5.0 NVMe，那么优势会继续扩大<br>
+但是事实是，对于高带宽的二级存储，大于内存的DBMS场景，OS的页驱逐机制，大概就只能扩展到几个线程<br>
+我们也识别出几个主要的性能问题</p>
+<ul>
+<li>page table的竞争</li>
+<li>单线程的页驱逐</li>
+<li>TLB shootdowns</li>
+</ul>
+<p>前面两个可以通过调整OS参数来缓解这些问题，但是 TLB shootdowns则很难处理<br>
+当一个CPU核将TLB变得无效时，本地flush的代价不高，但是需要触发 内部的处理器中断<br>
+这是一个同步操作，将远端TLB也变得无效，这个操作会导致 几千个时钟周期的开销<br>
+目前看想解决这个问题：</p>
+<ul>
+<li>修改处理器架构，采用微处理器架构</li>
+<li>大量的修改OS内核</li>
+</ul>
+<h2 id="实验分析">实验分析</h2>
+<p>机器是</p>
+<ul>
+<li>AMD EPYC 7713,64核，128线程</li>
+<li>512G内存</li>
+<li>10 * 3.8TB SSD，读 7000M/s，写3800M/s</li>
+<li>OS的page cache设置为100G</li>
+<li>用 fio作为测试工具，并设置了 O_DIRECT标志</li>
+<li>对于更新场景需要额外复杂的工作，所以只测试两个场景</li>
+<li>随机读、顺序读</li>
+</ul>
+<p>随机读</p>
+<ul>
+<li>读取2TB的数据，由于page cache只有100G，所以95%的读取都会导致缺页失败</li>
+<li>只用fio + O_DIRECT读，一共100个线程，大概每秒 900K</li>
+<li>延迟大概100微妙，接近NVMe SSD的峰值</li>
+<li>观察TLB是通过 /proc/interrupt 来观察的</li>
+<li>TLB shootdowns会引发内部处理器中断，耗时几千个时钟周期；另外只有单CPU核刷新</li>
+<li>CPU还必须同步page table，这也导致了大量的线程并发竞争情况</li>
+<li>在随机读的时候，前27秒使用 MADV_RANDOM 是很好的，跟 fio的差不多</li>
+<li>但是后面5秒就变成0了，此时是在页面驱逐，后面就反反复复的，大概只有fio的一半</li>
+<li>其他两个则更差</li>
+</ul>
+<p>顺序读</p>
+<ul>
+<li>这是模拟OLAP场景，扫描2TB数据，一开始使用单个SSD，后面使用10个做RAID 0</li>
+<li>fio依然是非常稳定</li>
+<li>MADV_NORMAL、MADV_SEQUENTIAL 一开始还不错，接近fio</li>
+<li>但当出现页面驱逐时，效率就很低了，大概只有一半，而随机的更差</li>
+<li>对于10个SSD场景，fio会提高10倍，但是mmap没有任何提升，最后fio差不多是mmap的20倍</li>
+</ul>
+<p>结论是</p>
+<ul>
+<li>mmap的性能只在初始时跟fio差不多，而且是单SSD场景</li>
+<li>一旦出现页面驱逐，或者多个SSD场景，则有 2-20倍的差距</li>
+<li>mmap在性能方面跟传统文件I/O 无法比较</li>
+</ul>
+<h2 id="总结">总结</h2>
+<p>目前没有对现代 DBMS使用mmap的研究<br>
+为了确保事务安全，有一个新的工作特性被引入：原子的 msync调用<br>
+普通场景来说，如果在 msync时候发生了宕机，DBMS不知道哪个页被成功写磁盘了<br>
+而原子 msync跟普通msync类似，但提供了原子性保证<br>
+它有一个副作用，就是失败的原子 msync会禁止OS级别的透明页驱逐能力，这样就不会出现之前描述的安全问题<br>
+有一个数据库 Kreon，实现了自定义的 kmmap，将复杂的copy-on-write特性合并进来<br>
+确保了事务的一致性<br>
+其他一些研究项目，不仅仅是替换 buffer pool，而做了很多有趣的事情</p>
+<ul>
+<li>有一个项目，利用OS mmap虚拟页的机制，实现了一个低开销的方式，将冷数据迁移到二级存储上</li>
+<li>RUMA 利用mmap“重写”页映射，实现各种操作，比如排序，这样就不用真正的物理拷贝数据</li>
+</ul>
+<p>最近也有一些想法，利用指针切换比较开销<br>
+不过我们的想法是，轻量级的buffer pool是最好的实现方式<br>
+它跟mmap性能差不多，但不会有它的缺陷</p>
+<p>相关文章和参考</p>
+<ul>
+<li><a href="https://blog.csdn.net/qq_35192280/article/details/112971258">WiredTiger系列1:数据页详解</a></li>
+<li><a href="https://www.bookstack.cn/read/aliyun-rds-core/443245c0392bf725.md">MongoDB · 内核特性 · wiredtiger page逐出</a></li>
+<li><a href="https://www.mongodb.com/docs/manual/storage/">MongoDB 官网</a></li>
+<li><a href="https://blog.csdn.net/q936889811/article/details/88534783">WiredTiger 原理知识</a></li>
+</ul>
+
+			<script type="text/javascript"
+        async
+        src="https://cdn.bootcss.com/mathjax/2.7.3/MathJax.js?config=TeX-AMS-MML_HTMLorMML">
+MathJax.Hub.Config({
+  tex2jax: {
+    inlineMath: [['$','$'], ['\\(','\\)']],
+    displayMath: [['$$','$$'], ['\[\[','\]\]']],
+    processEscapes: true,
+    processEnvironments: true,
+    skipTags: ['script', 'noscript', 'style', 'textarea', 'pre'],
+    TeX: { equationNumbers: { autoNumber: "AMS" },
+         extensions: ["AMSmath.js", "AMSsymbols.js"] }
+  }
+});
+
+MathJax.Hub.Queue(function() {
+    
+    
+    
+    var all = MathJax.Hub.getAllJax(), i;
+    for(i = 0; i < all.length; i += 1) {
+        all[i].SourceElement().parentNode.className += ' has-jax';
+    }
+});
+</script>
+
+<style>
+code.has-jax {
+    font: inherit;
+    font-size: 100%;
+    background: inherit;
+    border: inherit;
+    color: #515151;
+}
+</style>
+        </div>
+
+        
+
+
+        
+
+<div class="post-archive">
+    <h2>相关文章</h2>
+    <ul class="listing">
+        
+        <li><a href="/post/2022/08/%E4%B8%BA%E4%BD%95uber%E8%A6%81%E5%B0%86postgresql%E8%BF%81%E5%88%B0mysql/">为何Uber要将PostgreSQL迁到MySQL</a></li>
+        
+        <li><a href="/post/2022/07/cmu%E6%95%B0%E6%8D%AE%E5%BA%93%E8%AF%BE%E7%A8%8B/">卡内基梅隆的数据库课程-1</a></li>
+        
+        <li><a href="/post/2022/07/cmu%E6%95%B0%E6%8D%AE%E5%BA%93%E8%AF%BE%E7%A8%8B-2/">卡内基梅隆的数据库课程-2</a></li>
+        
+        <li><a href="/post/2022/07/cmu%E6%95%B0%E6%8D%AE%E5%BA%93%E8%AF%BE%E7%A8%8B-3/">卡内基梅隆的数据库课程-3</a></li>
+        
+        <li><a href="/post/2022/07/cmu%E6%95%B0%E6%8D%AE%E5%BA%93%E8%AF%BE%E7%A8%8B-4/">卡内基梅隆的数据库课程-4</a></li>
+        
+    </ul>
+</div>
+
+
+        <div class="post-meta meta-tags">
+            
+            <ul class="clearfix">
+                
+                <li><a href='/tags/%E6%95%B0%E6%8D%AE%E5%BA%93'>数据库</a></li>
+                
+                <li><a href='/tags/%E8%AE%BA%E6%96%87'>论文</a></li>
+                
+            </ul>
+            
+        </div>
+    </article>
+    
+    
+
+    
+    
+</div>
+
+
+                </div>
+
+                <div id="secondary">
+    <section class="widget">
+        <form id="search" action='https://code0xff.cn/search/' method="get" accept-charset="utf-8" target="_blank" _lpchecked="1">
+      
+      <input type="text" name="q" maxlength="20" placeholder="Search">
+      <input type="hidden" name="sitesearch" value="https://code0xff.cn/">
+      <button type="submit" class="submit icon-search"></button>
+</form>
+    </section>
+    
+    <section class="widget">
+        <h3 class="widget-title">最近文章</h3>
+<ul class="widget-list">
+    
+    <li>
+        <a href="https://code0xff.cn/post/2022/10/%E5%AE%B9%E5%99%A8%E7%BD%91%E7%BB%9C/" title="容器网络">容器网络</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.cn/post/2022/10/b&#43;%E6%A0%91%E6%89%A7%E8%A1%8C%E8%BF%87%E7%A8%8B/" title="B&#43;树执行过程">B&#43;树执行过程</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.cn/post/2022/09/k8s%E4%BD%BF%E7%94%A8/" title="k8s POD使用总结">k8s POD使用总结</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.cn/post/2022/09/architecture-of-a-database-system/" title="Architecture of a Database System论文翻译">Architecture of a Database System论文翻译</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.cn/post/2022/08/a-relational-model-of-data-for-large-shared-data-banks/" title="A Relational Model of Data for Large Shared Data Banks论文翻译">A Relational Model of Data for Large Shared Data Banks论文翻译</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.cn/post/2022/08/%E7%A1%AE%E5%AE%9A%E8%A6%81%E5%9C%A8dbms%E4%B8%AD%E7%94%A8mmap%E5%90%97/" title="确定要在DBMS中用mmap吗">确定要在DBMS中用mmap吗</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.cn/post/2022/08/%E4%B8%BA%E4%BD%95uber%E8%A6%81%E5%B0%86postgresql%E8%BF%81%E5%88%B0mysql/" title="为何Uber要将PostgreSQL迁到MySQL">为何Uber要将PostgreSQL迁到MySQL</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.cn/post/2022/07/cmu%E6%95%B0%E6%8D%AE%E5%BA%93%E8%AF%BE%E7%A8%8B/" title="卡内基梅隆的数据库课程-1">卡内基梅隆的数据库课程-1</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.cn/post/2022/07/cmu%E6%95%B0%E6%8D%AE%E5%BA%93%E8%AF%BE%E7%A8%8B-2/" title="卡内基梅隆的数据库课程-2">卡内基梅隆的数据库课程-2</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.cn/post/2022/07/cmu%E6%95%B0%E6%8D%AE%E5%BA%93%E8%AF%BE%E7%A8%8B-3/" title="卡内基梅隆的数据库课程-3">卡内基梅隆的数据库课程-3</a>
+    </li>
+    
+</ul>
+    </section>
+
+    
+
+    <section class="widget">
+        <h3 class="widget-title"><a href='/categories/'>分类</a></h3>
+<ul class="widget-list">
+    
+    <li><a href="https://code0xff.cn/categories/%E5%88%86%E5%B8%83%E5%BC%8F/">分布式 (6)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E5%95%86%E4%B8%9A/">商业 (3)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E5%A4%A7%E6%95%B0%E6%8D%AE/">大数据 (16)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E6%95%B0%E6%8D%AE%E5%BA%93/">数据库 (6)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E6%97%85%E8%A1%8C/">旅行 (10)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E6%9E%B6%E6%9E%84/">架构 (1)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E7%AE%97%E6%B3%95/">算法 (8)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E7%B3%BB%E7%BB%9F/">系统 (4)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E7%BC%96%E7%A8%8B%E8%AF%AD%E8%A8%80/">编程语言 (2)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E8%AF%BB%E4%B9%A6%E7%AC%94%E8%AE%B0/">读书笔记 (9)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E9%9A%8F%E4%BE%BF%E5%86%99%E5%86%99/">随便写写 (4)</a></li>
+    
+</ul>
+    </section>
+
+    <section class="widget">
+        <h3 class="widget-title">归档</a></h3>
+<ul class="widget-list">
+    
+    <li><a href="https://code0xff.cn/years/2021%E5%B9%B4/">2021年 (30)</a></li>
+    
+    <li><a href="https://code0xff.cn/years/2022%E5%B9%B4/">2022年 (39)</a></li>
+    
+</ul>
+    </section>
+
+    <section class="widget">
+        <h3 class="widget-title"><a href='/tags/'>标签</a></h3>
+<div class="tagcloud">
+    
+    <a href="https://code0xff.cn/tags/b%E6%A0%91/">B树 </a>
+    
+    <a href="https://code0xff.cn/tags/hive/">Hive </a>
+    
+    <a href="https://code0xff.cn/tags/k8s/">k8s </a>
+    
+    <a href="https://code0xff.cn/tags/kudu/">kudu </a>
+    
+    <a href="https://code0xff.cn/tags/manacher/">Manacher </a>
+    
+    <a href="https://code0xff.cn/tags/mapreduce/">MapReduce </a>
+    
+    <a href="https://code0xff.cn/tags/paxos/">paxos </a>
+    
+    <a href="https://code0xff.cn/tags/raft/">raft </a>
+    
+    <a href="https://code0xff.cn/tags/scala/">scala </a>
+    
+    <a href="https://code0xff.cn/tags/snowflake/">snowflake </a>
+    
+    <a href="https://code0xff.cn/tags/spark/">spark </a>
+    
+    <a href="https://code0xff.cn/tags/unix/">unix </a>
+    
+    <a href="https://code0xff.cn/tags/%E4%BA%8C%E5%88%86%E6%9F%A5%E6%89%BE/">二分查找 </a>
+    
+    <a href="https://code0xff.cn/tags/%E4%BA%8C%E5%8F%89%E6%A0%91%E9%81%8D%E5%8E%86/">二叉树遍历 </a>
+    
+    <a href="https://code0xff.cn/tags/%E5%88%86%E5%B8%83%E5%BC%8F/">分布式 </a>
+    
+    <a href="https://code0xff.cn/tags/%E5%8A%A8%E6%80%81%E6%B3%A8%E5%85%A5/">动态注入 </a>
+    
+    <a href="https://code0xff.cn/tags/%E5%8E%86%E5%8F%B2/">历史 </a>
+    
+    <a href="https://code0xff.cn/tags/%E5%9B%9E%E6%BA%AF/">回溯 </a>
+    
+    <a href="https://code0xff.cn/tags/%E5%9B%BD%E5%86%85%E6%97%85%E8%A1%8C/">国内旅行 </a>
+    
+    <a href="https://code0xff.cn/tags/%E5%9B%BD%E5%A4%96%E6%97%85%E8%A1%8C/">国外旅行 </a>
+    
+    <a href="https://code0xff.cn/tags/%E5%AD%98%E5%82%A8/">存储 </a>
+    
+    <a href="https://code0xff.cn/tags/%E5%B7%A5%E4%BD%9C%E8%AE%B0%E5%BD%95/">工作记录 </a>
+    
+    <a href="https://code0xff.cn/tags/%E5%BE%AE%E6%9C%8D%E5%8A%A1/">微服务 </a>
+    
+    <a href="https://code0xff.cn/tags/%E6%95%B0%E6%8D%AE%E5%BA%93/">数据库 </a>
+    
+    <a href="https://code0xff.cn/tags/%E6%B1%87%E7%BC%96/">汇编 </a>
+    
+    <a href="https://code0xff.cn/tags/%E6%B9%96%E4%BB%93%E4%B8%80%E4%BD%93/">湖仓一体 </a>
+    
+    <a href="https://code0xff.cn/tags/%E7%94%9F%E6%B4%BB/">生活 </a>
+    
+    <a href="https://code0xff.cn/tags/%E7%94%B5%E5%BD%B1/">电影 </a>
+    
+    <a href="https://code0xff.cn/tags/%E7%AE%97%E6%B3%95/">算法 </a>
+    
+    <a href="https://code0xff.cn/tags/%E7%BB%8F%E6%B5%8E/">经济 </a>
+    
+    <a href="https://code0xff.cn/tags/%E7%BC%93%E5%AD%98/">缓存 </a>
+    
+    <a href="https://code0xff.cn/tags/%E7%BC%96%E8%AF%91%E5%8E%9F%E7%90%86/">编译原理 </a>
+    
+    <a href="https://code0xff.cn/tags/%E7%BD%91%E7%BB%9C/">网络 </a>
+    
+    <a href="https://code0xff.cn/tags/%E8%AE%A1%E7%AE%97%E6%A1%86%E6%9E%B6/">计算框架 </a>
+    
+    <a href="https://code0xff.cn/tags/%E8%AE%BA%E6%96%87/">论文 </a>
+    
+    <a href="https://code0xff.cn/tags/%E8%AF%BB%E4%B9%A6%E7%AC%94%E8%AE%B0/">读书笔记 </a>
+    
+</div>
+    </section>
+
+    
+
+    <section class="widget">
+        <h3 class="widget-title">RSS</h3>
+        <ul class="widget-list">
+            <li><a href="https://code0xff.cn/index.xml">文章 RSS</a></li>
+        </ul>
+    </section>
+</div>
+            </div>
+        </div>
+    </div>
+    <footer id="footer">
+    <div>
+        &copy; 2022 <a href="https://code0xff.cn/">记录每个瞬间 By 老王</a>
+        
+    </div>
+    <br />
+    <div>
+        <div class="github-badge">
+            <a href="https://gohugo.io/" target="_black" rel="nofollow"><span class="badge-subject">Powered by</span><span class="badge-value bg-blue">Hugo</span></a>
+        </div>
+        <div class="github-badge">
+            <a href="https://github.com/flysnow-org/maupassant-hugo" target="_black"><span class="badge-subject">Theme</span><span class="badge-value bg-yellowgreen">Maupassant</span></a>
+        </div>
+    </div>
+    <div>
+        <a href="http://www.beian.miit.gov.cn/">京ICP备19014975号</a>
+    </div>
+</footer>
+
+
+    
+    <script type="text/javascript">
+        window.MathJax = {
+            tex2jax: {
+                inlineMath: [['$', '$']],
+                processEscapes: true
+                }
+            };
+    </script>
+    <script src='https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.5/MathJax.js?config=TeX-MML-AM_CHTML' async></script><script src="https://cdn.bootcdn.net/ajax/libs/fancybox/3.5.7/jquery.fancybox.min.js"></script>
+
+<a id="rocket" href="#top"></a>
+<script type="text/javascript" src='/js/totop.js?v=0.0.0' async=""></script>
+
+<script type="application/javascript">
+var doNotTrack = false;
+if (!doNotTrack) {
+	window.ga=window.ga||function(){(ga.q=ga.q||[]).push(arguments)};ga.l=+new Date;
+	ga('create', 'GA ID', 'auto');
+	
+	ga('send', 'pageview');
+}
+</script>
+<script async src='https://www.google-analytics.com/analytics.js'></script>
+
+
+
+    <script type="text/javascript" src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js" async></script>
+
+
+
+
+</body>
+
+</html>
