@@ -1,0 +1,581 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    
+    <meta name="referrer" content="no-referrer-when-downgrade">
+    
+
+    <title>MillWheel | 记录每个瞬间</title>
+    <meta property="og:title" content="MillWheel - 记录每个瞬间">
+    <meta property="og:type" content="article">
+        
+    <meta property="article:published_time" content='2022-11-18T08:35:19&#43;08:00'>
+        
+        
+    <meta property="article:modified_time" content='2022-11-18T08:35:19&#43;08:00'>
+        
+    <meta name="Keywords" content="">
+    <meta name="description" content="MillWheel">
+        <meta name="author" content="隔壁老王">
+        
+    <meta property="og:url" content="https://code0xff.cn/post/2022/11/millwheel/">
+    <link rel="shortcut icon" href='/favicon.ico'  type="image/x-icon">
+
+    <link rel="stylesheet" href='/css/normalize.css'>
+    <link rel="stylesheet" href='/css/style.css'>
+    <script type="text/javascript" src="//cdn.bootcdn.net/ajax/libs/jquery/3.4.1/jquery.min.js"></script>
+
+    
+    
+    
+        <link href="https://cdn.bootcdn.net/ajax/libs/fancybox/3.5.7/jquery.fancybox.min.css" rel="stylesheet">
+    
+    
+    
+    
+</head>
+
+
+<body>
+    <header id="header" class="clearfix">
+    <div class="container">
+        <div class="col-group">
+            <div class="site-name ">
+                
+                    <a id="logo" href="https://code0xff.cn/">
+                        记录每个瞬间
+                    </a>
+                
+                
+            </div>
+            <div>
+                <nav id="nav-menu" class="clearfix">
+                    <a class="current" href="https://code0xff.cn/">首页</a>
+                    
+                    <a  href="https://code0xff.cn/linked/" title="链接">链接</a>
+                    
+                    <a  href="https://code0xff.cn/archives/" title="归档">归档</a>
+                    
+                    <a  href="https://code0xff.cn/about/" title="关于">关于</a>
+                    
+                </nav>
+            </div>
+        </div>
+    </div>
+</header>
+
+    <div id="body">
+        <div class="container">
+            <div class="col-group">
+
+                <div class="col-8" id="main">
+                    
+<div class="res-cons">
+    
+    <article class="post">
+        <header>
+            <h1 class="post-title">MillWheel</h1>
+        </header>
+        <date class="post-meta meta-date">
+            2022年11月18日
+        </date>
+<nav id="TableOfContents">
+  <ul>
+    <li>
+      <ul>
+        <li><a href="#introduction">INTRODUCTION</a></li>
+        <li><a href="#system-overview">SYSTEM OVERVIEW</a></li>
+        <li><a href="#core-concepts">CORE CONCEPTS</a></li>
+      </ul>
+    </li>
+  </ul>
+</nav>
+        
+        <div class="post-meta">
+            
+            <span class="post-meta meta-tags">
+                <ul class="clearfix">
+                    <a href='/categories/%E5%A4%A7%E6%95%B0%E6%8D%AE'>大数据</a>
+                </ul>
+            </span>
+            
+        </div>
+        
+        
+        <div class="post-meta">
+            <span id="busuanzi_container_page_pv">|<span id="busuanzi_value_page_pv"></span><span>
+                    阅读</span></span>
+        </div>
+        
+        
+        <div class="post-content">
+            <blockquote>
+<p>论文：  <br>
+<a href="https://storage.googleapis.com/pub-tools-public-publication-data/pdf/41378.pdf">MillWheel: Fault-Tolerant Stream Processing at
+Internet Scale</a></p>
+</blockquote>
+<h2 id="introduction">INTRODUCTION</h2>
+<p>MillWheel是谷歌搞的一套分布式、低延迟的数据处理框架</p>
+<ul>
+<li>支持各种数据模型</li>
+<li>天生支持容错</li>
+<li>低延迟</li>
+<li>可以做到精确一次</li>
+</ul>
+<p>其他的如</p>
+<ul>
+<li>Spark Streaming、Sonora限制了用户代码能力</li>
+<li>S4 不提供完全容错的持久状态</li>
+<li>Strom提供精确一次</li>
+<li>Trident 限制了事务操作的顺序</li>
+</ul>
+<p>谷歌内部有这个需求：需要统计热点趋势信息，比如电视收视率情况<br>
+这需要根据查询构建出历史信息，而且新来的数据需要存储下来，为以后的查询使用<br>
+查询可以反映出波峰和低谷的，如果统计出有异常，需要报告给其他系统并发出通知<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2022/11/millwheel/1.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2022/11/millwheel/1.jpg" />
+        </a>
+    </p>
+<p>MillWheel需要实现如下逻辑</p>
+<ul>
+<li>当数据可用时，需要立刻被发布出去</li>
+<li>需要提供持久状态，并整合到系统的一致性模型中</li>
+<li>要能处理乱序数据</li>
+<li>系统能根据一个单调递增的低水印时间戳来计算</li>
+<li>当增加更多机器时，延迟应该继续保持常数不变</li>
+<li>系统能提供精确一次的记录交付</li>
+</ul>
+<h2 id="system-overview">SYSTEM OVERVIEW</h2>
+<p>从一个高层的角度看，MillWheel就是 基于输入数据的用户定义的转换图<br>
+这里会自动搞定底层的那些事情，而用户无需关系 <br>
+输入和输出表示为：(key, value, timestamp) 三元组</p>
+<ul>
+<li>key是系统内部的元数据字段</li>
+<li>value表示真实数据的字节数组，可以是任何的值</li>
+<li>timestamp是用户设置的任意值，一般为墙上时钟</li>
+</ul>
+<p>MillWheel 根据这些值来计算 低水印<br>
+比如，用户想聚合搜索词的每秒计数，他们可能希望在执行搜索时分配一个对应的时间戳<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2022/11/millwheel/2.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2022/11/millwheel/2.jpg" />
+        </a>
+    </p>
+<p>概念</p>
+<ul>
+<li>用户的计算会形成一个 计算流图、</li>
+<li>用户可以随意添加、删除计算逻辑，不用重启系统</li>
+<li>每条数据的处理是冥等的</li>
+<li>所有的记录都保证精确处理一次</li>
+</ul>
+<h2 id="core-concepts">CORE CONCEPTS</h2>
+<p>用户可以定义他们自己的逻辑，对应到MillWhell中，就是一堆输入、输出，对应的是有向图中的边</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4">
+<table style="border-spacing:0;padding:0;margin:0;border:0;width:auto;overflow:auto;display:block;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">15
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-cpp" data-lang="cpp">computation SpikeDetector {
+	input_streams {
+		stream model_updates {
+			key_extractor <span style="color:#ff79c6">=</span> ’SearchQuery’
+		}
+		stream window_counts {
+			key_extractor <span style="color:#ff79c6">=</span> ’SearchQuery’
+		}
+	}
+	output_streams {
+		stream anomalies {
+			record_format <span style="color:#ff79c6">=</span> ’AnomalyMessage’
+		}
+	}
+}
+</code></pre></td></tr></table>
+</div>
+</div><p>Figure 3: Definition of a single node in a MillWheel topology. Input streams and output streams correspond to directed edges in the graph</p>
+<p>计算</p>
+<ul>
+<li>用户的逻辑被封装到计算中，当有输入数据时，就会触发到用户逻辑</li>
+<li>用户逻辑可以是任意代码，包括连接外部系统、管理MillWhell、输出数据</li>
+<li>连接外部系统时，需要由用户自己保证冥等性</li>
+<li>处理key是串行执行的，但是多个key可以并行执行
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2022/11/millwheel/4.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2022/11/millwheel/4.jpg" />
+        </a>
+    </li>
+</ul>
+<p>key</p>
+<ul>
+<li>主要是用来比较两条记录，以及做聚合使用的</li>
+<li>消费者会指定一个key来提取这些记录</li>
+<li>计算逻辑只处理跟key相关的上下文</li>
+<li>比如可以用cookie作为指纹当做key来计算是否为垃圾邮件</li>
+<li>多个计算逻辑，可以从相同的流上提取不同的key，而key是被流的消费者指定
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2022/11/millwheel/5.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2022/11/millwheel/5.jpg" />
+        </a>
+    </li>
+</ul>
+<p>streams</p>
+<ul>
+<li>MillWhell中不同计算之间的传递机制</li>
+<li>一个计算可以订阅0 到多个输入流，并产生1 到多个输出流</li>
+<li>每个消费者在每各流上，基于指定的key来消费</li>
+<li>所以多个消费者可以订阅相同的流，然后以不同的方式处理(聚合)这些数据</li>
+<li>流是由他们的名字做唯一识别的</li>
+</ul>
+<p>persistent state</p>
+<ul>
+<li>最基本的格式，是一个不透明的byte string，基于每个key管理</li>
+<li>用户提供序列化/反序列化方式，如Protocol Buffers，将其转为基本格式</li>
+<li>持久化状态则由底层的分布式高可用存储来保证，如BigTable、Spanner，其确保数据完整性的保证对终端用户完全透明</li>
+<li>状态一般包括： 在记录窗口之上的聚合统计，join的buffer数据等</li>
+</ul>
+<p>
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2022/11/millwheel/16.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2022/11/millwheel/16.jpg" />
+        </a>
+    </p>
+
+			<script type="text/javascript"
+        async
+        src="https://cdn.bootcss.com/mathjax/2.7.3/MathJax.js?config=TeX-AMS-MML_HTMLorMML">
+MathJax.Hub.Config({
+  tex2jax: {
+    inlineMath: [['$','$'], ['\\(','\\)']],
+    displayMath: [['$$','$$'], ['\[\[','\]\]']],
+    processEscapes: true,
+    processEnvironments: true,
+    skipTags: ['script', 'noscript', 'style', 'textarea', 'pre'],
+    TeX: { equationNumbers: { autoNumber: "AMS" },
+         extensions: ["AMSmath.js", "AMSsymbols.js"] }
+  }
+});
+
+MathJax.Hub.Queue(function() {
+    
+    
+    
+    var all = MathJax.Hub.getAllJax(), i;
+    for(i = 0; i < all.length; i += 1) {
+        all[i].SourceElement().parentNode.className += ' has-jax';
+    }
+});
+</script>
+
+<style>
+code.has-jax {
+    font: inherit;
+    font-size: 100%;
+    background: inherit;
+    border: inherit;
+    color: #515151;
+}
+</style>
+        </div>
+
+        
+
+
+        
+
+<div class="post-archive">
+    <h2>相关文章</h2>
+    <ul class="listing">
+        
+        <li><a href="/post/2022/11/flumejava%E8%AE%BA%E6%96%87/">FlumeJava: Easy, Efficient Data-Parallel Pipelines</a></li>
+        
+    </ul>
+</div>
+
+
+        <div class="post-meta meta-tags">
+            
+            <ul class="clearfix">
+                
+                <li><a href='/tags/%E5%A4%A7%E6%95%B0%E6%8D%AE'>大数据</a></li>
+                
+            </ul>
+            
+        </div>
+    </article>
+    
+    
+
+    
+    
+</div>
+
+
+                </div>
+
+                <div id="secondary">
+    <section class="widget">
+        <form id="search" action='https://code0xff.cn/search/' method="get" accept-charset="utf-8" target="_blank" _lpchecked="1">
+      
+      <input type="text" name="q" maxlength="20" placeholder="Search">
+      <input type="hidden" name="sitesearch" value="https://code0xff.cn/">
+      <button type="submit" class="submit icon-search"></button>
+</form>
+    </section>
+    
+    <section class="widget">
+        <h3 class="widget-title">最近文章</h3>
+<ul class="widget-list">
+    
+    <li>
+        <a href="https://code0xff.cn/post/2022/11/%E8%B0%83%E8%AF%95mysql/" title="调试MySQL">调试MySQL</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.cn/post/2022/11/multi-tenant-cloud-data-services/" title="关于云环境中多租户问题的论文">关于云环境中多租户问题的论文</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.cn/post/2022/11/millwheel/" title="MillWheel">MillWheel</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.cn/post/2022/11/how-to-read-a-paper/" title="How to Read a Paper">How to Read a Paper</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.cn/post/2022/11/cmu%E6%95%B0%E6%8D%AE%E5%BA%93%E6%80%BB%E7%BB%93/" title="CMU数据库总结">CMU数据库总结</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.cn/post/2022/11/flumejava%E8%AE%BA%E6%96%87/" title="FlumeJava: Easy, Efficient Data-Parallel Pipelines">FlumeJava: Easy, Efficient Data-Parallel Pipelines</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.cn/post/2022/11/flink%E8%AE%BA%E6%96%87/" title="Apache Flink™: Stream and Batch Processing in a Single Engine">Apache Flink™: Stream and Batch Processing in a Single Engine</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.cn/post/2022/10/%E5%AE%B9%E5%99%A8%E7%BD%91%E7%BB%9C/" title="容器网络">容器网络</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.cn/post/2022/10/b&#43;%E6%A0%91%E6%89%A7%E8%A1%8C%E8%BF%87%E7%A8%8B/" title="B&#43;树执行过程">B&#43;树执行过程</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.cn/post/2022/09/k8s%E4%BD%BF%E7%94%A8/" title="k8s POD使用总结">k8s POD使用总结</a>
+    </li>
+    
+</ul>
+    </section>
+
+    
+
+    <section class="widget">
+        <h3 class="widget-title"><a href='/categories/'>分类</a></h3>
+<ul class="widget-list">
+    
+    <li><a href="https://code0xff.cn/categories/%E5%88%86%E5%B8%83%E5%BC%8F/">分布式 (6)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E5%95%86%E4%B8%9A/">商业 (3)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E5%A4%A7%E6%95%B0%E6%8D%AE/">大数据 (20)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E6%95%B0%E6%8D%AE%E5%BA%93/">数据库 (8)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E6%97%85%E8%A1%8C/">旅行 (10)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E6%9E%B6%E6%9E%84/">架构 (1)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E7%AE%97%E6%B3%95/">算法 (8)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E7%B3%BB%E7%BB%9F/">系统 (5)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E7%BC%96%E7%A8%8B%E8%AF%AD%E8%A8%80/">编程语言 (2)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E8%AF%BB%E4%B9%A6%E7%AC%94%E8%AE%B0/">读书笔记 (9)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E9%9A%8F%E4%BE%BF%E5%86%99%E5%86%99/">随便写写 (4)</a></li>
+    
+</ul>
+    </section>
+
+    <section class="widget">
+        <h3 class="widget-title">归档</a></h3>
+<ul class="widget-list">
+    
+    <li><a href="https://code0xff.cn/years/2021%E5%B9%B4/">2021年 (30)</a></li>
+    
+    <li><a href="https://code0xff.cn/years/2022%E5%B9%B4/">2022年 (46)</a></li>
+    
+</ul>
+    </section>
+
+    <section class="widget">
+        <h3 class="widget-title"><a href='/tags/'>标签</a></h3>
+<div class="tagcloud">
+    
+    <a href="https://code0xff.cn/tags/b%E6%A0%91/">B树 </a>
+    
+    <a href="https://code0xff.cn/tags/flink/">flink </a>
+    
+    <a href="https://code0xff.cn/tags/hive/">Hive </a>
+    
+    <a href="https://code0xff.cn/tags/k8s/">k8s </a>
+    
+    <a href="https://code0xff.cn/tags/kudu/">kudu </a>
+    
+    <a href="https://code0xff.cn/tags/manacher/">Manacher </a>
+    
+    <a href="https://code0xff.cn/tags/mapreduce/">MapReduce </a>
+    
+    <a href="https://code0xff.cn/tags/paxos/">paxos </a>
+    
+    <a href="https://code0xff.cn/tags/raft/">raft </a>
+    
+    <a href="https://code0xff.cn/tags/scala/">scala </a>
+    
+    <a href="https://code0xff.cn/tags/snowflake/">snowflake </a>
+    
+    <a href="https://code0xff.cn/tags/spark/">spark </a>
+    
+    <a href="https://code0xff.cn/tags/unix/">unix </a>
+    
+    <a href="https://code0xff.cn/tags/%E4%BA%8C%E5%88%86%E6%9F%A5%E6%89%BE/">二分查找 </a>
+    
+    <a href="https://code0xff.cn/tags/%E4%BA%8C%E5%8F%89%E6%A0%91%E9%81%8D%E5%8E%86/">二叉树遍历 </a>
+    
+    <a href="https://code0xff.cn/tags/%E5%88%86%E5%B8%83%E5%BC%8F/">分布式 </a>
+    
+    <a href="https://code0xff.cn/tags/%E5%8A%A8%E6%80%81%E6%B3%A8%E5%85%A5/">动态注入 </a>
+    
+    <a href="https://code0xff.cn/tags/%E5%8E%86%E5%8F%B2/">历史 </a>
+    
+    <a href="https://code0xff.cn/tags/%E5%9B%9E%E6%BA%AF/">回溯 </a>
+    
+    <a href="https://code0xff.cn/tags/%E5%9B%BD%E5%86%85%E6%97%85%E8%A1%8C/">国内旅行 </a>
+    
+    <a href="https://code0xff.cn/tags/%E5%9B%BD%E5%A4%96%E6%97%85%E8%A1%8C/">国外旅行 </a>
+    
+    <a href="https://code0xff.cn/tags/%E5%A4%A7%E6%95%B0%E6%8D%AE/">大数据 </a>
+    
+    <a href="https://code0xff.cn/tags/%E5%AD%98%E5%82%A8/">存储 </a>
+    
+    <a href="https://code0xff.cn/tags/%E5%B7%A5%E4%BD%9C%E8%AE%B0%E5%BD%95/">工作记录 </a>
+    
+    <a href="https://code0xff.cn/tags/%E5%BE%AE%E6%9C%8D%E5%8A%A1/">微服务 </a>
+    
+    <a href="https://code0xff.cn/tags/%E6%95%B0%E6%8D%AE%E5%BA%93/">数据库 </a>
+    
+    <a href="https://code0xff.cn/tags/%E6%B1%87%E7%BC%96/">汇编 </a>
+    
+    <a href="https://code0xff.cn/tags/%E6%B9%96%E4%BB%93%E4%B8%80%E4%BD%93/">湖仓一体 </a>
+    
+    <a href="https://code0xff.cn/tags/%E7%94%9F%E6%B4%BB/">生活 </a>
+    
+    <a href="https://code0xff.cn/tags/%E7%94%B5%E5%BD%B1/">电影 </a>
+    
+    <a href="https://code0xff.cn/tags/%E7%AE%97%E6%B3%95/">算法 </a>
+    
+    <a href="https://code0xff.cn/tags/%E7%BB%8F%E6%B5%8E/">经济 </a>
+    
+    <a href="https://code0xff.cn/tags/%E7%BC%93%E5%AD%98/">缓存 </a>
+    
+    <a href="https://code0xff.cn/tags/%E7%BC%96%E8%AF%91%E5%8E%9F%E7%90%86/">编译原理 </a>
+    
+    <a href="https://code0xff.cn/tags/%E7%BD%91%E7%BB%9C/">网络 </a>
+    
+    <a href="https://code0xff.cn/tags/%E8%AE%A1%E7%AE%97%E6%A1%86%E6%9E%B6/">计算框架 </a>
+    
+    <a href="https://code0xff.cn/tags/%E8%AE%BA%E6%96%87/">论文 </a>
+    
+    <a href="https://code0xff.cn/tags/%E8%AF%BB%E4%B9%A6%E7%AC%94%E8%AE%B0/">读书笔记 </a>
+    
+</div>
+    </section>
+
+    
+
+    <section class="widget">
+        <h3 class="widget-title">RSS</h3>
+        <ul class="widget-list">
+            <li><a href="https://code0xff.cn/index.xml">文章 RSS</a></li>
+        </ul>
+    </section>
+</div>
+            </div>
+        </div>
+    </div>
+    <footer id="footer">
+    <div>
+        &copy; 2022 <a href="https://code0xff.cn/">记录每个瞬间 By 老王</a>
+        
+    </div>
+    <br />
+    <div>
+        <div class="github-badge">
+            <a href="https://gohugo.io/" target="_black" rel="nofollow"><span class="badge-subject">Powered by</span><span class="badge-value bg-blue">Hugo</span></a>
+        </div>
+        <div class="github-badge">
+            <a href="https://github.com/flysnow-org/maupassant-hugo" target="_black"><span class="badge-subject">Theme</span><span class="badge-value bg-yellowgreen">Maupassant</span></a>
+        </div>
+    </div>
+    <div>
+        <a href="http://www.beian.miit.gov.cn/">京ICP备19014975号</a>
+    </div>
+</footer>
+
+
+    
+    <script type="text/javascript">
+        window.MathJax = {
+            tex2jax: {
+                inlineMath: [['$', '$']],
+                processEscapes: true
+                }
+            };
+    </script>
+    <script src='https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.5/MathJax.js?config=TeX-MML-AM_CHTML' async></script><script src="https://cdn.bootcdn.net/ajax/libs/fancybox/3.5.7/jquery.fancybox.min.js"></script>
+
+<a id="rocket" href="#top"></a>
+<script type="text/javascript" src='/js/totop.js?v=0.0.0' async=""></script>
+
+<script type="application/javascript">
+var doNotTrack = false;
+if (!doNotTrack) {
+	window.ga=window.ga||function(){(ga.q=ga.q||[]).push(arguments)};ga.l=+new Date;
+	ga('create', 'GA ID', 'auto');
+	
+	ga('send', 'pageview');
+}
+</script>
+<script async src='https://www.google-analytics.com/analytics.js'></script>
+
+
+
+    <script type="text/javascript" src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js" async></script>
+
+
+
+
+</body>
+
+</html>

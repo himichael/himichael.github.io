@@ -1,0 +1,882 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    
+    <meta name="referrer" content="no-referrer-when-downgrade">
+    
+
+    <title>Apache Flink™: Stream and Batch Processing in a Single Engine | 记录每个瞬间</title>
+    <meta property="og:title" content="Apache Flink™: Stream and Batch Processing in a Single Engine - 记录每个瞬间">
+    <meta property="og:type" content="article">
+        
+    <meta property="article:published_time" content='2022-11-05T09:35:19&#43;08:00'>
+        
+        
+    <meta property="article:modified_time" content='2022-11-05T09:35:19&#43;08:00'>
+        
+    <meta name="Keywords" content="">
+    <meta name="description" content="Apache Flink™: Stream and Batch Processing in a Single Engine">
+        <meta name="author" content="隔壁老王">
+        
+    <meta property="og:url" content="https://code0xff.cn/post/2022/11/flink%E8%AE%BA%E6%96%87/">
+    <link rel="shortcut icon" href='/favicon.ico'  type="image/x-icon">
+
+    <link rel="stylesheet" href='/css/normalize.css'>
+    <link rel="stylesheet" href='/css/style.css'>
+    <script type="text/javascript" src="//cdn.bootcdn.net/ajax/libs/jquery/3.4.1/jquery.min.js"></script>
+
+    
+    
+    
+        <link href="https://cdn.bootcdn.net/ajax/libs/fancybox/3.5.7/jquery.fancybox.min.css" rel="stylesheet">
+    
+    
+    
+    
+</head>
+
+
+<body>
+    <header id="header" class="clearfix">
+    <div class="container">
+        <div class="col-group">
+            <div class="site-name ">
+                
+                    <a id="logo" href="https://code0xff.cn/">
+                        记录每个瞬间
+                    </a>
+                
+                
+            </div>
+            <div>
+                <nav id="nav-menu" class="clearfix">
+                    <a class="current" href="https://code0xff.cn/">首页</a>
+                    
+                    <a  href="https://code0xff.cn/linked/" title="链接">链接</a>
+                    
+                    <a  href="https://code0xff.cn/archives/" title="归档">归档</a>
+                    
+                    <a  href="https://code0xff.cn/about/" title="关于">关于</a>
+                    
+                </nav>
+            </div>
+        </div>
+    </div>
+</header>
+
+    <div id="body">
+        <div class="container">
+            <div class="col-group">
+
+                <div class="col-8" id="main">
+                    
+<div class="res-cons">
+    
+    <article class="post">
+        <header>
+            <h1 class="post-title">Apache Flink™: Stream and Batch Processing in a Single Engine</h1>
+        </header>
+        <date class="post-meta meta-date">
+            2022年11月5日
+        </date>
+<nav id="TableOfContents">
+  <ul>
+    <li>
+      <ul>
+        <li><a href="#介绍">介绍</a></li>
+        <li><a href="#架构">架构</a></li>
+        <li><a href="#streaming-dataflows">Streaming Dataflows</a>
+          <ul>
+            <li><a href="#dataflow-graphs">Dataflow Graphs</a></li>
+            <li><a href="#data-exchange-through-intermediate-data-streams">Data Exchange through Intermediate Data Streams</a></li>
+            <li><a href="#fault-tolerance">Fault Tolerance</a></li>
+            <li><a href="#iterative-dataflows">Iterative Dataflows</a></li>
+          </ul>
+        </li>
+        <li><a href="#stream-analytics-on-top-of-dataflows">Stream Analytics on Top of Dataflows</a>
+          <ul>
+            <li><a href="#the-notion-of-time">The Notion of Time</a></li>
+            <li><a href="#stateful-stream-processing">Stateful Stream Processing</a></li>
+            <li><a href="#stream-windows">Stream Windows</a></li>
+            <li><a href="#asynchronous-stream-iterations">Asynchronous Stream Iterations</a></li>
+          </ul>
+        </li>
+        <li><a href="#batch-analytics-on-top-of-dataflows">Batch Analytics on Top of Dataflows</a>
+          <ul>
+            <li><a href="#query-optimization">Query Optimization</a></li>
+            <li><a href="#memory-management">Memory Management</a></li>
+            <li><a href="#batch-iterations">Batch Iterations</a></li>
+          </ul>
+        </li>
+        <li><a href="#conclusion">Conclusion</a></li>
+        <li><a href="#references">References</a></li>
+      </ul>
+    </li>
+  </ul>
+</nav>
+        
+        <div class="post-meta">
+            
+            <span class="post-meta meta-tags">
+                <ul class="clearfix">
+                    <a href='/categories/%E5%A4%A7%E6%95%B0%E6%8D%AE'>大数据</a>
+                </ul>
+            </span>
+            
+        </div>
+        
+        
+        <div class="post-meta">
+            <span id="busuanzi_container_page_pv">|<span id="busuanzi_value_page_pv"></span><span>
+                    阅读</span></span>
+        </div>
+        
+        
+        <div class="post-content">
+            <blockquote>
+<p>论文：<br>
+<a href="https://asterios.katsifodimos.com/assets/publications/flink-deb.pdf">Apache Flink™: Stream and Batch Processing in a Single Engine</a><br>
+<a href="https://flink.apache.org/">官网</a></p>
+</blockquote>
+<h2 id="介绍">介绍</h2>
+<p>首先介绍了Flink是个啥东西，是一个流批一体的处理系统<br>
+传统情况下要同时处理流、批，一般需要部署两套系统，这需要两套API模型<br>
+其开发、部署、维护成本都比较高，相当于高两套<br>
+论文也提到了，以前对实时数据处理要求没那么多，基本上都是批的为主，不过现在流处理，实时处理的要求也越来越多了</p>
+<p>lambda 架构是混合了流、批系统的 <br>
+流系统可能会返回大致数据，然后批系统不断迭代处理，最终纠正出一个精确结果</p>
+<p>相关的流系统：</p>
+<ul>
+<li>Apache Storm</li>
+<li>IBM Infosphere Streams</li>
+<li>Microsoft StreamInsight</li>
+<li>Streambase</li>
+</ul>
+<p>相关的批系统</p>
+<ul>
+<li>Apache Spark</li>
+<li>Apache Drill</li>
+</ul>
+<p>Flink可以处理：</p>
+<ul>
+<li>实时分析</li>
+<li>连续的数据管道</li>
+<li>历史数据处理，批处理</li>
+<li>交互式算法，机器学习、图分析</li>
+</ul>
+<p>如果假设 持久化的消息对了，那么数据流可以任意重放<br>
+API模型都是统一的，对于流批都是一样的，区别就是流的处理的开始点上 <br>
+对于批处理，Flink是把它当做流处理的一个特例，有固定窗口的，使用了特定的数据结构和算法以及调度策略，这样其上层就可以支持不同的批处理模型，如：机器学习、图分析，但是底层还是基于流系统的</p>
+<p>支持不用的事件事件</p>
+<ul>
+<li>event-time</li>
+<li>ingestion-time</li>
+<li>processing-time</li>
+</ul>
+<p>不过论文中也提到了，有两种情况，还是需要批处理</p>
+<ul>
+<li>比如传统遗留的流处理实现</li>
+<li>某些特定的分析算法，这些在流处理模型上没有 高效的处理算法</li>
+</ul>
+<h2 id="架构">架构</h2>
+<p>从其软件栈来看分为四层</p>
+<ul>
+<li>部署层，本地模式，集群模式，云环境模式</li>
+<li>核心层，Distributed	Streaming	Dataflow</li>
+<li>API层，包括：DataSet API(批处理)、DataStream	 API(流处理)</li>
+<li>库函数层，包括：Flink ML(机器学习)、GElly(图)、Table API(批)；CEP(复杂事件处理)、Talbe API(流)</li>
+</ul>
+<p>Flink的核心层是分布式的数据流引擎，用来执行数据流程序<br>
+Flink的运行程序是连接数据流的 有状态算子DAG，其核心层API包含两种</p>
+<ul>
+<li>用于批处理的 DataSet API，处理有边界数据</li>
+<li>用于流吹了的 DataStream API，处理无边界数据</li>
+</ul>
+<p>Flink的核心层是被当做一个数据流引擎，所以可以同时处理这种情况
+在往上就是一些DSL库，它们有DataSet 和 DataStream API生成<br>
+当前有支持机器学习的Flink ML，图计算的Gelly，以及处理SQL的 Table API</p>
+<p>
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2022/11/Flink%E8%AE%BA%E6%96%87/1.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2022/11/Flink%E8%AE%BA%E6%96%87/1.jpg" />
+        </a>
+    </p>
+<p>集群架构包含三个组件</p>
+<ul>
+<li>客户端
+<ul>
+<li>将程序代码转换为数据流图，提交到JobManager</li>
+<li>转换阶段还包含了一些数据类型校验</li>
+<li>DataSet程序还有CBO优化</li>
+</ul>
+</li>
+<li>JobManager
+<ul>
+<li>协调分布式数据流的执行，跟踪每个算子和流的状态，发布新的算子</li>
+<li>协调checkpoint和恢复</li>
+<li>每个checkpoint包含了最小化的元数据集，这样备份的JobManager可以用来重建和恢复数据流执行</li>
+</ul>
+</li>
+<li>TaskManagers
+<ul>
+<li>真正做数据处理的</li>
+<li>每个集群至少要有一个TaskManagers，用来执行流产生的算子</li>
+<li>定期向JobManager汇报自身状态</li>
+<li>内部维护了一个buffer pool，也会将流做物化</li>
+<li>会跟其他TaskManager通过网络交互，交互算子之间的数据流</li>
+</ul>
+</li>
+</ul>
+<p>
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2022/11/Flink%E8%AE%BA%E6%96%87/2.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2022/11/Flink%E8%AE%BA%E6%96%87/2.jpg" />
+        </a>
+    </p>
+<h2 id="streaming-dataflows">Streaming Dataflows</h2>
+<p>这里介绍 DataSet和DataStream API的下层，数据流<br>
+不管上层如果编写代码，最终由Flink执行的就是数据流图</p>
+<h3 id="dataflow-graphs">Dataflow Graphs</h3>
+<p>数据流图就是 DAG，由两部分组成</p>
+<ul>
+<li>有状态的算子</li>
+<li>数据流：被一个算子产生，可以被另一个算子消费</li>
+</ul>
+<p>数据流图可以被并行执行的，算子可以被并行化到一个、或者多个：subtasks<br>
+流会被拆分到 一个、或者多个流分区中，每个产生的 subtask 一个分区<br>
+所谓的有状态算子，就是一堆逻辑操作：如filter，hash-join，stream window functions等等<br>
+流在：生产者 和 消费者 之间分发数据，这里包含各种模式：</p>
+<ul>
+<li>点对点</li>
+<li>广播</li>
+<li>重分区</li>
+<li>扇出</li>
+<li>合并</li>
+</ul>
+<h3 id="data-exchange-through-intermediate-data-streams">Data Exchange through Intermediate Data Streams</h3>
+<p>
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2022/11/Flink%E8%AE%BA%E6%96%87/3.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2022/11/Flink%E8%AE%BA%E6%96%87/3.jpg" />
+        </a>
+    </p>
+<p>上图中包含了：中间数据，这个中间数据是由一个算子的逻辑操作产生的<br>
+它可以被其他一个、多个算子消费，中间数据可能会被物化、也可能没有<br>
+数据流的特殊行为参数，是由上层的API，如DataSet API控制的</p>
+<p>相关概念
+Pipelined intermediate streams</p>
+<ul>
+<li>在并非运行的 生产者 消费者之间交换数据，从而实现流水线执行</li>
+<li>这里可能会存在消费端处理不过来，背压生产者，使用了buffer pool，弥补了短期波动</li>
+<li>Flink使用流水线来处理 流数据传播，以及处理大部分批数据</li>
+<li>blocking streams 用来处理有界数据，在消费端可用之前，会缓存所有产生的算子数据</li>
+<li>所以 blocking streams 会将产生和消费的算子隔离到不同的阶段，它需要更多内存，会溢出到磁盘，但不会产生背压</li>
+<li>对于sort-merge、joins，会将流水线计划中断，于是用来隔离这种连续算子操作的</li>
+</ul>
+<p>Balancing Latency and Throughput</p>
+<ul>
+<li>Flink的数据交换是根据buffer交换实现的</li>
+<li>当数据在生产者端可用时，会写入buffer，然后发送给消费者</li>
+<li>这里可以实现两种场景： 高吞吐、高性能</li>
+<li>如果buffer满了再发送就是 高吞吐场景；如果给buffer设置了超时时间则是 高性能场景</li>
+<li>图4中是buffer超时的效果，30个机器，120core，99%的延迟为20ms时，吞吐量为1.5M/s</li>
+<li>如果超时时间调大，99%延迟为50ms，吞吐量为80M/s，随着延迟的增加吞吐量也在增加</li>
+</ul>
+<p>
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2022/11/Flink%E8%AE%BA%E6%96%87/4.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2022/11/Flink%E8%AE%BA%E6%96%87/4.jpg" />
+        </a>
+    </p>
+<p>Control Events</p>
+<ul>
+<li>它被当做交换数据的一部分发送，接受者收到这些数据后就会执行对应的控制命令，控制事件包括</li>
+<li>checkpoint barriers，将流 拆分为  pre-checkpoint 和 postcheckpoint 来协调checkpoint</li>
+<li>watermarks，流区分中的事件时间进展信号</li>
+<li>iteration barriers，流分区已经到达superstep的信号，在循环数据流之上的Bulk/StaleSynchronous并行迭代算法</li>
+<li>控制事件假设是按顺序达到的，为此使用一元运算符(unary operator)消费单个流分区，这样实现了FIFO</li>
+<li>算子以先来后到的方式，接受多余一个流分区合并流，为保持流的速率，避免背压</li>
+<li>在没有任何形式的重分区、广播、留给算子实现的无序记录处理时，Flink中的 streaming dataflows不提供顺序保证</li>
+<li>所以就不提供任务顺序保证，因为大多数算子 hash-join，map也不需要顺序</li>
+<li>为弥补这一点，可以通过 event-time来实现</li>
+</ul>
+<h3 id="fault-tolerance">Fault Tolerance</h3>
+<p>Flink提供了exactly-once-processing保证，通过checkpoint机制来实现，对于失败场景只需要部分重执行即可为此需要源端</p>
+<ul>
+<li>提供持久化、可重放的保证，比如Apache Kafka</li>
+<li>对于没有持久化保证的，其实也能做到，那就是源算子支持WAL就行了</li>
+</ul>
+<p>Flink的exactly-once-processing是通过分布式一致性快照实现的<br>
+Flink获取了算子状态的快照，每隔一段时间包含当前输入流的位置<br>
+这种实现的挑战是：不能把正在执行的任务给停住，所以要在保持延迟/吞吐量的前提下，实现快照<br>
+Flink使用的技术是：Asynchronous Barrier Snapshotting，论文的引用中也提到了这篇论文</p>
+<p>大致实现</p>
+<ul>
+<li>
+<p>Barriers是 将控制流注入到 逻辑时间相对应的输入流中</p>
+</li>
+<li>
+<p>之后将这个流逻辑上分割为两部分：当前时间快照的部分，快照之后的部分</p>
+</li>
+<li>
+<p>一个算子从上游接收到 barriers后，就执行了一个校准阶段，确保所有输入的barriers都被接受</p>
+</li>
+<li>
+<p>之后算子会将它的状态，比如 滑动窗口的内容、自定义的数据结构等等写入持久存储中(HDFS)</p>
+</li>
+<li>
+<p>一旦这个备份完成后，算子就将barrier转发给下游，最终所有的算子都会将自身的状态注册到快照中，于是全局的快照也完成了</p>
+</li>
+<li>
+<p>图5中， 快照 t2包含了 在 t2-barrier之前的消费所有记录结构的，所有算子状态</p>
+</li>
+<li>
+<p>ABS有点类似 Chandy-Lamport 的异步的分布式快照算法</p>
+</li>
+<li>
+<p>这里并不需要checkpoint新产生的记录，只需要将当前状态写入持久存储即可，这样也能保持存储的最小化</p>
+</li>
+<li>
+<p>恢复：所有算子返回的失败状态 &ndash;&gt; 最后成功的快照中这些算子对应的状态</p>
+</li>
+<li>
+<p>从最新barrier的快照中，重启输入流</p>
+</li>
+<li>
+<p>恢复时重计算的最大数量： 两个连续barriers中间的输入记录总数，也就是 t2 barrier 到 t1 barrier这段</p>
+</li>
+<li>
+<p>重放上游subtask 中的未处理记录buffer，就可以实现部分恢复</p>
+</li>
+<li>
+<p>ABS这种机制的好处：不需要暂停计算就能实现exactly-once</p>
+</li>
+<li>
+<p>跟其他形式的控制流完全解耦(通过触发窗口计算事件，不用将窗口机制限制为checkpoint的倍数)</p>
+</li>
+<li>
+<p>跟存储设备也完全解耦(可以存到文件系统、数据中)</p>
+</li>
+</ul>
+<p>
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2022/11/Flink%E8%AE%BA%E6%96%87/5.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2022/11/Flink%E8%AE%BA%E6%96%87/5.jpg" />
+        </a>
+    </p>
+<h3 id="iterative-dataflows">Iterative Dataflows</h3>
+<p>像机器学习、图处理这种的，都需要增量、迭代模式<br>
+一般是通过如下几种实现的</p>
+<ul>
+<li>每次迭代时提交新job</li>
+<li>增加一个额外node到DAG中</li>
+<li>feedback edges，反馈边缘</li>
+</ul>
+<p>Flink中的迭代模式实现叫做：iteration steps<br>
+这其中有一些特殊的算子，他们本身是包含了一个执行图的，如下图6所示
+主要实现如下：</p>
+<ul>
+<li>Flink中的迭代 head、tail这些任务会隐式的连接到 feeback edges</li>
+<li>head、tail这些任务会建立一个主动的feedback channel 反馈频道</li>
+<li>也会为 反馈频道内传输的从处理数据记录 提供协调</li>
+<li>对于实现了任何结构化并行迭代模式的类型，都需要协调</li>
+<li>比如：Bulk Synchronous Parallel (BSP)这种模型，它是用控制事件实现的</li>
+</ul>
+<p>
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2022/11/Flink%E8%AE%BA%E6%96%87/6.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2022/11/Flink%E8%AE%BA%E6%96%87/6.jpg" />
+        </a>
+    </p>
+<h2 id="stream-analytics-on-top-of-dataflows">Stream Analytics on Top of Dataflows</h2>
+<p>Flink的 DataStream API基于运行时环境，提供了一个完全的流分析框架，包括</p>
+<ul>
+<li>管理无序的事件事件</li>
+<li>定义窗口</li>
+<li>维护和更新 用户定义的状态</li>
+</ul>
+<p>而DataStream API也是基于 DataStream这个概念来的，它就是一个无边界的，给定类型的不可变元素集合<br>
+Flink的运行时环境已经提供了 流水线数据传输、连续的有状态算子、容错机制<br>
+而在运行时环境之上覆盖了一层 流处理器，其实就是实现了 窗口系统 和 状态接口，这两个东西对于运行时环境来时是不可见的，只当他两是 有状态算子实现而已</p>
+<h3 id="the-notion-of-time">The Notion of Time</h3>
+<p>Flink有两种时间概念</p>
+<ul>
+<li>事件事件，一个事件源产生的时间，如传感器信号管理的时间戳、移动设备的时间等</li>
+<li>处理时间，用于处理数据机器的墙上时间</li>
+</ul>
+<p>因为分布式系统存在时钟偏移，事件事件和处理时间之间的偏差可能会无限大，如果是基于墙上时钟来处理事件事件可能会有任意长的延迟<br>
+Flink为避免这种情况，会定期插入了一个特殊的事件：low watermarks，用来标记全局的进展<br>
+水印中包含了一个 事件属性<code>t</code>，表示所有 低于<code>t</code>的事件都已经进入算子了<br>
+水印可以帮助 执行引擎 以正确的事件顺序处理事件，并序列化算子，比如：通过统一的进度度量做窗口计算</p>
+<p>大致原理</p>
+<ul>
+<li>水印来自于于拓扑图的源头，这样就可以确定未来元素的固有事件</li>
+<li>水印从源头，通过其他数据流的算子进行传播</li>
+<li>算子也决定了如何跟水印交互，比如简单的map、filter就直接转发接收到的水印</li>
+<li>而复杂的算子会基于水印(事件时间)首先计算出通过水印触发的结果，然后再转发</li>
+<li>如果算子的输入超过一个，系统只转发最小的输入水印，以确保正确结果</li>
+<li>基于处理时间的Flink程序依靠机器时间，这样会导致时间不可靠，也就是恢复时的回放会不一致</li>
+<li>而基于事件时间就能提供更高可靠性语义，但是event-time-processing-time可能会导致延迟</li>
+<li>Flink为此提供了第三种时间概念，作为事件时间点一种特例，ingestion-time 摄入时间</li>
+<li>这是事件进入Flink的时间，它提供了比事件时间更低的延迟，也比处理时间 有更准确的结果</li>
+</ul>
+<h3 id="stateful-stream-processing">Stateful Stream Processing</h3>
+<p>大多数DataStream API算子看起来像是函数式的，无副作用的算子，不过他们提供了高效的有状态计算<br>
+比如</p>
+<ul>
+<li>机器学习的模型建立</li>
+<li>图分析</li>
+<li>用户session处理</li>
+<li>窗口聚合</li>
+</ul>
+<p>这里有很多种类型，简单的比如 counter、或者 sum 这样的，也有复杂的，比如：机器学习应用中的分类树、或者大型稀疏矩阵<br>
+流窗口 是一个有状态的算子，将记录分配给内存中不断更新的buckets，作为算子状态的一部分</p>
+<p>Flink中的状态是通过API显示提供的</p>
+<ul>
+<li>算子接口、注释，用于在一个算子的作用域内 静态注册显示的局部变量</li>
+<li>算子状态抽象，用于声明key-value状态分区，以及他们关联的算子</li>
+</ul>
+<p>Flink的状态也可以自定义的，这样就实现了流应用中的状态的高度灵活性管理<br>
+使用 StateBackend 来配置自定义的状态存储、以及checkpoint，而Flink的exactly-once语义也保证了这些状态的一致性</p>
+<h3 id="stream-windows">Stream Windows</h3>
+<p>无边界的数据没法直接计算，是通过不断的在小范围内迭代计算出来的，这种不断演化的逻辑视图就是 窗口<br>
+Flink的有状态算子中集成了窗口操作，包含了三个核心功能</p>
+<ul>
+<li>一个窗口的分配器 assigner</li>
+<li>一个可选的触发器 trigger</li>
+<li>一个驱逐器 evictor</li>
+</ul>
+<p>这三个功能内置就已经提供了，比如 滑动窗口，当然用户也可以自定义<br>
+分配器的责任是将每个记录分配给逻辑窗口，比如：</p>
+<ul>
+<li>当涉及到事件事件窗口时，它是基于记录的时间戳</li>
+<li>而对于滑动窗口，一个元素可以属于多个逻辑窗口</li>
+</ul>
+<p>触发器，当算子关联的窗口定义被执行时，就会调用到触发器
+驱逐器，也是一个可选的，它决定每个窗口内哪些记录可以被保留</p>
+<p>Flink的窗口能覆盖各种范围，比如：周期时间、计数、标点符号、地标、session、增量窗口等<br>
+Flink的窗口机制整合了乱序处理，跟谷歌的Dataflow类似</p>
+<p>如下是一个 6秒范围的窗口定义，每2秒滑动一次(分配器)，一旦水印通过窗口(触发器)末端就计算结果</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4">
+<table style="border-spacing:0;padding:0;margin:0;border:0;width:auto;overflow:auto;display:block;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-java" data-lang="java">stream
+  <span style="color:#ff79c6">.</span><span style="color:#50fa7b">window</span><span style="color:#ff79c6">(</span>SlidingTimeWindows<span style="color:#ff79c6">.</span><span style="color:#50fa7b">of</span><span style="color:#ff79c6">(</span>Time<span style="color:#ff79c6">.</span><span style="color:#50fa7b">of</span><span style="color:#ff79c6">(</span>6<span style="color:#ff79c6">,</span> SECONDS<span style="color:#ff79c6">),</span> Time<span style="color:#ff79c6">.</span><span style="color:#50fa7b">of</span><span style="color:#ff79c6">(</span>2<span style="color:#ff79c6">,</span> SECONDS<span style="color:#ff79c6">))</span>
+  <span style="color:#ff79c6">.</span><span style="color:#50fa7b">trigger</span><span style="color:#ff79c6">(</span>EventTimeTrigger<span style="color:#ff79c6">.</span><span style="color:#50fa7b">create</span><span style="color:#ff79c6">())</span>
+</code></pre></td></tr></table>
+</div>
+</div><p>下面的例子是定义了一个全局窗口(分配器)，每1000个事件会调用算子(触发器)，保留最后100个元素(驱逐器)</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4">
+<table style="border-spacing:0;padding:0;margin:0;border:0;width:auto;overflow:auto;display:block;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-java" data-lang="java">stream
+  <span style="color:#ff79c6">.</span><span style="color:#50fa7b">window</span><span style="color:#ff79c6">(</span>GlobalWindow<span style="color:#ff79c6">.</span><span style="color:#50fa7b">create</span><span style="color:#ff79c6">())</span>
+  <span style="color:#ff79c6">.</span><span style="color:#50fa7b">trigger</span><span style="color:#ff79c6">(</span>Count<span style="color:#ff79c6">.</span><span style="color:#50fa7b">of</span><span style="color:#ff79c6">(</span>1000<span style="color:#ff79c6">))</span>
+  <span style="color:#ff79c6">.</span><span style="color:#50fa7b">evict</span><span style="color:#ff79c6">(</span>Count<span style="color:#ff79c6">.</span><span style="color:#50fa7b">of</span><span style="color:#ff79c6">(</span>100<span style="color:#ff79c6">))</span>
+</code></pre></td></tr></table>
+</div>
+</div><p>注意，如果在窗口执行期间，上面的流基于key做了分区，那么上面的窗口算子是本地的，不需要worker做协调；这种机制可以实现各种窗口功能</p>
+<h3 id="asynchronous-stream-iterations">Asynchronous Stream Iterations</h3>
+<p>流中的循环对某些应用来说是必不可少的，比如增量构建、训练机器学习模型，强化学习、近似图等<br>
+大多数情况下，反馈循环不是必须的<br>
+异步迭代覆盖了流应用通讯需求，它跟 基于有限数据集上的结构化迭代的并行优化问题不同</p>
+<p>像图6那样，Flink的执行模型已经覆盖了 没有开启迭代控制机制下的异步迭代<br>
+反馈流被被视为 隐式迭代头算子中的算子状态，也是全局快照的一部分<br>
+DataStream API允许显式的反馈流定义，并可以简单地包含对流和进度跟踪上的结构化循环的支持</p>
+<h2 id="batch-analytics-on-top-of-dataflows">Batch Analytics on Top of Dataflows</h2>
+<p>因为批处理其实是流处理的特例，一个流程序，如果将其所有的数据都插入到一个窗口中了，那么就可以当做批处理来对待<br>
+但是还需要一些额外的工作</p>
+<ul>
+<li>批处理计算的API语法可以被简化(比如不需要手动设置全局窗口定义)</li>
+<li>对于批处理还需要一些额外的优化，对于容错，阶段调度也需要更有效</li>
+</ul>
+<p>Flink的批处理工作方式如下：</p>
+<ul>
+<li>批处理在同一个时刻可以按照流计算的方式执行，可以通过阻塞数据流的方式，将一个大的计算拆分多个 可以被连续调度的独立阶段</li>
+<li>当负载较高时候会关闭周期性的快照，失败恢复通过重放最近的物化中间结果(也可能是源头)，来恢复丢失的流分区</li>
+<li>阻塞的算子比如sort，实现很简单就是一直阻塞，直到将所有输入数据都处理完，运行时不用关系是否阻塞，这些算子的内存都是Flink分配的(JVM堆或非堆)，并且也能溢出到磁盘</li>
+<li>DataSet API提供了批处理计算的抽象，包括带容错的DataSet数据结构，并可以在DataSet之上(如join、聚合、迭代等)实现各种转换</li>
+<li>查询优化层会将DataSet程序转换为一个更高效的可执行程序</li>
+</ul>
+<h3 id="query-optimization">Query Optimization</h3>
+<p>Flink的优化是基于并行数据库系统技术的，比如：例如计划等价、成本建模和感兴趣的属性传播   <br>
+但是 DAG上的UDF使的Flink没法用传统技术来优化，因为这些算子隐藏了他们的语义，所以基础、以及成本估算方式很难被使用<br>
+Flink运行时支持各种执行策略，如：重分区、广播数据转换，以及基于排序的分区，基于sort、hash的join实现等等<br>
+Flink的优化器会基于感兴趣的属性传播概念，来枚举不同的物理计划，并时代基于代价的方式从多个物理计划中选择一个合适的计划，这些代价包括：</p>
+<ul>
+<li>网络</li>
+<li>磁盘I/O</li>
+<li>CPU开销</li>
+</ul>
+<p>为了UDF存在的克服基数评估问题，Flink使用程序员的hints</p>
+<h3 id="memory-management">Memory Management</h3>
+<p>基于数据库技术，Flink序列化数据到内存segment中<br>
+Flink没有在JVM堆上分配动态数据记录的buffer，对于像排序和join这样的算子，尽可能的直接使用二进制数据，这样可以保持 序列化和反序列化的开销最小化，并在需要的时候将部分数据溢出到磁盘<br>
+为处理任意对象，Flink使用了类型接口，以及自定义的序列化机制<br>
+为了在二进制表示的非堆上做数据处理，Flink管理了高效的缓存和鲁棒性的算法，减少了垃圾收集的开销，并能在内存压力的情况下优雅的扩展</p>
+<h3 id="batch-iterations">Batch Iterations</h3>
+<p>迭代图分析、并行梯度下降、以及优化技术，已经在 Bulk Synchronous Parallel (BSP) 和 Stale Synchronous Parallel (SSP)模式之上实现了 <br>
+Flink执行模式允许在这之上实现， 任何结构化迭代逻辑类型，这些是使用迭代控制事件 实现的<br>
+比如，BSP执行时，迭代控制事件会在迭代计算中标记 开始、结束<br>
+Flink还引入了更新的优化技术：增量迭代概念，它可以利用稀疏的计算依赖实现增量迭代，已经在Flink的图计算API Gelly中实现了</p>
+<h2 id="conclusion">Conclusion</h2>
+<p>这里总结下批处理相关的事情</p>
+<ul>
+<li>Hadoop这个不用说了，最流行的开源系统，基于了Map-Reduce范式</li>
+<li>Dryad引入了 UDF，生成了基于DAG的数据流图</li>
+<li>SCOPE对其做了增强，并在其上增加了SQL优化</li>
+<li>Tez可以看做Dryad的开源实现</li>
+<li>MPP数据库，Drill 和 Impala限制了他们的API，使用了SQL变体</li>
+<li>Spark，基于DAG的数据处理框架，提供了SQL优化，执行基于驱动的迭代，处理无边界数据是当做微批来做的</li>
+<li>相比之下，Flink是唯一的系统因为其整合了：分布式数据流，利用了流水线执行 批和流工作</li>
+<li>通过轻量级checkpoint实现精确一次，原生迭代处理，支持各种复杂的窗口语义，支持乱序处理</li>
+</ul>
+<p>批处理，之前学术和工业界都有大量先驱者</p>
+<ul>
+<li>SEEP、Naiad、Microsoft StreamInsight、IBM Streams.</li>
+<li>这些系统中的许多都是基于数据库社区的研究</li>
+<li>而上面这些系统都有一些问题：学术界的原型、不开源的商业产品、不能在普通商用机器集群上做水平扩展</li>
+<li>数据流处理领域出现了一些可以支持水平扩展、组合数据流操作、带有弱一致性保证的系统，如：Strom、Samza</li>
+<li>乱序处理的概念获得了很大吸引力，并被MillWhell 采用，这是后来提供的Apache Beam/谷歌商业执行程序的内部版本数据流</li>
+<li>Millwhell提供了精确一次的、低延迟的数据流处理、以及乱序处理，对Flink的发展产生了重大影响</li>
+<li>Flink是目前唯一开源支持：事件事件和乱序事件处理，提供带精确一次保证的一致性管理状态，实现高吞吐和低延迟，同时支持批和流</li>
+</ul>
+<p>Flink是实现了统一数据流引擎的平台，可以执行流处理和批分析<br>
+Flink数据流引擎将算子状态、逻辑中间结果 当做一等公民，通过使用不同参数，可以被批、流API同时使用<br>
+流API是基于Flink数据流引擎之上的，提供了状态恢复、分区、转换、聚合数据流窗口等功能<br>
+由于批处理只是流的一个特例，Flink会特殊对待，使用一个查询优化器来优化他们的执行；并实现了一个阻塞的算子，这个算子在内存不足时会溢出到磁盘</p>
+<h2 id="references">References</h2>
+<ul>
+<li><a href="https://arxiv.org/pdf/1506.08603.pdf">Lightweight Asynchronous Snapshots for Distributed Dataflows</a></li>
+<li><a href="https://storage.googleapis.com/pub-tools-public-publication-data/pdf/43864.pdf"> The dataflow model: a practical approach to balancing correctness, latency, and cost in massive-scale, unbounded, out-of-order data processing</a></li>
+<li>[ Distributed snapshots: determining global states of distributed systems]</li>
+<li>[The design of the Borealis stream processing engine]</li>
+<li>[fault-tolerant stream processing at Internet scale]</li>
+<li>[ Opening the Black ¨Boxes in Data Flow Optimization]</li>
+<li>[Impala: A modern, open-source sql engine for hadoop]</li>
+<li>[Book: Big Data: Principles and best practices of scalable realtime data systems]</li>
+<li>[Apache tez: A unifying framework for modeling and building data processing applications]</li>
+<li>[Spark: Cluster Computing with Working Sets]</li>
+<li>[Incorporating partitioning and parallel plans into the scope optimizer]</li>
+<li>[Spinning Fast Iterative Data Flows]</li>
+</ul>
+
+			<script type="text/javascript"
+        async
+        src="https://cdn.bootcss.com/mathjax/2.7.3/MathJax.js?config=TeX-AMS-MML_HTMLorMML">
+MathJax.Hub.Config({
+  tex2jax: {
+    inlineMath: [['$','$'], ['\\(','\\)']],
+    displayMath: [['$$','$$'], ['\[\[','\]\]']],
+    processEscapes: true,
+    processEnvironments: true,
+    skipTags: ['script', 'noscript', 'style', 'textarea', 'pre'],
+    TeX: { equationNumbers: { autoNumber: "AMS" },
+         extensions: ["AMSmath.js", "AMSsymbols.js"] }
+  }
+});
+
+MathJax.Hub.Queue(function() {
+    
+    
+    
+    var all = MathJax.Hub.getAllJax(), i;
+    for(i = 0; i < all.length; i += 1) {
+        all[i].SourceElement().parentNode.className += ' has-jax';
+    }
+});
+</script>
+
+<style>
+code.has-jax {
+    font: inherit;
+    font-size: 100%;
+    background: inherit;
+    border: inherit;
+    color: #515151;
+}
+</style>
+        </div>
+
+        
+
+
+        
+
+
+        <div class="post-meta meta-tags">
+            
+            <ul class="clearfix">
+                
+                <li><a href='/tags/flink'>flink</a></li>
+                
+            </ul>
+            
+        </div>
+    </article>
+    
+    
+
+    
+    
+</div>
+
+
+                </div>
+
+                <div id="secondary">
+    <section class="widget">
+        <form id="search" action='https://code0xff.cn/search/' method="get" accept-charset="utf-8" target="_blank" _lpchecked="1">
+      
+      <input type="text" name="q" maxlength="20" placeholder="Search">
+      <input type="hidden" name="sitesearch" value="https://code0xff.cn/">
+      <button type="submit" class="submit icon-search"></button>
+</form>
+    </section>
+    
+    <section class="widget">
+        <h3 class="widget-title">最近文章</h3>
+<ul class="widget-list">
+    
+    <li>
+        <a href="https://code0xff.cn/post/2022/11/%E8%B0%83%E8%AF%95mysql/" title="调试MySQL">调试MySQL</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.cn/post/2022/11/multi-tenant-cloud-data-services/" title="关于云环境中多租户问题的论文">关于云环境中多租户问题的论文</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.cn/post/2022/11/millwheel/" title="MillWheel">MillWheel</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.cn/post/2022/11/how-to-read-a-paper/" title="How to Read a Paper">How to Read a Paper</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.cn/post/2022/11/cmu%E6%95%B0%E6%8D%AE%E5%BA%93%E6%80%BB%E7%BB%93/" title="CMU数据库总结">CMU数据库总结</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.cn/post/2022/11/flumejava%E8%AE%BA%E6%96%87/" title="FlumeJava: Easy, Efficient Data-Parallel Pipelines">FlumeJava: Easy, Efficient Data-Parallel Pipelines</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.cn/post/2022/11/flink%E8%AE%BA%E6%96%87/" title="Apache Flink™: Stream and Batch Processing in a Single Engine">Apache Flink™: Stream and Batch Processing in a Single Engine</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.cn/post/2022/10/%E5%AE%B9%E5%99%A8%E7%BD%91%E7%BB%9C/" title="容器网络">容器网络</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.cn/post/2022/10/b&#43;%E6%A0%91%E6%89%A7%E8%A1%8C%E8%BF%87%E7%A8%8B/" title="B&#43;树执行过程">B&#43;树执行过程</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.cn/post/2022/09/k8s%E4%BD%BF%E7%94%A8/" title="k8s POD使用总结">k8s POD使用总结</a>
+    </li>
+    
+</ul>
+    </section>
+
+    
+
+    <section class="widget">
+        <h3 class="widget-title"><a href='/categories/'>分类</a></h3>
+<ul class="widget-list">
+    
+    <li><a href="https://code0xff.cn/categories/%E5%88%86%E5%B8%83%E5%BC%8F/">分布式 (6)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E5%95%86%E4%B8%9A/">商业 (3)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E5%A4%A7%E6%95%B0%E6%8D%AE/">大数据 (20)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E6%95%B0%E6%8D%AE%E5%BA%93/">数据库 (8)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E6%97%85%E8%A1%8C/">旅行 (10)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E6%9E%B6%E6%9E%84/">架构 (1)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E7%AE%97%E6%B3%95/">算法 (8)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E7%B3%BB%E7%BB%9F/">系统 (5)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E7%BC%96%E7%A8%8B%E8%AF%AD%E8%A8%80/">编程语言 (2)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E8%AF%BB%E4%B9%A6%E7%AC%94%E8%AE%B0/">读书笔记 (9)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E9%9A%8F%E4%BE%BF%E5%86%99%E5%86%99/">随便写写 (4)</a></li>
+    
+</ul>
+    </section>
+
+    <section class="widget">
+        <h3 class="widget-title">归档</a></h3>
+<ul class="widget-list">
+    
+    <li><a href="https://code0xff.cn/years/2021%E5%B9%B4/">2021年 (30)</a></li>
+    
+    <li><a href="https://code0xff.cn/years/2022%E5%B9%B4/">2022年 (46)</a></li>
+    
+</ul>
+    </section>
+
+    <section class="widget">
+        <h3 class="widget-title"><a href='/tags/'>标签</a></h3>
+<div class="tagcloud">
+    
+    <a href="https://code0xff.cn/tags/b%E6%A0%91/">B树 </a>
+    
+    <a href="https://code0xff.cn/tags/flink/">flink </a>
+    
+    <a href="https://code0xff.cn/tags/hive/">Hive </a>
+    
+    <a href="https://code0xff.cn/tags/k8s/">k8s </a>
+    
+    <a href="https://code0xff.cn/tags/kudu/">kudu </a>
+    
+    <a href="https://code0xff.cn/tags/manacher/">Manacher </a>
+    
+    <a href="https://code0xff.cn/tags/mapreduce/">MapReduce </a>
+    
+    <a href="https://code0xff.cn/tags/paxos/">paxos </a>
+    
+    <a href="https://code0xff.cn/tags/raft/">raft </a>
+    
+    <a href="https://code0xff.cn/tags/scala/">scala </a>
+    
+    <a href="https://code0xff.cn/tags/snowflake/">snowflake </a>
+    
+    <a href="https://code0xff.cn/tags/spark/">spark </a>
+    
+    <a href="https://code0xff.cn/tags/unix/">unix </a>
+    
+    <a href="https://code0xff.cn/tags/%E4%BA%8C%E5%88%86%E6%9F%A5%E6%89%BE/">二分查找 </a>
+    
+    <a href="https://code0xff.cn/tags/%E4%BA%8C%E5%8F%89%E6%A0%91%E9%81%8D%E5%8E%86/">二叉树遍历 </a>
+    
+    <a href="https://code0xff.cn/tags/%E5%88%86%E5%B8%83%E5%BC%8F/">分布式 </a>
+    
+    <a href="https://code0xff.cn/tags/%E5%8A%A8%E6%80%81%E6%B3%A8%E5%85%A5/">动态注入 </a>
+    
+    <a href="https://code0xff.cn/tags/%E5%8E%86%E5%8F%B2/">历史 </a>
+    
+    <a href="https://code0xff.cn/tags/%E5%9B%9E%E6%BA%AF/">回溯 </a>
+    
+    <a href="https://code0xff.cn/tags/%E5%9B%BD%E5%86%85%E6%97%85%E8%A1%8C/">国内旅行 </a>
+    
+    <a href="https://code0xff.cn/tags/%E5%9B%BD%E5%A4%96%E6%97%85%E8%A1%8C/">国外旅行 </a>
+    
+    <a href="https://code0xff.cn/tags/%E5%A4%A7%E6%95%B0%E6%8D%AE/">大数据 </a>
+    
+    <a href="https://code0xff.cn/tags/%E5%AD%98%E5%82%A8/">存储 </a>
+    
+    <a href="https://code0xff.cn/tags/%E5%B7%A5%E4%BD%9C%E8%AE%B0%E5%BD%95/">工作记录 </a>
+    
+    <a href="https://code0xff.cn/tags/%E5%BE%AE%E6%9C%8D%E5%8A%A1/">微服务 </a>
+    
+    <a href="https://code0xff.cn/tags/%E6%95%B0%E6%8D%AE%E5%BA%93/">数据库 </a>
+    
+    <a href="https://code0xff.cn/tags/%E6%B1%87%E7%BC%96/">汇编 </a>
+    
+    <a href="https://code0xff.cn/tags/%E6%B9%96%E4%BB%93%E4%B8%80%E4%BD%93/">湖仓一体 </a>
+    
+    <a href="https://code0xff.cn/tags/%E7%94%9F%E6%B4%BB/">生活 </a>
+    
+    <a href="https://code0xff.cn/tags/%E7%94%B5%E5%BD%B1/">电影 </a>
+    
+    <a href="https://code0xff.cn/tags/%E7%AE%97%E6%B3%95/">算法 </a>
+    
+    <a href="https://code0xff.cn/tags/%E7%BB%8F%E6%B5%8E/">经济 </a>
+    
+    <a href="https://code0xff.cn/tags/%E7%BC%93%E5%AD%98/">缓存 </a>
+    
+    <a href="https://code0xff.cn/tags/%E7%BC%96%E8%AF%91%E5%8E%9F%E7%90%86/">编译原理 </a>
+    
+    <a href="https://code0xff.cn/tags/%E7%BD%91%E7%BB%9C/">网络 </a>
+    
+    <a href="https://code0xff.cn/tags/%E8%AE%A1%E7%AE%97%E6%A1%86%E6%9E%B6/">计算框架 </a>
+    
+    <a href="https://code0xff.cn/tags/%E8%AE%BA%E6%96%87/">论文 </a>
+    
+    <a href="https://code0xff.cn/tags/%E8%AF%BB%E4%B9%A6%E7%AC%94%E8%AE%B0/">读书笔记 </a>
+    
+</div>
+    </section>
+
+    
+
+    <section class="widget">
+        <h3 class="widget-title">RSS</h3>
+        <ul class="widget-list">
+            <li><a href="https://code0xff.cn/index.xml">文章 RSS</a></li>
+        </ul>
+    </section>
+</div>
+            </div>
+        </div>
+    </div>
+    <footer id="footer">
+    <div>
+        &copy; 2022 <a href="https://code0xff.cn/">记录每个瞬间 By 老王</a>
+        
+    </div>
+    <br />
+    <div>
+        <div class="github-badge">
+            <a href="https://gohugo.io/" target="_black" rel="nofollow"><span class="badge-subject">Powered by</span><span class="badge-value bg-blue">Hugo</span></a>
+        </div>
+        <div class="github-badge">
+            <a href="https://github.com/flysnow-org/maupassant-hugo" target="_black"><span class="badge-subject">Theme</span><span class="badge-value bg-yellowgreen">Maupassant</span></a>
+        </div>
+    </div>
+    <div>
+        <a href="http://www.beian.miit.gov.cn/">京ICP备19014975号</a>
+    </div>
+</footer>
+
+
+    
+    <script type="text/javascript">
+        window.MathJax = {
+            tex2jax: {
+                inlineMath: [['$', '$']],
+                processEscapes: true
+                }
+            };
+    </script>
+    <script src='https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.5/MathJax.js?config=TeX-MML-AM_CHTML' async></script><script src="https://cdn.bootcdn.net/ajax/libs/fancybox/3.5.7/jquery.fancybox.min.js"></script>
+
+<a id="rocket" href="#top"></a>
+<script type="text/javascript" src='/js/totop.js?v=0.0.0' async=""></script>
+
+<script type="application/javascript">
+var doNotTrack = false;
+if (!doNotTrack) {
+	window.ga=window.ga||function(){(ga.q=ga.q||[]).push(arguments)};ga.l=+new Date;
+	ga('create', 'GA ID', 'auto');
+	
+	ga('send', 'pageview');
+}
+</script>
+<script async src='https://www.google-analytics.com/analytics.js'></script>
+
+
+
+    <script type="text/javascript" src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js" async></script>
+
+
+
+
+</body>
+
+</html>
