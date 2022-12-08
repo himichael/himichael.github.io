@@ -1,0 +1,943 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    
+    <meta name="referrer" content="no-referrer-when-downgrade">
+    
+
+    <title>MySQL文件存储结构 | 记录每个瞬间</title>
+    <meta property="og:title" content="MySQL文件存储结构 - 记录每个瞬间">
+    <meta property="og:type" content="article">
+        
+    <meta property="article:published_time" content='2022-12-02T08:35:19&#43;08:00'>
+        
+        
+    <meta property="article:modified_time" content='2022-12-02T08:35:19&#43;08:00'>
+        
+    <meta name="Keywords" content="">
+    <meta name="description" content="MySQL文件存储结构">
+        <meta name="author" content="隔壁老王">
+        
+    <meta property="og:url" content="https://code0xff.cn/post/2022/12/mysql%E6%96%87%E4%BB%B6%E5%AD%98%E5%82%A8%E7%BB%93%E6%9E%84/">
+    <link rel="shortcut icon" href='/favicon.ico'  type="image/x-icon">
+
+    <link rel="stylesheet" href='/css/normalize.css'>
+    <link rel="stylesheet" href='/css/style.css'>
+    <script type="text/javascript" src="//cdn.bootcdn.net/ajax/libs/jquery/3.4.1/jquery.min.js"></script>
+
+    
+    
+    
+        <link href="https://cdn.bootcdn.net/ajax/libs/fancybox/3.5.7/jquery.fancybox.min.css" rel="stylesheet">
+    
+    
+    
+    
+</head>
+
+
+<body>
+    <header id="header" class="clearfix">
+    <div class="container">
+        <div class="col-group">
+            <div class="site-name ">
+                
+                    <a id="logo" href="https://code0xff.cn/">
+                        记录每个瞬间
+                    </a>
+                
+                
+            </div>
+            <div>
+                <nav id="nav-menu" class="clearfix">
+                    <a class="current" href="https://code0xff.cn/">首页</a>
+                    
+                    <a  href="https://code0xff.cn/linked/" title="链接">链接</a>
+                    
+                    <a  href="https://code0xff.cn/archives/" title="归档">归档</a>
+                    
+                    <a  href="https://code0xff.cn/about/" title="关于">关于</a>
+                    
+                </nav>
+            </div>
+        </div>
+    </div>
+</header>
+
+    <div id="body">
+        <div class="container">
+            <div class="col-group">
+
+                <div class="col-8" id="main">
+                    
+<div class="res-cons">
+    
+    <article class="post">
+        <header>
+            <h1 class="post-title">MySQL文件存储结构</h1>
+        </header>
+        <date class="post-meta meta-date">
+            2022年12月2日
+        </date>
+<nav id="TableOfContents">
+  <ul>
+    <li>
+      <ul>
+        <li><a href="#row格式">row格式</a></li>
+        <li><a href="#数据页">数据页</a></li>
+        <li><a href="#数据页的头信息">数据页的头信息</a></li>
+        <li><a href="#各种page定义">各种page定义</a></li>
+        <li><a href="#参考">参考</a></li>
+      </ul>
+    </li>
+  </ul>
+</nav>
+        
+        <div class="post-meta">
+            
+            <span class="post-meta meta-tags">
+                <ul class="clearfix">
+                    <a href='/categories/%E6%95%B0%E6%8D%AE%E5%BA%93'>数据库</a>
+                </ul>
+            </span>
+            
+        </div>
+        
+        
+        <div class="post-meta">
+            <span id="busuanzi_container_page_pv">|<span id="busuanzi_value_page_pv"></span><span>
+                    阅读</span></span>
+        </div>
+        
+        
+        <div class="post-content">
+            <h2 id="row格式">row格式</h2>
+<p>行格式介绍参考官网 -&gt; <a href="https://dev.mysql.com/doc/refman/8.0/en/innodb-row-format.html#innodb-row-format-compact">这里</a><br>
+行格式有4种</p>
+<ul>
+<li>REDUNDANT</li>
+<li>COMPACT</li>
+<li>DYNAMIC</li>
+<li>COMPRESSED</li>
+</ul>
+<p>
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1//post/2022/12/MySQL%E6%96%87%E4%BB%B6%E5%AD%98%E5%82%A8%E7%BB%93%E6%9E%84/1.png">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1//post/2022/12/MySQL%E6%96%87%E4%BB%B6%E5%AD%98%E5%82%A8%E7%BB%93%E6%9E%84/1.png" />
+        </a>
+    <br>
+变长字段的长度列表</p>
+<ul>
+<li>存储像 varchar这种的，其长度是可变的</li>
+<li>在这个列表中存储了对应字段的长度</li>
+<li>如果存储的最大字节不超过255，则使用1个字节</li>
+<li>如果实际使用的字节不超过127，则用 1个字节表示</li>
+<li>否则用2个字节表示</li>
+<li>对于varchar(M)，字符类型为ascii，其长度为 M * 1，而UTF为M * 3，UTFmb4为M * 4</li>
+<li>变长字段的长度列表不存储值为NULL的长度信息</li>
+<li>变长字段的长度列表不是一定存在的</li>
+<li>变长字段的长度列表中各字段长度信息是按列的顺序逆序排列的</li>
+<li>char类型字段的长度信息是否需要存储在 变长字段的长度列表 中取决于其所使用的字符集是否为变长字符集</li>
+</ul>
+<p>比如，ascii字符集，各字段为f1、f2、f3、f4<br>
+其值为 &ldquo;a&rdquo;、NULL、&ldquo;ccc&rdquo;、99<br>
+变成字段f1为1、f3长度为3，则变成字段列表内容为 0x03、0x01</p>
+<p>NULL值标志位</p>
+<ul>
+<li>也是反向存储的</li>
+<li>对于向量位不足 1个字节，则补0</li>
+<li>NULL值标志位不是一定存在的</li>
+</ul>
+<p>
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E6%96%87%E4%BB%B6%E5%AD%98%E5%82%A8%E7%BB%93%E6%9E%84/3.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E6%96%87%E4%BB%B6%E5%AD%98%E5%82%A8%E7%BB%93%E6%9E%84/3.jpg" />
+        </a>
+    </p>
+<p>更完整的行信息如下：<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E6%96%87%E4%BB%B6%E5%AD%98%E5%82%A8%E7%BB%93%E6%9E%84/2.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E6%96%87%E4%BB%B6%E5%AD%98%E5%82%A8%E7%BB%93%E6%9E%84/2.jpg" />
+        </a>
+    </p>
+<p>头记录信息如下：<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E6%96%87%E4%BB%B6%E5%AD%98%E5%82%A8%E7%BB%93%E6%9E%84/4.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E6%96%87%E4%BB%B6%E5%AD%98%E5%82%A8%E7%BB%93%E6%9E%84/4.jpg" />
+        </a>
+    <br>
+头记录说明</p>
+<ul>
+<li>预留位1、2：暂未使用</li>
+<li>delete_mask：当前记录被删除的标志位</li>
+<li>min_rec_mask：B+树的每层非叶子节点中的最小记录的标志位</li>
+<li>n_owned：当前记录拥有的记录数</li>
+<li>heap_no：当前记录在记录堆中的位置</li>
+<li>record_type：当前记录类型。具体地，0: 普通记录；1: B+树非叶子节点记录（即所谓的目录项记录）；2: 最小记录；3: 最大记录</li>
+<li>next_record：下一条记录的相对位置</li>
+</ul>
+<p>记录的数据内容</p>
+<ul>
+<li>DB_ROW_ID：该字段占6个字节，用于标识一条记录</li>
+<li>DB_TRX_ID：该字段占6个字节，其值为事务ID</li>
+<li>DB_ROLL_PTR：该字段占7个字节，其值为回滚指针</li>
+</ul>
+<p>next_record 是按照单链表的方式，指向了下一条记录<br>
+其中 infimum 是最小记录、supermum是最大记录<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E6%96%87%E4%BB%B6%E5%AD%98%E5%82%A8%E7%BB%93%E6%9E%84/5.png">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E6%96%87%E4%BB%B6%E5%AD%98%E5%82%A8%E7%BB%93%E6%9E%84/5.png" />
+        </a>
+    </p>
+<p>删除记录2 后的结果，并不会真正删除，后面如果再插入数据，会复用这个空间<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E6%96%87%E4%BB%B6%E5%AD%98%E5%82%A8%E7%BB%93%E6%9E%84/6.png">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E6%96%87%E4%BB%B6%E5%AD%98%E5%82%A8%E7%BB%93%E6%9E%84/6.png" />
+        </a>
+    </p>
+<p>COMPACT格式中，如果超过了 768字节，则会用产生溢出页，并用20字节指针，指向溢出页<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E6%96%87%E4%BB%B6%E5%AD%98%E5%82%A8%E7%BB%93%E6%9E%84/7.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E6%96%87%E4%BB%B6%E5%AD%98%E5%82%A8%E7%BB%93%E6%9E%84/7.jpg" />
+        </a>
+    </p>
+<p>DYNAMIC格式跟COMPACT的区别是，不再存储768字节了，直接用20字节指向溢出页<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E6%96%87%E4%BB%B6%E5%AD%98%E5%82%A8%E7%BB%93%E6%9E%84/8.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E6%96%87%E4%BB%B6%E5%AD%98%E5%82%A8%E7%BB%93%E6%9E%84/8.jpg" />
+        </a>
+    </p>
+<h2 id="数据页">数据页</h2>
+<p>一行数据是存储在 数据页中的，InnoDB中定义了很多页类型<br>
+默认情况下，每个页大小为 16K<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E6%96%87%E4%BB%B6%E5%AD%98%E5%82%A8%E7%BB%93%E6%9E%84/9.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E6%96%87%E4%BB%B6%E5%AD%98%E5%82%A8%E7%BB%93%E6%9E%84/9.jpg" />
+        </a>
+     <br>
+上图中，File Header、File Trailer是通用的，也就是每种类型的页都会有这种结构</p>
+<p>
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E6%96%87%E4%BB%B6%E5%AD%98%E5%82%A8%E7%BB%93%E6%9E%84/10.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E6%96%87%E4%BB%B6%E5%AD%98%E5%82%A8%E7%BB%93%E6%9E%84/10.jpg" />
+        </a>
+     <br>
+File Header中，包含了上个页、下个页的指针<br>
+但是有些类型的页其 前后指针是空的<br>
+数据页通过前后指针就可以很快定位到相邻记录，所以数据page之间是双链表结构</p>
+<p>
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E6%96%87%E4%BB%B6%E5%AD%98%E5%82%A8%E7%BB%93%E6%9E%84/12.png">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E6%96%87%E4%BB%B6%E5%AD%98%E5%82%A8%E7%BB%93%E6%9E%84/12.png" />
+        </a>
+    </p>
+<p>数据的插入过程，先从空闲空间中分配<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E6%96%87%E4%BB%B6%E5%AD%98%E5%82%A8%E7%BB%93%E6%9E%84/13.png">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E6%96%87%E4%BB%B6%E5%AD%98%E5%82%A8%E7%BB%93%E6%9E%84/13.png" />
+        </a>
+    </p>
+<p>数据页中有一个 Page Directory，可以用这个做二分查找，快速定位<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E6%96%87%E4%BB%B6%E5%AD%98%E5%82%A8%E7%BB%93%E6%9E%84/11.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E6%96%87%E4%BB%B6%E5%AD%98%E5%82%A8%E7%BB%93%E6%9E%84/11.jpg" />
+        </a>
+    <br>
+这里规定，虚拟的最小值分为一组，里面只有一条记录也就是最小值本身 <br>
+最大值分为一组，里面的记录数有1-8之间<br>
+其他的分组只能是4-8条之间</p>
+<p>比如槽子指向的分别是 1、3、5、7、9<br>
+如果要查8，那么根据二分定位到9，这个值比9小，所以找9前面的7这个槽子<br>
+根据7 这个槽子就定位到一个具体的记录了，然后再按照 单链表往后遍历，就能找到 8这条记录了</p>
+<h2 id="数据页的头信息">数据页的头信息</h2>
+<p>File Header定义如下：</p>
+<table>
+<thead>
+<tr>
+<th>名称</th>
+<th>大小（单位：B）</th>
+<th>描述</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>FIL_PAGE_SPACE_OR_CHKSUM</td>
+<td>4</td>
+<td>页的校验和（checksum值）</td>
+</tr>
+<tr>
+<td>FIL_PAGE_OFFSET</td>
+<td>4</td>
+<td>页号</td>
+</tr>
+<tr>
+<td>FIL_PAGE_PREV</td>
+<td>4</td>
+<td>上一个页的页号</td>
+</tr>
+<tr>
+<td>FIL_PAGE_NEXT</td>
+<td>4</td>
+<td>下一个页的页号</td>
+</tr>
+<tr>
+<td>FIL_PAGE_LSN</td>
+<td>8</td>
+<td>页面被最后修改时对应的日志序列位置（英文名是：Log</td>
+</tr>
+<tr>
+<td>FIL_PAGE_TYPE</td>
+<td>2</td>
+<td>该页的类型</td>
+</tr>
+<tr>
+<td>FIL_PAGE_FILE_FLUSH_LSN</td>
+<td>8</td>
+<td>仅在系统表空间的一个页中定义，代表文件至少被刷新到了对应的LSN值</td>
+</tr>
+<tr>
+<td>FIL_PAGE_ARCH_LOG_NO_OR_SPACE_ID</td>
+<td>4</td>
+<td>页属于哪个表空间</td>
+</tr>
+</tbody>
+</table>
+<p>File Trailer 定义如下：</p>
+<ul>
+<li>前4个字节代表页的校验和，这个部分是和File Header中的校验和相对应的</li>
+<li>后4个字节代表页面被最后修改时对应的日志序列位置（LSN）</li>
+</ul>
+<p>Page Header 定义如下：</p>
+<table>
+<thead>
+<tr>
+<th>名称</th>
+<th>大小（单位：Byte）</th>
+<th>描述</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>PAGE_N_DIR_SLOTS</td>
+<td>2</td>
+<td>页目录的插槽数</td>
+</tr>
+<tr>
+<td>PAGE_HEAP_TOP</td>
+<td>2</td>
+<td>还未使用的空间最小地址，也就是说从该地址之后就是Free Space</td>
+</tr>
+<tr>
+<td>PAGE_N_HEAP</td>
+<td>2</td>
+<td>第1位表示本记录是否为紧凑型的记录，剩余的15位表示本页的堆中记录的数量（包括最小和最大记录以及标记为删除的记录）</td>
+</tr>
+<tr>
+<td>PAGE_FREE</td>
+<td>2</td>
+<td>各个已删除的记录通过next_record组成一个单向链表，这个单向链表中的记录所占用的存储空间可以被重新利用；PAGE_FREE表示该链表头节点对应记录在页面中的偏移量</td>
+</tr>
+<tr>
+<td>PAGE_GARBAGE</td>
+<td>2</td>
+<td>已删除记录占用的字节数</td>
+</tr>
+<tr>
+<td>PAGE_LAST_INSERT</td>
+<td>2</td>
+<td>最后插入记录的位置</td>
+</tr>
+<tr>
+<td>PAGE_DIRECTION</td>
+<td>2</td>
+<td>记录插入的方向</td>
+</tr>
+<tr>
+<td>PAGE_N_DIRECTION</td>
+<td>2</td>
+<td>一个方向连续插入的记录数量</td>
+</tr>
+<tr>
+<td>PAGE_N_RECS</td>
+<td>2</td>
+<td>该页中记录的数量（不包括最小和最大记录以及被标记为删除的记录）</td>
+</tr>
+<tr>
+<td>PAGE_MAX_TRX_ID</td>
+<td>8</td>
+<td>修改当前页的最大事务ID，该值仅在二级索引中定义</td>
+</tr>
+<tr>
+<td>PAGE_LEVEL</td>
+<td>2</td>
+<td>当前页在B+树中所处的层级</td>
+</tr>
+<tr>
+<td>PAGE_INDEX_ID</td>
+<td>8</td>
+<td>索引ID，表示当前页属于哪个索引</td>
+</tr>
+<tr>
+<td>PAGE_BTR_SEG_LEAF</td>
+<td>10</td>
+<td>B+树叶子段的头部信息，仅在B+树的Root页定义</td>
+</tr>
+<tr>
+<td>PAGE_BTR_SEG_TOP</td>
+<td>10</td>
+<td>B+树非叶子段的头部信息，仅在B+树的Root页定义</td>
+</tr>
+</tbody>
+</table>
+<p>数据页的完整展示如下：<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E6%96%87%E4%BB%B6%E5%AD%98%E5%82%A8%E7%BB%93%E6%9E%84/14.png">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E6%96%87%E4%BB%B6%E5%AD%98%E5%82%A8%E7%BB%93%E6%9E%84/14.png" />
+        </a>
+    </p>
+<h2 id="各种page定义">各种page定义</h2>
+<p>这个头文件的位置是：mysql-8.0.28/storage/innobase/include/fil0fil.h</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">  1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">  2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">  3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">  4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">  5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">  6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">  7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">  8
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">  9
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 10
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 11
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 12
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 13
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 14
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 15
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 16
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 17
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 18
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 19
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 20
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 21
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 22
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 23
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 24
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 25
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 26
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 27
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 28
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 29
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 30
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 31
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 32
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 33
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 34
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 35
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 36
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 37
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 38
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 39
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 40
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 41
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 42
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 43
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 44
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 45
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 46
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 47
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 48
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 49
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 50
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 51
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 52
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 53
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 54
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 55
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 56
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 57
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 58
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 59
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 60
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 61
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 62
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 63
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 64
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 65
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 66
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 67
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 68
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 69
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 70
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 71
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 72
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 73
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 74
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 75
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 76
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 77
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 78
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 79
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 80
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 81
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 82
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 83
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 84
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 85
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 86
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 87
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 88
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 89
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 90
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 91
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 92
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 93
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 94
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 95
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 96
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 97
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 98
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 99
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">100
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">101
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-cpp" data-lang="cpp"><span style="display:flex;"><span><span style="color:#6272a4">/** B-tree node */</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">constexpr</span> page_type_t FIL_PAGE_INDEX <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">17855</span>;
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4">/** R-tree node */</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">constexpr</span> page_type_t FIL_PAGE_RTREE <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">17854</span>;
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4">/** Tablespace SDI Index page */</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">constexpr</span> page_type_t FIL_PAGE_SDI <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">17853</span>;
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4">/** This page type is unused. */</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">constexpr</span> page_type_t FIL_PAGE_TYPE_UNUSED <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">1</span>;
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4">/** Undo log page */</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">constexpr</span> page_type_t FIL_PAGE_UNDO_LOG <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">2</span>;
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4">/** Index node */</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">constexpr</span> page_type_t FIL_PAGE_INODE <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">3</span>;
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4">/** Insert buffer free list */</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">constexpr</span> page_type_t FIL_PAGE_IBUF_FREE_LIST <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">4</span>;
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4">/* File page types introduced in MySQL/InnoDB 5.1.7 */</span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4">/** Freshly allocated page */</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">constexpr</span> page_type_t FIL_PAGE_TYPE_ALLOCATED <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">0</span>;
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4">/** Insert buffer bitmap */</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">constexpr</span> page_type_t FIL_PAGE_IBUF_BITMAP <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">5</span>;
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4">/** System page */</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">constexpr</span> page_type_t FIL_PAGE_TYPE_SYS <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">6</span>;
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4">/** Transaction system data */</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">constexpr</span> page_type_t FIL_PAGE_TYPE_TRX_SYS <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">7</span>;
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4">/** File space header */</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">constexpr</span> page_type_t FIL_PAGE_TYPE_FSP_HDR <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">8</span>;
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4">/** Extent descriptor page */</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">constexpr</span> page_type_t FIL_PAGE_TYPE_XDES <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">9</span>;
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4">/** Uncompressed BLOB page */</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">constexpr</span> page_type_t FIL_PAGE_TYPE_BLOB <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">10</span>;
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4">/** First compressed BLOB page */</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">constexpr</span> page_type_t FIL_PAGE_TYPE_ZBLOB <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">11</span>;
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4">/** Subsequent compressed BLOB page */</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">constexpr</span> page_type_t FIL_PAGE_TYPE_ZBLOB2 <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">12</span>;
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4">/** In old tablespaces, garbage in FIL_PAGE_TYPE is replaced with
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">this value when flushing pages. */</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">constexpr</span> page_type_t FIL_PAGE_TYPE_UNKNOWN <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">13</span>;
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4">/** Compressed page */</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">constexpr</span> page_type_t FIL_PAGE_COMPRESSED <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">14</span>;
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4">/** Encrypted page */</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">constexpr</span> page_type_t FIL_PAGE_ENCRYPTED <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">15</span>;
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4">/** Compressed and Encrypted page */</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">constexpr</span> page_type_t FIL_PAGE_COMPRESSED_AND_ENCRYPTED <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">16</span>;
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4">/** Encrypted R-tree page */</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">constexpr</span> page_type_t FIL_PAGE_ENCRYPTED_RTREE <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">17</span>;
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4">/** Uncompressed SDI BLOB page */</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">constexpr</span> page_type_t FIL_PAGE_SDI_BLOB <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">18</span>;
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4">/** Commpressed SDI BLOB page */</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">constexpr</span> page_type_t FIL_PAGE_SDI_ZBLOB <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">19</span>;
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4">/** Legacy doublewrite buffer page. */</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">constexpr</span> page_type_t FIL_PAGE_TYPE_LEGACY_DBLWR <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">20</span>;
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4">/** Rollback Segment Array page */</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">constexpr</span> page_type_t FIL_PAGE_TYPE_RSEG_ARRAY <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">21</span>;
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4">/** Index pages of uncompressed LOB */</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">constexpr</span> page_type_t FIL_PAGE_TYPE_LOB_INDEX <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">22</span>;
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4">/** Data pages of uncompressed LOB */</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">constexpr</span> page_type_t FIL_PAGE_TYPE_LOB_DATA <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">23</span>;
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4">/** The first page of an uncompressed LOB */</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">constexpr</span> page_type_t FIL_PAGE_TYPE_LOB_FIRST <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">24</span>;
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4">/** The first page of a compressed LOB */</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">constexpr</span> page_type_t FIL_PAGE_TYPE_ZLOB_FIRST <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">25</span>;
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4">/** Data pages of compressed LOB */</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">constexpr</span> page_type_t FIL_PAGE_TYPE_ZLOB_DATA <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">26</span>;
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4">/** Index pages of compressed LOB. This page contains an array of
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">z_index_entry_t objects.*/</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">constexpr</span> page_type_t FIL_PAGE_TYPE_ZLOB_INDEX <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">27</span>;
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4">/** Fragment pages of compressed LOB. */</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">constexpr</span> page_type_t FIL_PAGE_TYPE_ZLOB_FRAG <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">28</span>;
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4">/** Index pages of fragment pages (compressed LOB). */</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">constexpr</span> page_type_t FIL_PAGE_TYPE_ZLOB_FRAG_ENTRY <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">29</span>;
+</span></span></code></pre></td></tr></table>
+</div>
+</div><h2 id="参考">参考</h2>
+<ul>
+<li><a href="https://zhuanlan.zhihu.com/p/266060894">MySQL之InnoDB存储引擎：Row Format行格式</a></li>
+<li><a href="https://www.modb.pro/u/443175">GrowthDBA</a></li>
+<li><a href="https://www.modb.pro/db/172853">MySQL工具之innodb_ruby：探究InnoDB存储结构的利器</a></li>
+</ul>
+
+			<script type="text/javascript"
+        async
+        src="https://cdn.bootcss.com/mathjax/2.7.3/MathJax.js?config=TeX-AMS-MML_HTMLorMML">
+MathJax.Hub.Config({
+  tex2jax: {
+    inlineMath: [['$','$'], ['\\(','\\)']],
+    displayMath: [['$$','$$'], ['\[\[','\]\]']],
+    processEscapes: true,
+    processEnvironments: true,
+    skipTags: ['script', 'noscript', 'style', 'textarea', 'pre'],
+    TeX: { equationNumbers: { autoNumber: "AMS" },
+         extensions: ["AMSmath.js", "AMSsymbols.js"] }
+  }
+});
+
+MathJax.Hub.Queue(function() {
+    
+    
+    
+    var all = MathJax.Hub.getAllJax(), i;
+    for(i = 0; i < all.length; i += 1) {
+        all[i].SourceElement().parentNode.className += ' has-jax';
+    }
+});
+</script>
+
+<style>
+code.has-jax {
+    font: inherit;
+    font-size: 100%;
+    background: inherit;
+    border: inherit;
+    color: #515151;
+}
+</style>
+        </div>
+
+        
+
+
+        
+
+<div class="post-archive">
+    <h2>相关文章</h2>
+    <ul class="listing">
+        
+        <li><a href="/post/2022/11/%E8%B0%83%E8%AF%95mysql/">调试MySQL</a></li>
+        
+        <li><a href="/post/2022/11/cmu%E6%95%B0%E6%8D%AE%E5%BA%93%E6%80%BB%E7%BB%93/">CMU数据库总结</a></li>
+        
+        <li><a href="/post/2022/09/architecture-of-a-database-system/">Architecture of a Database System论文翻译</a></li>
+        
+        <li><a href="/post/2022/08/a-relational-model-of-data-for-large-shared-data-banks/">A Relational Model of Data for Large Shared Data Banks论文翻译</a></li>
+        
+        <li><a href="/post/2022/08/%E7%A1%AE%E5%AE%9A%E8%A6%81%E5%9C%A8dbms%E4%B8%AD%E7%94%A8mmap%E5%90%97/">确定要在DBMS中用mmap吗</a></li>
+        
+    </ul>
+</div>
+
+
+        <div class="post-meta meta-tags">
+            
+            <ul class="clearfix">
+                
+                <li><a href='/tags/%E6%95%B0%E6%8D%AE%E5%BA%93'>数据库</a></li>
+                
+            </ul>
+            
+        </div>
+    </article>
+    
+    
+
+    
+    
+</div>
+
+
+                </div>
+
+                <div id="secondary">
+    <section class="widget">
+        <form id="search" action='https://code0xff.cn/search/' method="get" accept-charset="utf-8" target="_blank" _lpchecked="1">
+      
+      <input type="text" name="q" maxlength="20" placeholder="Search">
+      <input type="hidden" name="sitesearch" value="https://code0xff.cn/">
+      <button type="submit" class="submit icon-search"></button>
+</form>
+    </section>
+    
+    <section class="widget">
+        <h3 class="widget-title">最近文章</h3>
+<ul class="widget-list">
+    
+    <li>
+        <a href="https://code0xff.cn/post/2022/12/mysql%E6%96%87%E4%BB%B6%E5%AD%98%E5%82%A8%E7%BB%93%E6%9E%84/" title="MySQL文件存储结构">MySQL文件存储结构</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.cn/post/2022/11/%E8%B0%83%E8%AF%95mysql/" title="调试MySQL">调试MySQL</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.cn/post/2022/11/multi-tenant-cloud-data-services/" title="关于云环境中多租户问题的论文">关于云环境中多租户问题的论文</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.cn/post/2022/11/millwheel/" title="MillWheel">MillWheel</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.cn/post/2022/11/how-to-read-a-paper/" title="How to Read a Paper">How to Read a Paper</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.cn/post/2022/11/cmu%E6%95%B0%E6%8D%AE%E5%BA%93%E6%80%BB%E7%BB%93/" title="CMU数据库总结">CMU数据库总结</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.cn/post/2022/11/flumejava%E8%AE%BA%E6%96%87/" title="FlumeJava: Easy, Efficient Data-Parallel Pipelines">FlumeJava: Easy, Efficient Data-Parallel Pipelines</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.cn/post/2022/11/flink%E8%AE%BA%E6%96%87/" title="Apache Flink™: Stream and Batch Processing in a Single Engine">Apache Flink™: Stream and Batch Processing in a Single Engine</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.cn/post/2022/10/%E5%AE%B9%E5%99%A8%E7%BD%91%E7%BB%9C/" title="容器网络">容器网络</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.cn/post/2022/10/b&#43;%E6%A0%91%E6%89%A7%E8%A1%8C%E8%BF%87%E7%A8%8B/" title="B&#43;树执行过程">B&#43;树执行过程</a>
+    </li>
+    
+</ul>
+    </section>
+
+    
+
+    <section class="widget">
+        <h3 class="widget-title"><a href='/categories/'>分类</a></h3>
+<ul class="widget-list">
+    
+    <li><a href="https://code0xff.cn/categories/%E5%88%86%E5%B8%83%E5%BC%8F/">分布式 (6)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E5%95%86%E4%B8%9A/">商业 (3)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E5%A4%A7%E6%95%B0%E6%8D%AE/">大数据 (20)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E6%95%B0%E6%8D%AE%E5%BA%93/">数据库 (9)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E6%97%85%E8%A1%8C/">旅行 (10)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E6%9E%B6%E6%9E%84/">架构 (1)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E7%AE%97%E6%B3%95/">算法 (8)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E7%B3%BB%E7%BB%9F/">系统 (5)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E7%BC%96%E7%A8%8B%E8%AF%AD%E8%A8%80/">编程语言 (2)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E8%AF%BB%E4%B9%A6%E7%AC%94%E8%AE%B0/">读书笔记 (9)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E9%9A%8F%E4%BE%BF%E5%86%99%E5%86%99/">随便写写 (4)</a></li>
+    
+</ul>
+    </section>
+
+    <section class="widget">
+        <h3 class="widget-title">归档</a></h3>
+<ul class="widget-list">
+    
+    <li><a href="https://code0xff.cn/years/2021%E5%B9%B4/">2021年 (30)</a></li>
+    
+    <li><a href="https://code0xff.cn/years/2022%E5%B9%B4/">2022年 (47)</a></li>
+    
+</ul>
+    </section>
+
+    <section class="widget">
+        <h3 class="widget-title"><a href='/tags/'>标签</a></h3>
+<div class="tagcloud">
+    
+    <a href="https://code0xff.cn/tags/b%E6%A0%91/">B树 </a>
+    
+    <a href="https://code0xff.cn/tags/flink/">flink </a>
+    
+    <a href="https://code0xff.cn/tags/hive/">Hive </a>
+    
+    <a href="https://code0xff.cn/tags/k8s/">k8s </a>
+    
+    <a href="https://code0xff.cn/tags/kudu/">kudu </a>
+    
+    <a href="https://code0xff.cn/tags/manacher/">Manacher </a>
+    
+    <a href="https://code0xff.cn/tags/mapreduce/">MapReduce </a>
+    
+    <a href="https://code0xff.cn/tags/paxos/">paxos </a>
+    
+    <a href="https://code0xff.cn/tags/raft/">raft </a>
+    
+    <a href="https://code0xff.cn/tags/scala/">scala </a>
+    
+    <a href="https://code0xff.cn/tags/snowflake/">snowflake </a>
+    
+    <a href="https://code0xff.cn/tags/spark/">spark </a>
+    
+    <a href="https://code0xff.cn/tags/unix/">unix </a>
+    
+    <a href="https://code0xff.cn/tags/%E4%BA%8C%E5%88%86%E6%9F%A5%E6%89%BE/">二分查找 </a>
+    
+    <a href="https://code0xff.cn/tags/%E4%BA%8C%E5%8F%89%E6%A0%91%E9%81%8D%E5%8E%86/">二叉树遍历 </a>
+    
+    <a href="https://code0xff.cn/tags/%E5%88%86%E5%B8%83%E5%BC%8F/">分布式 </a>
+    
+    <a href="https://code0xff.cn/tags/%E5%8A%A8%E6%80%81%E6%B3%A8%E5%85%A5/">动态注入 </a>
+    
+    <a href="https://code0xff.cn/tags/%E5%8E%86%E5%8F%B2/">历史 </a>
+    
+    <a href="https://code0xff.cn/tags/%E5%9B%9E%E6%BA%AF/">回溯 </a>
+    
+    <a href="https://code0xff.cn/tags/%E5%9B%BD%E5%86%85%E6%97%85%E8%A1%8C/">国内旅行 </a>
+    
+    <a href="https://code0xff.cn/tags/%E5%9B%BD%E5%A4%96%E6%97%85%E8%A1%8C/">国外旅行 </a>
+    
+    <a href="https://code0xff.cn/tags/%E5%A4%A7%E6%95%B0%E6%8D%AE/">大数据 </a>
+    
+    <a href="https://code0xff.cn/tags/%E5%AD%98%E5%82%A8/">存储 </a>
+    
+    <a href="https://code0xff.cn/tags/%E5%B7%A5%E4%BD%9C%E8%AE%B0%E5%BD%95/">工作记录 </a>
+    
+    <a href="https://code0xff.cn/tags/%E5%BE%AE%E6%9C%8D%E5%8A%A1/">微服务 </a>
+    
+    <a href="https://code0xff.cn/tags/%E6%95%B0%E6%8D%AE%E5%BA%93/">数据库 </a>
+    
+    <a href="https://code0xff.cn/tags/%E6%B1%87%E7%BC%96/">汇编 </a>
+    
+    <a href="https://code0xff.cn/tags/%E6%B9%96%E4%BB%93%E4%B8%80%E4%BD%93/">湖仓一体 </a>
+    
+    <a href="https://code0xff.cn/tags/%E7%94%9F%E6%B4%BB/">生活 </a>
+    
+    <a href="https://code0xff.cn/tags/%E7%94%B5%E5%BD%B1/">电影 </a>
+    
+    <a href="https://code0xff.cn/tags/%E7%AE%97%E6%B3%95/">算法 </a>
+    
+    <a href="https://code0xff.cn/tags/%E7%BB%8F%E6%B5%8E/">经济 </a>
+    
+    <a href="https://code0xff.cn/tags/%E7%BC%93%E5%AD%98/">缓存 </a>
+    
+    <a href="https://code0xff.cn/tags/%E7%BC%96%E8%AF%91%E5%8E%9F%E7%90%86/">编译原理 </a>
+    
+    <a href="https://code0xff.cn/tags/%E7%BD%91%E7%BB%9C/">网络 </a>
+    
+    <a href="https://code0xff.cn/tags/%E8%AE%A1%E7%AE%97%E6%A1%86%E6%9E%B6/">计算框架 </a>
+    
+    <a href="https://code0xff.cn/tags/%E8%AE%BA%E6%96%87/">论文 </a>
+    
+    <a href="https://code0xff.cn/tags/%E8%AF%BB%E4%B9%A6%E7%AC%94%E8%AE%B0/">读书笔记 </a>
+    
+</div>
+    </section>
+
+    
+
+    <section class="widget">
+        <h3 class="widget-title">RSS</h3>
+        <ul class="widget-list">
+            <li><a href="https://code0xff.cn/index.xml">文章 RSS</a></li>
+        </ul>
+    </section>
+</div>
+            </div>
+        </div>
+    </div>
+    <footer id="footer">
+    <div>
+        &copy; 2022 <a href="https://code0xff.cn/">记录每个瞬间 By 老王</a>
+        
+    </div>
+    <br />
+    <div>
+        <div class="github-badge">
+            <a href="https://gohugo.io/" target="_black" rel="nofollow"><span class="badge-subject">Powered by</span><span class="badge-value bg-blue">Hugo</span></a>
+        </div>
+        <div class="github-badge">
+            <a href="https://github.com/flysnow-org/maupassant-hugo" target="_black"><span class="badge-subject">Theme</span><span class="badge-value bg-yellowgreen">Maupassant</span></a>
+        </div>
+    </div>
+    <div>
+        网站备案编号：<a href="https://beian.miit.gov.cn">京ICP备19014975号-1</a>
+    </div>
+</footer>
+
+
+    
+    <script type="text/javascript">
+        window.MathJax = {
+            tex2jax: {
+                inlineMath: [['$', '$']],
+                processEscapes: true
+                }
+            };
+    </script>
+    <script src='https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.5/MathJax.js?config=TeX-MML-AM_CHTML' async></script><script src="https://cdn.bootcdn.net/ajax/libs/fancybox/3.5.7/jquery.fancybox.min.js"></script>
+
+<a id="rocket" href="#top"></a>
+<script type="text/javascript" src='/js/totop.js?v=0.0.0' async=""></script>
+
+<script type="application/javascript">
+var doNotTrack = false;
+if (!doNotTrack) {
+	window.ga=window.ga||function(){(ga.q=ga.q||[]).push(arguments)};ga.l=+new Date;
+	ga('create', 'GA ID', 'auto');
+	
+	ga('send', 'pageview');
+}
+</script>
+<script async src='https://www.google-analytics.com/analytics.js'></script>
+
+
+
+    <script type="text/javascript" src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js" async></script>
+
+
+
+
+</body>
+
+</html>
