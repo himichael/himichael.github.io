@@ -1,0 +1,623 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    
+    <meta name="referrer" content="no-referrer-when-downgrade">
+    
+
+    <title>高可用设计 | 记录每个瞬间</title>
+    <meta property="og:title" content="高可用设计 - 记录每个瞬间">
+    <meta property="og:type" content="article">
+        
+    <meta property="article:published_time" content='2022-09-18T12:12:19&#43;08:00'>
+        
+        
+    <meta property="article:modified_time" content='2022-09-18T12:12:19&#43;08:00'>
+        
+    <meta name="Keywords" content="">
+    <meta name="description" content="高可用设计">
+        <meta name="author" content="隔壁老王">
+        
+    <meta property="og:url" content="https://code0xff.cn/post/2022/09/%E9%AB%98%E5%8F%AF%E7%94%A8%E8%AE%BE%E8%AE%A1/">
+    <link rel="shortcut icon" href='/favicon.ico'  type="image/x-icon">
+
+    <link rel="stylesheet" href='/css/normalize.css'>
+    <link rel="stylesheet" href='/css/style.css'>
+    <script type="text/javascript" src="//cdn.bootcdn.net/ajax/libs/jquery/3.4.1/jquery.min.js"></script>
+
+    
+    
+    
+        <link href="https://cdn.bootcdn.net/ajax/libs/fancybox/3.5.7/jquery.fancybox.min.css" rel="stylesheet">
+    
+    
+    
+    
+</head>
+
+
+<body>
+    <header id="header" class="clearfix">
+    <div class="container">
+        <div class="col-group">
+            <div class="site-name ">
+                
+                    <a id="logo" href="https://code0xff.cn/">
+                        记录每个瞬间
+                    </a>
+                
+                
+            </div>
+            <div>
+                <nav id="nav-menu" class="clearfix">
+                    <a class="current" href="https://code0xff.cn/">首页</a>
+                    
+                    <a  href="https://code0xff.cn/linked/" title="链接">链接</a>
+                    
+                    <a  href="https://code0xff.cn/archives/" title="归档">归档</a>
+                    
+                    <a  href="https://code0xff.cn/about/" title="关于">关于</a>
+                    
+                </nav>
+            </div>
+        </div>
+    </div>
+</header>
+
+    <div id="body">
+        <div class="container">
+            <div class="col-group">
+
+                <div class="col-8" id="main">
+                    
+<div class="res-cons">
+    
+    <article class="post">
+        <header>
+            <h1 class="post-title">高可用设计</h1>
+        </header>
+        <date class="post-meta meta-date">
+            2022年9月18日
+        </date>
+<nav id="TableOfContents">
+  <ul>
+    <li>
+      <ul>
+        <li><a href="#背景">背景</a></li>
+        <li><a href="#设计概览">设计概览</a>
+          <ul>
+            <li><a href="#整体架构">整体架构</a></li>
+            <li><a href="#动态启动">动态启动</a></li>
+            <li><a href="#engine的动态创建过程">engine的动态创建过程</a></li>
+            <li><a href="#不同的安全连接方式">不同的安全连接方式</a></li>
+          </ul>
+        </li>
+        <li><a href="#基于负载的选择">基于负载的选择</a></li>
+      </ul>
+    </li>
+  </ul>
+</nav>
+        
+        <div class="post-meta">
+            
+            <span class="post-meta meta-tags">
+                <ul class="clearfix">
+                    <a href='/categories/%E5%A4%A7%E6%95%B0%E6%8D%AE'>大数据</a>
+                </ul>
+            </span>
+            
+        </div>
+        
+        
+        <div class="post-meta">
+            <span id="busuanzi_container_page_pv">|<span id="busuanzi_value_page_pv"></span><span>
+                    阅读</span></span>
+        </div>
+        
+        
+        <div class="post-content">
+            <h2 id="背景">背景</h2>
+<p>由于 spark自带的thrift本身只是一个单点，虽然可以通过ZK部署主备，但运行时仍然只有一个节点接收外部请求，很容易成为瓶颈<br>
+为此，我们参考了网易的 kyuubi，给其增加了高可用能力，可以将各种不同的节点都部署成多个，解决单点、以及计算瓶颈的问题</p>
+<h2 id="设计概览">设计概览</h2>
+<h3 id="整体架构">整体架构</h3>
+<p>总体的架构如下：<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2022/08/%E9%AB%98%E5%8F%AF%E7%94%A8%E8%AE%BE%E8%AE%A1/1.png">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2022/08/%E9%AB%98%E5%8F%AF%E7%94%A8%E8%AE%BE%E8%AE%A1/1.png" />
+        </a>
+      <br>
+对上述名词做一个解释：</p>
+<ul>
+<li>hive-client，这个就是原生的hive jdbc程序，通过一个统一的IP、域名来访问扩展spar-driver</li>
+<li>load-balance，由k8s提供的一个负载均衡服务，它将请求转发到一个具体的 proxy</li>
+<li>proxy，这个角色有点特殊，它即是服务端，也是客户端，
+<ul>
+<li>对于 hive-client来说，他是客户端，接收请求</li>
+<li>对于 engine 来说，它又是客户端，将hive-client的请求转发给 engine</li>
+<li>hive-client -&gt; proxy， 以及 proxy -&gt; engine，使用的都是统一套 hive thrift协议</li>
+</ul>
+</li>
+<li>engine，这个类似之前的扩展spar-driver服务端
+<ul>
+<li>它也相当于一个 spark-driver</li>
+<li>之前扩展spar-driver的hive-server端接收hive-client请求，执行SQL并返回</li>
+<li>现在这个 engine，就等同于之前的扩展spar-driver hive-server</li>
+<li>engine 会将自身注册到 Zookeeper上，包括engine节点的 IP和port</li>
+</ul>
+</li>
+<li>proxy 接收到 hive-client的请求后，会通过Zookeeper查找一堆 engine列表，然后选择一个合适的，再创建一个连接，跟engine通讯</li>
+<li>如果proxy没有找到合适的，或者 engine列表为空，则通过k8s的api-server动态启动一个engine</li>
+</ul>
+<p>一个更完整的调用关系：<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2022/08/%E9%AB%98%E5%8F%AF%E7%94%A8%E8%AE%BE%E8%AE%A1/2.png">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2022/08/%E9%AB%98%E5%8F%AF%E7%94%A8%E8%AE%BE%E8%AE%A1/2.png" />
+        </a>
+        <br>
+从上图可以看到，proxy 和 engine是多对多的关系</p>
+<ul>
+<li>load-balance请求请求转发给一个具体的proxy后，这个proxy会选择一个合适的engine进行连接</li>
+<li>每个engine，相当于一个spark-dirver</li>
+<li>上图中，相当于有 4个 spark集群</li>
+</ul>
+<h3 id="动态启动">动态启动</h3>
+<p>
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2022/08/%E9%AB%98%E5%8F%AF%E7%94%A8%E8%AE%BE%E8%AE%A1/3.png">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2022/08/%E9%AB%98%E5%8F%AF%E7%94%A8%E8%AE%BE%E8%AE%A1/3.png" />
+        </a>
+    </p>
+<p>上述的执行流程是：</p>
+<ol>
+<li>proxy首先从<code>/扩展spar-driver/xxx/engine</code>找一个合适的engine</li>
+<li>如果没有合适的，则通过spark-submit，调用api-server，动态启动一个engine</li>
+<li>api-server负责创建一个新的pod，也就是新的engine</li>
+<li>新的engine将自己注册到 zookeeper上</li>
+<li>proxy感知到zookeeper的变化，获取到刚刚注册的engine，跟这个engine建立通讯</li>
+</ol>
+<p>所有的节点都部署在k8s上(zookeeper也可以单独部署)<br>
+当客户端的请求到proxy之后，proxy会在zookeeper的 <code>/扩展spar-driver/xxx/engine</code>这个路径上，查找可用的engine<br>
+这个查找过程，本身可以扩展出很多东西：</p>
+<ul>
+<li>engine定时的将自身的负载信息回报到zookeeper上，proxy根据负载情况选择一个合适的engine</li>
+<li>proxy缓存engine的列表，等下次请求来了，就不用再访问zookeeper了</li>
+<li>对于上述缓存方案，还需要增加一些定时清理，去除无效的engine等逻辑</li>
+<li>如果engine少于固定的数量，比如5个或者10个，则再动态启动一批</li>
+</ul>
+<p>目前的逻辑比较简单，就是看目前的 engine列表数量是否 小于一个阈值，如果不是，则随机选择一个engine<br>
+否则就动态创建一批 engine</p>
+<h3 id="engine的动态创建过程">engine的动态创建过程</h3>
+<p>执行过程：<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2022/08/%E9%AB%98%E5%8F%AF%E7%94%A8%E8%AE%BE%E8%AE%A1/4.png">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2022/08/%E9%AB%98%E5%8F%AF%E7%94%A8%E8%AE%BE%E8%AE%A1/4.png" />
+        </a>
+      <br>
+1、proxy通过api-server动态启动engine<br>
+2、api-server创建新pod，也就是engine   <br>
+3、engine将自身注册到zookeeper上 <br>
+4、engine再创建executor，这里也是通过api-server创建的<br>
+5、api-server创建一个新的pod  executor</p>
+<p>proxy 创建engine时，是通过 env的方式，将spark的参数传递给engine的<br>
+这样engine在启动的时候，通过env就可以拿到对应的参数了</p>
+<p>
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2022/08/%E9%AB%98%E5%8F%AF%E7%94%A8%E8%AE%BE%E8%AE%A1/5.png">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2022/08/%E9%AB%98%E5%8F%AF%E7%94%A8%E8%AE%BE%E8%AE%A1/5.png" />
+        </a>
+      <br>
+如上，proxy会调用 spark-submit程序，来启动一个新pod<br>
+1、proxy 会将一堆自定义的 &ndash;conf 参数传递给spark-submit<br>
+2、spark-submit根据这些参数，创建pod参数、configmap参数、volume、传递env等等<br>
+3、最终是调用 fabric8 API将请求发给 api-server的<br>
+4、api-server收到请求后，创建出新的pod，也就是engine<br>
+5、proxy调用spark-submit时，传递了一堆参数，其中包含了 env相关的，这些参数最终由api-server收到传递给engine<br>
+6、engine通过 env就可以获取到proxy传递过来的指定，执行一些更动态的逻辑</p>
+<h3 id="不同的安全连接方式">不同的安全连接方式</h3>
+<p>proxy，engine可以使用不同的连接方式</p>
+<ul>
+<li>客户端 到 proxy，可以采用kerboers方式，这跟之前的连接方式一样</li>
+<li>proxy 到 engine，可以采用 SASL方式，因为客户端到proxy已经验证一次了，后面没必要再验证了，而SASL本身也是加密的</li>
+</ul>
+<p>
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2022/08/%E9%AB%98%E5%8F%AF%E7%94%A8%E8%AE%BE%E8%AE%A1/6.png">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2022/08/%E9%AB%98%E5%8F%AF%E7%94%A8%E8%AE%BE%E8%AE%A1/6.png" />
+        </a>
+    </p>
+<h2 id="基于负载的选择">基于负载的选择</h2>
+<p>继承 SparkListener，实现</p>
+<ul>
+<li>onJobStart</li>
+<li>onJobEnd</li>
+<li>onExecutorAdded</li>
+<li>onExecutorRemoved</li>
+</ul>
+<p>等节点变化，job变化时候，变更Zookeeper下的 固定节点<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2022/08/%E9%AB%98%E5%8F%AF%E7%94%A8%E8%AE%BE%E8%AE%A1/7.png">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2022/08/%E9%AB%98%E5%8F%AF%E7%94%A8%E8%AE%BE%E8%AE%A1/7.png" />
+        </a>
+    </p>
+<p>/扩展spar-driver/my-test/engine/172.16.18.99 这个znode 节点中存储的信息为：</p>
+<pre tabindex="0"><code>{
+ &quot;execCount&quot;: 11,
+ &quot;jobCount&quot;: 1024,
+ &quot;driver&quot;: {
+   &quot;cores&quot;: 2,
+   &quot;mem&quot;: &quot;2G&quot;
+ },
+ &quot;executor&quot;: {
+   &quot;cores&quot;: 2,
+   &quot;mem&quot;: &quot;4G&quot;
+ }
+}
+</code></pre><p>当新增一个executor，或者新job出现时，更新 /扩展spar-driver/my-test/engine/172.16.18.99</p>
+<p>跟这个任务相关的有三个线程：</p>
+<ul>
+<li>spark的listener线程，当job、executor变化时触发自定义的逻辑，然后将事件发到队列中</li>
+<li>engine节点的监听线程立刻从 阻塞队列中获取事件，将事件更新到 Zookeeper上</li>
+<li>proxy的监听节点定期监听Zookeeper的engine列表，然后选择一个负载最低的放入缓存中，待后续请求使用</li>
+</ul>
+<p>负载计算公式：</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4">
+<table style="border-spacing:0;padding:0;margin:0;border:0;width:auto;overflow:auto;display:block;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell"><span style="color:#ff79c6">(</span>driver的核数 + driver的内存 + executor数量 * <span style="color:#ff79c6">(</span>executor的核数 + executor的内存<span style="color:#ff79c6">))</span>  / job数量
+</code></pre></td></tr></table>
+</div>
+</div><p>举个例子:</p>
+<blockquote>
+<p>集群1<br>
+driver：1C2G，executor：2C4G，executor数量109个，job数量33个<br>
+(1 + 2 + 109 * (2 + 4)) / 33.0<br>
+结果为 19.909</p>
+<p>集群2   <br>
+driver： 1C2G，executor：2C4G，executor数量为46个，job数量为25个<br>
+(1 + 2 + 46 * ( 2 + 4)) / 25.0<br>
+结果为 11.16<br>
+综合看集群1的分数更高，所以选择集群 1</p>
+</blockquote>
+<p>现在已经有一个1分钟的定时逻辑，会获取zk 上的engine列表<br>
+proxy统计出这个路径下的engine，计算出executor的数量 * 内存，executor数量 * CPU<br>
+以及job数量，计算出一个负载最低的engine，然后选择出这个engine，以提供给下次请求使用</p>
+<p>如果proxy是基于事件监听的方式，获取到的统计就非常实时了，但是每次有job新增、销毁都会触发 N个proxy重新计算，也要考虑大集群的消耗问题<br>
+当然也可以支持两种</p>
+<ul>
+<li>基于1分钟(可以配置)的定期检查</li>
+<li>基于事件通知的实时方式</li>
+</ul>
+
+			<script type="text/javascript"
+        async
+        src="https://cdn.bootcss.com/mathjax/2.7.3/MathJax.js?config=TeX-AMS-MML_HTMLorMML">
+MathJax.Hub.Config({
+  tex2jax: {
+    inlineMath: [['$','$'], ['\\(','\\)']],
+    displayMath: [['$$','$$'], ['\[\[','\]\]']],
+    processEscapes: true,
+    processEnvironments: true,
+    skipTags: ['script', 'noscript', 'style', 'textarea', 'pre'],
+    TeX: { equationNumbers: { autoNumber: "AMS" },
+         extensions: ["AMSmath.js", "AMSsymbols.js"] }
+  }
+});
+
+MathJax.Hub.Queue(function() {
+    
+    
+    
+    var all = MathJax.Hub.getAllJax(), i;
+    for(i = 0; i < all.length; i += 1) {
+        all[i].SourceElement().parentNode.className += ' has-jax';
+    }
+});
+</script>
+
+<style>
+code.has-jax {
+    font: inherit;
+    font-size: 100%;
+    background: inherit;
+    border: inherit;
+    color: #515151;
+}
+</style>
+        </div>
+
+        
+
+
+        
+
+<div class="post-archive">
+    <h2>相关文章</h2>
+    <ul class="listing">
+        
+        <li><a href="/post/2022/08/kyuubi%E8%AE%BE%E8%AE%A1%E8%B0%83%E7%A0%94/">Kyuubi设计调研</a></li>
+        
+        <li><a href="/post/2022/07/%E5%AE%B9%E7%81%BE%E9%83%A8%E7%BD%B2%E8%B0%83%E7%A0%94/">容灾部署调研</a></li>
+        
+        <li><a href="/post/2022/06/%E8%87%AA%E5%AE%9A%E4%B9%89hiveserver%E8%AE%BE%E8%AE%A1/">自定义HiveServer设计</a></li>
+        
+        <li><a href="/post/2022/01/%E5%87%A0%E7%A7%8D%E5%BC%80%E6%BA%90%E6%95%B0%E6%8D%AE%E5%BA%93%E5%AF%B9%E5%85%83%E6%95%B0%E6%8D%AE%E7%9A%84%E7%AE%A1%E7%90%86/">几种开源数据库对元数据的管理</a></li>
+        
+    </ul>
+</div>
+
+
+        <div class="post-meta meta-tags">
+            
+            <ul class="clearfix">
+                
+                <li><a href='/tags/%E5%B7%A5%E4%BD%9C%E8%AE%B0%E5%BD%95'>工作记录</a></li>
+                
+            </ul>
+            
+        </div>
+    </article>
+    
+    
+
+    
+    
+</div>
+
+
+                </div>
+
+                <div id="secondary">
+    <section class="widget">
+        <form id="search" action='https://code0xff.cn/search/' method="get" accept-charset="utf-8" target="_blank" _lpchecked="1">
+      
+      <input type="text" name="q" maxlength="20" placeholder="Search">
+      <input type="hidden" name="sitesearch" value="https://code0xff.cn/">
+      <button type="submit" class="submit icon-search"></button>
+</form>
+    </section>
+    
+    <section class="widget">
+        <h3 class="widget-title">最近文章</h3>
+<ul class="widget-list">
+    
+    <li>
+        <a href="https://code0xff.cn/post/2022/12/mysql%E6%96%87%E4%BB%B6%E5%AD%98%E5%82%A8%E7%BB%93%E6%9E%84/" title="MySQL文件存储结构">MySQL文件存储结构</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.cn/post/2022/11/%E8%B0%83%E8%AF%95mysql/" title="调试MySQL">调试MySQL</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.cn/post/2022/11/multi-tenant-cloud-data-services/" title="关于云环境中多租户问题的论文">关于云环境中多租户问题的论文</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.cn/post/2022/11/millwheel/" title="MillWheel">MillWheel</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.cn/post/2022/11/how-to-read-a-paper/" title="How to Read a Paper">How to Read a Paper</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.cn/post/2022/11/cmu%E6%95%B0%E6%8D%AE%E5%BA%93%E6%80%BB%E7%BB%93/" title="CMU数据库总结">CMU数据库总结</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.cn/post/2022/11/flumejava%E8%AE%BA%E6%96%87/" title="FlumeJava: Easy, Efficient Data-Parallel Pipelines">FlumeJava: Easy, Efficient Data-Parallel Pipelines</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.cn/post/2022/11/flink%E8%AE%BA%E6%96%87/" title="Apache Flink™: Stream and Batch Processing in a Single Engine">Apache Flink™: Stream and Batch Processing in a Single Engine</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.cn/post/2022/10/%E5%AE%B9%E5%99%A8%E7%BD%91%E7%BB%9C/" title="容器网络">容器网络</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.cn/post/2022/10/b&#43;%E6%A0%91%E6%89%A7%E8%A1%8C%E8%BF%87%E7%A8%8B/" title="B&#43;树执行过程">B&#43;树执行过程</a>
+    </li>
+    
+</ul>
+    </section>
+
+    
+
+    <section class="widget">
+        <h3 class="widget-title"><a href='/categories/'>分类</a></h3>
+<ul class="widget-list">
+    
+    <li><a href="https://code0xff.cn/categories/%E5%88%86%E5%B8%83%E5%BC%8F/">分布式 (6)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E5%95%86%E4%B8%9A/">商业 (3)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E5%A4%A7%E6%95%B0%E6%8D%AE/">大数据 (21)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E6%95%B0%E6%8D%AE/">数据 (1)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E6%95%B0%E6%8D%AE%E5%BA%93/">数据库 (9)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E6%97%85%E8%A1%8C/">旅行 (10)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E6%9E%B6%E6%9E%84/">架构 (1)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E7%AE%97%E6%B3%95/">算法 (8)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E7%B3%BB%E7%BB%9F/">系统 (5)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E7%BC%96%E7%A8%8B%E8%AF%AD%E8%A8%80/">编程语言 (2)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E8%AF%BB%E4%B9%A6%E7%AC%94%E8%AE%B0/">读书笔记 (9)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E9%9A%8F%E4%BE%BF%E5%86%99%E5%86%99/">随便写写 (4)</a></li>
+    
+</ul>
+    </section>
+
+    <section class="widget">
+        <h3 class="widget-title">归档</a></h3>
+<ul class="widget-list">
+    
+    <li><a href="https://code0xff.cn/years/2021%E5%B9%B4/">2021年 (30)</a></li>
+    
+    <li><a href="https://code0xff.cn/years/2022%E5%B9%B4/">2022年 (49)</a></li>
+    
+</ul>
+    </section>
+
+    <section class="widget">
+        <h3 class="widget-title"><a href='/tags/'>标签</a></h3>
+<div class="tagcloud">
+    
+    <a href="https://code0xff.cn/tags/b%E6%A0%91/">B树 </a>
+    
+    <a href="https://code0xff.cn/tags/flink/">flink </a>
+    
+    <a href="https://code0xff.cn/tags/hive/">Hive </a>
+    
+    <a href="https://code0xff.cn/tags/k8s/">k8s </a>
+    
+    <a href="https://code0xff.cn/tags/kudu/">kudu </a>
+    
+    <a href="https://code0xff.cn/tags/manacher/">Manacher </a>
+    
+    <a href="https://code0xff.cn/tags/mapreduce/">MapReduce </a>
+    
+    <a href="https://code0xff.cn/tags/paxos/">paxos </a>
+    
+    <a href="https://code0xff.cn/tags/raft/">raft </a>
+    
+    <a href="https://code0xff.cn/tags/scala/">scala </a>
+    
+    <a href="https://code0xff.cn/tags/snowflake/">snowflake </a>
+    
+    <a href="https://code0xff.cn/tags/spark/">spark </a>
+    
+    <a href="https://code0xff.cn/tags/unix/">unix </a>
+    
+    <a href="https://code0xff.cn/tags/%E4%BA%8C%E5%88%86%E6%9F%A5%E6%89%BE/">二分查找 </a>
+    
+    <a href="https://code0xff.cn/tags/%E4%BA%8C%E5%8F%89%E6%A0%91%E9%81%8D%E5%8E%86/">二叉树遍历 </a>
+    
+    <a href="https://code0xff.cn/tags/%E5%88%86%E5%B8%83%E5%BC%8F/">分布式 </a>
+    
+    <a href="https://code0xff.cn/tags/%E5%8A%A8%E6%80%81%E6%B3%A8%E5%85%A5/">动态注入 </a>
+    
+    <a href="https://code0xff.cn/tags/%E5%8E%86%E5%8F%B2/">历史 </a>
+    
+    <a href="https://code0xff.cn/tags/%E5%9B%9E%E6%BA%AF/">回溯 </a>
+    
+    <a href="https://code0xff.cn/tags/%E5%9B%BD%E5%86%85%E6%97%85%E8%A1%8C/">国内旅行 </a>
+    
+    <a href="https://code0xff.cn/tags/%E5%9B%BD%E5%A4%96%E6%97%85%E8%A1%8C/">国外旅行 </a>
+    
+    <a href="https://code0xff.cn/tags/%E5%A4%A7%E6%95%B0%E6%8D%AE/">大数据 </a>
+    
+    <a href="https://code0xff.cn/tags/%E5%AD%98%E5%82%A8/">存储 </a>
+    
+    <a href="https://code0xff.cn/tags/%E5%B7%A5%E4%BD%9C%E8%AE%B0%E5%BD%95/">工作记录 </a>
+    
+    <a href="https://code0xff.cn/tags/%E5%BE%AE%E6%9C%8D%E5%8A%A1/">微服务 </a>
+    
+    <a href="https://code0xff.cn/tags/%E6%95%B0%E6%8D%AE%E5%BA%93/">数据库 </a>
+    
+    <a href="https://code0xff.cn/tags/%E6%B1%87%E7%BC%96/">汇编 </a>
+    
+    <a href="https://code0xff.cn/tags/%E6%B9%96%E4%BB%93%E4%B8%80%E4%BD%93/">湖仓一体 </a>
+    
+    <a href="https://code0xff.cn/tags/%E7%94%9F%E6%B4%BB/">生活 </a>
+    
+    <a href="https://code0xff.cn/tags/%E7%94%B5%E5%BD%B1/">电影 </a>
+    
+    <a href="https://code0xff.cn/tags/%E7%AE%97%E6%B3%95/">算法 </a>
+    
+    <a href="https://code0xff.cn/tags/%E7%BB%8F%E6%B5%8E/">经济 </a>
+    
+    <a href="https://code0xff.cn/tags/%E7%BC%93%E5%AD%98/">缓存 </a>
+    
+    <a href="https://code0xff.cn/tags/%E7%BC%96%E8%AF%91%E5%8E%9F%E7%90%86/">编译原理 </a>
+    
+    <a href="https://code0xff.cn/tags/%E7%BD%91%E7%BB%9C/">网络 </a>
+    
+    <a href="https://code0xff.cn/tags/%E8%AE%A1%E7%AE%97%E6%A1%86%E6%9E%B6/">计算框架 </a>
+    
+    <a href="https://code0xff.cn/tags/%E8%AE%BA%E6%96%87/">论文 </a>
+    
+    <a href="https://code0xff.cn/tags/%E8%AF%BB%E4%B9%A6%E7%AC%94%E8%AE%B0/">读书笔记 </a>
+    
+</div>
+    </section>
+
+    
+
+    <section class="widget">
+        <h3 class="widget-title">RSS</h3>
+        <ul class="widget-list">
+            <li><a href="https://code0xff.cn/index.xml">文章 RSS</a></li>
+        </ul>
+    </section>
+</div>
+            </div>
+        </div>
+    </div>
+    <footer id="footer">
+    <div>
+        &copy; 2022 <a href="https://code0xff.cn/">记录每个瞬间 By 老王</a>
+        
+    </div>
+    <br />
+    <div>
+        <div class="github-badge">
+            <a href="https://gohugo.io/" target="_black" rel="nofollow"><span class="badge-subject">Powered by</span><span class="badge-value bg-blue">Hugo</span></a>
+        </div>
+        <div class="github-badge">
+            <a href="https://github.com/flysnow-org/maupassant-hugo" target="_black"><span class="badge-subject">Theme</span><span class="badge-value bg-yellowgreen">Maupassant</span></a>
+        </div>
+    </div>
+    <div>
+        网站备案编号：<a href="https://beian.miit.gov.cn">京ICP备19014975号-1</a>
+    </div>
+</footer>
+
+
+    
+    <script type="text/javascript">
+        window.MathJax = {
+            tex2jax: {
+                inlineMath: [['$', '$']],
+                processEscapes: true
+                }
+            };
+    </script>
+    <script src='https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.5/MathJax.js?config=TeX-MML-AM_CHTML' async></script><script src="https://cdn.bootcdn.net/ajax/libs/fancybox/3.5.7/jquery.fancybox.min.js"></script>
+
+<a id="rocket" href="#top"></a>
+<script type="text/javascript" src='/js/totop.js?v=0.0.0' async=""></script>
+
+<script type="application/javascript">
+var doNotTrack = false;
+if (!doNotTrack) {
+	window.ga=window.ga||function(){(ga.q=ga.q||[]).push(arguments)};ga.l=+new Date;
+	ga('create', 'GA ID', 'auto');
+	
+	ga('send', 'pageview');
+}
+</script>
+<script async src='https://www.google-analytics.com/analytics.js'></script>
+
+
+
+    <script type="text/javascript" src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js" async></script>
+
+
+
+
+</body>
+
+</html>
