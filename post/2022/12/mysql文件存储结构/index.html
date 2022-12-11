@@ -87,9 +87,27 @@
   <ul>
     <li>
       <ul>
-        <li><a href="#row格式">row格式</a></li>
-        <li><a href="#数据页">数据页</a></li>
-        <li><a href="#数据页的头信息">数据页的头信息</a></li>
+        <li><a href="#innodb-architecture">InnoDB Architecture</a></li>
+        <li><a href="#表空间">表空间</a></li>
+        <li><a href="#表空间的管理">表空间的管理</a>
+          <ul>
+            <li><a href="#fil_page_type_fsp_hdr--介绍">FIL_PAGE_TYPE_FSP_HDR  介绍</a></li>
+            <li><a href="#listnode结构体">ListNode结构体</a></li>
+            <li><a href="#fil_page_type_xdes-介绍">FIL_PAGE_TYPE_XDES 介绍</a></li>
+            <li><a href="#fil_page_inode-介绍">FIL_PAGE_INODE 介绍</a></li>
+          </ul>
+        </li>
+        <li><a href="#表空间的整体结构">表空间的整体结构</a></li>
+        <li><a href="#数据页-fil_page_index">数据页 FIL_PAGE_INDEX</a>
+          <ul>
+            <li><a href="#数据页的头信息">数据页的头信息</a></li>
+            <li><a href="#page-directory">Page Directory</a></li>
+            <li><a href="#b树索引">B+树索引</a></li>
+            <li><a href="#和inode关联">和INode关联</a></li>
+            <li><a href="#数据页的完整结构">数据页的完整结构</a></li>
+          </ul>
+        </li>
+        <li><a href="#行格式">行格式</a></li>
         <li><a href="#各种page定义">各种page定义</a></li>
         <li><a href="#参考">参考</a></li>
       </ul>
@@ -115,101 +133,422 @@
         
         
         <div class="post-content">
-            <h2 id="row格式">row格式</h2>
-<p>行格式介绍参考官网 -&gt; <a href="https://dev.mysql.com/doc/refman/8.0/en/innodb-row-format.html#innodb-row-format-compact">这里</a><br>
-行格式有4种</p>
+            <h2 id="innodb-architecture">InnoDB Architecture</h2>
+<p>总体上是分为磁盘上的数据结构，以及内存中的数据结构<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E6%96%87%E4%BB%B6%E5%AD%98%E5%82%A8%E7%BB%93%E6%9E%84/innodb-architecture-8-0.png">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E6%96%87%E4%BB%B6%E5%AD%98%E5%82%A8%E7%BB%93%E6%9E%84/innodb-architecture-8-0.png" />
+        </a>
+    </p>
+<p>磁盘数据结构包括</p>
 <ul>
-<li>REDUNDANT</li>
-<li>COMPACT</li>
-<li>DYNAMIC</li>
-<li>COMPRESSED</li>
+<li>系统表空间，也就是  ibdata1、ibdata2 这样的文件，用于存储用户表的元数据：表、列、索引信息等</li>
+<li>双写buffer，保持原子性的</li>
+<li>用户表空间，create table xx 后会创建一个xx.ibd文件</li>
+<li>通用表空间，多个表之间可以共用这部分</li>
+<li>undo、redo跟事务相关的</li>
+<li>掐还有临时表空间</li>
 </ul>
+<p>基于内存的数据结构</p>
+<ul>
+<li>buffer pool</li>
+<li>change buffer</li>
+<li>adaptive hash index</li>
+</ul>
+<h2 id="表空间">表空间</h2>
+<p>通用头信息<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E6%96%87%E4%BB%B6%E5%AD%98%E5%82%A8%E7%BB%93%E6%9E%84/x_1-mysql-innodb-fil-header-trailer.png">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E6%96%87%E4%BB%B6%E5%AD%98%E5%82%A8%E7%BB%93%E6%9E%84/x_1-mysql-innodb-fil-header-trailer.png" />
+        </a>
+         <br>
+InnoDB 表空间<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E6%96%87%E4%BB%B6%E5%AD%98%E5%82%A8%E7%BB%93%E6%9E%84/x_2-innobase.jpeg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E6%96%87%E4%BB%B6%E5%AD%98%E5%82%A8%E7%BB%93%E6%9E%84/x_2-innobase.jpeg" />
+        </a>
+          <br>
+一个不恰当的比方</p>
+<ul>
+<li>库：类似星球</li>
+<li>表空间：类似星球中的某个国家</li>
+<li>段：国家中的省</li>
+<li>extent(区)：对应市，由64个page组成</li>
+<li>page(页)：小区</li>
+<li>row(行)：一个家庭</li>
+</ul>
+<p>一个索引，比如聚集索引会对应 两个区 extent</p>
+<ul>
+<li>上图有点老了，rollback segment现在是有独立的空间</li>
+<li>segment是一个逻辑概念，InnoDB设计者考虑到了空间优化问题</li>
+<li>默认分配32个16K page，如果分配满了则分配一个extent(1M,64个page)</li>
+<li>超过32M数据后，一次分配4个 extent</li>
+</ul>
+<h2 id="表空间的管理">表空间的管理</h2>
+<p>表空间主要是用 FSP_HDR、XDES（extent descriptor）、INODE来管理、分配各个page<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E6%96%87%E4%BB%B6%E5%AD%98%E5%82%A8%E7%BB%93%E6%9E%84/x_3-fsp-header-xdes2.png">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E6%96%87%E4%BB%B6%E5%AD%98%E5%82%A8%E7%BB%93%E6%9E%84/x_3-fsp-header-xdes2.png" />
+        </a>
+     <br>
+简单说明下</p>
+<ul>
+<li>256个extent一组，一组一共256M</li>
+<li>0 - 255组比较特殊，这一组的 0号page FSP_HEAD 用来记录表空间的一些信息</li>
+<li>第一组的 1号page ibuf_bitmap 用于插入缓冲区</li>
+<li>第一组的 inode 用来记录段信息</li>
+<li>第二组 256 - 511， 第三组 512 - 767，以此类推</li>
+<li>第二组、第三组，以及之后的组，其 0号、1号page都是固定的</li>
+<li>第二组的0号page 是FIL_PAGE_TYPE_XDES，用来记录extent的一些信息</li>
+<li>第二组的1号page，是FIL_PAGE_INODE，用来记录segment 段信息</li>
+</ul>
+<p>区的分类</p>
+<ul>
+<li>空闲的区：现在还没有用到这个区中的任何页面</li>
+<li>有剩余空间的碎片区：表示碎片区中还有可用的页面</li>
+<li>没有剩余空间的碎片区：表示碎片区中的所有页面都被使用，没有空闲页面</li>
+<li>附属于某个段的区。每一个索引都可以分为叶子节点段和非叶子节点段</li>
+</ul>
+<p>对应于四种状态</p>
+<table>
+<thead>
+<tr>
+<th>状态名</th>
+<th>含义</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>FREE</td>
+<td>空闲的区</td>
+</tr>
+<tr>
+<td>FREE_FRAG</td>
+<td>有剩余空间的碎片区</td>
+</tr>
+<tr>
+<td>FULL_FRAG</td>
+<td>没有剩余空间的碎片区</td>
+</tr>
+<tr>
+<td>FSEG</td>
+<td>附属于某个段的区</td>
+</tr>
+</tbody>
+</table>
+<h3 id="fil_page_type_fsp_hdr--介绍">FIL_PAGE_TYPE_FSP_HDR  介绍</h3>
+<p>页面中各个字段含义</p>
+<table>
+<thead>
+<tr>
+<th>名称</th>
+<th>中文名</th>
+<th>占用空间大小</th>
+<th>简单描述</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>File Header</td>
+<td>文件头部</td>
+<td>38字节</td>
+<td>页的一些通用信息</td>
+</tr>
+<tr>
+<td>File Space Header</td>
+<td>表空间头部</td>
+<td>112字节</td>
+<td>表空间的一些整体属性信息</td>
+</tr>
+<tr>
+<td>XDES Entry</td>
+<td>区描述信息</td>
+<td>10240字节</td>
+<td>存储本组256个区对应的属性信息</td>
+</tr>
+<tr>
+<td>Empty Space</td>
+<td>尚未使用空间</td>
+<td>5986字节</td>
+<td>用于页结构的填充，没啥实际意义</td>
+</tr>
+<tr>
+<td>File Trailer</td>
+<td>文件尾部</td>
+<td>8字节</td>
+<td>校验页是否完整</td>
+</tr>
+</tbody>
+</table>
+<p>File Space Header介绍<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E6%96%87%E4%BB%B6%E5%AD%98%E5%82%A8%E7%BB%93%E6%9E%84/x_4-fsp-header2.png">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E6%96%87%E4%BB%B6%E5%AD%98%E5%82%A8%E7%BB%93%E6%9E%84/x_4-fsp-header2.png" />
+        </a>
+    </p>
+<p>File Space Header部分</p>
+<table>
+<thead>
+<tr>
+<th>名称</th>
+<th>占用空间大小</th>
+<th>描述</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Space ID</td>
+<td>4字节</td>
+<td>表空间的ID</td>
+</tr>
+<tr>
+<td>Not Used</td>
+<td>4字节</td>
+<td>这4个字节未被使用，可以忽略</td>
+</tr>
+<tr>
+<td>Size</td>
+<td>4字节</td>
+<td>当前表空间占有的页面数</td>
+</tr>
+<tr>
+<td>FREE Limit</td>
+<td>4字节</td>
+<td>尚未被初始化的最小页号，大于或等于这个页号的区对应的XDES Entry结构都没有被加入FREE链表</td>
+</tr>
+<tr>
+<td>Space Flags</td>
+<td>4字节</td>
+<td>表空间的一些占用存储空间比较小的属性</td>
+</tr>
+<tr>
+<td>FRAG_N_USED</td>
+<td>4字节</td>
+<td>FREE_FRAG链表中已使用的页面数量</td>
+</tr>
+<tr>
+<td>List Base Node for FREE List</td>
+<td>16字节</td>
+<td>FREE链表的基节点</td>
+</tr>
+<tr>
+<td>List Base Node for FREE_FRAG List</td>
+<td>16字节</td>
+<td>FREE_FRAG链表的基节点</td>
+</tr>
+<tr>
+<td>List Base Node for FULL_FRAG List</td>
+<td>16字节</td>
+<td>FULL_FRAG链表的基节点</td>
+</tr>
+<tr>
+<td>Next Unused Segment ID</td>
+<td>8字节</td>
+<td>当前表空间中下一个未使用的 Segment ID</td>
+</tr>
+<tr>
+<td>List Base Node for SEG_INODES_FULL List</td>
+<td>16字节</td>
+<td>SEG_INODES_FULL链表的基节点</td>
+</tr>
+<tr>
+<td>List Base Node for SEG_INODES_FREE List</td>
+<td>16字节</td>
+<td>SEG_INODES_FREE链表的基节点</td>
+</tr>
+</tbody>
+</table>
+<p>Space Flags</p>
+<table>
+<thead>
+<tr>
+<th>标志名称</th>
+<th>占用空间（单位：bit）</th>
+<th>描述</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>POST_ANTELOPE</td>
+<td>1</td>
+<td>表示文件格式是否大于ANTELOPE</td>
+</tr>
+<tr>
+<td>ZIP_SSIZE</td>
+<td>4</td>
+<td>表示压缩页面的大小</td>
+</tr>
+<tr>
+<td>ATOMIC_BLOBS</td>
+<td>1</td>
+<td>表示是否自动把值非常长的字段放到BLOB页里</td>
+</tr>
+<tr>
+<td>PAGE_SIZE</td>
+<td>4</td>
+<td>页面大小</td>
+</tr>
+<tr>
+<td>DATA_DIR</td>
+<td>1</td>
+<td>表示表空间是否是从默认的数据目录中获取的</td>
+</tr>
+<tr>
+<td>SHARED</td>
+<td>1</td>
+<td>是否为共享表空间</td>
+</tr>
+<tr>
+<td>TEMPORARY</td>
+<td>1</td>
+<td>是否为临时表空间</td>
+</tr>
+<tr>
+<td>ENCRYPTION</td>
+<td>1</td>
+<td>表空间是否加密</td>
+</tr>
+<tr>
+<td>UNUSED</td>
+<td>18</td>
+<td>没有使用到的比特位</td>
+</tr>
+</tbody>
+</table>
+<h3 id="listnode结构体">ListNode结构体</h3>
 <p>
-        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1//post/2022/12/MySQL%E6%96%87%E4%BB%B6%E5%AD%98%E5%82%A8%E7%BB%93%E6%9E%84/1.png">
-            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1//post/2022/12/MySQL%E6%96%87%E4%BB%B6%E5%AD%98%E5%82%A8%E7%BB%93%E6%9E%84/1.png" />
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E6%96%87%E4%BB%B6%E5%AD%98%E5%82%A8%E7%BB%93%E6%9E%84/19.png">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E6%96%87%E4%BB%B6%E5%AD%98%E5%82%A8%E7%BB%93%E6%9E%84/19.png" />
+        </a>
+     <br>
+字段介绍</p>
+<ul>
+<li>List Length表明该链表一共有多少节点</li>
+<li>First Node Page Number和First Node Offset表明该链表的头节点在表空间中的位置</li>
+<li>Last Node Page Number和Last Node Offset表明该链表的尾节点在表空间中的位置</li>
+</ul>
+<p>FSP header中最重要的几个链表，其中3个是归属表空间的，2个是指向段的</p>
+<ul>
+<li>当一个Extent中所有page都未被使用时，挂在FSP_FREE list base node上，可以用于随后的分配</li>
+<li>有一部分page被写入的extent，挂在FREE_FRAG list base node上</li>
+<li>全满的extent，挂在FULL_FRAG list base node上</li>
+<li>归属于某个segment时候挂在FSEG list base node上，又成free、full两个头结点</li>
+</ul>
+<h3 id="fil_page_type_xdes-介绍">FIL_PAGE_TYPE_XDES 介绍</h3>
+<p>page中的各个字段</p>
+<ul>
+<li>File Header 38 Byte</li>
+<li>NULL  112 Byte</li>
+<li>XDES Entry，一共256个，一共10240字节</li>
+<li>Empty Space，5986Byte</li>
+<li>File Trailer 8Byte</li>
+</ul>
+<p>XDES Entry的结构
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E6%96%87%E4%BB%B6%E5%AD%98%E5%82%A8%E7%BB%93%E6%9E%84/17.png">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E6%96%87%E4%BB%B6%E5%AD%98%E5%82%A8%E7%BB%93%E6%9E%84/17.png" />
         </a>
     <br>
-变长字段的长度列表</p>
+XDES（全称就是Extent Descriptor Entry）<br>
+每一个区都对应着一个XDES Entry结构，这个结构记录了对应的区的一些属性<br>
+介绍</p>
 <ul>
-<li>存储像 varchar这种的，其长度是可变的</li>
-<li>在这个列表中存储了对应字段的长度</li>
-<li>如果存储的最大字节不超过255，则使用1个字节</li>
-<li>如果实际使用的字节不超过127，则用 1个字节表示</li>
-<li>否则用2个字节表示</li>
-<li>对于varchar(M)，字符类型为ascii，其长度为 M * 1，而UTF为M * 3，UTFmb4为M * 4</li>
-<li>变长字段的长度列表不存储值为NULL的长度信息</li>
-<li>变长字段的长度列表不是一定存在的</li>
-<li>变长字段的长度列表中各字段长度信息是按列的顺序逆序排列的</li>
-<li>char类型字段的长度信息是否需要存储在 变长字段的长度列表 中取决于其所使用的字符集是否为变长字符集</li>
+<li>Segment ID（8字节），每一个段都有一个唯一的编号</li>
+<li>List Node（12字节），XDES的前后指针，指向前一个页的页号，以及页的偏移量</li>
+<li>State（4字节），表示这个区的状态，对应的值为：FREE、FREE_FRAG、FULL_FRAG和FSEG</li>
+<li>Page State Bitmap（16字节），128bit，两个bit对应一个page，第一个bit对应是否被使用，第二个bit暂时没用</li>
 </ul>
-<p>比如，ascii字符集，各字段为f1、f2、f3、f4<br>
-其值为 &ldquo;a&rdquo;、NULL、&ldquo;ccc&rdquo;、99<br>
-变成字段f1为1、f3长度为3，则变成字段列表内容为 0x03、0x01</p>
-<p>NULL值标志位</p>
+<p>表空间的三个链表</p>
 <ul>
-<li>也是反向存储的</li>
-<li>对于向量位不足 1个字节，则补0</li>
-<li>NULL值标志位不是一定存在的</li>
+<li>把状态为FREE的区对应的XDES Entry结构通过List Node来连接成一个链表，这个链表我们就称之为FREE链表</li>
+<li>把状态为FREE_FRAG的区对应的XDES Entry结构通过List Node来连接成一个链表，这个链表我们就称之为FREE_FRAG链表</li>
+<li>把状态为FULL_FRAG的区对应的XDES Entry结构通过List Node来连接成一个链表，这个链表我们就称之为FULL_FRAG链表</li>
 </ul>
-<p>
-        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E6%96%87%E4%BB%B6%E5%AD%98%E5%82%A8%E7%BB%93%E6%9E%84/3.jpg">
-            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E6%96%87%E4%BB%B6%E5%AD%98%E5%82%A8%E7%BB%93%E6%9E%84/3.jpg" />
+<h3 id="fil_page_inode-介绍">FIL_PAGE_INODE 介绍</h3>
+<p>各个字段含义</p>
+<table>
+<thead>
+<tr>
+<th>名称</th>
+<th>中文名</th>
+<th>占用空间大小</th>
+<th>简单描述</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>File_Header</td>
+<td>文件头部</td>
+<td>38字节</td>
+<td>页的一些通用信息</td>
+</tr>
+<tr>
+<td>List_Node_for_INODE_Page_List</td>
+<td>通用链表节点</td>
+<td>12字节</td>
+<td>存储上一个INODE页面和下一个INODE页面的指针</td>
+</tr>
+<tr>
+<td>INODE_Entry</td>
+<td>段描述信息</td>
+<td>16320字节</td>
+<td>存储段描述信息，最多85个INode Entry</td>
+</tr>
+<tr>
+<td>Empty_Space</td>
+<td>尚未使用空间</td>
+<td>6字节</td>
+<td>用于页结构的填充，没啥实际意义</td>
+</tr>
+<tr>
+<td>File_Trailer</td>
+<td>文件尾部</td>
+<td>8字节</td>
+<td>校验页是否完整</td>
+</tr>
+</tbody>
+</table>
+<p>INode Entry结构体<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E6%96%87%E4%BB%B6%E5%AD%98%E5%82%A8%E7%BB%93%E6%9E%84/18.png">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E6%96%87%E4%BB%B6%E5%AD%98%E5%82%A8%E7%BB%93%E6%9E%84/18.png" />
         </a>
     </p>
-<p>更完整的行信息如下：<br>
-
-        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E6%96%87%E4%BB%B6%E5%AD%98%E5%82%A8%E7%BB%93%E6%9E%84/2.jpg">
-            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E6%96%87%E4%BB%B6%E5%AD%98%E5%82%A8%E7%BB%93%E6%9E%84/2.jpg" />
-        </a>
-    </p>
-<p>头记录信息如下：<br>
-
-        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E6%96%87%E4%BB%B6%E5%AD%98%E5%82%A8%E7%BB%93%E6%9E%84/4.jpg">
-            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E6%96%87%E4%BB%B6%E5%AD%98%E5%82%A8%E7%BB%93%E6%9E%84/4.jpg" />
-        </a>
-    <br>
-头记录说明</p>
 <ul>
-<li>预留位1、2：暂未使用</li>
-<li>delete_mask：当前记录被删除的标志位</li>
-<li>min_rec_mask：B+树的每层非叶子节点中的最小记录的标志位</li>
-<li>n_owned：当前记录拥有的记录数</li>
-<li>heap_no：当前记录在记录堆中的位置</li>
-<li>record_type：当前记录类型。具体地，0: 普通记录；1: B+树非叶子节点记录（即所谓的目录项记录）；2: 最小记录；3: 最大记录</li>
-<li>next_record：下一条记录的相对位置</li>
+<li>Segment ID，就是指这个INODE Entry结构对应的段的编号（ID）。</li>
+<li>NOT_FULL_N_USED，这个字段指的是在NOT_FULL链表中已经使用了多少个页面。</li>
+<li>FREE链表，一个ListNode类型，指向一个 XDES entry</li>
+<li>NOT_FULL链表，同上</li>
+<li>FULL链表，同上</li>
+<li>Magic Number，标记这个INODE Entry是否已经被初始化了</li>
+<li>Fragment Array Entry，32个零散的page，每个都指向一个page</li>
 </ul>
-<p>记录的数据内容</p>
+<h2 id="表空间的整体结构">表空间的整体结构</h2>
+<p>如下图 
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E6%96%87%E4%BB%B6%E5%AD%98%E5%82%A8%E7%BB%93%E6%9E%84/16.png">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E6%96%87%E4%BB%B6%E5%AD%98%E5%82%A8%E7%BB%93%E6%9E%84/16.png" />
+        </a>
+     <br>
+绿色部分是255个区，黄色部分、红色也是255个区<br>
+绿色部分比较特殊，它的前三个跟其他区不一样</p>
 <ul>
-<li>DB_ROW_ID：该字段占6个字节，用于标识一条记录</li>
-<li>DB_TRX_ID：该字段占6个字节，其值为事务ID</li>
-<li>DB_ROLL_PTR：该字段占7个字节，其值为回滚指针</li>
+<li>page0是 FSP_HDR</li>
+<li>page1是 change buffer</li>
+<li>page2是 INODE</li>
 </ul>
-<p>next_record 是按照单链表的方式，指向了下一条记录<br>
-其中 infimum 是最小记录、supermum是最大记录<br>
+<p>黄色、红色，以及后面多的区，整体结构都是类似的，每个区的前面 2个比较特殊</p>
+<ul>
+<li>page0是 XDES_HDR</li>
+<li>page1是 change buffer</li>
+</ul>
+<p>一个完整的图，将整个结构串联起来
 
-        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E6%96%87%E4%BB%B6%E5%AD%98%E5%82%A8%E7%BB%93%E6%9E%84/5.png">
-            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E6%96%87%E4%BB%B6%E5%AD%98%E5%82%A8%E7%BB%93%E6%9E%84/5.png" />
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E6%96%87%E4%BB%B6%E5%AD%98%E5%82%A8%E7%BB%93%E6%9E%84/x_7-segment-extent-all-in-one.png">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E6%96%87%E4%BB%B6%E5%AD%98%E5%82%A8%E7%BB%93%E6%9E%84/x_7-segment-extent-all-in-one.png" />
         </a>
     </p>
-<p>删除记录2 后的结果，并不会真正删除，后面如果再插入数据，会复用这个空间<br>
-
-        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E6%96%87%E4%BB%B6%E5%AD%98%E5%82%A8%E7%BB%93%E6%9E%84/6.png">
-            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E6%96%87%E4%BB%B6%E5%AD%98%E5%82%A8%E7%BB%93%E6%9E%84/6.png" />
-        </a>
-    </p>
-<p>COMPACT格式中，如果超过了 768字节，则会用产生溢出页，并用20字节指针，指向溢出页<br>
-
-        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E6%96%87%E4%BB%B6%E5%AD%98%E5%82%A8%E7%BB%93%E6%9E%84/7.jpg">
-            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E6%96%87%E4%BB%B6%E5%AD%98%E5%82%A8%E7%BB%93%E6%9E%84/7.jpg" />
-        </a>
-    </p>
-<p>DYNAMIC格式跟COMPACT的区别是，不再存储768字节了，直接用20字节指向溢出页<br>
-
-        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E6%96%87%E4%BB%B6%E5%AD%98%E5%82%A8%E7%BB%93%E6%9E%84/8.jpg">
-            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E6%96%87%E4%BB%B6%E5%AD%98%E5%82%A8%E7%BB%93%E6%9E%84/8.jpg" />
-        </a>
-    </p>
-<h2 id="数据页">数据页</h2>
+<h2 id="数据页-fil_page_index">数据页 FIL_PAGE_INDEX</h2>
 <p>一行数据是存储在 数据页中的，InnoDB中定义了很多页类型<br>
 默认情况下，每个页大小为 16K<br>
 
@@ -237,19 +576,13 @@ File Header中，包含了上个页、下个页的指针<br>
             <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E6%96%87%E4%BB%B6%E5%AD%98%E5%82%A8%E7%BB%93%E6%9E%84/13.png" />
         </a>
     </p>
-<p>数据页中有一个 Page Directory，可以用这个做二分查找，快速定位<br>
+<p>不同数据页之间的连接关系 <br>
 
-        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E6%96%87%E4%BB%B6%E5%AD%98%E5%82%A8%E7%BB%93%E6%9E%84/11.jpg">
-            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E6%96%87%E4%BB%B6%E5%AD%98%E5%82%A8%E7%BB%93%E6%9E%84/11.jpg" />
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E6%96%87%E4%BB%B6%E5%AD%98%E5%82%A8%E7%BB%93%E6%9E%84/13_b.png">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E6%96%87%E4%BB%B6%E5%AD%98%E5%82%A8%E7%BB%93%E6%9E%84/13_b.png" />
         </a>
-    <br>
-这里规定，虚拟的最小值分为一组，里面只有一条记录也就是最小值本身 <br>
-最大值分为一组，里面的记录数有1-8之间<br>
-其他的分组只能是4-8条之间</p>
-<p>比如槽子指向的分别是 1、3、5、7、9<br>
-如果要查8，那么根据二分定位到9，这个值比9小，所以找9前面的7这个槽子<br>
-根据7 这个槽子就定位到一个具体的记录了，然后再按照 单链表往后遍历，就能找到 8这条记录了</p>
-<h2 id="数据页的头信息">数据页的头信息</h2>
+    </p>
+<h3 id="数据页的头信息">数据页的头信息</h3>
 <p>File Header定义如下：</p>
 <table>
 <thead>
@@ -389,227 +722,414 @@ File Header中，包含了上个页、下个页的指针<br>
 </tr>
 </tbody>
 </table>
-<p>数据页的完整展示如下：<br>
+<h3 id="page-directory">Page Directory</h3>
+<p>数据页中有一个 Page Directory，可以用这个做二分查找，快速定位<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E6%96%87%E4%BB%B6%E5%AD%98%E5%82%A8%E7%BB%93%E6%9E%84/11.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E6%96%87%E4%BB%B6%E5%AD%98%E5%82%A8%E7%BB%93%E6%9E%84/11.jpg" />
+        </a>
+    <br>
+这里规定，虚拟的最小值分为一组，里面只有一条记录也就是最小值本身 <br>
+最大值分为一组，里面的记录数有1-8之间<br>
+其他的分组只能是4-8条之间</p>
+<p>比如槽子指向的分别是 1、3、5、7、9<br>
+如果要查8，那么根据二分定位到9，这个值比9小，所以找9前面的7这个槽子<br>
+根据7 这个槽子就定位到一个具体的记录了，然后再按照 单链表往后遍历，就能找到 8这条记录了</p>
+<h3 id="b树索引">B+树索引</h3>
+<p>完整的结构如下：<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E6%96%87%E4%BB%B6%E5%AD%98%E5%82%A8%E7%BB%93%E6%9E%84/15.png">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E6%96%87%E4%BB%B6%E5%AD%98%E5%82%A8%E7%BB%93%E6%9E%84/15.png" />
+        </a>
+    </p>
+<p>MySQL的数据页、索引页用的都是 FIL_PAGE_INDEX 这种类型的页<br>
+也就是：数据即索引，索引即数据<br>
+再说说 记录头信息里的<code>record_type</code>属性</p>
+<ul>
+<li>0：普通的用户记录</li>
+<li>1：目录项记录</li>
+<li>2：最小记录</li>
+<li>3：最大记录</li>
+</ul>
+<p>一些注意事项</p>
+<ul>
+<li>根页面永不动窝</li>
+<li>普通二级索引内节点，包含三个值：索引列的值、主键值、页号</li>
+<li>这样就能保证B+树每一层节点中各条目录项记录除页号这个字段外是唯一的</li>
+<li>二级索引的叶子节点，存储了索引列的值、主键值，找到主键后，再回表查询</li>
+<li>联合索引(c2、c3)，非叶节点存储了c2+c3，如果c2相同则按照c3排序</li>
+<li>联合索引(c2、c3)的叶子节点存储了c2、c3、主键</li>
+</ul>
+<h3 id="和inode关联">和INode关联</h3>
+<p>如何找到 某个具体的 段？<br>
+每个 数据页都有两个字段</p>
+<ul>
+<li>PAGE_BTR_SEG_LEAF</li>
+<li>PAGE_BTR_SEG_TOP</li>
+</ul>
+<p>都占用10个字节，它们其实对应一个叫Segment Header的结构</p>
+<table>
+<thead>
+<tr>
+<th>名称</th>
+<th>占用空间大小</th>
+<th>描述</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Space ID of the INODE Entry</td>
+<td>4字节</td>
+<td>INODE Entry结构所在的表空间ID</td>
+</tr>
+<tr>
+<td>Page Number of the INODE Entry</td>
+<td>4字节</td>
+<td>INODE Entry结构所在的页面页号</td>
+</tr>
+<tr>
+<td>Byte Offset of the INODE Entry</td>
+<td>2字节</td>
+<td>INODE Entry结构在该页面中的偏移量</td>
+</tr>
+</tbody>
+</table>
+<h3 id="数据页的完整结构">数据页的完整结构</h3>
+<p>一个数据页的完整结构<br>
 
         <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E6%96%87%E4%BB%B6%E5%AD%98%E5%82%A8%E7%BB%93%E6%9E%84/14.png">
             <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E6%96%87%E4%BB%B6%E5%AD%98%E5%82%A8%E7%BB%93%E6%9E%84/14.png" />
         </a>
     </p>
+<p>从另一个角度观察，数据页和其他页的关联<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E6%96%87%E4%BB%B6%E5%AD%98%E5%82%A8%E7%BB%93%E6%9E%84/x_14-index-page.png">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E6%96%87%E4%BB%B6%E5%AD%98%E5%82%A8%E7%BB%93%E6%9E%84/x_14-index-page.png" />
+        </a>
+    </p>
+<h2 id="行格式">行格式</h2>
+<p>行格式介绍参考官网 -&gt; <a href="https://dev.mysql.com/doc/refman/8.0/en/innodb-row-format.html#innodb-row-format-compact">这里</a><br>
+行格式有4种</p>
+<ul>
+<li>REDUNDANT</li>
+<li>COMPACT</li>
+<li>DYNAMIC</li>
+<li>COMPRESSED</li>
+</ul>
+<p>
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1//post/2022/12/MySQL%E6%96%87%E4%BB%B6%E5%AD%98%E5%82%A8%E7%BB%93%E6%9E%84/1.png">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1//post/2022/12/MySQL%E6%96%87%E4%BB%B6%E5%AD%98%E5%82%A8%E7%BB%93%E6%9E%84/1.png" />
+        </a>
+    <br>
+变长字段的长度列表</p>
+<ul>
+<li>存储像 varchar这种的，其长度是可变的</li>
+<li>在这个列表中存储了对应字段的长度</li>
+<li>如果存储的最大字节不超过255，则使用1个字节</li>
+<li>如果实际使用的字节不超过127，则用 1个字节表示</li>
+<li>否则用2个字节表示</li>
+<li>对于varchar(M)，字符类型为ascii，其长度为 M * 1，而UTF为M * 3，UTFmb4为M * 4</li>
+<li>变长字段的长度列表不存储值为NULL的长度信息</li>
+<li>变长字段的长度列表不是一定存在的</li>
+<li>变长字段的长度列表中各字段长度信息是按列的顺序逆序排列的</li>
+<li>char类型字段的长度信息是否需要存储在 变长字段的长度列表 中取决于其所使用的字符集是否为变长字符集</li>
+</ul>
+<p>比如，ascii字符集，各字段为f1、f2、f3、f4<br>
+其值为 &ldquo;a&rdquo;、NULL、&ldquo;ccc&rdquo;、99<br>
+变成字段f1为1、f3长度为3，则变成字段列表内容为 0x03、0x01</p>
+<p>NULL值标志位</p>
+<ul>
+<li>也是反向存储的</li>
+<li>对于向量位不足 1个字节，则补0</li>
+<li>NULL值标志位不是一定存在的</li>
+</ul>
+<p>
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E6%96%87%E4%BB%B6%E5%AD%98%E5%82%A8%E7%BB%93%E6%9E%84/3.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E6%96%87%E4%BB%B6%E5%AD%98%E5%82%A8%E7%BB%93%E6%9E%84/3.jpg" />
+        </a>
+    </p>
+<p>更完整的行信息如下：<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E6%96%87%E4%BB%B6%E5%AD%98%E5%82%A8%E7%BB%93%E6%9E%84/2.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E6%96%87%E4%BB%B6%E5%AD%98%E5%82%A8%E7%BB%93%E6%9E%84/2.jpg" />
+        </a>
+    </p>
+<p>头记录信息如下：<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E6%96%87%E4%BB%B6%E5%AD%98%E5%82%A8%E7%BB%93%E6%9E%84/4.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E6%96%87%E4%BB%B6%E5%AD%98%E5%82%A8%E7%BB%93%E6%9E%84/4.jpg" />
+        </a>
+    <br>
+头记录说明</p>
+<ul>
+<li>预留位1、2：暂未使用</li>
+<li>delete_mask：当前记录被删除的标志位</li>
+<li>min_rec_mask：B+树的每层非叶子节点中的最小记录的标志位</li>
+<li>n_owned：当前记录拥有的记录数</li>
+<li>heap_no：当前记录在记录堆中的位置</li>
+<li>record_type：当前记录类型。具体地，0: 普通记录；1: B+树非叶子节点记录（即所谓的目录项记录）；2: 最小记录；3: 最大记录</li>
+<li>next_record：下一条记录的相对位置</li>
+</ul>
+<p>记录的数据内容</p>
+<ul>
+<li>DB_ROW_ID：该字段占6个字节，用于标识一条记录</li>
+<li>DB_TRX_ID：该字段占6个字节，其值为事务ID</li>
+<li>DB_ROLL_PTR：该字段占7个字节，其值为回滚指针</li>
+</ul>
+<p>next_record 是按照单链表的方式，指向了下一条记录<br>
+其中 infimum 是最小记录、supermum是最大记录<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E6%96%87%E4%BB%B6%E5%AD%98%E5%82%A8%E7%BB%93%E6%9E%84/5.png">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E6%96%87%E4%BB%B6%E5%AD%98%E5%82%A8%E7%BB%93%E6%9E%84/5.png" />
+        </a>
+    </p>
+<p>删除记录2 后的结果，并不会真正删除，后面如果再插入数据，会复用这个空间<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E6%96%87%E4%BB%B6%E5%AD%98%E5%82%A8%E7%BB%93%E6%9E%84/6.png">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E6%96%87%E4%BB%B6%E5%AD%98%E5%82%A8%E7%BB%93%E6%9E%84/6.png" />
+        </a>
+    </p>
+<p>COMPACT格式中，如果超过了 768字节，则会用产生溢出页，并用20字节指针，指向溢出页<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E6%96%87%E4%BB%B6%E5%AD%98%E5%82%A8%E7%BB%93%E6%9E%84/7.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E6%96%87%E4%BB%B6%E5%AD%98%E5%82%A8%E7%BB%93%E6%9E%84/7.jpg" />
+        </a>
+    </p>
+<p>DYNAMIC格式跟COMPACT的区别是，不再存储768字节了，直接用20字节指向溢出页<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E6%96%87%E4%BB%B6%E5%AD%98%E5%82%A8%E7%BB%93%E6%9E%84/8.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E6%96%87%E4%BB%B6%E5%AD%98%E5%82%A8%E7%BB%93%E6%9E%84/8.jpg" />
+        </a>
+    </p>
 <h2 id="各种page定义">各种page定义</h2>
 <p>这个头文件的位置是：mysql-8.0.28/storage/innobase/include/fil0fil.h</p>
-<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
-<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
-<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">  1
-</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">  2
-</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">  3
-</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">  4
-</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">  5
-</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">  6
-</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">  7
-</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">  8
-</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">  9
-</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 10
-</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 11
-</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 12
-</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 13
-</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 14
-</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 15
-</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 16
-</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 17
-</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 18
-</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 19
-</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 20
-</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 21
-</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 22
-</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 23
-</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 24
-</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 25
-</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 26
-</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 27
-</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 28
-</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 29
-</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 30
-</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 31
-</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 32
-</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 33
-</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 34
-</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 35
-</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 36
-</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 37
-</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 38
-</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 39
-</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 40
-</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 41
-</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 42
-</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 43
-</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 44
-</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 45
-</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 46
-</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 47
-</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 48
-</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 49
-</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 50
-</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 51
-</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 52
-</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 53
-</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 54
-</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 55
-</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 56
-</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 57
-</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 58
-</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 59
-</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 60
-</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 61
-</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 62
-</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 63
-</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 64
-</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 65
-</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 66
-</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 67
-</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 68
-</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 69
-</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 70
-</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 71
-</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 72
-</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 73
-</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 74
-</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 75
-</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 76
-</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 77
-</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 78
-</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 79
-</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 80
-</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 81
-</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 82
-</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 83
-</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 84
-</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 85
-</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 86
-</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 87
-</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 88
-</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 89
-</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 90
-</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 91
-</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 92
-</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 93
-</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 94
-</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 95
-</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 96
-</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 97
-</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 98
-</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 99
-</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">100
-</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">101
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4">
+<table style="border-spacing:0;padding:0;margin:0;border:0;width:auto;overflow:auto;display:block;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">  1
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">  2
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">  3
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">  4
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">  5
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">  6
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">  7
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">  8
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">  9
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 10
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 11
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 12
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 13
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 14
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 15
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 16
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 17
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 18
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 19
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 20
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 21
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 22
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 23
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 24
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 25
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 26
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 27
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 28
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 29
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 30
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 31
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 32
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 33
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 34
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 35
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 36
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 37
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 38
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 39
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 40
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 41
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 42
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 43
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 44
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 45
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 46
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 47
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 48
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 49
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 50
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 51
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 52
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 53
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 54
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 55
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 56
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 57
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 58
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 59
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 60
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 61
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 62
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 63
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 64
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 65
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 66
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 67
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 68
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 69
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 70
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 71
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 72
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 73
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 74
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 75
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 76
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 77
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 78
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 79
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 80
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 81
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 82
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 83
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 84
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 85
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 86
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 87
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 88
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 89
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 90
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 91
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 92
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 93
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 94
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 95
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 96
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 97
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 98
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 99
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">100
+</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">101
 </span></code></pre></td>
 <td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
-<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-cpp" data-lang="cpp"><span style="display:flex;"><span><span style="color:#6272a4">/** B-tree node */</span>
-</span></span><span style="display:flex;"><span><span style="color:#ff79c6">constexpr</span> page_type_t FIL_PAGE_INDEX <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">17855</span>;
-</span></span><span style="display:flex;"><span>
-</span></span><span style="display:flex;"><span><span style="color:#6272a4">/** R-tree node */</span>
-</span></span><span style="display:flex;"><span><span style="color:#ff79c6">constexpr</span> page_type_t FIL_PAGE_RTREE <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">17854</span>;
-</span></span><span style="display:flex;"><span>
-</span></span><span style="display:flex;"><span><span style="color:#6272a4">/** Tablespace SDI Index page */</span>
-</span></span><span style="display:flex;"><span><span style="color:#ff79c6">constexpr</span> page_type_t FIL_PAGE_SDI <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">17853</span>;
-</span></span><span style="display:flex;"><span>
-</span></span><span style="display:flex;"><span><span style="color:#6272a4">/** This page type is unused. */</span>
-</span></span><span style="display:flex;"><span><span style="color:#ff79c6">constexpr</span> page_type_t FIL_PAGE_TYPE_UNUSED <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">1</span>;
-</span></span><span style="display:flex;"><span>
-</span></span><span style="display:flex;"><span><span style="color:#6272a4">/** Undo log page */</span>
-</span></span><span style="display:flex;"><span><span style="color:#ff79c6">constexpr</span> page_type_t FIL_PAGE_UNDO_LOG <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">2</span>;
-</span></span><span style="display:flex;"><span>
-</span></span><span style="display:flex;"><span><span style="color:#6272a4">/** Index node */</span>
-</span></span><span style="display:flex;"><span><span style="color:#ff79c6">constexpr</span> page_type_t FIL_PAGE_INODE <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">3</span>;
-</span></span><span style="display:flex;"><span>
-</span></span><span style="display:flex;"><span><span style="color:#6272a4">/** Insert buffer free list */</span>
-</span></span><span style="display:flex;"><span><span style="color:#ff79c6">constexpr</span> page_type_t FIL_PAGE_IBUF_FREE_LIST <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">4</span>;
-</span></span><span style="display:flex;"><span>
-</span></span><span style="display:flex;"><span><span style="color:#6272a4">/* File page types introduced in MySQL/InnoDB 5.1.7 */</span>
-</span></span><span style="display:flex;"><span><span style="color:#6272a4">/** Freshly allocated page */</span>
-</span></span><span style="display:flex;"><span><span style="color:#ff79c6">constexpr</span> page_type_t FIL_PAGE_TYPE_ALLOCATED <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">0</span>;
-</span></span><span style="display:flex;"><span>
-</span></span><span style="display:flex;"><span><span style="color:#6272a4">/** Insert buffer bitmap */</span>
-</span></span><span style="display:flex;"><span><span style="color:#ff79c6">constexpr</span> page_type_t FIL_PAGE_IBUF_BITMAP <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">5</span>;
-</span></span><span style="display:flex;"><span>
-</span></span><span style="display:flex;"><span><span style="color:#6272a4">/** System page */</span>
-</span></span><span style="display:flex;"><span><span style="color:#ff79c6">constexpr</span> page_type_t FIL_PAGE_TYPE_SYS <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">6</span>;
-</span></span><span style="display:flex;"><span>
-</span></span><span style="display:flex;"><span><span style="color:#6272a4">/** Transaction system data */</span>
-</span></span><span style="display:flex;"><span><span style="color:#ff79c6">constexpr</span> page_type_t FIL_PAGE_TYPE_TRX_SYS <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">7</span>;
-</span></span><span style="display:flex;"><span>
-</span></span><span style="display:flex;"><span><span style="color:#6272a4">/** File space header */</span>
-</span></span><span style="display:flex;"><span><span style="color:#ff79c6">constexpr</span> page_type_t FIL_PAGE_TYPE_FSP_HDR <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">8</span>;
-</span></span><span style="display:flex;"><span>
-</span></span><span style="display:flex;"><span><span style="color:#6272a4">/** Extent descriptor page */</span>
-</span></span><span style="display:flex;"><span><span style="color:#ff79c6">constexpr</span> page_type_t FIL_PAGE_TYPE_XDES <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">9</span>;
-</span></span><span style="display:flex;"><span>
-</span></span><span style="display:flex;"><span><span style="color:#6272a4">/** Uncompressed BLOB page */</span>
-</span></span><span style="display:flex;"><span><span style="color:#ff79c6">constexpr</span> page_type_t FIL_PAGE_TYPE_BLOB <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">10</span>;
-</span></span><span style="display:flex;"><span>
-</span></span><span style="display:flex;"><span><span style="color:#6272a4">/** First compressed BLOB page */</span>
-</span></span><span style="display:flex;"><span><span style="color:#ff79c6">constexpr</span> page_type_t FIL_PAGE_TYPE_ZBLOB <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">11</span>;
-</span></span><span style="display:flex;"><span>
-</span></span><span style="display:flex;"><span><span style="color:#6272a4">/** Subsequent compressed BLOB page */</span>
-</span></span><span style="display:flex;"><span><span style="color:#ff79c6">constexpr</span> page_type_t FIL_PAGE_TYPE_ZBLOB2 <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">12</span>;
-</span></span><span style="display:flex;"><span>
-</span></span><span style="display:flex;"><span><span style="color:#6272a4">/** In old tablespaces, garbage in FIL_PAGE_TYPE is replaced with
-</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">this value when flushing pages. */</span>
-</span></span><span style="display:flex;"><span><span style="color:#ff79c6">constexpr</span> page_type_t FIL_PAGE_TYPE_UNKNOWN <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">13</span>;
-</span></span><span style="display:flex;"><span>
-</span></span><span style="display:flex;"><span><span style="color:#6272a4">/** Compressed page */</span>
-</span></span><span style="display:flex;"><span><span style="color:#ff79c6">constexpr</span> page_type_t FIL_PAGE_COMPRESSED <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">14</span>;
-</span></span><span style="display:flex;"><span>
-</span></span><span style="display:flex;"><span><span style="color:#6272a4">/** Encrypted page */</span>
-</span></span><span style="display:flex;"><span><span style="color:#ff79c6">constexpr</span> page_type_t FIL_PAGE_ENCRYPTED <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">15</span>;
-</span></span><span style="display:flex;"><span>
-</span></span><span style="display:flex;"><span><span style="color:#6272a4">/** Compressed and Encrypted page */</span>
-</span></span><span style="display:flex;"><span><span style="color:#ff79c6">constexpr</span> page_type_t FIL_PAGE_COMPRESSED_AND_ENCRYPTED <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">16</span>;
-</span></span><span style="display:flex;"><span>
-</span></span><span style="display:flex;"><span><span style="color:#6272a4">/** Encrypted R-tree page */</span>
-</span></span><span style="display:flex;"><span><span style="color:#ff79c6">constexpr</span> page_type_t FIL_PAGE_ENCRYPTED_RTREE <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">17</span>;
-</span></span><span style="display:flex;"><span>
-</span></span><span style="display:flex;"><span><span style="color:#6272a4">/** Uncompressed SDI BLOB page */</span>
-</span></span><span style="display:flex;"><span><span style="color:#ff79c6">constexpr</span> page_type_t FIL_PAGE_SDI_BLOB <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">18</span>;
-</span></span><span style="display:flex;"><span>
-</span></span><span style="display:flex;"><span><span style="color:#6272a4">/** Commpressed SDI BLOB page */</span>
-</span></span><span style="display:flex;"><span><span style="color:#ff79c6">constexpr</span> page_type_t FIL_PAGE_SDI_ZBLOB <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">19</span>;
-</span></span><span style="display:flex;"><span>
-</span></span><span style="display:flex;"><span><span style="color:#6272a4">/** Legacy doublewrite buffer page. */</span>
-</span></span><span style="display:flex;"><span><span style="color:#ff79c6">constexpr</span> page_type_t FIL_PAGE_TYPE_LEGACY_DBLWR <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">20</span>;
-</span></span><span style="display:flex;"><span>
-</span></span><span style="display:flex;"><span><span style="color:#6272a4">/** Rollback Segment Array page */</span>
-</span></span><span style="display:flex;"><span><span style="color:#ff79c6">constexpr</span> page_type_t FIL_PAGE_TYPE_RSEG_ARRAY <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">21</span>;
-</span></span><span style="display:flex;"><span>
-</span></span><span style="display:flex;"><span><span style="color:#6272a4">/** Index pages of uncompressed LOB */</span>
-</span></span><span style="display:flex;"><span><span style="color:#ff79c6">constexpr</span> page_type_t FIL_PAGE_TYPE_LOB_INDEX <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">22</span>;
-</span></span><span style="display:flex;"><span>
-</span></span><span style="display:flex;"><span><span style="color:#6272a4">/** Data pages of uncompressed LOB */</span>
-</span></span><span style="display:flex;"><span><span style="color:#ff79c6">constexpr</span> page_type_t FIL_PAGE_TYPE_LOB_DATA <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">23</span>;
-</span></span><span style="display:flex;"><span>
-</span></span><span style="display:flex;"><span><span style="color:#6272a4">/** The first page of an uncompressed LOB */</span>
-</span></span><span style="display:flex;"><span><span style="color:#ff79c6">constexpr</span> page_type_t FIL_PAGE_TYPE_LOB_FIRST <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">24</span>;
-</span></span><span style="display:flex;"><span>
-</span></span><span style="display:flex;"><span><span style="color:#6272a4">/** The first page of a compressed LOB */</span>
-</span></span><span style="display:flex;"><span><span style="color:#ff79c6">constexpr</span> page_type_t FIL_PAGE_TYPE_ZLOB_FIRST <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">25</span>;
-</span></span><span style="display:flex;"><span>
-</span></span><span style="display:flex;"><span><span style="color:#6272a4">/** Data pages of compressed LOB */</span>
-</span></span><span style="display:flex;"><span><span style="color:#ff79c6">constexpr</span> page_type_t FIL_PAGE_TYPE_ZLOB_DATA <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">26</span>;
-</span></span><span style="display:flex;"><span>
-</span></span><span style="display:flex;"><span><span style="color:#6272a4">/** Index pages of compressed LOB. This page contains an array of
-</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">z_index_entry_t objects.*/</span>
-</span></span><span style="display:flex;"><span><span style="color:#ff79c6">constexpr</span> page_type_t FIL_PAGE_TYPE_ZLOB_INDEX <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">27</span>;
-</span></span><span style="display:flex;"><span>
-</span></span><span style="display:flex;"><span><span style="color:#6272a4">/** Fragment pages of compressed LOB. */</span>
-</span></span><span style="display:flex;"><span><span style="color:#ff79c6">constexpr</span> page_type_t FIL_PAGE_TYPE_ZLOB_FRAG <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">28</span>;
-</span></span><span style="display:flex;"><span>
-</span></span><span style="display:flex;"><span><span style="color:#6272a4">/** Index pages of fragment pages (compressed LOB). */</span>
-</span></span><span style="display:flex;"><span><span style="color:#ff79c6">constexpr</span> page_type_t FIL_PAGE_TYPE_ZLOB_FRAG_ENTRY <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">29</span>;
-</span></span></code></pre></td></tr></table>
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-cpp" data-lang="cpp"><span style="color:#6272a4">/** B-tree node */</span>
+<span style="color:#ff79c6">constexpr</span> page_type_t FIL_PAGE_INDEX <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">17855</span>;
+
+<span style="color:#6272a4">/** R-tree node */</span>
+<span style="color:#ff79c6">constexpr</span> page_type_t FIL_PAGE_RTREE <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">17854</span>;
+
+<span style="color:#6272a4">/** Tablespace SDI Index page */</span>
+<span style="color:#ff79c6">constexpr</span> page_type_t FIL_PAGE_SDI <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">17853</span>;
+
+<span style="color:#6272a4">/** This page type is unused. */</span>
+<span style="color:#ff79c6">constexpr</span> page_type_t FIL_PAGE_TYPE_UNUSED <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">1</span>;
+
+<span style="color:#6272a4">/** Undo log page */</span>
+<span style="color:#ff79c6">constexpr</span> page_type_t FIL_PAGE_UNDO_LOG <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">2</span>;
+
+<span style="color:#6272a4">/** Index node */</span>
+<span style="color:#ff79c6">constexpr</span> page_type_t FIL_PAGE_INODE <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">3</span>;
+
+<span style="color:#6272a4">/** Insert buffer free list */</span>
+<span style="color:#ff79c6">constexpr</span> page_type_t FIL_PAGE_IBUF_FREE_LIST <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">4</span>;
+
+<span style="color:#6272a4">/* File page types introduced in MySQL/InnoDB 5.1.7 */</span>
+<span style="color:#6272a4">/** Freshly allocated page */</span>
+<span style="color:#ff79c6">constexpr</span> page_type_t FIL_PAGE_TYPE_ALLOCATED <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">0</span>;
+
+<span style="color:#6272a4">/** Insert buffer bitmap */</span>
+<span style="color:#ff79c6">constexpr</span> page_type_t FIL_PAGE_IBUF_BITMAP <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">5</span>;
+
+<span style="color:#6272a4">/** System page */</span>
+<span style="color:#ff79c6">constexpr</span> page_type_t FIL_PAGE_TYPE_SYS <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">6</span>;
+
+<span style="color:#6272a4">/** Transaction system data */</span>
+<span style="color:#ff79c6">constexpr</span> page_type_t FIL_PAGE_TYPE_TRX_SYS <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">7</span>;
+
+<span style="color:#6272a4">/** File space header */</span>
+<span style="color:#ff79c6">constexpr</span> page_type_t FIL_PAGE_TYPE_FSP_HDR <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">8</span>;
+
+<span style="color:#6272a4">/** Extent descriptor page */</span>
+<span style="color:#ff79c6">constexpr</span> page_type_t FIL_PAGE_TYPE_XDES <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">9</span>;
+
+<span style="color:#6272a4">/** Uncompressed BLOB page */</span>
+<span style="color:#ff79c6">constexpr</span> page_type_t FIL_PAGE_TYPE_BLOB <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">10</span>;
+
+<span style="color:#6272a4">/** First compressed BLOB page */</span>
+<span style="color:#ff79c6">constexpr</span> page_type_t FIL_PAGE_TYPE_ZBLOB <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">11</span>;
+
+<span style="color:#6272a4">/** Subsequent compressed BLOB page */</span>
+<span style="color:#ff79c6">constexpr</span> page_type_t FIL_PAGE_TYPE_ZBLOB2 <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">12</span>;
+
+<span style="color:#6272a4">/** In old tablespaces, garbage in FIL_PAGE_TYPE is replaced with
+</span><span style="color:#6272a4">this value when flushing pages. */</span>
+<span style="color:#ff79c6">constexpr</span> page_type_t FIL_PAGE_TYPE_UNKNOWN <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">13</span>;
+
+<span style="color:#6272a4">/** Compressed page */</span>
+<span style="color:#ff79c6">constexpr</span> page_type_t FIL_PAGE_COMPRESSED <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">14</span>;
+
+<span style="color:#6272a4">/** Encrypted page */</span>
+<span style="color:#ff79c6">constexpr</span> page_type_t FIL_PAGE_ENCRYPTED <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">15</span>;
+
+<span style="color:#6272a4">/** Compressed and Encrypted page */</span>
+<span style="color:#ff79c6">constexpr</span> page_type_t FIL_PAGE_COMPRESSED_AND_ENCRYPTED <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">16</span>;
+
+<span style="color:#6272a4">/** Encrypted R-tree page */</span>
+<span style="color:#ff79c6">constexpr</span> page_type_t FIL_PAGE_ENCRYPTED_RTREE <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">17</span>;
+
+<span style="color:#6272a4">/** Uncompressed SDI BLOB page */</span>
+<span style="color:#ff79c6">constexpr</span> page_type_t FIL_PAGE_SDI_BLOB <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">18</span>;
+
+<span style="color:#6272a4">/** Commpressed SDI BLOB page */</span>
+<span style="color:#ff79c6">constexpr</span> page_type_t FIL_PAGE_SDI_ZBLOB <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">19</span>;
+
+<span style="color:#6272a4">/** Legacy doublewrite buffer page. */</span>
+<span style="color:#ff79c6">constexpr</span> page_type_t FIL_PAGE_TYPE_LEGACY_DBLWR <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">20</span>;
+
+<span style="color:#6272a4">/** Rollback Segment Array page */</span>
+<span style="color:#ff79c6">constexpr</span> page_type_t FIL_PAGE_TYPE_RSEG_ARRAY <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">21</span>;
+
+<span style="color:#6272a4">/** Index pages of uncompressed LOB */</span>
+<span style="color:#ff79c6">constexpr</span> page_type_t FIL_PAGE_TYPE_LOB_INDEX <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">22</span>;
+
+<span style="color:#6272a4">/** Data pages of uncompressed LOB */</span>
+<span style="color:#ff79c6">constexpr</span> page_type_t FIL_PAGE_TYPE_LOB_DATA <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">23</span>;
+
+<span style="color:#6272a4">/** The first page of an uncompressed LOB */</span>
+<span style="color:#ff79c6">constexpr</span> page_type_t FIL_PAGE_TYPE_LOB_FIRST <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">24</span>;
+
+<span style="color:#6272a4">/** The first page of a compressed LOB */</span>
+<span style="color:#ff79c6">constexpr</span> page_type_t FIL_PAGE_TYPE_ZLOB_FIRST <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">25</span>;
+
+<span style="color:#6272a4">/** Data pages of compressed LOB */</span>
+<span style="color:#ff79c6">constexpr</span> page_type_t FIL_PAGE_TYPE_ZLOB_DATA <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">26</span>;
+
+<span style="color:#6272a4">/** Index pages of compressed LOB. This page contains an array of
+</span><span style="color:#6272a4">z_index_entry_t objects.*/</span>
+<span style="color:#ff79c6">constexpr</span> page_type_t FIL_PAGE_TYPE_ZLOB_INDEX <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">27</span>;
+
+<span style="color:#6272a4">/** Fragment pages of compressed LOB. */</span>
+<span style="color:#ff79c6">constexpr</span> page_type_t FIL_PAGE_TYPE_ZLOB_FRAG <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">28</span>;
+
+<span style="color:#6272a4">/** Index pages of fragment pages (compressed LOB). */</span>
+<span style="color:#ff79c6">constexpr</span> page_type_t FIL_PAGE_TYPE_ZLOB_FRAG_ENTRY <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">29</span>;
+</code></pre></td></tr></table>
 </div>
 </div><h2 id="参考">参考</h2>
 <ul>
 <li><a href="https://zhuanlan.zhihu.com/p/266060894">MySQL之InnoDB存储引擎：Row Format行格式</a></li>
 <li><a href="https://www.modb.pro/u/443175">GrowthDBA</a></li>
 <li><a href="https://www.modb.pro/db/172853">MySQL工具之innodb_ruby：探究InnoDB存储结构的利器</a></li>
+<li><a href="https://www.modb.pro/db/397973">MySQL工具之binlog2sql</a></li>
+<li><a href="https://www.modb.pro/db/563240">MySQL 八股文之 MVCC 实现原理</a></li>
+<li><a href="https://www.modb.pro/db/125692">MySQL之Server层的“Buffer”和“Cache”</a></li>
+<li><a href="https://www.modb.pro/db/111341">MySQL各种“Buffer”之InnoDB Buffer Pool</a></li>
+<li><a href="https://www.modb.pro/db/112469">MySQL各种“Buffer”之Change Buffer</a></li>
+<li><a href="https://www.modb.pro/db/121606">MySQL各种“Buffer”之Log Buffer</a></li>
+<li><a href="https://www.modb.pro/db/114783">MySQL各种“Buffer”之Doublewrite Buffer</a></li>
+<li><a href="https://www.modb.pro/db/113573">MySQL各种“Buffer”之Adaptive Hash Index</a></li>
+<li><a href="https://www.modb.pro/db/178422">MySQL工具之innblock：一文搞懂表空间碎片是如何产生的</a></li>
+<li><a href="https://www.modb.pro/db/144961">MySQL之InnoDB表空间</a></li>
+<li><a href="http://neoremind.com/2020/01/inside_innodb_file/">从MySQL InnoDB物理文件格式深入理解索引</a></li>
+<li><a href="https://blog.jcole.us/innodb/">Jeremy Cole的InnoDB介绍</a></li>
+<li><a href="https://github.com/alibaba/innodb-java-reader">innodb-java-reader工具</a></li>
+<li><a href="https://github.com/jeremycole/innodb_ruby">innodb_ruby工具</a></li>
 </ul>
 
 			<script type="text/javascript"
