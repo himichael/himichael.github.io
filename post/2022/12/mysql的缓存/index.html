@@ -1,0 +1,1400 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    
+    <meta name="referrer" content="no-referrer-when-downgrade">
+    
+
+    <title>MySQL的缓存 | 记录每个瞬间</title>
+    <meta property="og:title" content="MySQL的缓存 - 记录每个瞬间">
+    <meta property="og:type" content="article">
+        
+    <meta property="article:published_time" content='2022-12-19T08:15:19&#43;08:00'>
+        
+        
+    <meta property="article:modified_time" content='2022-12-19T08:15:19&#43;08:00'>
+        
+    <meta name="Keywords" content="">
+    <meta name="description" content="MySQL的缓存">
+        <meta name="author" content="隔壁老王">
+        
+    <meta property="og:url" content="https://code0xff.cn/post/2022/12/mysql%E7%9A%84%E7%BC%93%E5%AD%98/">
+    <link rel="shortcut icon" href='/favicon.ico'  type="image/x-icon">
+
+    <link rel="stylesheet" href='/css/normalize.css'>
+    <link rel="stylesheet" href='/css/style.css'>
+    <script type="text/javascript" src="//cdn.bootcdn.net/ajax/libs/jquery/3.4.1/jquery.min.js"></script>
+
+    
+    
+    
+        <link href="https://cdn.bootcdn.net/ajax/libs/fancybox/3.5.7/jquery.fancybox.min.css" rel="stylesheet">
+    
+    
+    
+    
+</head>
+
+
+<body>
+    <header id="header" class="clearfix">
+    <div class="container">
+        <div class="col-group">
+            <div class="site-name ">
+                
+                    <a id="logo" href="https://code0xff.cn/">
+                        记录每个瞬间
+                    </a>
+                
+                
+            </div>
+            <div>
+                <nav id="nav-menu" class="clearfix">
+                    <a class="current" href="https://code0xff.cn/">首页</a>
+                    
+                    <a  href="https://code0xff.cn/linked/" title="链接">链接</a>
+                    
+                    <a  href="https://code0xff.cn/archives/" title="归档">归档</a>
+                    
+                    <a  href="https://code0xff.cn/about/" title="关于">关于</a>
+                    
+                </nav>
+            </div>
+        </div>
+    </div>
+</header>
+
+    <div id="body">
+        <div class="container">
+            <div class="col-group">
+
+                <div class="col-8" id="main">
+                    
+<div class="res-cons">
+    
+    <article class="post">
+        <header>
+            <h1 class="post-title">MySQL的缓存</h1>
+        </header>
+        <date class="post-meta meta-date">
+            2022年12月19日
+        </date>
+<nav id="TableOfContents">
+  <ul>
+    <li>
+      <ul>
+        <li><a href="#innodb-buffer-pool">InnoDB Buffer Pool</a></li>
+        <li><a href="#doublewrite-buffer">Doublewrite Buffer</a></li>
+        <li><a href="#log-buffer">Log Buffer</a></li>
+        <li><a href="#adaptive-hash-index">Adaptive Hash Index</a></li>
+        <li><a href="#change-buffer">Change Buffer</a></li>
+        <li><a href="#innodb-参数汇总">InnoDB 参数汇总</a></li>
+        <li><a href="#参考">参考</a></li>
+      </ul>
+    </li>
+  </ul>
+</nav>
+        
+        <div class="post-meta">
+            
+            <span class="post-meta meta-tags">
+                <ul class="clearfix">
+                    <a href='/categories/%E5%8E%9F%E7%90%86%E5%88%86%E6%9E%90'>原理分析</a>
+                </ul>
+            </span>
+            
+        </div>
+        
+        
+        <div class="post-meta">
+            <span id="busuanzi_container_page_pv">|<span id="busuanzi_value_page_pv"></span><span>
+                    阅读</span></span>
+        </div>
+        
+        
+        <div class="post-content">
+            <h2 id="innodb-buffer-pool">InnoDB Buffer Pool</h2>
+<p>一些重要的参数</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">8
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-sql" data-lang="sql"><span style="display:flex;"><span><span style="color:#6272a4">-- buffer pool size
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span><span style="color:#ff79c6">SHOW</span> VARIABLES <span style="color:#ff79c6">LIKE</span> <span style="color:#f1fa8c">&#39;innodb_buffer_pool_size&#39;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4">-- 实例个数
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span><span style="color:#ff79c6">SHOW</span> VARIABLES <span style="color:#ff79c6">LIKE</span> <span style="color:#f1fa8c">&#39;innodb_buffer_pool_instances&#39;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4">-- 每个实例按 chunk 分成若干个
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span><span style="color:#ff79c6">SHOW</span> VARIABLES <span style="color:#ff79c6">LIKE</span> <span style="color:#f1fa8c">&#39;innodb_buffer_pool_chunk_size&#39;</span>
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>注意<br>
+innodb_buffer_pool_size 必须是 innodb_buffer_pool_instances * innodb_buffer_pool_chunk_size 的整数倍，或者相等<br>
+否则系统会自动调整值的</p>
+<p>采用 LRU的方式将buffer pool 中的page组织起来<br>
+分为 young区 和 old两个区域<br>
+一开始先加入到 old 区的开头，如果超过了一定的阈值，则放到 young区<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E7%9A%84%E7%BC%93%E5%AD%98/2.png">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E7%9A%84%E7%BC%93%E5%AD%98/2.png" />
+        </a>
+    </p>
+<p>整个buffer pool 按照实例个数分为若干个<br>
+每个实例又包含 N个 chunk，这其中包含多个链表</p>
+<ul>
+<li>free链表</li>
+<li>flush链表</li>
+<li>LRU链表</li>
+<li>其他链表</li>
+</ul>
+<p>每个链表包含一个 list node base，执行控制块的头、尾部<br>
+控制块包含 表空间信息、page信息<br>
+这样可以通过 hash方式快速定位到具体的page</p>
+<p>buffer pool相关的参数<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E7%9A%84%E7%BC%93%E5%AD%98/1.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E7%9A%84%E7%BC%93%E5%AD%98/1.jpg" />
+        </a>
+    </p>
+<p>其他一些参数</p>
+<ul>
+<li>innodb_old_blocks_time，默认1000ms，   从old区到 young的等待时间，也就是old区过了1秒后才能到 young区</li>
+<li>innodb_old_blocks_pct， 默认37    ，表示old区占用 37%，剩下的63% 是young</li>
+<li>innodb_read_ahead_threshold，顺序访问一个extent，会异步读取默认 56个page</li>
+<li>innodb_random_read_ahead，默认关闭，这是随机预读取</li>
+<li>innodb_lru_scan_depth，定期从链表尾部扫描 N个page，如果有脏页则刷磁盘</li>
+<li>innodb_flush_neighbors，是否刷新邻居page</li>
+<li>innodb_io_capacity_max，每秒后台刷新的脏页</li>
+<li>innodb_adaptive_flushing，刷新脏页的自适应模式</li>
+<li>innodb_max_dirty_pages_pct，当系统的脏页超过一定比例后，就开始刷新</li>
+</ul>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">15
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">16
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">17
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">18
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">19
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">20
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">21
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">22
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-sql" data-lang="sql"><span style="display:flex;"><span><span style="color:#6272a4">----------------------
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>BUFFER POOL <span style="color:#ff79c6">AND</span> MEMORY
+</span></span><span style="display:flex;"><span><span style="color:#6272a4">----------------------
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>Total <span style="color:#ff79c6">large</span> memory allocated <span style="color:#bd93f9">2198863872</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">Dictionary</span> memory allocated <span style="color:#bd93f9">776332</span>
+</span></span><span style="display:flex;"><span>Buffer pool <span style="color:#ff79c6">size</span>   <span style="color:#bd93f9">131072</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">Free</span> buffers       <span style="color:#bd93f9">124908</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">Database</span> pages     <span style="color:#bd93f9">5720</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">Old</span> <span style="color:#ff79c6">database</span> pages <span style="color:#bd93f9">2071</span>
+</span></span><span style="display:flex;"><span>Modified db pages  <span style="color:#bd93f9">910</span>
+</span></span><span style="display:flex;"><span>Pending <span style="color:#ff79c6">reads</span> <span style="color:#bd93f9">0</span>
+</span></span><span style="display:flex;"><span>Pending writes: LRU <span style="color:#bd93f9">0</span>, flush list <span style="color:#bd93f9">0</span>, single page <span style="color:#bd93f9">0</span>
+</span></span><span style="display:flex;"><span>Pages made young <span style="color:#bd93f9">4</span>, <span style="color:#ff79c6">not</span> young <span style="color:#bd93f9">0</span>
+</span></span><span style="display:flex;"><span><span style="color:#bd93f9">0</span>.<span style="color:#bd93f9">10</span> youngs<span style="color:#ff79c6">/</span>s, <span style="color:#bd93f9">0</span>.<span style="color:#bd93f9">00</span> non<span style="color:#ff79c6">-</span>youngs<span style="color:#ff79c6">/</span>s
+</span></span><span style="display:flex;"><span>Pages <span style="color:#ff79c6">read</span> <span style="color:#bd93f9">197</span>, created <span style="color:#bd93f9">5523</span>, written <span style="color:#bd93f9">5060</span>
+</span></span><span style="display:flex;"><span><span style="color:#bd93f9">0</span>.<span style="color:#bd93f9">00</span> <span style="color:#ff79c6">reads</span><span style="color:#ff79c6">/</span>s, <span style="color:#bd93f9">190</span>.<span style="color:#bd93f9">89</span> creates<span style="color:#ff79c6">/</span>s, <span style="color:#bd93f9">244</span>.<span style="color:#bd93f9">94</span> writes<span style="color:#ff79c6">/</span>s
+</span></span><span style="display:flex;"><span>Buffer pool hit rate <span style="color:#bd93f9">1000</span> <span style="color:#ff79c6">/</span> <span style="color:#bd93f9">1000</span>, young<span style="color:#ff79c6">-</span>making rate <span style="color:#bd93f9">0</span> <span style="color:#ff79c6">/</span> <span style="color:#bd93f9">1000</span> <span style="color:#ff79c6">not</span>
+</span></span><span style="display:flex;"><span><span style="color:#bd93f9">0</span> <span style="color:#ff79c6">/</span> <span style="color:#bd93f9">1000</span>
+</span></span><span style="display:flex;"><span>Pages <span style="color:#ff79c6">read</span> ahead <span style="color:#bd93f9">0</span>.<span style="color:#bd93f9">00</span><span style="color:#ff79c6">/</span>s, evicted <span style="color:#ff79c6">without</span> <span style="color:#ff79c6">access</span> <span style="color:#bd93f9">0</span>.<span style="color:#bd93f9">00</span><span style="color:#ff79c6">/</span>s, Random <span style="color:#ff79c6">read</span>
+</span></span><span style="display:flex;"><span>ahead <span style="color:#bd93f9">0</span>.<span style="color:#bd93f9">00</span><span style="color:#ff79c6">/</span>s
+</span></span><span style="display:flex;"><span>LRU len: <span style="color:#bd93f9">5720</span>, unzip_LRU len: <span style="color:#bd93f9">0</span>
+</span></span><span style="display:flex;"><span>I<span style="color:#ff79c6">/</span>O <span style="color:#ff79c6">sum</span>[<span style="color:#bd93f9">0</span>]:cur[<span style="color:#bd93f9">0</span>], unzip <span style="color:#ff79c6">sum</span>[<span style="color:#bd93f9">0</span>]:cur[<span style="color:#bd93f9">0</span>]
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>字段解释</p>
+<table>
+<thead>
+<tr>
+<th>Name</th>
+<th>Descption</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Total large memory allocated</td>
+<td>分配给InnoDB Buffer Pool的总内存(字节)</td>
+</tr>
+<tr>
+<td>Dictionary memory allocated</td>
+<td>分配给InnoDB数据字典的内存(字节)</td>
+</tr>
+<tr>
+<td>Buffer pool size</td>
+<td>buffer pool的page个数</td>
+</tr>
+<tr>
+<td>Free buffers</td>
+<td>Buffer Pool Free List page总数</td>
+</tr>
+<tr>
+<td>Database pages</td>
+<td>Buffer Pool LRU List page总数</td>
+</tr>
+<tr>
+<td>Old database pages</td>
+<td>IBP old LRU 总大小，单位pages（冷端）</td>
+</tr>
+<tr>
+<td>Modified db pages</td>
+<td>当前IBP中脏页的数量，单位pages</td>
+</tr>
+<tr>
+<td>Pending reads</td>
+<td>等待读入IBP的页数量，单位pages</td>
+</tr>
+<tr>
+<td>Pending writes: LRU, flush list, single page</td>
+<td>从LRU、flush等链表中刷磁盘的page数</td>
+</tr>
+<tr>
+<td>Pages made young，not young</td>
+<td>LRU中被made young的页面数（LRU列表中页移动到前端的次数）；not young，LRU中保持在old 子列表中的页面数（没被移动到前端，因innodb_old_blocks_time设置。）</td>
+</tr>
+<tr>
+<td>youngs/s，non-youngs/s</td>
+<td>每秒从old区到young的节点数量， non-young表示不能从old区移动的数量</td>
+</tr>
+<tr>
+<td>Pages read，created，written</td>
+<td>读取、创建、写入了多少page</td>
+</tr>
+<tr>
+<td>reads/s,creates/s,writes/s</td>
+<td>平均每秒读的页数，创建的页数，写的页数</td>
+</tr>
+<tr>
+<td>Buffer pool hit rate， young-making rate</td>
+<td>过去某段时间内评估1000次访问又多少被缓存到buffer pool，有多少页面移动到young区</td>
+</tr>
+<tr>
+<td>Pages read ahead，evicted without access，Random read</td>
+<td>每秒平均预读操作次数；每秒因未被访问而被逐出ibp的页数；每秒平均随机预读次数</td>
+</tr>
+<tr>
+<td>LRU len，unzip_LRU len</td>
+<td>BP中LRU列表包含页面的总数（Database pages），压缩页的unzip_LRU列表包含页面的总数</td>
+</tr>
+<tr>
+<td>I/O sum，cur, unzip sum:cur</td>
+<td>最近50秒读取磁盘page总数，现在正在读取的磁盘page数；最近50秒解压的page数，正在解压的pae数</td>
+</tr>
+</tbody>
+</table>
+<h2 id="doublewrite-buffer">Doublewrite Buffer</h2>
+<p>参考一张Mysql的InnoDB架构图<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E6%96%87%E4%BB%B6%E5%AD%98%E5%82%A8%E7%BB%93%E6%9E%84/innodb-architecture-8-0.png">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E6%96%87%E4%BB%B6%E5%AD%98%E5%82%A8%E7%BB%93%E6%9E%84/innodb-architecture-8-0.png" />
+        </a>
+    <br>
+开启双写</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-sql" data-lang="sql"><span style="display:flex;"><span><span style="color:#ff79c6">SHOW</span> VARIABLES <span style="color:#ff79c6">LIKE</span> <span style="color:#f1fa8c">&#39;innodb_doublewrite&#39;</span>;
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>8.0 将双写缓冲区单独拿了出来</p>
+<p>操作系统的默认Page大小是 4K</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-shell" data-lang="shell"><span style="display:flex;"><span>getconf PAGESIZE
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>MySQL的默认page是 16K</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-sql" data-lang="sql"><span style="display:flex;"><span><span style="color:#ff79c6">SHOW</span> VARIABLES <span style="color:#ff79c6">LIKE</span> <span style="color:#f1fa8c">&#39;innodb_page_size&#39;</span>;
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>数据库的page大小比 OS的要大，所以无法保证原子性<br>
+1个数据库page对应4个OSpage，如果数据库的page写一半宕机了，对于OS层来说只写了两个page<br>
+对于数据库来说这个page相当于不完整，后面都没法恢复<br>
+因为各种MySQL的各种类型page都是 16K的<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E7%9A%84%E7%BC%93%E5%AD%98/3.png">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E7%9A%84%E7%BC%93%E5%AD%98/3.png" />
+        </a>
+    </p>
+<p>Doublewrite Buffer工作流程<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E7%9A%84%E7%BC%93%E5%AD%98/4.png">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E7%9A%84%E7%BC%93%E5%AD%98/4.png" />
+        </a>
+        <br>
+执行过程：<br>
+1、页数据先memcopy到DWB的内存里<br>
+2、DWB的内存里的数据页，会先刷到DWB的磁盘上<br>
+3、DWB的内存里的数据页，再刷到数据磁盘存储.ibd文件上</p>
+<p>因为要写两次，第一次是内存写到磁盘 DWB磁盘上，这是顺序写<br>
+第二次是从内存写到 ibd 文件，这是随机写<br>
+按照官网的说法，虽然是写了两次，但并不是<strong>两倍的</strong> I/O开销，因为写入到 DWB磁盘上的是大量的顺序I/O效率很高</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">7
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-sql" data-lang="sql"><span style="display:flex;"><span><span style="color:#ff79c6">SHOW</span> <span style="color:#ff79c6">GLOBAL</span> STATUS <span style="color:#ff79c6">LIKE</span> <span style="color:#f1fa8c">&#39;%dblwr%&#39;</span>;
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4">-- Innodb_dblwr_pages_written
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">-- 记录写入到DWB中的页数量
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4">-- Innodb_dblwr_writes
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">-- 记录DWB写操作的次数
+</span></span></span></code></pre></td></tr></table>
+</div>
+</div><p>MySQL 8.x 相关的参数</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-sql" data-lang="sql"><span style="display:flex;"><span><span style="color:#ff79c6">SHOW</span> VARIABLES <span style="color:#ff79c6">LIKE</span> <span style="color:#f1fa8c">&#39;%double%&#39;</span>;
+</span></span></code></pre></td></tr></table>
+</div>
+</div><table>
+<thead>
+<tr>
+<th>name</th>
+<th>value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>innodb_doublewrite_batch_size</td>
+<td>批量写入的双写页数，默认为0，最大256</td>
+</tr>
+<tr>
+<td>innodb_doublewrite_dir</td>
+<td>双写文件的自定义目录，默认为数据目录，应放在最快存储介质上</td>
+</tr>
+<tr>
+<td>innodb_doublewrite_files</td>
+<td>双写文件的数量</td>
+</tr>
+</tbody>
+</table>
+<p>默认有两个双写文件</p>
+<ul>
+<li>刷新列表双写文件的默认大小是InnoDB页面大小 * 双写页面字节</li>
+<li>LRU列表双写文件用于从缓冲池LRU列表中刷新的页面。它还包含用于单页刷新的插槽。LRU列表双写文件的默认大小是InnoDB页面大小 *（双写页面 +（512 缓冲池实例数）</li>
+</ul>
+<p>Doublewrite文件名具有以下格式：<br>
+以下双写文件是为页面大小为16KB和单个缓冲池的MySQL实例创建的：</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-sql" data-lang="sql"><span style="display:flex;"><span><span style="color:#ff79c6">#</span>ib_丨page_size_file_丨number.dblwr
+</span></span></code></pre></td></tr></table>
+</div>
+</div><h2 id="log-buffer">Log Buffer</h2>
+<p>这里存储的是 redo log 的缓存<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E7%9A%84%E7%BC%93%E5%AD%98/5.png">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E7%9A%84%E7%BC%93%E5%AD%98/5.png" />
+        </a>
+       <br>
+redo log 默认是两个文件，按照环形的方式组织</p>
+<p>一些重要的参数</p>
+<table>
+<thead>
+<tr>
+<th>name</th>
+<th>value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>innodb_log_buffer_size</td>
+<td>用于写入磁盘上的日志文件的缓冲区的大小</td>
+</tr>
+<tr>
+<td>innodb_log_checksums</td>
+<td>启用或禁用重做日志页面的校验和</td>
+</tr>
+<tr>
+<td>innodb_log_file_size</td>
+<td>日志组每个Redo Log文件的大小</td>
+</tr>
+<tr>
+<td>innodb_log_files_in_group</td>
+<td>日志组文件的数量</td>
+</tr>
+</tbody>
+</table>
+<p>Redo Log三层结构   <br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E7%9A%84%E7%BC%93%E5%AD%98/6.png">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E7%9A%84%E7%BC%93%E5%AD%98/6.png" />
+        </a>
+    </p>
+<ul>
+<li>InnoDB一项很重要的内存结构（In-Memory Structure），即我们的Log Buffer（日志缓冲区），这一层，是MySQL应用程序用户态控制。</li>
+<li>操作系统文件系统的缓冲区（FS Page Cache），这一层，是操作系统OS内核态控制。</li>
+<li>落盘的物理日志文件</li>
+</ul>
+<p>提交事务时的三种方案
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E7%9A%84%E7%BC%93%E5%AD%98/7.png">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E7%9A%84%E7%BC%93%E5%AD%98/7.png" />
+        </a>
+    </p>
+<ul>
+<li>
+<p>策略一：最佳性能（innodb_flush_log_at_trx_commit=0）<br>
+处理过程：每隔一秒，才将Log Buffer中的数据批量write入FS Page Cache，同时MySQL主动fsync<br>
+缺点：这种策略，如果数据库奔溃，有一秒的数据丢失</p>
+</li>
+<li>
+<p>策略二：强一致（innodb_flush_log_at_trx_commit=1）<br>
+处理过程：每次事务提交，都将Log Buffer中的数据write入FS Page    Cache，同时MySQL主动fsync。这种策略，是InnoDB的默认配置，为的是保证事务ACID特性<br>
+缺点：这种策略，性能较其余两种策略较差</p>
+</li>
+<li>
+<p>策略三：折衷（innodb_flush_log_at_trx_commit=2）<br>
+处理过程：每次事务提交，都将Log Buffer中的数据write入FS Page Cache；每隔一秒，MySQL主动将FS Page Cache中的数据批量fsync<br>
+缺点：这种策略，如果操作系统奔溃，最多有一秒的数据丢失。（因为OS也会fsync，MySQL主动fsync的周期是一秒，所以最多丢一秒数据。磁盘IO次数不确定，因为操作系统的fsync频率并不是MySQL能控制的）</p>
+</li>
+</ul>
+<h2 id="adaptive-hash-index">Adaptive Hash Index</h2>
+<p>。。。</p>
+<h2 id="change-buffer">Change Buffer</h2>
+<p>。。。</p>
+<h2 id="innodb-参数汇总">InnoDB 参数汇总</h2>
+<table>
+<thead>
+<tr>
+<th>Variable_name</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>ignore_builtin_innodb</td>
+<td>OFF</td>
+</tr>
+<tr>
+<td>innodb_adaptive_flushing</td>
+<td>ON</td>
+</tr>
+<tr>
+<td>innodb_adaptive_flushing_lwm</td>
+<td>10</td>
+</tr>
+<tr>
+<td>innodb_adaptive_hash_index</td>
+<td>ON</td>
+</tr>
+<tr>
+<td>innodb_adaptive_hash_index_parts</td>
+<td>8</td>
+</tr>
+<tr>
+<td>innodb_adaptive_max_sleep_delay</td>
+<td>150000</td>
+</tr>
+<tr>
+<td>innodb_api_bk_commit_interval</td>
+<td>5</td>
+</tr>
+<tr>
+<td>innodb_api_disable_rowlock</td>
+<td>OFF</td>
+</tr>
+<tr>
+<td>innodb_api_enable_binlog</td>
+<td>OFF</td>
+</tr>
+<tr>
+<td>innodb_api_enable_mdl</td>
+<td>OFF</td>
+</tr>
+<tr>
+<td>innodb_api_trx_level</td>
+<td>0</td>
+</tr>
+<tr>
+<td>innodb_autoextend_increment</td>
+<td>64</td>
+</tr>
+<tr>
+<td>innodb_autoinc_lock_mode</td>
+<td>1</td>
+</tr>
+<tr>
+<td>innodb_buffer_pool_chunk_size</td>
+<td>134217728</td>
+</tr>
+<tr>
+<td>innodb_buffer_pool_dump_at_shutdown</td>
+<td>ON</td>
+</tr>
+<tr>
+<td>innodb_buffer_pool_dump_now</td>
+<td>OFF</td>
+</tr>
+<tr>
+<td>innodb_buffer_pool_dump_pct</td>
+<td>25</td>
+</tr>
+<tr>
+<td>innodb_buffer_pool_filename</td>
+<td>ib_buffer_pool</td>
+</tr>
+<tr>
+<td>innodb_buffer_pool_instances</td>
+<td>1</td>
+</tr>
+<tr>
+<td>innodb_buffer_pool_load_abort</td>
+<td>OFF</td>
+</tr>
+<tr>
+<td>innodb_buffer_pool_load_at_startup</td>
+<td>ON</td>
+</tr>
+<tr>
+<td>innodb_buffer_pool_load_now</td>
+<td>OFF</td>
+</tr>
+<tr>
+<td>innodb_buffer_pool_size</td>
+<td>134217728</td>
+</tr>
+<tr>
+<td>innodb_change_buffer_max_size</td>
+<td>25</td>
+</tr>
+<tr>
+<td>innodb_change_buffering</td>
+<td>all</td>
+</tr>
+<tr>
+<td>innodb_checksum_algorithm</td>
+<td>crc32</td>
+</tr>
+<tr>
+<td>innodb_checksums</td>
+<td>ON</td>
+</tr>
+<tr>
+<td>innodb_cmp_per_index_enabled</td>
+<td>OFF</td>
+</tr>
+<tr>
+<td>innodb_commit_concurrency</td>
+<td>0</td>
+</tr>
+<tr>
+<td>innodb_compression_failure_threshold_pct</td>
+<td>5</td>
+</tr>
+<tr>
+<td>innodb_compression_level</td>
+<td>6</td>
+</tr>
+<tr>
+<td>innodb_compression_pad_pct_max</td>
+<td>50</td>
+</tr>
+<tr>
+<td>innodb_concurrency_tickets</td>
+<td>5000</td>
+</tr>
+<tr>
+<td>innodb_data_file_path</td>
+<td>ibdata1:12M:autoextend</td>
+</tr>
+<tr>
+<td>innodb_data_home_dir</td>
+<td></td>
+</tr>
+<tr>
+<td>innodb_deadlock_detect</td>
+<td>ON</td>
+</tr>
+<tr>
+<td>innodb_default_row_format</td>
+<td>dynamic</td>
+</tr>
+<tr>
+<td>innodb_disable_sort_file_cache</td>
+<td>OFF</td>
+</tr>
+<tr>
+<td>innodb_doublewrite</td>
+<td>ON</td>
+</tr>
+<tr>
+<td>innodb_fast_shutdown</td>
+<td>1</td>
+</tr>
+<tr>
+<td>innodb_file_format</td>
+<td>Barracuda</td>
+</tr>
+<tr>
+<td>innodb_file_format_check</td>
+<td>ON</td>
+</tr>
+<tr>
+<td>innodb_file_format_max</td>
+<td>Barracuda</td>
+</tr>
+<tr>
+<td>innodb_file_per_table</td>
+<td>ON</td>
+</tr>
+<tr>
+<td>innodb_fill_factor</td>
+<td>100</td>
+</tr>
+<tr>
+<td>innodb_flush_log_at_timeout</td>
+<td>1</td>
+</tr>
+<tr>
+<td>innodb_flush_log_at_trx_commit</td>
+<td>1</td>
+</tr>
+<tr>
+<td>innodb_flush_method</td>
+<td></td>
+</tr>
+<tr>
+<td>innodb_flush_neighbors</td>
+<td>1</td>
+</tr>
+<tr>
+<td>innodb_flush_sync</td>
+<td>ON</td>
+</tr>
+<tr>
+<td>innodb_flushing_avg_loops</td>
+<td>30</td>
+</tr>
+<tr>
+<td>innodb_force_load_corrupted</td>
+<td>OFF</td>
+</tr>
+<tr>
+<td>innodb_force_recovery</td>
+<td>0</td>
+</tr>
+<tr>
+<td>innodb_ft_aux_table</td>
+<td></td>
+</tr>
+<tr>
+<td>innodb_ft_cache_size</td>
+<td>8000000</td>
+</tr>
+<tr>
+<td>innodb_ft_enable_diag_print</td>
+<td>OFF</td>
+</tr>
+<tr>
+<td>innodb_ft_enable_stopword</td>
+<td>ON</td>
+</tr>
+<tr>
+<td>innodb_ft_max_token_size</td>
+<td>84</td>
+</tr>
+<tr>
+<td>innodb_ft_min_token_size</td>
+<td>3</td>
+</tr>
+<tr>
+<td>innodb_ft_num_word_optimize</td>
+<td>2000</td>
+</tr>
+<tr>
+<td>innodb_ft_result_cache_limit</td>
+<td>2000000000</td>
+</tr>
+<tr>
+<td>innodb_ft_server_stopword_table</td>
+<td></td>
+</tr>
+<tr>
+<td>innodb_ft_sort_pll_degree</td>
+<td>2</td>
+</tr>
+<tr>
+<td>innodb_ft_total_cache_size</td>
+<td>640000000</td>
+</tr>
+<tr>
+<td>innodb_ft_user_stopword_table</td>
+<td></td>
+</tr>
+<tr>
+<td>innodb_io_capacity</td>
+<td>200</td>
+</tr>
+<tr>
+<td>innodb_io_capacity_max</td>
+<td>2000</td>
+</tr>
+<tr>
+<td>innodb_large_prefix</td>
+<td>ON</td>
+</tr>
+<tr>
+<td>innodb_lock_wait_timeout</td>
+<td>50</td>
+</tr>
+<tr>
+<td>innodb_locks_unsafe_for_binlog</td>
+<td>OFF</td>
+</tr>
+<tr>
+<td>innodb_log_buffer_size</td>
+<td>16777216</td>
+</tr>
+<tr>
+<td>innodb_log_checksums</td>
+<td>ON</td>
+</tr>
+<tr>
+<td>innodb_log_compressed_pages</td>
+<td>ON</td>
+</tr>
+<tr>
+<td>innodb_log_file_size</td>
+<td>50331648</td>
+</tr>
+<tr>
+<td>innodb_log_files_in_group</td>
+<td>2</td>
+</tr>
+<tr>
+<td>innodb_log_group_home_dir</td>
+<td>./</td>
+</tr>
+<tr>
+<td>innodb_log_write_ahead_size</td>
+<td>8192</td>
+</tr>
+<tr>
+<td>innodb_lru_scan_depth</td>
+<td>1024</td>
+</tr>
+<tr>
+<td>innodb_max_dirty_pages_pct</td>
+<td>75.000000</td>
+</tr>
+<tr>
+<td>innodb_max_dirty_pages_pct_lwm</td>
+<td>0.000000</td>
+</tr>
+<tr>
+<td>innodb_max_purge_lag</td>
+<td>0</td>
+</tr>
+<tr>
+<td>innodb_max_purge_lag_delay</td>
+<td>0</td>
+</tr>
+<tr>
+<td>innodb_max_undo_log_size</td>
+<td>1073741824</td>
+</tr>
+<tr>
+<td>innodb_monitor_disable</td>
+<td></td>
+</tr>
+<tr>
+<td>innodb_monitor_enable</td>
+<td></td>
+</tr>
+<tr>
+<td>innodb_monitor_reset</td>
+<td></td>
+</tr>
+<tr>
+<td>innodb_monitor_reset_all</td>
+<td></td>
+</tr>
+<tr>
+<td>innodb_numa_interleave</td>
+<td>OFF</td>
+</tr>
+<tr>
+<td>innodb_old_blocks_pct</td>
+<td>37</td>
+</tr>
+<tr>
+<td>innodb_old_blocks_time</td>
+<td>1000</td>
+</tr>
+<tr>
+<td>innodb_online_alter_log_max_size</td>
+<td>134217728</td>
+</tr>
+<tr>
+<td>innodb_open_files</td>
+<td>2000</td>
+</tr>
+<tr>
+<td>innodb_optimize_fulltext_only</td>
+<td>OFF</td>
+</tr>
+<tr>
+<td>innodb_page_cleaners</td>
+<td>1</td>
+</tr>
+<tr>
+<td>innodb_page_size</td>
+<td>16384</td>
+</tr>
+<tr>
+<td>innodb_print_all_deadlocks</td>
+<td>OFF</td>
+</tr>
+<tr>
+<td>innodb_purge_batch_size</td>
+<td>300</td>
+</tr>
+<tr>
+<td>innodb_purge_rseg_truncate_frequency</td>
+<td>128</td>
+</tr>
+<tr>
+<td>innodb_purge_threads</td>
+<td>4</td>
+</tr>
+<tr>
+<td>innodb_random_read_ahead</td>
+<td>OFF</td>
+</tr>
+<tr>
+<td>innodb_read_ahead_threshold</td>
+<td>56</td>
+</tr>
+<tr>
+<td>innodb_read_io_threads</td>
+<td>4</td>
+</tr>
+<tr>
+<td>innodb_read_only</td>
+<td>OFF</td>
+</tr>
+<tr>
+<td>innodb_replication_delay</td>
+<td>0</td>
+</tr>
+<tr>
+<td>innodb_rollback_on_timeout</td>
+<td>OFF</td>
+</tr>
+<tr>
+<td>innodb_rollback_segments</td>
+<td>128</td>
+</tr>
+<tr>
+<td>innodb_sort_buffer_size</td>
+<td>1048576</td>
+</tr>
+<tr>
+<td>innodb_spin_wait_delay</td>
+<td>6</td>
+</tr>
+<tr>
+<td>innodb_stats_auto_recalc</td>
+<td>ON</td>
+</tr>
+<tr>
+<td>innodb_stats_include_delete_marked</td>
+<td>OFF</td>
+</tr>
+<tr>
+<td>innodb_stats_method</td>
+<td>nulls_equal</td>
+</tr>
+<tr>
+<td>innodb_stats_on_metadata</td>
+<td>OFF</td>
+</tr>
+<tr>
+<td>innodb_stats_persistent</td>
+<td>ON</td>
+</tr>
+<tr>
+<td>innodb_stats_persistent_sample_pages</td>
+<td>20</td>
+</tr>
+<tr>
+<td>innodb_stats_sample_pages</td>
+<td>8</td>
+</tr>
+<tr>
+<td>innodb_stats_transient_sample_pages</td>
+<td>8</td>
+</tr>
+<tr>
+<td>innodb_status_output</td>
+<td>OFF</td>
+</tr>
+<tr>
+<td>innodb_status_output_locks</td>
+<td>OFF</td>
+</tr>
+<tr>
+<td>innodb_strict_mode</td>
+<td>ON</td>
+</tr>
+<tr>
+<td>innodb_support_xa</td>
+<td>ON</td>
+</tr>
+<tr>
+<td>innodb_sync_array_size</td>
+<td>1</td>
+</tr>
+<tr>
+<td>innodb_sync_spin_loops</td>
+<td>30</td>
+</tr>
+<tr>
+<td>innodb_table_locks</td>
+<td>ON</td>
+</tr>
+<tr>
+<td>innodb_temp_data_file_path</td>
+<td>ibtmp1:12M:autoextend</td>
+</tr>
+<tr>
+<td>innodb_thread_concurrency</td>
+<td>0</td>
+</tr>
+<tr>
+<td>innodb_thread_sleep_delay</td>
+<td>10000</td>
+</tr>
+<tr>
+<td>innodb_tmpdir</td>
+<td></td>
+</tr>
+<tr>
+<td>innodb_undo_directory</td>
+<td>./</td>
+</tr>
+<tr>
+<td>innodb_undo_log_truncate</td>
+<td>OFF</td>
+</tr>
+<tr>
+<td>innodb_undo_logs</td>
+<td>128</td>
+</tr>
+<tr>
+<td>innodb_undo_tablespaces</td>
+<td>0</td>
+</tr>
+<tr>
+<td>innodb_use_native_aio</td>
+<td>ON</td>
+</tr>
+<tr>
+<td>innodb_version</td>
+<td>5.7.40</td>
+</tr>
+<tr>
+<td>innodb_write_io_threads</td>
+<td>4</td>
+</tr>
+</tbody>
+</table>
+<h2 id="参考">参考</h2>
+<ul>
+<li><a href="https://dev.mysql.com/doc/refman/8.0/en/innodb-standard-monitor.html">InnoDB Standard Monitor and Lock Monitor Output</a></li>
+<li><a href="https://dev.mysql.com/doc/refman/8.0/en/innodb-buffer-pool.html">Buffer Pool</a></li>
+<li><a href="https://cloud.tencent.com/developer/article/2062690">谨慎设置innodb_io_capacity_max</a></li>
+<li><a href="https://zhuanlan.zhihu.com/p/65811829">InnoDB Buffer Pool详解</a></li>
+<li><a href="https://www.cnblogs.com/mengxinJ/p/14071262.html">InnoDB 中的缓冲池(Buffer Pool) </a></li>
+<li><a href="https://zhuanlan.zhihu.com/p/527487308">InnoDB的杀手锏BufferPool</a></li>
+<li><a href="https://www.cnblogs.com/konggg/p/14695311.html">show engine innodb status 输出结果解读</a></li>
+<li><a href="https://dev.mysql.com/doc/refman/8.0/en/innodb-doublewrite-buffer.html">Doublewrite Buffer</a></li>
+<li><a href="https://www.modb.pro/db/114783">MySQL各种“Buffer”之Doublewrite Buffer</a></li>
+<li><a href="https://zhuanlan.zhihu.com/p/444298770">详解MySQL InnoDB之UNDO Log</a></li>
+</ul>
+
+			<script type="text/javascript"
+        async
+        src="https://cdn.bootcss.com/mathjax/2.7.3/MathJax.js?config=TeX-AMS-MML_HTMLorMML">
+MathJax.Hub.Config({
+  tex2jax: {
+    inlineMath: [['$','$'], ['\\(','\\)']],
+    displayMath: [['$$','$$'], ['\[\[','\]\]']],
+    processEscapes: true,
+    processEnvironments: true,
+    skipTags: ['script', 'noscript', 'style', 'textarea', 'pre'],
+    TeX: { equationNumbers: { autoNumber: "AMS" },
+         extensions: ["AMSmath.js", "AMSsymbols.js"] }
+  }
+});
+
+MathJax.Hub.Queue(function() {
+    
+    
+    
+    var all = MathJax.Hub.getAllJax(), i;
+    for(i = 0; i < all.length; i += 1) {
+        all[i].SourceElement().parentNode.className += ' has-jax';
+    }
+});
+</script>
+
+<style>
+code.has-jax {
+    font: inherit;
+    font-size: 100%;
+    background: inherit;
+    border: inherit;
+    color: #515151;
+}
+</style>
+        </div>
+
+        
+
+
+        
+
+<div class="post-archive">
+    <h2>相关文章</h2>
+    <ul class="listing">
+        
+        <li><a href="/post/2022/12/mysql%E6%9F%A5%E8%AF%A2%E5%88%86%E6%9E%90/">MySQL查询分析</a></li>
+        
+        <li><a href="/post/2022/12/%E7%94%A8%E5%B7%A5%E5%85%B7%E5%88%86%E6%9E%90mysql%E5%AD%98%E5%82%A8%E6%96%87%E4%BB%B6/">用工具分析MySQL存储文件</a></li>
+        
+        <li><a href="/post/2022/12/mysql%E6%96%87%E4%BB%B6%E5%AD%98%E5%82%A8%E7%BB%93%E6%9E%84/">MySQL文件存储结构</a></li>
+        
+    </ul>
+</div>
+
+
+        <div class="post-meta meta-tags">
+            
+            <ul class="clearfix">
+                
+                <li><a href='/tags/mysql'>MySQL</a></li>
+                
+            </ul>
+            
+        </div>
+    </article>
+    
+    
+
+    
+    
+</div>
+
+
+                </div>
+
+                <div id="secondary">
+    <section class="widget">
+        <form id="search" action='https://code0xff.cn/search/' method="get" accept-charset="utf-8" target="_blank" _lpchecked="1">
+      
+      <input type="text" name="q" maxlength="20" placeholder="Search">
+      <input type="hidden" name="sitesearch" value="https://code0xff.cn/">
+      <button type="submit" class="submit icon-search"></button>
+</form>
+    </section>
+    
+    <section class="widget">
+        <h3 class="widget-title">最近文章</h3>
+<ul class="widget-list">
+    
+    <li>
+        <a href="https://code0xff.cn/post/2022/12/mysql%E7%9A%84%E6%81%A2%E5%A4%8D/" title="MySQL的恢复">MySQL的恢复</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.cn/post/2022/12/mysql%E7%9A%84%E7%BC%93%E5%AD%98/" title="MySQL的缓存">MySQL的缓存</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.cn/post/2022/12/mysql%E6%9F%A5%E8%AF%A2%E5%88%86%E6%9E%90/" title="MySQL查询分析">MySQL查询分析</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.cn/post/2022/12/%E7%94%A8%E5%B7%A5%E5%85%B7%E5%88%86%E6%9E%90mysql%E5%AD%98%E5%82%A8%E6%96%87%E4%BB%B6/" title="用工具分析MySQL存储文件">用工具分析MySQL存储文件</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.cn/post/2022/12/mysql%E6%96%87%E4%BB%B6%E5%AD%98%E5%82%A8%E7%BB%93%E6%9E%84/" title="MySQL文件存储结构">MySQL文件存储结构</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.cn/post/2022/11/%E8%B0%83%E8%AF%95mysql/" title="调试MySQL">调试MySQL</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.cn/post/2022/11/multi-tenant-cloud-data-services/" title="关于云环境中多租户问题的论文">关于云环境中多租户问题的论文</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.cn/post/2022/11/millwheel/" title="MillWheel">MillWheel</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.cn/post/2022/11/how-to-read-a-paper/" title="How to Read a Paper">How to Read a Paper</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.cn/post/2022/11/cmu%E6%95%B0%E6%8D%AE%E5%BA%93%E6%80%BB%E7%BB%93/" title="CMU数据库总结">CMU数据库总结</a>
+    </li>
+    
+</ul>
+    </section>
+
+    
+
+    <section class="widget">
+        <h3 class="widget-title"><a href='/categories/'>分类</a></h3>
+<ul class="widget-list">
+    
+    <li><a href="https://code0xff.cn/categories/%E5%88%86%E5%B8%83%E5%BC%8F/">分布式 (6)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E5%8E%9F%E7%90%86%E5%88%86%E6%9E%90/">原理分析 (5)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E5%95%86%E4%B8%9A/">商业 (3)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E5%A4%A7%E6%95%B0%E6%8D%AE/">大数据 (21)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E6%95%B0%E6%8D%AE/">数据 (1)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E6%95%B0%E6%8D%AE%E5%BA%93/">数据库 (8)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E6%97%85%E8%A1%8C/">旅行 (10)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E6%9E%B6%E6%9E%84/">架构 (1)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E7%AE%97%E6%B3%95/">算法 (8)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E7%B3%BB%E7%BB%9F/">系统 (5)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E7%BC%96%E7%A8%8B%E8%AF%AD%E8%A8%80/">编程语言 (2)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E8%AF%BB%E4%B9%A6%E7%AC%94%E8%AE%B0/">读书笔记 (9)</a></li>
+    
+    <li><a href="https://code0xff.cn/categories/%E9%9A%8F%E4%BE%BF%E5%86%99%E5%86%99/">随便写写 (4)</a></li>
+    
+</ul>
+    </section>
+
+    <section class="widget">
+        <h3 class="widget-title">归档</a></h3>
+<ul class="widget-list">
+    
+    <li><a href="https://code0xff.cn/years/2021%E5%B9%B4/">2021年 (30)</a></li>
+    
+    <li><a href="https://code0xff.cn/years/2022%E5%B9%B4/">2022年 (53)</a></li>
+    
+</ul>
+    </section>
+
+    <section class="widget">
+        <h3 class="widget-title"><a href='/tags/'>标签</a></h3>
+<div class="tagcloud">
+    
+    <a href="https://code0xff.cn/tags/b%E6%A0%91/">B树 </a>
+    
+    <a href="https://code0xff.cn/tags/flink/">flink </a>
+    
+    <a href="https://code0xff.cn/tags/hive/">Hive </a>
+    
+    <a href="https://code0xff.cn/tags/k8s/">k8s </a>
+    
+    <a href="https://code0xff.cn/tags/kudu/">kudu </a>
+    
+    <a href="https://code0xff.cn/tags/manacher/">Manacher </a>
+    
+    <a href="https://code0xff.cn/tags/mapreduce/">MapReduce </a>
+    
+    <a href="https://code0xff.cn/tags/mysql/">MySQL </a>
+    
+    <a href="https://code0xff.cn/tags/paxos/">paxos </a>
+    
+    <a href="https://code0xff.cn/tags/raft/">raft </a>
+    
+    <a href="https://code0xff.cn/tags/scala/">scala </a>
+    
+    <a href="https://code0xff.cn/tags/snowflake/">snowflake </a>
+    
+    <a href="https://code0xff.cn/tags/spark/">spark </a>
+    
+    <a href="https://code0xff.cn/tags/unix/">unix </a>
+    
+    <a href="https://code0xff.cn/tags/%E4%BA%8C%E5%88%86%E6%9F%A5%E6%89%BE/">二分查找 </a>
+    
+    <a href="https://code0xff.cn/tags/%E4%BA%8C%E5%8F%89%E6%A0%91%E9%81%8D%E5%8E%86/">二叉树遍历 </a>
+    
+    <a href="https://code0xff.cn/tags/%E5%88%86%E5%B8%83%E5%BC%8F/">分布式 </a>
+    
+    <a href="https://code0xff.cn/tags/%E5%8A%A8%E6%80%81%E6%B3%A8%E5%85%A5/">动态注入 </a>
+    
+    <a href="https://code0xff.cn/tags/%E5%8E%86%E5%8F%B2/">历史 </a>
+    
+    <a href="https://code0xff.cn/tags/%E5%9B%9E%E6%BA%AF/">回溯 </a>
+    
+    <a href="https://code0xff.cn/tags/%E5%9B%BD%E5%86%85%E6%97%85%E8%A1%8C/">国内旅行 </a>
+    
+    <a href="https://code0xff.cn/tags/%E5%9B%BD%E5%A4%96%E6%97%85%E8%A1%8C/">国外旅行 </a>
+    
+    <a href="https://code0xff.cn/tags/%E5%A4%A7%E6%95%B0%E6%8D%AE/">大数据 </a>
+    
+    <a href="https://code0xff.cn/tags/%E5%AD%98%E5%82%A8/">存储 </a>
+    
+    <a href="https://code0xff.cn/tags/%E5%B7%A5%E4%BD%9C%E8%AE%B0%E5%BD%95/">工作记录 </a>
+    
+    <a href="https://code0xff.cn/tags/%E5%BE%AE%E6%9C%8D%E5%8A%A1/">微服务 </a>
+    
+    <a href="https://code0xff.cn/tags/%E6%95%B0%E6%8D%AE%E5%BA%93/">数据库 </a>
+    
+    <a href="https://code0xff.cn/tags/%E6%B1%87%E7%BC%96/">汇编 </a>
+    
+    <a href="https://code0xff.cn/tags/%E6%B9%96%E4%BB%93%E4%B8%80%E4%BD%93/">湖仓一体 </a>
+    
+    <a href="https://code0xff.cn/tags/%E7%94%9F%E6%B4%BB/">生活 </a>
+    
+    <a href="https://code0xff.cn/tags/%E7%94%B5%E5%BD%B1/">电影 </a>
+    
+    <a href="https://code0xff.cn/tags/%E7%AE%97%E6%B3%95/">算法 </a>
+    
+    <a href="https://code0xff.cn/tags/%E7%BB%8F%E6%B5%8E/">经济 </a>
+    
+    <a href="https://code0xff.cn/tags/%E7%BC%93%E5%AD%98/">缓存 </a>
+    
+    <a href="https://code0xff.cn/tags/%E7%BC%96%E8%AF%91%E5%8E%9F%E7%90%86/">编译原理 </a>
+    
+    <a href="https://code0xff.cn/tags/%E7%BD%91%E7%BB%9C/">网络 </a>
+    
+    <a href="https://code0xff.cn/tags/%E8%AE%A1%E7%AE%97%E6%A1%86%E6%9E%B6/">计算框架 </a>
+    
+    <a href="https://code0xff.cn/tags/%E8%AE%BA%E6%96%87/">论文 </a>
+    
+    <a href="https://code0xff.cn/tags/%E8%AF%BB%E4%B9%A6%E7%AC%94%E8%AE%B0/">读书笔记 </a>
+    
+</div>
+    </section>
+
+    
+
+    <section class="widget">
+        <h3 class="widget-title">RSS</h3>
+        <ul class="widget-list">
+            <li><a href="https://code0xff.cn/index.xml">文章 RSS</a></li>
+        </ul>
+    </section>
+</div>
+            </div>
+        </div>
+    </div>
+    <footer id="footer">
+    <div>
+        &copy; 2022 <a href="https://code0xff.cn/">记录每个瞬间 By 老王</a>
+        
+    </div>
+    <br />
+    <div>
+        <div class="github-badge">
+            <a href="https://gohugo.io/" target="_black" rel="nofollow"><span class="badge-subject">Powered by</span><span class="badge-value bg-blue">Hugo</span></a>
+        </div>
+        <div class="github-badge">
+            <a href="https://github.com/flysnow-org/maupassant-hugo" target="_black"><span class="badge-subject">Theme</span><span class="badge-value bg-yellowgreen">Maupassant</span></a>
+        </div>
+    </div>
+    <div>
+        网站备案编号：<a href="https://beian.miit.gov.cn">京ICP备19014975号-1</a>
+    </div>
+</footer>
+
+
+    
+    <script type="text/javascript">
+        window.MathJax = {
+            tex2jax: {
+                inlineMath: [['$', '$']],
+                processEscapes: true
+                }
+            };
+    </script>
+    <script src='https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.5/MathJax.js?config=TeX-MML-AM_CHTML' async></script><script src="https://cdn.bootcdn.net/ajax/libs/fancybox/3.5.7/jquery.fancybox.min.js"></script>
+
+<a id="rocket" href="#top"></a>
+<script type="text/javascript" src='/js/totop.js?v=0.0.0' async=""></script>
+
+<script type="application/javascript">
+var doNotTrack = false;
+if (!doNotTrack) {
+	window.ga=window.ga||function(){(ga.q=ga.q||[]).push(arguments)};ga.l=+new Date;
+	ga('create', 'GA ID', 'auto');
+	
+	ga('send', 'pageview');
+}
+</script>
+<script async src='https://www.google-analytics.com/analytics.js'></script>
+
+
+
+    <script type="text/javascript" src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js" async></script>
+
+
+
+
+</body>
+
+</html>
