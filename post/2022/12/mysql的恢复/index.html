@@ -92,6 +92,7 @@
             <li><a href="#redo-log格式">redo log格式</a></li>
             <li><a href="#mini-transaction">Mini-Transaction</a></li>
             <li><a href="#redo-log写入过程">redo log写入过程</a></li>
+            <li><a href="#写入-page-cache">写入 page cache</a></li>
             <li><a href="#管理redo-log的log_sys">管理redo log的log_sys</a></li>
             <li><a href="#redo-log文件格式">redo log文件格式</a></li>
             <li><a href="#刷新到磁盘">刷新到磁盘</a></li>
@@ -104,11 +105,13 @@
             <li><a href="#undo-log-格式">undo log 格式</a></li>
             <li><a href="#undo-log的组织">undo log的组织</a></li>
             <li><a href="#回滚段">回滚段</a></li>
+            <li><a href="#rollback过程">rollback过程</a></li>
           </ul>
         </li>
         <li><a href="#源码中的类型定义">源码中的类型定义</a>
           <ul>
             <li><a href="#redo-log所有类型">redo log所有类型</a></li>
+            <li><a href="#undo-log的所有类型">undo log的所有类型</a></li>
           </ul>
         </li>
         <li><a href="#参考">参考</a></li>
@@ -148,6 +151,12 @@
     </li>
 </ul>
 <h3 id="redo-log格式">redo log格式</h3>
+<p>redo log大致可以分为三类</p>
+<ul>
+<li>作用于Page的REDO，这种占大多数，如：Index Page REDO，Undo Page REDO，Rtree PageREDO</li>
+<li>作用于Space的REDO，针对space的操作，如：MLOG_FILE_CREATE，MLOG_FILE_DELETE，MLOG_FILE_RENAME</li>
+<li>提供额外信息的Logic REDO，如MLOG_MULTI_REC_END</li>
+</ul>
 <p>通用的redo log格式如下：<br>
 
         <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E7%9A%84%E6%81%A2%E5%A4%8D/1.jpg">
@@ -183,14 +192,44 @@
     </li>
 </ul>
 <p>一些复杂的 redo log格式：</p>
-<p>| type               | description |
-|MLOG_REC_INSERT|表示插以条使非紧凑格式的记录时的redo志类型|
-| MLOG_COMP_REC_INSERT | 插入紧凑格式的记录|
-|MLOG_COMP_PAGE_CREATE| 创建紧凑格式记录 |
-| MLOG_COMP_REC_DELETE | 删除一条记录 |
-| MLOG_COMP_LIST_START_DELETE | 从这里开始删除记录|
-| MLOG_COMP_LIST_END_DELETE | 跟上面配套使用，表示结束删除|
-| MLOG_ZIP_PAGE_COMPRESS | 一条压缩记录 |</p>
+<table>
+<thead>
+<tr>
+<th>type</th>
+<th>description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>MLOG_REC_INSERT</td>
+<td>表示插以条使非紧凑格式的记录时的redo志类型</td>
+</tr>
+<tr>
+<td>MLOG_COMP_REC_INSERT</td>
+<td>插入紧凑格式的记录</td>
+</tr>
+<tr>
+<td>MLOG_COMP_PAGE_CREATE</td>
+<td>创建紧凑格式记录</td>
+</tr>
+<tr>
+<td>MLOG_COMP_REC_DELETE</td>
+<td>删除一条记录</td>
+</tr>
+<tr>
+<td>MLOG_COMP_LIST_START_DELETE</td>
+<td>从这里开始删除记录</td>
+</tr>
+<tr>
+<td>MLOG_COMP_LIST_END_DELETE</td>
+<td>跟上面配套使用，表示结束删除</td>
+</tr>
+<tr>
+<td>MLOG_ZIP_PAGE_COMPRESS</td>
+<td>一条压缩记录</td>
+</tr>
+</tbody>
+</table>
 <p>下面是 一条 MLOG_COMP_REC_INSERT 类型的redo log：<br>
 
         <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E7%9A%84%E6%81%A2%E5%A4%8D/4.jpg">
@@ -202,6 +241,18 @@ n_uniques，主键是一个字段，联合主键多个，二级索引是包含�
 物理上，它标注了表空间iD，page号，这种是属于物理级别的<br>
 但它记录了并不纯粹是物理信息，相当于是用这些信息，组成了一个逻辑的插入语句<br>
 等恢复的时候，通过这些信息，调用对应的恢复函数，变成一次insert插入，就可以真正还原了</p>
+<p>MLOG_REC_UPDATE_IN_PLACE 内容格式<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E7%9A%84%E6%81%A2%E5%A4%8D/x_1.png">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E7%9A%84%E6%81%A2%E5%A4%8D/x_1.png" />
+        </a>
+    </p>
+<p>MLOG_FILE_CREATE 内容格式
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E7%9A%84%E6%81%A2%E5%A4%8D/x_2.png">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E7%9A%84%E6%81%A2%E5%A4%8D/x_2.png" />
+        </a>
+    </p>
 <h3 id="mini-transaction">Mini-Transaction</h3>
 <p>插入一条数据时，B+树可能会分裂，此时可能需要修改好几个page，也就会记录更多的redo log<br>
 这些redo log应该是以事务的方式出现，他们是不可分割的<br>
@@ -271,6 +322,48 @@ n_uniques，主键是一个字段，联合主键多个，二级索引是包含�
             <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E7%9A%84%E6%81%A2%E5%A4%8D/11.jpg" />
         </a>
     </p>
+<p>从8.0 开始，设计了一套无锁的写log机制，最大限度的保证了并发性<br>
+首先会根据自身的 redo log长度，计算出对应在 log buffer中的占用空间，这部分空间就是独占的，不会有并发</p>
+<h3 id="写入-page-cache">写入 page cache</h3>
+<p>InnoDB中有单独的log_writer来做这件事情<br>
+InnoDB在这里引入一个叫做link_buf的数据结构<br>
+link_buf是一个循环使用的数组，对每个lsn取模可以得到其在link_buf上的一个槽位，在这个槽位中记录REDO长度。另外一个线程从开始遍历这个link_buf，通过槽位中的长度可以找到这条REDO的结尾位置，一直遍历到下一位置为0的位置，可以认为之后的REDO有空洞，而之前已经连续，这个位置叫做link_buf的tail<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E7%9A%84%E6%81%A2%E5%A4%8D/x_4.png">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E7%9A%84%E6%81%A2%E5%A4%8D/x_4.png" />
+        </a>
+    </p>
+<p>log_writer 和众多mtr利用这个link_buf数据结构完成写入过程：<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E7%9A%84%E6%81%A2%E5%A4%8D/x_5.png">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E7%9A%84%E6%81%A2%E5%A4%8D/x_5.png" />
+        </a>
+    <br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E7%9A%84%E6%81%A2%E5%A4%8D/x_6.png">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E7%9A%84%E6%81%A2%E5%A4%8D/x_6.png" />
+        </a>
+    <br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E7%9A%84%E6%81%A2%E5%A4%8D/x_7.png">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E7%9A%84%E6%81%A2%E5%A4%8D/x_7.png" />
+        </a>
+    <br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E7%9A%84%E6%81%A2%E5%A4%8D/x_8.png">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E7%9A%84%E6%81%A2%E5%A4%8D/x_8.png" />
+        </a>
+    <br>
+三个变量</p>
+<ul>
+<li>write_lsn是当前log_writer已经写入到Page Cache中日志末尾</li>
+<li>current_lsn是当前已经分配给mtr的的最大lsn位置</li>
+<li>buf_ready_for_write_lsn是当前log_writer找到的Log Buffer中已经连续的日志结尾</li>
+</ul>
+<p>从write_lsn到buf_ready_for_write_lsn是下一次log_writer可以连续调用pwrite写入Page Cache的范围<br>
+从buf_ready_for_write_lsn到current_lsn是当前mtr正在并发写Log Buffer的范围</p>
+<p>一开始有空洞，就是不连续的红色部分，等写完之后红色部分连续了，将buf_ready_for_write_lsn向前滑动，红色部分清零，就可以重复使用了<br>
+紧接log_writer将连续的内容刷盘并提升write_lsn</p>
 <h3 id="管理redo-log的log_sys">管理redo log的log_sys</h3>
 <p>InnoDB 使用 log_sys 这个对象来管理 Redo Log Buffer，其结构体为 log_t<br>
 <code>log_t</code>路径为：   /innobase/include/log0log.h<br>
@@ -338,6 +431,13 @@ redo log总大小就是： innodb_log_file_size * innodb_log_files_in_group<br>
 <li>暂时没有</li>
 <li>checkpoint2，跟checkpoint1格式一样</li>
 </ul>
+<p>redo log的三层结构<br>
+最上面的混合逻辑+物理结构，然后写入log buffer，再刷新到磁盘<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E7%9A%84%E6%81%A2%E5%A4%8D/x-3.png">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E7%9A%84%E6%81%A2%E5%A4%8D/x-3.png" />
+        </a>
+    </p>
 <h3 id="刷新到磁盘">刷新到磁盘</h3>
 <p><code>Log Sequeue Number</code>是一个全局递增的值，在一条redo log都没写入时，LSN的值为<code>8704</code><br>
 实际统计LSN时，会把log block header、log block trialer也算上<br>
@@ -383,6 +483,23 @@ redo log总大小就是： innodb_log_file_size * innodb_log_files_in_group<br>
 <p>flush链表中的脏⻚按照修改发⽣的时间顺序进行排序<br>
 也就是按照<code>oldest_modification</code>代表的LSN值进⾏排序<br>
 被多次更新的页面不会重复插入到flush链表中，但是会更新<code>newest_modification</code>属性的值</p>
+<p>为了避免大量的唤醒工作影响log_writer或log_flusher线程，InnoDB中引入了两个专门负责唤醒用户的线程：<br>
+log_wirte_notifier和log_flush_notifier<br>
+当超过一个条件变量需要被唤醒时，log_writer和log_flusher会通知这两个线程完成唤醒工作<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E7%9A%84%E6%81%A2%E5%A4%8D/x_9.png">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E7%9A%84%E6%81%A2%E5%A4%8D/x_9.png" />
+        </a>
+    </p>
+<p>多个线程通过一些内部数据结构的辅助，完成了高效的从REDO产生，到REDO写盘，再到唤醒用户线程的流程，下面是整个这个过程的时序图<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E7%9A%84%E6%81%A2%E5%A4%8D/x_10.png">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E7%9A%84%E6%81%A2%E5%A4%8D/x_10.png" />
+        </a>
+     
+这里的 log_writer完成主要写入工作，调用<code>pwrite</code>系统调用完成原子写入<br>
+后面再交给log_flusher完成真正的 fsync()系统调用<br>
+这里根据<code>innodb_flush_log_at_trx_commit</code>的取值不同，有不同的写入和通知方式</p>
 <h3 id="checkpoint">checkpoint</h3>
 <p>为防止redo log文件追尾，需要定期做 checkpoint<br>
 对于已经刷新到磁盘上的数据，其 redo log就可以被覆盖了<br>
@@ -495,6 +612,7 @@ redo log文件组有两个checkpoint头，1 和 2，取最新的即可，这样�
 </div><p>所以肯定是在 1~0x40000000之间，后者就等于 1G<br>
 所以能产生不重复的LOG_BLOCK_HDR_NO最多只有 1GB个，一个block是512字节，redo log组总文件最大就是 512G</p>
 <h2 id="undo-log">undo log</h2>
+<p>undo log本身也会比 redo log记录下来</p>
 <h3 id="undo-log-格式">undo log 格式</h3>
 <p>一般来说，每次对一条记录的改动都会对应一条 undo log，有时候会会对应两条<br>
 undo log专门存放在 <code>FIL_PAGE_UNDO_LOG</code>的页面中，可以放在系统表空间中，也可以放在独立表空间中</p>
@@ -535,6 +653,12 @@ undo log专门存放在 <code>FIL_PAGE_UNDO_LOG</code>的页面中，可以放�
 
         <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E7%9A%84%E6%81%A2%E5%A4%8D/22.jpg">
             <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E7%9A%84%E6%81%A2%E5%A4%8D/22.jpg" />
+        </a>
+    </p>
+<p>page的开头是 next record offset，结尾是 prev record offset
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E7%9A%84%E6%81%A2%E5%A4%8D/x_11.png">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E7%9A%84%E6%81%A2%E5%A4%8D/x_11.png" />
         </a>
     </p>
 <p>插入2条记录后的 undo log格式如下：<br>
@@ -611,6 +735,12 @@ TRX_UNDO_UPD_EXIST_REC 格式如下：<br>
             <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E7%9A%84%E6%81%A2%E5%A4%8D/29.jpg" />
         </a>
     </p>
+<p>MVCC方式的数据组织，根据事务id，去undo page中对比，如果可见则返回，否则继续遍历链表   <br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E7%9A%84%E6%81%A2%E5%A4%8D/x_12.png">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E7%9A%84%E6%81%A2%E5%A4%8D/x_12.png" />
+        </a>
+    </p>
 <h3 id="undo-log的组织">undo log的组织</h3>
 <p>undo log会按照 双链表的方式组织在一起，链表的第一个节点比较特殊，有有一些特殊的header，其他节点格式都一样<br>
 一下就是 FIL_PAGE_UNDO_LOG 页面的格式：<br>
@@ -672,6 +802,12 @@ TRX_UNDO_UPD_EXIST_REC 格式如下：<br>
             <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E7%9A%84%E6%81%A2%E5%A4%8D/32.jpg" />
         </a>
     </p>
+<p>undo page的内部组成<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E7%9A%84%E6%81%A2%E5%A4%8D/x_13.png">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E7%9A%84%E6%81%A2%E5%A4%8D/x_13.png" />
+        </a>
+    </p>
 <h3 id="回滚段">回滚段</h3>
 <p>重用undo log</p>
 <ul>
@@ -713,6 +849,106 @@ TRX_UNDO_UPD_EXIST_REC 格式如下：<br>
 <li>space ID</li>
 <li>page Number</li>
 </ul>
+<p>系统的第<code>5</code>号页面，Rollback Segment Header，undo slot，undo log链表之间的关系<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E7%9A%84%E6%81%A2%E5%A4%8D/34.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E7%9A%84%E6%81%A2%E5%A4%8D/34.jpg" />
+        </a>
+    </p>
+<p>独立表空间下，默认第3个page 固定作为这128个Rollback Segment的目录，也就是Rollback Segment Arrary Header <br>
+其中最多会有128个指针指向各个Rollback Segment Header所在的Page<br>
+每个Rollback Segment Header又包含了 1024个 slot，指向了一个 Undo Segment 的first undo page<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E7%9A%84%E6%81%A2%E5%A4%8D/x_14.png">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E7%9A%84%E6%81%A2%E5%A4%8D/x_14.png" />
+        </a>
+    </p>
+<p>一个事务引用内存中的数据结构，以及磁盘上的物理结构组织<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E7%9A%84%E6%81%A2%E5%A4%8D/x_15.png">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E7%9A%84%E6%81%A2%E5%A4%8D/x_15.png" />
+        </a>
+    </p>
+<p>回滚段的分配</p>
+<ul>
+<li>0号必须在系统表空间，也就是0号对应的 Rollback Segment Header必须在系统表空间</li>
+<li>33 - 127号跟0号类似，用于普通表，不过这些可以自定义表空间</li>
+<li>1 - 32号页面用于临时表空间，对应数据目录中的 ibtmp1 文件</li>
+<li>临时表只在系统运行期间有效，所以不需要记录undo log</li>
+</ul>
+<p>为事务分配undo log的过程</p>
+<ul>
+<li>首先从系统表空间第 5号页面，分配一个回滚段，也就是 Rollback Segment Header，之后这个事务就一致使用这个段</li>
+<li>分配到回滚段后，看这个回滚段的两个cached链表有没有缓存的undo slot，insert和update要找对应的cached</li>
+<li>如果没有，则需要从Rollback Segment Header中找到一个空闲的(FIL_NULL)的slot</li>
+<li>如果找不到就报错了</li>
+<li>找到的话，如果是从cached分配的，那么对应的Undo Log Segment就已经分配了</li>
+<li>否则要新分配一个 页面作为undo log链表的first undo page</li>
+<li>之后事务就开始写这个链表了</li>
+<li>临时表的操作也是类似的</li>
+</ul>
+<p>配置回滚段的数量，默认为 128</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-sql" data-lang="sql"><span style="display:flex;"><span><span style="color:#ff79c6">SHOW</span> VARIABLES <span style="color:#ff79c6">LIKE</span> <span style="color:#f1fa8c">&#39;innodb_rollback_segments&#39;</span>;
+</span></span></code></pre></td></tr></table>
+</div>
+</div><ul>
+<li>innodb_rollback_segments 设置为1，只有一个普通表空间回滚段可用，但仍有32个临时表空间回滚段</li>
+<li>设置为 2- 33之间，跟 1 效果一样</li>
+<li>设置为 大于33，则针对普通表的可用回滚段数量就是 该值 - 32</li>
+</ul>
+<p>设置 undo log表空间</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">5
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-sql" data-lang="sql"><span style="display:flex;"><span><span style="color:#6272a4">-- undo 表空间所在的目录，默认放在数据目录中
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span><span style="color:#ff79c6">SHOW</span> VARIABLES <span style="color:#ff79c6">LIKE</span> <span style="color:#f1fa8c">&#39;innodb_undo_directory&#39;</span>;
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4">-- 表空间数量
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span><span style="color:#ff79c6">SHOW</span> VARIABLES <span style="color:#ff79c6">LIKE</span> <span style="color:#f1fa8c">&#39;innodb_undo_tablespaces&#39;</span>;
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p><strong>roll_pointer</strong><br>
+聚集索引的记录中包含了 roll_pointer指针，有些类型的undo log中也包含了这个指针<br>
+它指向了一个undo log地址，这个字段由<code>7</code>个字节组成<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E7%9A%84%E6%81%A2%E5%A4%8D/35.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E7%9A%84%E6%81%A2%E5%A4%8D/35.jpg" />
+        </a>
+     
+解释</p>
+<ul>
+<li>is_insert，表示undo log是否为 TRX_UNDO_INSERT 这种大类</li>
+<li>rseg_id，指向undo log回滚段的编号，最大只有128个，所以 7个bit就足够了</li>
+<li>page number，4个字节</li>
+<li>offse，16K页面，2个字节足够了</li>
+</ul>
+<h3 id="rollback过程">rollback过程</h3>
+<p>解释</p>
+<ul>
+<li>首先通过 redo log，将各个页面恢复到崩溃之前的状态</li>
+<li>通过系统表空间 5号页面，找到 128个回滚段，每个回滚段中的1024个 undo slot中不为 FIL_NULL的slot</li>
+<li>每个undo slot对应一个undo log链表，从first undo page中找到Undo Log Segment Header</li>
+<li>然后就能找到TRX_UNDO_STATE，如果其状态为TRX_UNDO_ACTIVE，则表示当前是一个活跃事务</li>
+<li>再在Undo Log Segment Header中找到 TRX_UNDO_LAST_LOG，这样就找到了本组中最后一个undo log页面</li>
+<li>最后一个页面中记录了事务id，这就是未提交的事务</li>
+<li>从最后一个链表往前，反向回滚，就可以将未提交的事务还原了</li>
+</ul>
+<p>
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E7%9A%84%E6%81%A2%E5%A4%8D/x_16.png">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E7%9A%84%E6%81%A2%E5%A4%8D/x_16.png" />
+        </a>
+    </p>
 <h2 id="源码中的类型定义">源码中的类型定义</h2>
 <h3 id="redo-log所有类型">redo log所有类型</h3>
 <p>文件所在位置：<br>
@@ -1105,11 +1341,86 @@ mysql-8.0.28/storage/innobase/include/mtr0types.h</p>
 </span></span><span style="display:flex;"><span>};
 </span></span></code></pre></td></tr></table>
 </div>
+</div><h3 id="undo-log的所有类型">undo log的所有类型</h3>
+<p>文件所在位置：<br>
+mysql-8.0.28/storage/innobase/include/trx0rec.h</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">15
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">16
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">17
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">18
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">19
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">20
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">21
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">22
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">23
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">24
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">25
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">26
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">27
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">28
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">29
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">30
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">31
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">32
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-cpp" data-lang="cpp"><span style="display:flex;"><span><span style="color:#ff79c6">#define TRX_UNDO_INSERT_REC 11 </span><span style="color:#6272a4">/* fresh insert into clustered index */</span><span style="color:#ff79c6">
+</span></span></span><span style="display:flex;"><span><span style="color:#ff79c6">#define TRX_UNDO_UPD_EXIST_REC        \
+</span></span></span><span style="display:flex;"><span><span style="color:#ff79c6">  12 </span><span style="color:#6272a4">/* update of a non-delete-marked \
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">     record */</span><span style="color:#ff79c6">
+</span></span></span><span style="display:flex;"><span><span style="color:#ff79c6">#define TRX_UNDO_UPD_DEL_REC                \
+</span></span></span><span style="display:flex;"><span><span style="color:#ff79c6">  13 </span><span style="color:#6272a4">/* update of a delete marked record to \
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">     a not delete marked record; also the   \
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">     fields of the record can change */</span><span style="color:#ff79c6">
+</span></span></span><span style="display:flex;"><span><span style="color:#ff79c6">#define TRX_UNDO_DEL_MARK_REC              \
+</span></span></span><span style="display:flex;"><span><span style="color:#ff79c6">  14 </span><span style="color:#6272a4">/* delete marking of a record; fields \
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">     do not change */</span><span style="color:#ff79c6">
+</span></span></span><span style="display:flex;"><span><span style="color:#ff79c6">#define TRX_UNDO_CMPL_INFO_MULT           \
+</span></span></span><span style="display:flex;"><span><span style="color:#ff79c6">  16 </span><span style="color:#6272a4">/* compilation info is multiplied by \
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">     this and ORed to the type above */</span><span style="color:#ff79c6">
+</span></span></span><span style="display:flex;"><span><span style="color:#ff79c6"></span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">#define TRX_UNDO_MODIFY_BLOB              \
+</span></span></span><span style="display:flex;"><span><span style="color:#ff79c6">  64 </span><span style="color:#6272a4">/* If this bit is set in type_cmpl,  \
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">     then the undo log record has support \
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">     for partial update of BLOBs. Also to \
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">     make the undo log format extensible, \
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">     introducing a new flag next to the   \
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">     type_cmpl flag. */</span><span style="color:#ff79c6">
+</span></span></span><span style="display:flex;"><span><span style="color:#ff79c6"></span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">#define TRX_UNDO_UPD_EXTERN                \
+</span></span></span><span style="display:flex;"><span><span style="color:#ff79c6">  128 </span><span style="color:#6272a4">/* This bit can be ORed to type_cmpl \
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">      to denote that we updated external   \
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">      storage fields: used by purge to     \
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">      free the external storage */</span><span style="color:#ff79c6">
+</span></span></span><span style="display:flex;"><span><span style="color:#ff79c6"></span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4">/* Operation type flags used in trx_undo_report_row_operation */</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">#define TRX_UNDO_INSERT_OP 1
+</span></span></span><span style="display:flex;"><span><span style="color:#ff79c6">#define TRX_UNDO_MODIFY_OP 2
+</span></span></span></code></pre></td></tr></table>
+</div>
 </div><h2 id="参考">参考</h2>
 <ul>
 <li><a href="https://www.modb.pro/doc/57946">说过的话就一定要办到 —— redo 日志（上）</a></li>
 <li><a href="https://www.modb.pro/doc/57947">说过的话就一定要办到 —— redo 日志（下）</a></li>
+<li><a href="http://catkang.github.io/2019/01/16/crash-recovery.html">数据库故障恢复机制的前世今生</a></li>
 <li><a href="http://catkang.github.io/2020/02/27/mysql-redo.html">庖丁解InnoDB之REDO LOG</a></li>
+<li><a href="http://catkang.github.io/2021/10/30/mysql-undo.html">庖丁解InnoDB之Undo LOG</a></li>
 <li><a href="https://dev.mysql.com/blog-archive/mysql-8-0-new-lock-free-scalable-wal-design/">MySQL 8.0: New Lock free, scalable WAL design</a></li>
 <li><a href="https://blog.csdn.net/m0_51504545/article/details/125834670">MySQL - redolog 图文详解</a></li>
 <li><a href="https://www.modb.pro/db/21523">浅析 InnoDB Redo Log</a></li>
@@ -1117,6 +1428,8 @@ mysql-8.0.28/storage/innobase/include/mtr0types.h</p>
 <li><a href="https://www.modb.pro/doc/57950">写作本书时用到的一些重要的参考资料</a></li>
 <li><a href="https://raw.githubusercontent.com/hedengcheng/tech/master/database/MySQL/InnoDB%20Log%20Block%20Structure.jpg">一张log block的大图</a></li>
 <li><a href="https://docs.kilvn.com/mysql-learning-notes/">MySQL 是怎样运行的：从根儿上理解 MySQL</a></li>
+<li><a href="http://mysql.taobao.org/monthly/2015/04/01/">MySQL · 引擎特性 · InnoDB undo log 漫游</a></li>
+<li><a href="https://blog.jcole.us/2014/04/16/the-basics-of-the-innodb-undo-logging-and-history-system/">The basics of the InnoDB undo logging and history system</a></li>
 </ul>
 
 			<script type="text/javascript"
