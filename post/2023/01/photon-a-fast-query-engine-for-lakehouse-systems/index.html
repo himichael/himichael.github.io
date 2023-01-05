@@ -1,0 +1,694 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    
+    <meta name="referrer" content="no-referrer-when-downgrade">
+    
+
+    <title>Photon A Fast Query Engine for Lakehouse Systems | 记录每个瞬间</title>
+    <meta property="og:title" content="Photon A Fast Query Engine for Lakehouse Systems - 记录每个瞬间">
+    <meta property="og:type" content="article">
+        
+    <meta property="article:published_time" content='2023-01-02T10:35:19&#43;08:00'>
+        
+        
+    <meta property="article:modified_time" content='2023-01-02T10:35:19&#43;08:00'>
+        
+    <meta name="Keywords" content="">
+    <meta name="description" content="Photon A Fast Query Engine for Lakehouse Systems">
+        <meta name="author" content="隔壁老王">
+        
+    <meta property="og:url" content="https://code0xff.org/post/2023/01/photon-a-fast-query-engine-for-lakehouse-systems/">
+    <link rel="shortcut icon" href='/favicon.ico'  type="image/x-icon">
+
+    <link rel="stylesheet" href='/css/normalize.css'>
+    <link rel="stylesheet" href='/css/style.css'>
+    <script type="text/javascript" src="//cdn.bootcdn.net/ajax/libs/jquery/3.4.1/jquery.min.js"></script>
+
+    
+    
+    
+        <link href="https://cdn.bootcdn.net/ajax/libs/fancybox/3.5.7/jquery.fancybox.min.css" rel="stylesheet">
+    
+    
+    
+    
+</head>
+
+
+<body>
+    <header id="header" class="clearfix">
+    <div class="container">
+        <div class="col-group">
+            <div class="site-name ">
+                
+                    <a id="logo" href="https://code0xff.org/">
+                        记录每个瞬间
+                    </a>
+                
+                
+            </div>
+            <div>
+                <nav id="nav-menu" class="clearfix">
+                    <a class="current" href="https://code0xff.org/">首页</a>
+                    
+                    <a  href="https://code0xff.org/linked/" title="链接">链接</a>
+                    
+                    <a  href="https://code0xff.org/archives/" title="归档">归档</a>
+                    
+                    <a  href="https://code0xff.org/about/" title="关于">关于</a>
+                    
+                </nav>
+            </div>
+        </div>
+    </div>
+</header>
+
+    <div id="body">
+        <div class="container">
+            <div class="col-group">
+
+                <div class="col-8" id="main">
+                    
+<div class="res-cons">
+    
+    <article class="post">
+        <header>
+            <h1 class="post-title">Photon A Fast Query Engine for Lakehouse Systems</h1>
+        </header>
+        <date class="post-meta meta-date">
+            2023年1月2日
+        </date>
+<nav id="TableOfContents">
+  <ul>
+    <li>
+      <ul>
+        <li><a href="#背景">背景</a></li>
+        <li><a href="#photon要解决的问题">Photon要解决的问题</a></li>
+        <li><a href="#photon的细节">Photon的细节</a></li>
+        <li><a href="#整合到databricks场景">整合到Databricks场景</a></li>
+        <li><a href="#测试评估">测试评估</a></li>
+        <li><a href="#相关文章">相关文章</a></li>
+      </ul>
+    </li>
+  </ul>
+</nav>
+        
+        <div class="post-meta">
+            
+            <span class="post-meta meta-tags">
+                <ul class="clearfix">
+                    <a href='/categories/%E5%A4%A7%E6%95%B0%E6%8D%AE'>大数据</a>
+                </ul>
+            </span>
+            
+        </div>
+        
+        
+        <div class="post-meta">
+            <span id="busuanzi_container_page_pv">|<span id="busuanzi_value_page_pv"></span><span>
+                    阅读</span></span>
+        </div>
+        
+        
+        <div class="post-content">
+            <blockquote>
+<p>原文 <br>
+<a href="https://cs.stanford.edu/~matei/papers/2022/sigmod_photon.pdf">https://cs.stanford.edu/~matei/papers/2022/sigmod_photon.pdf</a></p>
+</blockquote>
+<h2 id="背景">背景</h2>
+<p>传统的数仓中保存的都是结构化数据，方便治理<br>
+而数据湖中存储的是非结构化数据，治理起来也比较麻烦<br>
+于是 Databricks 搞出了一个新玩意，Lakehouse</p>
+<blockquote>
+<p>&ldquo;Lakehouse&rdquo;, which implements the functionality of structured data warehouses on top of unstructured data lakes</p>
+</blockquote>
+<p>这个解释还是很清晰的，不像那些整PPT搞概念的，lakehouse就是在 数据湖之上，提供了事务和ACID的数据仓库<br>
+也就是让 数据湖中的数据更方便管理</p>
+<h2 id="photon要解决的问题">Photon要解决的问题</h2>
+<p>为什么要引入Photon？</p>
+<ul>
+<li>近些年因为新硬件的引入，如SSD、NVMe，存储层的性能有大幅度提升</li>
+<li>自动shuffle、Delta Lake存储格式，都可以大幅度减少I/O</li>
+<li>想要继续提升性能，需要在内存、CPU这块继续提升，但这很难</li>
+<li>因为整个语言都是基于JVM的，想要提升性能就需要对JVM内部非常熟悉，才能充分利用SIMD指令</li>
+<li>JVM因为编译的限制，如果宽表&gt;100字段，可能会导致code-gen失败退回火山模型，性能急速下跌</li>
+</ul>
+<p>两个问题</p>
+<ul>
+<li>数据湖中保存的是非结构化数据，非常不统一，缺乏物理布局，没有统计信息</li>
+<li>需要兼容Spark DataFrame API的语义</li>
+</ul>
+<p>对于1)，其解决思路是采用向量化的执行引擎<br>
+对于2)，相当于把Spark的一些物理查询计划重写一遍</p>
+<p>Photon 在Lakehouse架构中的位置</p>
+<ul>
+<li>最底下的是存储层，这里将计算和存储分离，存储层使用的都是云厂商提供的</li>
+<li>这里就是Delta Lake存储格式，支持分区和数据skip，能减少大量I/O</li>
+<li>执行层使用的是云厂商的VM，Photon 位于这一层</li>
+<li>用户接口层</li>
+</ul>
+<p>
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/Photon%20A%20Fast%20Query%20Engine%20for%20Lakehouse%20Systems/1.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/Photon%20A%20Fast%20Query%20Engine%20for%20Lakehouse%20Systems/1.jpg" />
+        </a>
+    <br>
+Figure 1: Databricks’ execution layer. Photon runs as part of the Databricks Runtime, which executes queries on a distributed<br>
+cluster of public cloud VMs. Within these clusters, Photon executes tasks on partitions of data on a single thread.</p>
+<p>这里还有一个SQL的例子</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">7
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-sql" data-lang="sql"><span style="display:flex;"><span><span style="color:#ff79c6">SELECT</span> <span style="color:#ff79c6">upper</span>(c_name), <span style="color:#ff79c6">sum</span>(o_price)
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">FROM</span> customer, orders
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">WHERE</span>
+</span></span><span style="display:flex;"><span>  o_shipdate <span style="color:#ff79c6">&gt;</span> <span style="color:#f1fa8c">&#39;2021-01-01&#39;</span> <span style="color:#ff79c6">AND</span>
+</span></span><span style="display:flex;"><span>  customer.c_age <span style="color:#ff79c6">&gt;</span> <span style="color:#bd93f9">25</span> <span style="color:#ff79c6">AND</span>
+</span></span><span style="display:flex;"><span>  customer.c_orderid <span style="color:#ff79c6">=</span> orders.o_orderid
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">GROUP</span> <span style="color:#ff79c6">BY</span> c_name
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>Listing 1: An example SQL query. This query can benefit from both storage optimizations such as file clustering, as<br>
+well as runtime engine optimizations that Photon provides, such as SIMD vectorized execution.</p>
+<p>使用 Interpreted Vectorization的包括</p>
+<ul>
+<li>MonetDB</li>
+<li>X100</li>
+</ul>
+<p>使用 Code-Gen的包括</p>
+<ul>
+<li>Spark SQL</li>
+<li>HyPer</li>
+<li>Impala</li>
+</ul>
+<p>向量化的优点</p>
+<ul>
+<li>代码生成很难跟踪调试、而向量化毕竟是普通代码，可以方便用现有工具调试</li>
+<li>增加观察指标更容易，方便跟metrics集成</li>
+<li>扩展起来更容易</li>
+<li>Code-Gen用于复杂的表达式和子表达式，而向量化也能做到部分，就是增加一些不同的算子</li>
+</ul>
+<p>Photon 是</p>
+<ul>
+<li>基于列的，这样可以更好的使用Parquet文件格式</li>
+<li>由于Spark社区有大量的更新，全部替代不可能，只能先替代一些核心重要的</li>
+<li>对于不支持的算子，会优雅的退回到原生Spark的执行方式</li>
+</ul>
+<h2 id="photon的细节">Photon的细节</h2>
+<p>使用列的布局方式，这里每列中有一个特殊的标识，用来标识这一列中的某个值是否为NULL<br>
+此外还会记录string的编码类型，如ASCII，或者UTF-8，以便更好的优化   <br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/Photon%20A%20Fast%20Query%20Engine%20for%20Lakehouse%20Systems/2.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/Photon%20A%20Fast%20Query%20Engine%20for%20Lakehouse%20Systems/2.jpg" />
+        </a>
+       <br>
+Figure 2: A column batch in Photon. This batch represents the schema {int, string} with the tuples (10, “hello”) and (null,    “photon”). Data at inactive row indices may still be valid.</p>
+<p>column vector再加上一个 postion list，就组成了逻辑上的一行<br>
+对于filter来说，可能会优化掉很多行，但不会真的只生成几条数据，而是用 position list做标记<br>
+用来标记这行是否是 avtive 的</p>
+<p>执行引擎是构建在kernel层面的，数据的所有操作都是在非常底层的层面实现了一个个kernel函数<br>
+比如shuffle数据的序列化，针对数据的hash操作等等，而这些底层的kernel函数有些场景会显式使用SIMD指令进行优化，更多的时候则是依赖编译器的自动向量化优化<br>
+kernel 有两个因素来调节</p>
+<ul>
+<li>这个batch是否为null</li>
+<li>这个batch是否有不活跃的数据</li>
+</ul>
+<p>这里使用了 RESTRICT 让编译器自动实现向量化<br>
+向量化内存管理，使用自定义的内存池，而不是反复向操作系统申请内存</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-cpp" data-lang="cpp"><span style="display:flex;"><span><span style="color:#ff79c6">template</span> <span style="color:#ff79c6">&lt;</span><span style="color:#8be9fd">bool</span> kHasNulls, <span style="color:#8be9fd">bool</span> kAllRowsActive<span style="color:#ff79c6">&gt;</span>
+</span></span><span style="display:flex;"><span><span style="color:#8be9fd">void</span> SquareRootKernel(<span style="color:#ff79c6">const</span> <span style="color:#8be9fd">int16_t</span><span style="color:#ff79c6">*</span> RESTRICT pos_list,
+</span></span><span style="display:flex;"><span>  <span style="color:#8be9fd">int</span> num_rows, <span style="color:#ff79c6">const</span> <span style="color:#8be9fd">double</span><span style="color:#ff79c6">*</span> RESTRICT input,
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">const</span> <span style="color:#8be9fd">int8_t</span><span style="color:#ff79c6">*</span> RESTRICT nulls, <span style="color:#8be9fd">double</span><span style="color:#ff79c6">*</span> RESTRICT result) {
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">for</span> (<span style="color:#8be9fd">int</span> i <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">0</span>; i <span style="color:#ff79c6">&lt;</span> num_rows; i<span style="color:#ff79c6">++</span>) {
+</span></span><span style="display:flex;"><span>    <span style="color:#6272a4">// branch compiles away since condition is
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>    <span style="color:#6272a4">// compile-time constant.
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>    <span style="color:#8be9fd">int</span> row_idx <span style="color:#ff79c6">=</span> kAllRowsActive <span style="color:#ff79c6">?</span> <span style="color:#8be9fd;font-style:italic">i</span> : pos_list[i];
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">if</span> (<span style="color:#ff79c6">!</span>kHasNulls <span style="color:#ff79c6">||</span> <span style="color:#ff79c6">!</span>nulls[row_idx]) {
+</span></span><span style="display:flex;"><span>      result[row_idx] <span style="color:#ff79c6">=</span> sqrt(input[row_idx]);
+</span></span><span style="display:flex;"><span>    }
+</span></span><span style="display:flex;"><span>  }
+</span></span><span style="display:flex;"><span>}
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>Listing 2: A Photon kernel that is specialized on the presence of NULLs and inactive rows. Branches over compiletime constant template parameters are optimized away</p>
+<h2 id="整合到databricks场景">整合到Databricks场景</h2>
+<p>首先是将spark的执行计划转为photon的执行计划<br>
+这里需要从最下层开始转换，因为从中间转换就会有很多 行-列的 转换开销不值得<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/Photon%20A%20Fast%20Query%20Engine%20for%20Lakehouse%20Systems/3.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/Photon%20A%20Fast%20Query%20Engine%20for%20Lakehouse%20Systems/3.jpg" />
+        </a>
+     <br>
+如果发现photon不支持，则插入一个转换节点，将photon转换回spark的执行计划</p>
+<p>执行过程：</p>
+<ul>
+<li>通过 JNI调用C++库，然后将 photon部分的执行计划通过 protobuf做序列化吹了</li>
+<li>之后反序列化并转为 photon内部的执行计划</li>
+<li>每个算子都有 HasNext、GetNext</li>
+<li>执行计划结束photon会将结果shuffle到文件中，使用spark的shuffle协议</li>
+<li>之后一个新的photon task会读取之前的文件，而文件格式是自定义的不兼容spark格式，</li>
+<li>JVM和C++之前的传递都是指针，列数据文件被存储到非JVM堆中，开源的 OffHeapColumnVector</li>
+<li>JVM和C++共享这篇数据所以不用copy，JNI会调用来消费这些数据</li>
+<li>每次JNI调用大概 23ns，跟一次C++虚函数调用时间类似</li>
+<li>photon的执行计划最后，会将 列数据转为行数据</li>
+</ul>
+<p>内存管理</p>
+<ul>
+<li>photon 和 spark是共享一套集群的，其内存视图也要保持一致，避免OOM</li>
+<li>为此需要满足预留的内存，此时可能会出现排序，聚合等需要溢出的场景</li>
+<li>两阶段分配内存</li>
+<li>先通过reserve进行申请，再通过allocate进行实际的内存分配</li>
+<li>reserve不足时，会溢出到磁盘</li>
+<li>这步也是要跟Spark保持一致，将内存消耗从小到大排序，然后溢出最多使用的</li>
+<li>这个策略是尽可能少的发生溢出</li>
+<li>photon使用了广播，如广播hash join，会受到GC影响，为此在photon生命周期结束时执行一个清理操作</li>
+</ul>
+<p>整合</p>
+<ul>
+<li>photon可以将其执行信息导出，这样后面可以更好的优化</li>
+<li>还可以将这些信息导出到 spark-ui 上</li>
+<li>各种算子实现的细节都需要保证语义上的一致性，也就是C++和Java产出一样的行为</li>
+<li>比如integer -&gt; float，以及时间处理部分，如果产生的结果不一样，会导致不一样的查询结果</li>
+<li>为了保证这种行为需要三种测试</li>
+<li>单元测试、端到端的测试，随机化的测试</li>
+</ul>
+<h2 id="测试评估">测试评估</h2>
+<p>需要了解三件事情</p>
+<ul>
+<li>哪种情况的查询收益最大</li>
+<li>跟其他引擎做端到端的对比</li>
+<li>自适应的优化有什么影响</li>
+</ul>
+<p>加速依赖CPU的算子：join、agg<br>
+加速数据编码：shuffle写还有parquet write<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/Photon%20A%20Fast%20Query%20Engine%20for%20Lakehouse%20Systems/4.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/Photon%20A%20Fast%20Query%20Engine%20for%20Lakehouse%20Systems/4.jpg" />
+        </a>
+    <br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/Photon%20A%20Fast%20Query%20Engine%20for%20Lakehouse%20Systems/5.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/Photon%20A%20Fast%20Query%20Engine%20for%20Lakehouse%20Systems/5.jpg" />
+        </a>
+    <br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/Photon%20A%20Fast%20Query%20Engine%20for%20Lakehouse%20Systems/6.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/Photon%20A%20Fast%20Query%20Engine%20for%20Lakehouse%20Systems/6.jpg" />
+        </a>
+    <br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/Photon%20A%20Fast%20Query%20Engine%20for%20Lakehouse%20Systems/7.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/Photon%20A%20Fast%20Query%20Engine%20for%20Lakehouse%20Systems/7.jpg" />
+        </a>
+    </p>
+<p>TPC-H 大概有 8 - 23倍的性能提升<br>
+大概有 0.06%的 JNI调用的开销</p>
+<p>Q1的提升来自decimal类型的处理，DBR使用的是JDK的BigDecimal，性能非常差<br>
+另外稀疏场景需要做压缩，不然性能还不如原生的 <br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/Photon%20A%20Fast%20Query%20Engine%20for%20Lakehouse%20Systems/8.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/Photon%20A%20Fast%20Query%20Engine%20for%20Lakehouse%20Systems/8.jpg" />
+        </a>
+    <br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/Photon%20A%20Fast%20Query%20Engine%20for%20Lakehouse%20Systems/9.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/Photon%20A%20Fast%20Query%20Engine%20for%20Lakehouse%20Systems/9.jpg" />
+        </a>
+    </p>
+<h2 id="相关文章">相关文章</h2>
+<ul>
+<li><a href="https://www.databricks.com/blog/2021/06/17/announcing-photon-public-preview-the-next-generation-query-engine-on-the-databricks-lakehouse-platform.html">Announcing Photon Public Preview: The Next Generation Query Engine on the Databricks Lakehouse Platform</a></li>
+<li><a href="https://zhuanlan.zhihu.com/p/511400714">论文解读 Photon: A Fast Query Engine for Lakehouse Systems</a></li>
+<li><a href="https://www.modb.pro/db/440089">Photon</a></li>
+<li><a href="https://learn.microsoft.com/zh-cn/azure/databricks/runtime/photon">Photon 运行时</a>
+-<a href="https://cs.stanford.edu/~matei/">Matei Zaharia</a></li>
+</ul>
+
+			<script type="text/javascript"
+        async
+        src="https://cdn.bootcss.com/mathjax/2.7.3/MathJax.js?config=TeX-AMS-MML_HTMLorMML">
+MathJax.Hub.Config({
+  tex2jax: {
+    inlineMath: [['$','$'], ['\\(','\\)']],
+    displayMath: [['$$','$$'], ['\[\[','\]\]']],
+    processEscapes: true,
+    processEnvironments: true,
+    skipTags: ['script', 'noscript', 'style', 'textarea', 'pre'],
+    TeX: { equationNumbers: { autoNumber: "AMS" },
+         extensions: ["AMSmath.js", "AMSsymbols.js"] }
+  }
+});
+
+MathJax.Hub.Queue(function() {
+    
+    
+    
+    var all = MathJax.Hub.getAllJax(), i;
+    for(i = 0; i < all.length; i += 1) {
+        all[i].SourceElement().parentNode.className += ' has-jax';
+    }
+});
+</script>
+
+<style>
+code.has-jax {
+    font: inherit;
+    font-size: 100%;
+    background: inherit;
+    border: inherit;
+    color: #515151;
+}
+</style>
+        </div>
+
+        
+
+
+        
+
+<div class="post-archive">
+    <h2>相关文章</h2>
+    <ul class="listing">
+        
+        <li><a href="/post/2022/11/multi-tenant-cloud-data-services/">关于云环境中多租户问题的论文</a></li>
+        
+        <li><a href="/post/2023/01/millwheel/">MillWheel</a></li>
+        
+        <li><a href="/post/2022/11/how-to-read-a-paper/">How to Read a Paper</a></li>
+        
+        <li><a href="/post/2022/09/architecture-of-a-database-system/">Architecture of a Database System论文翻译</a></li>
+        
+        <li><a href="/post/2022/08/%E7%A1%AE%E5%AE%9A%E8%A6%81%E5%9C%A8dbms%E4%B8%AD%E7%94%A8mmap%E5%90%97/">确定要在DBMS中用mmap吗</a></li>
+        
+    </ul>
+</div>
+
+
+        <div class="post-meta meta-tags">
+            
+            <ul class="clearfix">
+                
+                <li><a href='/tags/spark'>Spark</a></li>
+                
+                <li><a href='/tags/%E8%AE%BA%E6%96%87'>论文</a></li>
+                
+            </ul>
+            
+        </div>
+    </article>
+    
+    
+
+    
+    
+</div>
+
+
+                </div>
+
+                <div id="secondary">
+    <section class="widget">
+        <form id="search" action='https://code0xff.org/search/' method="get" accept-charset="utf-8" target="_blank" _lpchecked="1">
+      
+      <input type="text" name="q" maxlength="20" placeholder="Search">
+      <input type="hidden" name="sitesearch" value="https://code0xff.org/">
+      <button type="submit" class="submit icon-search"></button>
+</form>
+    </section>
+    
+    <section class="widget">
+        <h3 class="widget-title">最近文章</h3>
+<ul class="widget-list">
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/01/monetdbx100-hyper-pipelining-query-execution/" title="MonetDB/X100: Hyper-Pipelining Query Execution">MonetDB/X100: Hyper-Pipelining Query Execution</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/01/access-path-selection-in-main-memory-optimized-data-systems-should-i-scan-or-should-i-probe/" title="Access Path Selection in Main-Memory Optimized Data Systems Should I Scan or Should I Probe">Access Path Selection in Main-Memory Optimized Data Systems Should I Scan or Should I Probe</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/01/photon-a-fast-query-engine-for-lakehouse-systems/" title="Photon A Fast Query Engine for Lakehouse Systems">Photon A Fast Query Engine for Lakehouse Systems</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/01/mysql%E7%9A%84%E5%B9%B6%E5%8F%91/" title="MySQL的并发">MySQL的并发</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2022/12/mysql%E7%9A%84%E6%81%A2%E5%A4%8D/" title="MySQL的恢复">MySQL的恢复</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2022/12/mysql%E7%9A%84%E7%BC%93%E5%AD%98/" title="MySQL的缓存">MySQL的缓存</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2022/12/mysql%E6%9F%A5%E8%AF%A2%E5%88%86%E6%9E%90/" title="MySQL查询分析">MySQL查询分析</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2022/12/%E7%94%A8%E5%B7%A5%E5%85%B7%E5%88%86%E6%9E%90mysql%E5%AD%98%E5%82%A8%E6%96%87%E4%BB%B6/" title="用工具分析MySQL存储文件">用工具分析MySQL存储文件</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2022/12/mysql%E6%96%87%E4%BB%B6%E5%AD%98%E5%82%A8%E7%BB%93%E6%9E%84/" title="MySQL文件存储结构">MySQL文件存储结构</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2022/11/%E8%B0%83%E8%AF%95mysql/" title="调试MySQL">调试MySQL</a>
+    </li>
+    
+</ul>
+    </section>
+
+    
+
+    <section class="widget">
+        <h3 class="widget-title"><a href='/categories/'>分类</a></h3>
+<ul class="widget-list">
+    
+    <li><a href="https://code0xff.org/categories/%E5%88%86%E5%B8%83%E5%BC%8F/">分布式 (6)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E5%8E%9F%E7%90%86%E5%88%86%E6%9E%90/">原理分析 (6)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E5%95%86%E4%B8%9A/">商业 (3)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E5%A4%A7%E6%95%B0%E6%8D%AE/">大数据 (22)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%95%B0%E6%8D%AE%E5%BA%93/">数据库 (11)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%97%85%E8%A1%8C/">旅行 (10)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%9E%B6%E6%9E%84/">架构 (1)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E7%AE%97%E6%B3%95/">算法 (8)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E7%B3%BB%E7%BB%9F/">系统 (5)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E7%BC%96%E7%A8%8B%E8%AF%AD%E8%A8%80/">编程语言 (2)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E8%AF%BB%E4%B9%A6%E7%AC%94%E8%AE%B0/">读书笔记 (9)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E9%9A%8F%E4%BE%BF%E5%86%99%E5%86%99/">随便写写 (4)</a></li>
+    
+</ul>
+    </section>
+
+    <section class="widget">
+        <h3 class="widget-title">归档</a></h3>
+<ul class="widget-list">
+    
+    <li><a href="https://code0xff.org/years/2021%E5%B9%B4/">2021年 (30)</a></li>
+    
+    <li><a href="https://code0xff.org/years/2022%E5%B9%B4/">2022年 (54)</a></li>
+    
+    <li><a href="https://code0xff.org/years/2023%E5%B9%B4/">2023年 (3)</a></li>
+    
+</ul>
+    </section>
+
+    <section class="widget">
+        <h3 class="widget-title"><a href='/tags/'>标签</a></h3>
+<div class="tagcloud">
+    
+    <a href="https://code0xff.org/tags/b%E6%A0%91/">B树 </a>
+    
+    <a href="https://code0xff.org/tags/flink/">flink </a>
+    
+    <a href="https://code0xff.org/tags/hive/">Hive </a>
+    
+    <a href="https://code0xff.org/tags/k8s/">k8s </a>
+    
+    <a href="https://code0xff.org/tags/kudu/">kudu </a>
+    
+    <a href="https://code0xff.org/tags/manacher/">Manacher </a>
+    
+    <a href="https://code0xff.org/tags/mapreduce/">MapReduce </a>
+    
+    <a href="https://code0xff.org/tags/mysql/">MySQL </a>
+    
+    <a href="https://code0xff.org/tags/paxos/">paxos </a>
+    
+    <a href="https://code0xff.org/tags/raft/">raft </a>
+    
+    <a href="https://code0xff.org/tags/scala/">scala </a>
+    
+    <a href="https://code0xff.org/tags/snowflake/">snowflake </a>
+    
+    <a href="https://code0xff.org/tags/spark/">spark </a>
+    
+    <a href="https://code0xff.org/tags/unix/">unix </a>
+    
+    <a href="https://code0xff.org/tags/%E4%BA%8C%E5%88%86%E6%9F%A5%E6%89%BE/">二分查找 </a>
+    
+    <a href="https://code0xff.org/tags/%E4%BA%8C%E5%8F%89%E6%A0%91%E9%81%8D%E5%8E%86/">二叉树遍历 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%88%86%E5%B8%83%E5%BC%8F/">分布式 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%8A%A8%E6%80%81%E6%B3%A8%E5%85%A5/">动态注入 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%8E%86%E5%8F%B2/">历史 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%9B%9E%E6%BA%AF/">回溯 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%9B%BD%E5%86%85%E6%97%85%E8%A1%8C/">国内旅行 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%9B%BD%E5%A4%96%E6%97%85%E8%A1%8C/">国外旅行 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%A4%A7%E6%95%B0%E6%8D%AE/">大数据 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%AD%98%E5%82%A8/">存储 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%B7%A5%E4%BD%9C%E8%AE%B0%E5%BD%95/">工作记录 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%BE%AE%E6%9C%8D%E5%8A%A1/">微服务 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%95%B0%E6%8D%AE%E5%BA%93/">数据库 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%9F%A5%E8%AF%A2%E4%BC%98%E5%8C%96/">查询优化 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%B1%87%E7%BC%96/">汇编 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%B9%96%E4%BB%93%E4%B8%80%E4%BD%93/">湖仓一体 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%94%9F%E6%B4%BB/">生活 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%94%B5%E5%BD%B1/">电影 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%AE%97%E6%B3%95/">算法 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BB%8F%E6%B5%8E/">经济 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BC%93%E5%AD%98/">缓存 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BC%96%E8%AF%91%E5%8E%9F%E7%90%86/">编译原理 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BD%91%E7%BB%9C/">网络 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AE%A1%E7%AE%97%E6%A1%86%E6%9E%B6/">计算框架 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AE%BA%E6%96%87/">论文 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AF%BB%E4%B9%A6%E7%AC%94%E8%AE%B0/">读书笔记 </a>
+    
+</div>
+    </section>
+
+    
+
+    <section class="widget">
+        <h3 class="widget-title">RSS</h3>
+        <ul class="widget-list">
+            <li><a href="https://code0xff.org/index.xml">文章 RSS</a></li>
+        </ul>
+    </section>
+</div>
+            </div>
+        </div>
+    </div>
+    <footer id="footer">
+    <div>
+        &copy; 2023 <a href="https://code0xff.org/">记录每个瞬间 By 老王</a>
+        
+    </div>
+    <br />
+    <div>
+        <div class="github-badge">
+            <a href="https://gohugo.io/" target="_black" rel="nofollow"><span class="badge-subject">Powered by</span><span class="badge-value bg-blue">Hugo</span></a>
+        </div>
+        <div class="github-badge">
+            <a href="https://github.com/flysnow-org/maupassant-hugo" target="_black"><span class="badge-subject">Theme</span><span class="badge-value bg-yellowgreen">Maupassant</span></a>
+        </div>
+    </div>
+    <div>
+        网站备案编号：<a href="https://beian.miit.gov.cn">京ICP备19014975号-1</a>
+    </div>
+</footer>
+
+
+    
+    <script type="text/javascript">
+        window.MathJax = {
+            tex2jax: {
+                inlineMath: [['$', '$']],
+                processEscapes: true
+                }
+            };
+    </script>
+    <script src='https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.5/MathJax.js?config=TeX-MML-AM_CHTML' async></script><script src="https://cdn.bootcdn.net/ajax/libs/fancybox/3.5.7/jquery.fancybox.min.js"></script>
+
+<a id="rocket" href="#top"></a>
+<script type="text/javascript" src='/js/totop.js?v=0.0.0' async=""></script>
+
+<script type="application/javascript">
+var doNotTrack = false;
+if (!doNotTrack) {
+	window.ga=window.ga||function(){(ga.q=ga.q||[]).push(arguments)};ga.l=+new Date;
+	ga('create', 'GA ID', 'auto');
+	
+	ga('send', 'pageview');
+}
+</script>
+<script async src='https://www.google-analytics.com/analytics.js'></script>
+
+
+
+    <script type="text/javascript" src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js" async></script>
+
+
+
+
+</body>
+
+</html>

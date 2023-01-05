@@ -1,0 +1,585 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    
+    <meta name="referrer" content="no-referrer-when-downgrade">
+    
+
+    <title>MySQL的并发 | 记录每个瞬间</title>
+    <meta property="og:title" content="MySQL的并发 - 记录每个瞬间">
+    <meta property="og:type" content="article">
+        
+    <meta property="article:published_time" content='2022-12-25T08:15:19&#43;08:00'>
+        
+        
+    <meta property="article:modified_time" content='2022-12-25T08:15:19&#43;08:00'>
+        
+    <meta name="Keywords" content="">
+    <meta name="description" content="MySQL的并发">
+        <meta name="author" content="隔壁老王">
+        
+    <meta property="og:url" content="https://code0xff.org/post/2023/01/mysql%E7%9A%84%E5%B9%B6%E5%8F%91/">
+    <link rel="shortcut icon" href='/favicon.ico'  type="image/x-icon">
+
+    <link rel="stylesheet" href='/css/normalize.css'>
+    <link rel="stylesheet" href='/css/style.css'>
+    <script type="text/javascript" src="//cdn.bootcdn.net/ajax/libs/jquery/3.4.1/jquery.min.js"></script>
+
+    
+    
+    
+        <link href="https://cdn.bootcdn.net/ajax/libs/fancybox/3.5.7/jquery.fancybox.min.css" rel="stylesheet">
+    
+    
+    
+    
+</head>
+
+
+<body>
+    <header id="header" class="clearfix">
+    <div class="container">
+        <div class="col-group">
+            <div class="site-name ">
+                
+                    <a id="logo" href="https://code0xff.org/">
+                        记录每个瞬间
+                    </a>
+                
+                
+            </div>
+            <div>
+                <nav id="nav-menu" class="clearfix">
+                    <a class="current" href="https://code0xff.org/">首页</a>
+                    
+                    <a  href="https://code0xff.org/linked/" title="链接">链接</a>
+                    
+                    <a  href="https://code0xff.org/archives/" title="归档">归档</a>
+                    
+                    <a  href="https://code0xff.org/about/" title="关于">关于</a>
+                    
+                </nav>
+            </div>
+        </div>
+    </div>
+</header>
+
+    <div id="body">
+        <div class="container">
+            <div class="col-group">
+
+                <div class="col-8" id="main">
+                    
+<div class="res-cons">
+    
+    <article class="post">
+        <header>
+            <h1 class="post-title">MySQL的并发</h1>
+        </header>
+        <date class="post-meta meta-date">
+            2022年12月25日
+        </date>
+<nav id="TableOfContents">
+  <ul>
+    <li>
+      <ul>
+        <li><a href="#mvcc">MVCC</a>
+          <ul>
+            <li><a href="#基本概念">基本概念</a></li>
+            <li><a href="#readview">ReadView</a></li>
+            <li><a href="#purage">purage</a></li>
+          </ul>
+        </li>
+        <li><a href="#锁">锁</a></li>
+        <li><a href="#参考">参考</a></li>
+      </ul>
+    </li>
+  </ul>
+</nav>
+        
+        <div class="post-meta">
+            
+            <span class="post-meta meta-tags">
+                <ul class="clearfix">
+                    <a href='/categories/%E5%8E%9F%E7%90%86%E5%88%86%E6%9E%90'>原理分析</a>
+                </ul>
+            </span>
+            
+        </div>
+        
+        
+        <div class="post-meta">
+            <span id="busuanzi_container_page_pv">|<span id="busuanzi_value_page_pv"></span><span>
+                    阅读</span></span>
+        </div>
+        
+        
+        <div class="post-content">
+            <h2 id="mvcc">MVCC</h2>
+<h3 id="基本概念">基本概念</h3>
+<p>标准的事务隔离级别：</p>
+<ul>
+<li>READ UNCOMMITTED ：未提交读</li>
+<li>READ COMMITTED ：已提交读</li>
+<li>REPEATABLE READ ：可重复读</li>
+<li>SERIALIZABLE ：可串行化</li>
+</ul>
+<p>隔离级别允许发生的严重程度</p>
+<ul>
+<li>READ UNCOMMITTED 隔离级别下，可能发生 脏读 、 不可重复读 和 幻读 问题。</li>
+<li>READ COMMITTED 隔离级别下，可能发生 不可重复读 和 幻读 问题，但是不可以发生 脏读 问题。</li>
+<li>REPEATABLE READ 隔离级别下，可能发生 幻读 问题，但是不可以发生 脏读 和 不可重复读 的问题。</li>
+<li>SERIALIZABLE 隔离级别下，各种问题都不可以发生</li>
+</ul>
+<p>两个必要隐藏列（trx_id、roll_pointer）</p>
+<ul>
+<li>trx_id ：每次一个事务对某条聚簇索引记录进行改动时，都会把该事务的 事务id 赋值给 trx_id 隐藏列</li>
+<li>roll_pointer ：每次对某条聚簇索引记录进行改动时，都会把旧的版本写入到 undo日志 中，然后这个隐藏列就相当于一个指针，可以通过它来找到该记录修改前的信息</li>
+</ul>
+<p>MVCC通过版本链实现的，增量的数据是存放在 undo page中的<br>
+然后通过 roll_pointer 指针指向undo page的最新版本<br>
+如果通过 trx_id 发现，不可见则继续往前查找，直到能找到这个版本，否则找不到<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E7%9A%84%E5%B9%B6%E5%8F%91/x_1.png">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E7%9A%84%E5%B9%B6%E5%8F%91/x_1.png" />
+        </a>
+    </p>
+<h3 id="readview">ReadView</h3>
+<p>通过版本链来判断事务的可见性</p>
+<p>几个重要的属性</p>
+<table>
+<thead>
+<tr>
+<th>名字</th>
+<th>解释</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>m_ids</td>
+<td>表示在生成 ReadView 时当前系统中活跃的读写事务的 事务id 列表</td>
+</tr>
+<tr>
+<td>min_trx_id</td>
+<td>表示在生成 ReadView 时当前系统中活跃的读写事务中最小的 事务id ，也就是m_ids 中的最小值</td>
+</tr>
+<tr>
+<td>max_trx_id</td>
+<td>表示生成 ReadView 时系统中应该分配给下一个事务的 id 值</td>
+</tr>
+<tr>
+<td>creator_trx_id</td>
+<td>表示生成该 ReadView 的事务的 事务id</td>
+</tr>
+</tbody>
+</table>
+<p>判断记录某个版本是否可见的步骤</p>
+<ul>
+<li>被访问版本的<code>trx_id</code>与 ReadView 中的 <code>creator_trx_id</code>相同，表示修改自己的记录，<strong>可以访问</strong></li>
+<li>被访问版本的<code>trx_id</code>小于 ReadView 中的<code>min_trx_id</code>，该事务在生成ReadView前已提交，<strong>可以访问</strong></li>
+<li><code>trx_id</code>大于ReadView中的<code>max_trx_id</code>，在当前事务生成ReadView之后产生的，<strong>不可见</strong></li>
+<li><code>trx_id</code>在ReadView的 min_trx_id 和 max_trx_id 之间，需要判断trx_id 是否在 m_ids 列表中，如果在说明创建ReadView时该事务是活跃，<strong>不可见</strong>；否则就不在创建ReadView时生成的，<strong>可见</strong></li>
+</ul>
+<p>REPEATABLE READ：在事务启动的时候，就生成一个 ReadView，事务内不变<br>
+READ COMMITTED： 每次读取数据前都生成一个ReadView</p>
+<p>二级索引的MVCC<br>
+每个page都有一个 PAGE_MAX_TRX_ID 属性，每当对该页面做操作时，如果大于这个值就更新<br>
+如果这个值小于ReadView 中的 min_trx_id，则表示可见<br>
+否则回表，去聚集索引中再判断</p>
+<h3 id="purage">purage</h3>
+<p>insert undo 在事务提交后就可以删除了<br>
+delete、update的 undo需要支持MVCC还不能删除</p>
+<p>一个事务写的一组undo log都有一个 Undo Log Header页面，这个页面中有一个 TRX_UNDO_HISTORY_NODE 属性<br>
+这表示一个 history链表节点，当事务提交后，就把这个事务执行过程中产生的 undo 插入到 history链表中<br>
+而每个回滚段都有一个 Rollback Segment Header的页面，其中包含了两个属性</p>
+<ul>
+<li>TRX_RSEG_HISTORY，表示 history链表的基节点</li>
+<li>TRX_RSEG_HISTORY_SIZE，表示history链表的页面数量</li>
+</ul>
+<p>后台线程会检查 当前事务的 编号，然后从 history链表中取出 编号较小的，如果其编号 <strong>小于</strong>当前事务id<br>
+则表示可以删除了<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E7%9A%84%E6%81%A2%E5%A4%8D/x_14.png">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E7%9A%84%E6%81%A2%E5%A4%8D/x_14.png" />
+        </a>
+       <br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E7%9A%84%E6%81%A2%E5%A4%8D/x_15.png">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E7%9A%84%E6%81%A2%E5%A4%8D/x_15.png" />
+        </a>
+    </p>
+<p>Undo Truncate</p>
+<ul>
+<li>coordinator线程会等待所有的worker完成一批Undo Records的Purge工作，之后尝试清理不再需要的Undo Log</li>
+<li>trx_purge_truncate函数中会遍历所有的Rollback Segment中的所有Undo Segment</li>
+<li>如果其状态是TRX_UNDO_TO_PURGE，调用trx_purge_free_segment释放占用的磁盘空间并从History List中删除</li>
+<li>否则，说明该Undo Segment正在被使用或者还在被cache（TRX_UNDO_CACHED类型），那么只通过trx_purge_remove_log_hd将其从History List中删除。</li>
+<li>Undo Truncate的频率由：innodb_rseg_truncate_frequency 参数控制，也就是攒了一批再做</li>
+</ul>
+<p>Undo Tablespace Truncate</p>
+<ul>
+<li>innodb_trx_purge_truncate配置打开</li>
+<li>会尝试重建Undo Tablespaces以缩小文件空间占用</li>
+<li>每一时刻最多有一个Tablespace处于inactive，inactive的Undo Tablespace上的所有Rollback Segment都不参与给新事物的分配</li>
+<li>等该文件上所有的活跃事务退出，并且所有的Undo Log都完成Purge之后，这个Tablespace就会被通过trx_purge_initiate_truncate重建</li>
+<li>包括重建Undo Tablespace中的文件结构和内存结构，之后被重新标记为active，参与分配给新的事务使用</li>
+</ul>
+<h2 id="锁">锁</h2>
+<p>。。。</p>
+<h2 id="参考">参考</h2>
+<ul>
+<li><a href="http://catkang.github.io/2022/01/27/btree-lock.html">B+树数据库加锁历史</a></li>
+<li><a href="http://catkang.github.io/2018/09/19/concurrency-control.html">浅析数据库并发控制机制</a></li>
+<li><a href="http://catkang.github.io/2018/08/31/isolation-level.html">数据库事务隔离发展历史</a></li>
+<li><a href="https://www.modb.pro/db/55757">面试中的老大难-mysql事务和锁</a></li>
+<li><a href="https://blog.csdn.net/weixin_49258262/article/details/123779590">一条记录的多幅面孔-事务的隔离级别与 MVCC</a></li>
+<li><a href="http://catkang.github.io/2021/10/30/mysql-undo.html">庖丁解InnoDB之Undo LOG</a></li>
+<li><a href="https://blog.csdn.net/weixin_49258262/article/details/123779590">一条记录的多幅面孔-事务的隔离级别与 MVCC</a></li>
+<li><a href="https://cdn.modb.pro/db/55757">面试中的老大难-mysql事务和锁，一次性讲清楚！</a></li>
+<li><a href="https://cdn.modb.pro/db/487985">工作面试老大难-锁（下）</a></li>
+<li><a href="https://zhuanlan.zhihu.com/p/420777227">数据库恢复机制：ARIES算法论文</a></li>
+<li><a href="https://blog.csdn.net/weixin_34123613/article/details/92562478">图解数据库Aries事务Recovery算法</a></li>
+<li><a href="https://zhuanlan.zhihu.com/p/143173278">不衰的经典: ARIES事务恢复 [数据库学习的成人试炼]</a></li>
+</ul>
+
+			<script type="text/javascript"
+        async
+        src="https://cdn.bootcss.com/mathjax/2.7.3/MathJax.js?config=TeX-AMS-MML_HTMLorMML">
+MathJax.Hub.Config({
+  tex2jax: {
+    inlineMath: [['$','$'], ['\\(','\\)']],
+    displayMath: [['$$','$$'], ['\[\[','\]\]']],
+    processEscapes: true,
+    processEnvironments: true,
+    skipTags: ['script', 'noscript', 'style', 'textarea', 'pre'],
+    TeX: { equationNumbers: { autoNumber: "AMS" },
+         extensions: ["AMSmath.js", "AMSsymbols.js"] }
+  }
+});
+
+MathJax.Hub.Queue(function() {
+    
+    
+    
+    var all = MathJax.Hub.getAllJax(), i;
+    for(i = 0; i < all.length; i += 1) {
+        all[i].SourceElement().parentNode.className += ' has-jax';
+    }
+});
+</script>
+
+<style>
+code.has-jax {
+    font: inherit;
+    font-size: 100%;
+    background: inherit;
+    border: inherit;
+    color: #515151;
+}
+</style>
+        </div>
+
+        
+
+
+        
+
+<div class="post-archive">
+    <h2>相关文章</h2>
+    <ul class="listing">
+        
+        <li><a href="/post/2022/12/mysql%E7%9A%84%E6%81%A2%E5%A4%8D/">MySQL的恢复</a></li>
+        
+        <li><a href="/post/2022/12/mysql%E7%9A%84%E7%BC%93%E5%AD%98/">MySQL的缓存</a></li>
+        
+        <li><a href="/post/2022/12/mysql%E6%9F%A5%E8%AF%A2%E5%88%86%E6%9E%90/">MySQL查询分析</a></li>
+        
+        <li><a href="/post/2022/12/%E7%94%A8%E5%B7%A5%E5%85%B7%E5%88%86%E6%9E%90mysql%E5%AD%98%E5%82%A8%E6%96%87%E4%BB%B6/">用工具分析MySQL存储文件</a></li>
+        
+        <li><a href="/post/2022/12/mysql%E6%96%87%E4%BB%B6%E5%AD%98%E5%82%A8%E7%BB%93%E6%9E%84/">MySQL文件存储结构</a></li>
+        
+    </ul>
+</div>
+
+
+        <div class="post-meta meta-tags">
+            
+            <ul class="clearfix">
+                
+                <li><a href='/tags/mysql'>MySQL</a></li>
+                
+            </ul>
+            
+        </div>
+    </article>
+    
+    
+
+    
+    
+</div>
+
+
+                </div>
+
+                <div id="secondary">
+    <section class="widget">
+        <form id="search" action='https://code0xff.org/search/' method="get" accept-charset="utf-8" target="_blank" _lpchecked="1">
+      
+      <input type="text" name="q" maxlength="20" placeholder="Search">
+      <input type="hidden" name="sitesearch" value="https://code0xff.org/">
+      <button type="submit" class="submit icon-search"></button>
+</form>
+    </section>
+    
+    <section class="widget">
+        <h3 class="widget-title">最近文章</h3>
+<ul class="widget-list">
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/01/monetdbx100-hyper-pipelining-query-execution/" title="MonetDB/X100: Hyper-Pipelining Query Execution">MonetDB/X100: Hyper-Pipelining Query Execution</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/01/access-path-selection-in-main-memory-optimized-data-systems-should-i-scan-or-should-i-probe/" title="Access Path Selection in Main-Memory Optimized Data Systems Should I Scan or Should I Probe">Access Path Selection in Main-Memory Optimized Data Systems Should I Scan or Should I Probe</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/01/photon-a-fast-query-engine-for-lakehouse-systems/" title="Photon A Fast Query Engine for Lakehouse Systems">Photon A Fast Query Engine for Lakehouse Systems</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/01/mysql%E7%9A%84%E5%B9%B6%E5%8F%91/" title="MySQL的并发">MySQL的并发</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2022/12/mysql%E7%9A%84%E6%81%A2%E5%A4%8D/" title="MySQL的恢复">MySQL的恢复</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2022/12/mysql%E7%9A%84%E7%BC%93%E5%AD%98/" title="MySQL的缓存">MySQL的缓存</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2022/12/mysql%E6%9F%A5%E8%AF%A2%E5%88%86%E6%9E%90/" title="MySQL查询分析">MySQL查询分析</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2022/12/%E7%94%A8%E5%B7%A5%E5%85%B7%E5%88%86%E6%9E%90mysql%E5%AD%98%E5%82%A8%E6%96%87%E4%BB%B6/" title="用工具分析MySQL存储文件">用工具分析MySQL存储文件</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2022/12/mysql%E6%96%87%E4%BB%B6%E5%AD%98%E5%82%A8%E7%BB%93%E6%9E%84/" title="MySQL文件存储结构">MySQL文件存储结构</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2022/11/%E8%B0%83%E8%AF%95mysql/" title="调试MySQL">调试MySQL</a>
+    </li>
+    
+</ul>
+    </section>
+
+    
+
+    <section class="widget">
+        <h3 class="widget-title"><a href='/categories/'>分类</a></h3>
+<ul class="widget-list">
+    
+    <li><a href="https://code0xff.org/categories/%E5%88%86%E5%B8%83%E5%BC%8F/">分布式 (6)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E5%8E%9F%E7%90%86%E5%88%86%E6%9E%90/">原理分析 (6)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E5%95%86%E4%B8%9A/">商业 (3)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E5%A4%A7%E6%95%B0%E6%8D%AE/">大数据 (22)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%95%B0%E6%8D%AE%E5%BA%93/">数据库 (11)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%97%85%E8%A1%8C/">旅行 (10)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%9E%B6%E6%9E%84/">架构 (1)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E7%AE%97%E6%B3%95/">算法 (8)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E7%B3%BB%E7%BB%9F/">系统 (5)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E7%BC%96%E7%A8%8B%E8%AF%AD%E8%A8%80/">编程语言 (2)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E8%AF%BB%E4%B9%A6%E7%AC%94%E8%AE%B0/">读书笔记 (9)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E9%9A%8F%E4%BE%BF%E5%86%99%E5%86%99/">随便写写 (4)</a></li>
+    
+</ul>
+    </section>
+
+    <section class="widget">
+        <h3 class="widget-title">归档</a></h3>
+<ul class="widget-list">
+    
+    <li><a href="https://code0xff.org/years/2021%E5%B9%B4/">2021年 (30)</a></li>
+    
+    <li><a href="https://code0xff.org/years/2022%E5%B9%B4/">2022年 (54)</a></li>
+    
+    <li><a href="https://code0xff.org/years/2023%E5%B9%B4/">2023年 (3)</a></li>
+    
+</ul>
+    </section>
+
+    <section class="widget">
+        <h3 class="widget-title"><a href='/tags/'>标签</a></h3>
+<div class="tagcloud">
+    
+    <a href="https://code0xff.org/tags/b%E6%A0%91/">B树 </a>
+    
+    <a href="https://code0xff.org/tags/flink/">flink </a>
+    
+    <a href="https://code0xff.org/tags/hive/">Hive </a>
+    
+    <a href="https://code0xff.org/tags/k8s/">k8s </a>
+    
+    <a href="https://code0xff.org/tags/kudu/">kudu </a>
+    
+    <a href="https://code0xff.org/tags/manacher/">Manacher </a>
+    
+    <a href="https://code0xff.org/tags/mapreduce/">MapReduce </a>
+    
+    <a href="https://code0xff.org/tags/mysql/">MySQL </a>
+    
+    <a href="https://code0xff.org/tags/paxos/">paxos </a>
+    
+    <a href="https://code0xff.org/tags/raft/">raft </a>
+    
+    <a href="https://code0xff.org/tags/scala/">scala </a>
+    
+    <a href="https://code0xff.org/tags/snowflake/">snowflake </a>
+    
+    <a href="https://code0xff.org/tags/spark/">spark </a>
+    
+    <a href="https://code0xff.org/tags/unix/">unix </a>
+    
+    <a href="https://code0xff.org/tags/%E4%BA%8C%E5%88%86%E6%9F%A5%E6%89%BE/">二分查找 </a>
+    
+    <a href="https://code0xff.org/tags/%E4%BA%8C%E5%8F%89%E6%A0%91%E9%81%8D%E5%8E%86/">二叉树遍历 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%88%86%E5%B8%83%E5%BC%8F/">分布式 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%8A%A8%E6%80%81%E6%B3%A8%E5%85%A5/">动态注入 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%8E%86%E5%8F%B2/">历史 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%9B%9E%E6%BA%AF/">回溯 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%9B%BD%E5%86%85%E6%97%85%E8%A1%8C/">国内旅行 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%9B%BD%E5%A4%96%E6%97%85%E8%A1%8C/">国外旅行 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%A4%A7%E6%95%B0%E6%8D%AE/">大数据 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%AD%98%E5%82%A8/">存储 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%B7%A5%E4%BD%9C%E8%AE%B0%E5%BD%95/">工作记录 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%BE%AE%E6%9C%8D%E5%8A%A1/">微服务 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%95%B0%E6%8D%AE%E5%BA%93/">数据库 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%9F%A5%E8%AF%A2%E4%BC%98%E5%8C%96/">查询优化 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%B1%87%E7%BC%96/">汇编 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%B9%96%E4%BB%93%E4%B8%80%E4%BD%93/">湖仓一体 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%94%9F%E6%B4%BB/">生活 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%94%B5%E5%BD%B1/">电影 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%AE%97%E6%B3%95/">算法 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BB%8F%E6%B5%8E/">经济 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BC%93%E5%AD%98/">缓存 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BC%96%E8%AF%91%E5%8E%9F%E7%90%86/">编译原理 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BD%91%E7%BB%9C/">网络 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AE%A1%E7%AE%97%E6%A1%86%E6%9E%B6/">计算框架 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AE%BA%E6%96%87/">论文 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AF%BB%E4%B9%A6%E7%AC%94%E8%AE%B0/">读书笔记 </a>
+    
+</div>
+    </section>
+
+    
+
+    <section class="widget">
+        <h3 class="widget-title">RSS</h3>
+        <ul class="widget-list">
+            <li><a href="https://code0xff.org/index.xml">文章 RSS</a></li>
+        </ul>
+    </section>
+</div>
+            </div>
+        </div>
+    </div>
+    <footer id="footer">
+    <div>
+        &copy; 2023 <a href="https://code0xff.org/">记录每个瞬间 By 老王</a>
+        
+    </div>
+    <br />
+    <div>
+        <div class="github-badge">
+            <a href="https://gohugo.io/" target="_black" rel="nofollow"><span class="badge-subject">Powered by</span><span class="badge-value bg-blue">Hugo</span></a>
+        </div>
+        <div class="github-badge">
+            <a href="https://github.com/flysnow-org/maupassant-hugo" target="_black"><span class="badge-subject">Theme</span><span class="badge-value bg-yellowgreen">Maupassant</span></a>
+        </div>
+    </div>
+    <div>
+        网站备案编号：<a href="https://beian.miit.gov.cn">京ICP备19014975号-1</a>
+    </div>
+</footer>
+
+
+    
+    <script type="text/javascript">
+        window.MathJax = {
+            tex2jax: {
+                inlineMath: [['$', '$']],
+                processEscapes: true
+                }
+            };
+    </script>
+    <script src='https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.5/MathJax.js?config=TeX-MML-AM_CHTML' async></script><script src="https://cdn.bootcdn.net/ajax/libs/fancybox/3.5.7/jquery.fancybox.min.js"></script>
+
+<a id="rocket" href="#top"></a>
+<script type="text/javascript" src='/js/totop.js?v=0.0.0' async=""></script>
+
+<script type="application/javascript">
+var doNotTrack = false;
+if (!doNotTrack) {
+	window.ga=window.ga||function(){(ga.q=ga.q||[]).push(arguments)};ga.l=+new Date;
+	ga('create', 'GA ID', 'auto');
+	
+	ga('send', 'pageview');
+}
+</script>
+<script async src='https://www.google-analytics.com/analytics.js'></script>
+
+
+
+    <script type="text/javascript" src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js" async></script>
+
+
+
+
+</body>
+
+</html>

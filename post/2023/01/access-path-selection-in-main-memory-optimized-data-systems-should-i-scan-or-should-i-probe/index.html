@@ -1,0 +1,617 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    
+    <meta name="referrer" content="no-referrer-when-downgrade">
+    
+
+    <title>Access Path Selection in Main-Memory Optimized Data Systems Should I Scan or Should I Probe | 记录每个瞬间</title>
+    <meta property="og:title" content="Access Path Selection in Main-Memory Optimized Data Systems Should I Scan or Should I Probe - 记录每个瞬间">
+    <meta property="og:type" content="article">
+        
+    <meta property="article:published_time" content='2023-01-03T10:35:19&#43;08:00'>
+        
+        
+    <meta property="article:modified_time" content='2023-01-03T10:35:19&#43;08:00'>
+        
+    <meta name="Keywords" content="">
+    <meta name="description" content="Access Path Selection in Main-Memory Optimized Data Systems Should I Scan or Should I Probe">
+        <meta name="author" content="隔壁老王">
+        
+    <meta property="og:url" content="https://code0xff.org/post/2023/01/access-path-selection-in-main-memory-optimized-data-systems-should-i-scan-or-should-i-probe/">
+    <link rel="shortcut icon" href='/favicon.ico'  type="image/x-icon">
+
+    <link rel="stylesheet" href='/css/normalize.css'>
+    <link rel="stylesheet" href='/css/style.css'>
+    <script type="text/javascript" src="//cdn.bootcdn.net/ajax/libs/jquery/3.4.1/jquery.min.js"></script>
+
+    
+    
+    
+        <link href="https://cdn.bootcdn.net/ajax/libs/fancybox/3.5.7/jquery.fancybox.min.css" rel="stylesheet">
+    
+    
+    
+    
+</head>
+
+
+<body>
+    <header id="header" class="clearfix">
+    <div class="container">
+        <div class="col-group">
+            <div class="site-name ">
+                
+                    <a id="logo" href="https://code0xff.org/">
+                        记录每个瞬间
+                    </a>
+                
+                
+            </div>
+            <div>
+                <nav id="nav-menu" class="clearfix">
+                    <a class="current" href="https://code0xff.org/">首页</a>
+                    
+                    <a  href="https://code0xff.org/linked/" title="链接">链接</a>
+                    
+                    <a  href="https://code0xff.org/archives/" title="归档">归档</a>
+                    
+                    <a  href="https://code0xff.org/about/" title="关于">关于</a>
+                    
+                </nav>
+            </div>
+        </div>
+    </div>
+</header>
+
+    <div id="body">
+        <div class="container">
+            <div class="col-group">
+
+                <div class="col-8" id="main">
+                    
+<div class="res-cons">
+    
+    <article class="post">
+        <header>
+            <h1 class="post-title">Access Path Selection in Main-Memory Optimized Data Systems Should I Scan or Should I Probe</h1>
+        </header>
+        <date class="post-meta meta-date">
+            2023年1月3日
+        </date>
+<nav id="TableOfContents">
+  <ul>
+    <li>
+      <ul>
+        <li><a href="#介绍">介绍</a></li>
+        <li><a href="#访问路径选择">访问路径选择</a></li>
+        <li><a href="#测试">测试</a></li>
+        <li><a href="#结论">结论</a></li>
+        <li><a href="#参考">参考</a></li>
+      </ul>
+    </li>
+  </ul>
+</nav>
+        
+        <div class="post-meta">
+            
+            <span class="post-meta meta-tags">
+                <ul class="clearfix">
+                    <a href='/categories/%E6%95%B0%E6%8D%AE%E5%BA%93'>数据库</a>
+                </ul>
+            </span>
+            
+        </div>
+        
+        
+        <div class="post-meta">
+            <span id="busuanzi_container_page_pv">|<span id="busuanzi_value_page_pv"></span><span>
+                    阅读</span></span>
+        </div>
+        
+        
+        <div class="post-content">
+            <blockquote>
+<p>原文 <br>
+<a href="https://15721.courses.cs.cmu.edu/spring2020/papers/13-execution/kester-sigmod17.pdf">https://15721.courses.cs.cmu.edu/spring2020/papers/13-execution/kester-sigmod17.pdf</a></p>
+</blockquote>
+<h2 id="介绍">介绍</h2>
+<p>对于传统系统来说</p>
+<ul>
+<li>如果有主索引，那么查询时肯定是走索引了</li>
+<li>如果没有索引，那么就是全表扫描</li>
+</ul>
+<p>对于 二级索引，就不同了，它是需要回表的，有多次I/O<br>
+而现代化的硬件，可能 顺序扫描比 走二级索引更好</p>
+<ul>
+<li>现代数据系统都是列存的，只需要访问指定的列就行了</li>
+<li>向量化模型，一次一批效率更高</li>
+<li>列存的数据压缩更好</li>
+<li>顺序scan在并非情况下，是可以共享的</li>
+<li>SIMD执行让顺序scan效率也提高很多</li>
+</ul>
+<p>由于大内存的出现，现代分析系统往往不再考虑二级索引，而专注于对scan更多的优化，他们往往只提供单个路径访问方式<br>
+本论文要回答两个问题</p>
+<ul>
+<li>现代分析系统中，仍然需要使用二级索引吗？</li>
+<li>随着硬件和系统的进步，我们如何做 access path selection？</li>
+</ul>
+<p>本文主要关注 主内存系统，大多都是读场景，写只有append-only，以及单独的线程去做合并，写入到 读优化的文件系统中<br>
+在现代系统中，访问路径的选择性不是一个固定值，而是一个斜率，具体跟并发数量、硬件特性、数据布局有关  <br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/kester-sigmod17/1.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/kester-sigmod17/1.jpg" />
+        </a>
+    </p>
+<h2 id="访问路径选择">访问路径选择</h2>
+<p>首先需要考虑一些预备的参数</p>
+<ul>
+<li>select 算子</li>
+<li>参数和符号</li>
+<li>查询工作负载的建模</li>
+<li>建模数据布局</li>
+<li>硬件特性</li>
+<li>其他扫描增强，如zone-map</li>
+<li>压缩</li>
+<li>B+ 树</li>
+</ul>
+<p>Table 1: Parameters and notation used to model access methods and to perform access path selection.
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/kester-sigmod17/2.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/kester-sigmod17/2.jpg" />
+        </a>
+    </p>
+<p><strong>Modeling In-Memory Shared Scans</strong></p>
+<ul>
+<li>数据移动 $T_{DS} = \frac{N·ts}{BW_{S}}$</li>
+<li>谓词评估 $PE = 2·f_{p}·p·N$</li>
+<li>写入结果 $TD_{R} = \frac{N·rw}{BW_{R}}$</li>
+<li>单个查询的开销(4) $SingleQueryCost = max(TD_{S}, PE) + si·TD_{R}$</li>
+<li>共享查询的开销(5) $SharedScan = max(TD_{S}, q·PE) +S_{tot}·TD_{R}$</li>
+</ul>
+<p><strong>Modeling In-Memory Secondary B+-Trees</strong></p>
+<ul>
+<li>树的遍历，$TT = (1 + \lceil logb(N) \rceil) · (C_{m} + \frac{b·C_{A}}{2} + \frac{b·f_{p}·p}{2})$</li>
+<li>遍历叶节点，$si· TL, where, TL = \frac{N·C_{M}}{b}$</li>
+<li>二级索引的数据访问， $si· TD_{I}, where, TD_{I} = \frac{N·(aw+ow)}{BW_{I}}$</li>
+<li>写结果， $RW = si·N·\frac{rw}{BW_{R}}$</li>
+<li>结果排序，$SC_{i} = si·N·\log2(si·N)$</li>
+<li>单个索引的探测时间， $SingleIndexProbe = TT + si · (TL + TD_{I}) + RW + SC_{i}$</li>
+<li>并发的索引访问， $ConcIndex = q·TT + S_{tot} · (TL + TD_{I}) + S_{tot}·TD_{R} + SF·CA, where$</li>
+</ul>
+<p>
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/kester-sigmod17/2_1.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/kester-sigmod17/2_1.jpg" />
+        </a>
+    </p>
+<p>
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/kester-sigmod17/3.png">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/kester-sigmod17/3.png" />
+        </a>
+    </p>
+<p>访问路径的选择<br>
+Access Path Selection = $APS = \frac{ConcIndex}{SharedScan}$</p>
+<p>这里的选择性是因子，如果很高，说明要扫描很多tuple 倾向于scan；否则倾向于index</p>
+<ul>
+<li>当APS &gt;= 1，倾向于使用scan</li>
+<li>当 APS &lt; 1，倾向于使用索引</li>
+</ul>
+<h2 id="测试">测试</h2>
+<p>下面几张图，首先的硬件参数：</p>
+<ul>
+<li>HW1，ng CM = 180ns, CA = 2ns, BWS = 40GB/s, BWI = 20GB/s, and BWR = 20G</li>
+<li>HW2，2, withCM = 100ns, and bandwidth BWS = 160GB/s, BWI = 80GB/s, and BWR = 80G
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/kester-sigmod17/4.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/kester-sigmod17/4.jpg" />
+        </a>
+    <br>
+上图 4- 7的<code>x</code>轴是查询并发度，<code>y</code>轴是每个查询的独立选择性<br>
+图8 - 10，<code>x</code>轴是数量N，<code>y</code>轴依然是选择性<br>
+深蓝色的表示表示 APS很低，会选择二级索引，亮蓝色的表示二级索引有 2-3倍的加速<br>
+中间蓝绿过度表示 scan和index差不多<br>
+黄色部分表示 scan有1.5 - 2倍的加速<br>
+红色区域，尤其是深红色表示用共享scan 有3倍的加速</li>
+</ul>
+<p>上图中</p>
+<ul>
+<li>4 - 8中，随着并发的增加，就更偏向于scan，图4、图5是压缩和不压缩看起来都差不多</li>
+<li>图6是更多列的影响，图7的 另一种硬件场景</li>
+<li>图8是随着数据集大小的增大，更偏向于scan</li>
+<li>图9、10是增大了并发度</li>
+</ul>
+<p>
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/kester-sigmod17/11.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/kester-sigmod17/11.jpg" />
+        </a>
+    <br>
+现在我们将 访问路径选择，跟查询优化器做整合，这时候APS 就称为优化器的一部分</p>
+<ul>
+<li>为了实现此功能，需要更好的收集相关数据</li>
+<li>比如数据布局、硬件特征、查询并发性</li>
+<li>因为现代系统是基于主内存的，响应时间很快，因此需要高效的收集，快速的做出决定</li>
+</ul>
+<p>
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/kester-sigmod17/12.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/kester-sigmod17/12.jpg" />
+        </a>
+    <br>
+解释上图</p>
+<ul>
+<li>图12、图13都是类似的，图12是单个查询，图13是1 - 512并发查询</li>
+<li>图12中随着并发的增加，使用索引的代价就很高了</li>
+<li>图13中，上面是scan更合适，下面是索引更合适，在选择性较低的情况下，索引都比较合适的</li>
+<li>这也解释了图1， 这条线并不是单纯的直线，总的来说随着并发的增加，共享scan的效果就更好，被平摊了</li>
+<li>图14是数据大小对其影响，一开始索引合适，随着数据量增大，索引的效果也在降低</li>
+<li>图15是混合列的布局，随着列数量增加，二级索引就更像是面向行的情况，可以过滤掉更多数据</li>
+<li>图16是各种硬件不同的场景，路径选择需要监控适配不同的硬件场景才能达到更好的性能</li>
+<li>图17是压缩场景下，scan会略好一点，但是两种访问路径都仍然有用</li>
+</ul>
+<p>
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/kester-sigmod17/18.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/kester-sigmod17/18.jpg" />
+        </a>
+    <br>
+解释</p>
+<ul>
+<li>图18中，是混合了9种场景，包括并发的 low、middle、high，以及选择性很低的点查，选择性中等，较高等场景</li>
+<li>图18中可以看到没有哪个路径选择对于所有场景都通吃的</li>
+<li>在不同场景下各种路径选择都用，所有优化器需要根据不同的场景做出合理的选择</li>
+<li>图19，TPC-H场景，包含了MonetDB、PG</li>
+</ul>
+<h2 id="结论">结论</h2>
+<p>。。。
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/kester-sigmod17/19.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/kester-sigmod17/19.jpg" />
+        </a>
+    </p>
+<h2 id="参考">参考</h2>
+<ul>
+<li><a href="">Markdown 数学符号大全</a></li>
+<li><a href="https://zhuanlan.zhihu.com/p/455118287">知乎的解读</a></li>
+</ul>
+
+			<script type="text/javascript"
+        async
+        src="https://cdn.bootcss.com/mathjax/2.7.3/MathJax.js?config=TeX-AMS-MML_HTMLorMML">
+MathJax.Hub.Config({
+  tex2jax: {
+    inlineMath: [['$','$'], ['\\(','\\)']],
+    displayMath: [['$$','$$'], ['\[\[','\]\]']],
+    processEscapes: true,
+    processEnvironments: true,
+    skipTags: ['script', 'noscript', 'style', 'textarea', 'pre'],
+    TeX: { equationNumbers: { autoNumber: "AMS" },
+         extensions: ["AMSmath.js", "AMSsymbols.js"] }
+  }
+});
+
+MathJax.Hub.Queue(function() {
+    
+    
+    
+    var all = MathJax.Hub.getAllJax(), i;
+    for(i = 0; i < all.length; i += 1) {
+        all[i].SourceElement().parentNode.className += ' has-jax';
+    }
+});
+</script>
+
+<style>
+code.has-jax {
+    font: inherit;
+    font-size: 100%;
+    background: inherit;
+    border: inherit;
+    color: #515151;
+}
+</style>
+        </div>
+
+        
+
+
+        
+
+<div class="post-archive">
+    <h2>相关文章</h2>
+    <ul class="listing">
+        
+        <li><a href="/post/2023/01/photon-a-fast-query-engine-for-lakehouse-systems/">Photon A Fast Query Engine for Lakehouse Systems</a></li>
+        
+        <li><a href="/post/2022/11/multi-tenant-cloud-data-services/">关于云环境中多租户问题的论文</a></li>
+        
+        <li><a href="/post/2023/01/millwheel/">MillWheel</a></li>
+        
+        <li><a href="/post/2022/11/how-to-read-a-paper/">How to Read a Paper</a></li>
+        
+        <li><a href="/post/2022/09/architecture-of-a-database-system/">Architecture of a Database System论文翻译</a></li>
+        
+    </ul>
+</div>
+
+
+        <div class="post-meta meta-tags">
+            
+            <ul class="clearfix">
+                
+                <li><a href='/tags/%E6%9F%A5%E8%AF%A2%E4%BC%98%E5%8C%96'>查询优化</a></li>
+                
+                <li><a href='/tags/%E8%AE%BA%E6%96%87'>论文</a></li>
+                
+            </ul>
+            
+        </div>
+    </article>
+    
+    
+
+    
+    
+</div>
+
+
+                </div>
+
+                <div id="secondary">
+    <section class="widget">
+        <form id="search" action='https://code0xff.org/search/' method="get" accept-charset="utf-8" target="_blank" _lpchecked="1">
+      
+      <input type="text" name="q" maxlength="20" placeholder="Search">
+      <input type="hidden" name="sitesearch" value="https://code0xff.org/">
+      <button type="submit" class="submit icon-search"></button>
+</form>
+    </section>
+    
+    <section class="widget">
+        <h3 class="widget-title">最近文章</h3>
+<ul class="widget-list">
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/01/monetdbx100-hyper-pipelining-query-execution/" title="MonetDB/X100: Hyper-Pipelining Query Execution">MonetDB/X100: Hyper-Pipelining Query Execution</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/01/access-path-selection-in-main-memory-optimized-data-systems-should-i-scan-or-should-i-probe/" title="Access Path Selection in Main-Memory Optimized Data Systems Should I Scan or Should I Probe">Access Path Selection in Main-Memory Optimized Data Systems Should I Scan or Should I Probe</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/01/photon-a-fast-query-engine-for-lakehouse-systems/" title="Photon A Fast Query Engine for Lakehouse Systems">Photon A Fast Query Engine for Lakehouse Systems</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/01/mysql%E7%9A%84%E5%B9%B6%E5%8F%91/" title="MySQL的并发">MySQL的并发</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2022/12/mysql%E7%9A%84%E6%81%A2%E5%A4%8D/" title="MySQL的恢复">MySQL的恢复</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2022/12/mysql%E7%9A%84%E7%BC%93%E5%AD%98/" title="MySQL的缓存">MySQL的缓存</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2022/12/mysql%E6%9F%A5%E8%AF%A2%E5%88%86%E6%9E%90/" title="MySQL查询分析">MySQL查询分析</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2022/12/%E7%94%A8%E5%B7%A5%E5%85%B7%E5%88%86%E6%9E%90mysql%E5%AD%98%E5%82%A8%E6%96%87%E4%BB%B6/" title="用工具分析MySQL存储文件">用工具分析MySQL存储文件</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2022/12/mysql%E6%96%87%E4%BB%B6%E5%AD%98%E5%82%A8%E7%BB%93%E6%9E%84/" title="MySQL文件存储结构">MySQL文件存储结构</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2022/11/%E8%B0%83%E8%AF%95mysql/" title="调试MySQL">调试MySQL</a>
+    </li>
+    
+</ul>
+    </section>
+
+    
+
+    <section class="widget">
+        <h3 class="widget-title"><a href='/categories/'>分类</a></h3>
+<ul class="widget-list">
+    
+    <li><a href="https://code0xff.org/categories/%E5%88%86%E5%B8%83%E5%BC%8F/">分布式 (6)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E5%8E%9F%E7%90%86%E5%88%86%E6%9E%90/">原理分析 (6)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E5%95%86%E4%B8%9A/">商业 (3)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E5%A4%A7%E6%95%B0%E6%8D%AE/">大数据 (22)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%95%B0%E6%8D%AE%E5%BA%93/">数据库 (11)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%97%85%E8%A1%8C/">旅行 (10)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%9E%B6%E6%9E%84/">架构 (1)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E7%AE%97%E6%B3%95/">算法 (8)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E7%B3%BB%E7%BB%9F/">系统 (5)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E7%BC%96%E7%A8%8B%E8%AF%AD%E8%A8%80/">编程语言 (2)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E8%AF%BB%E4%B9%A6%E7%AC%94%E8%AE%B0/">读书笔记 (9)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E9%9A%8F%E4%BE%BF%E5%86%99%E5%86%99/">随便写写 (4)</a></li>
+    
+</ul>
+    </section>
+
+    <section class="widget">
+        <h3 class="widget-title">归档</a></h3>
+<ul class="widget-list">
+    
+    <li><a href="https://code0xff.org/years/2021%E5%B9%B4/">2021年 (30)</a></li>
+    
+    <li><a href="https://code0xff.org/years/2022%E5%B9%B4/">2022年 (54)</a></li>
+    
+    <li><a href="https://code0xff.org/years/2023%E5%B9%B4/">2023年 (3)</a></li>
+    
+</ul>
+    </section>
+
+    <section class="widget">
+        <h3 class="widget-title"><a href='/tags/'>标签</a></h3>
+<div class="tagcloud">
+    
+    <a href="https://code0xff.org/tags/b%E6%A0%91/">B树 </a>
+    
+    <a href="https://code0xff.org/tags/flink/">flink </a>
+    
+    <a href="https://code0xff.org/tags/hive/">Hive </a>
+    
+    <a href="https://code0xff.org/tags/k8s/">k8s </a>
+    
+    <a href="https://code0xff.org/tags/kudu/">kudu </a>
+    
+    <a href="https://code0xff.org/tags/manacher/">Manacher </a>
+    
+    <a href="https://code0xff.org/tags/mapreduce/">MapReduce </a>
+    
+    <a href="https://code0xff.org/tags/mysql/">MySQL </a>
+    
+    <a href="https://code0xff.org/tags/paxos/">paxos </a>
+    
+    <a href="https://code0xff.org/tags/raft/">raft </a>
+    
+    <a href="https://code0xff.org/tags/scala/">scala </a>
+    
+    <a href="https://code0xff.org/tags/snowflake/">snowflake </a>
+    
+    <a href="https://code0xff.org/tags/spark/">spark </a>
+    
+    <a href="https://code0xff.org/tags/unix/">unix </a>
+    
+    <a href="https://code0xff.org/tags/%E4%BA%8C%E5%88%86%E6%9F%A5%E6%89%BE/">二分查找 </a>
+    
+    <a href="https://code0xff.org/tags/%E4%BA%8C%E5%8F%89%E6%A0%91%E9%81%8D%E5%8E%86/">二叉树遍历 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%88%86%E5%B8%83%E5%BC%8F/">分布式 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%8A%A8%E6%80%81%E6%B3%A8%E5%85%A5/">动态注入 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%8E%86%E5%8F%B2/">历史 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%9B%9E%E6%BA%AF/">回溯 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%9B%BD%E5%86%85%E6%97%85%E8%A1%8C/">国内旅行 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%9B%BD%E5%A4%96%E6%97%85%E8%A1%8C/">国外旅行 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%A4%A7%E6%95%B0%E6%8D%AE/">大数据 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%AD%98%E5%82%A8/">存储 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%B7%A5%E4%BD%9C%E8%AE%B0%E5%BD%95/">工作记录 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%BE%AE%E6%9C%8D%E5%8A%A1/">微服务 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%95%B0%E6%8D%AE%E5%BA%93/">数据库 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%9F%A5%E8%AF%A2%E4%BC%98%E5%8C%96/">查询优化 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%B1%87%E7%BC%96/">汇编 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%B9%96%E4%BB%93%E4%B8%80%E4%BD%93/">湖仓一体 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%94%9F%E6%B4%BB/">生活 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%94%B5%E5%BD%B1/">电影 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%AE%97%E6%B3%95/">算法 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BB%8F%E6%B5%8E/">经济 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BC%93%E5%AD%98/">缓存 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BC%96%E8%AF%91%E5%8E%9F%E7%90%86/">编译原理 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BD%91%E7%BB%9C/">网络 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AE%A1%E7%AE%97%E6%A1%86%E6%9E%B6/">计算框架 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AE%BA%E6%96%87/">论文 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AF%BB%E4%B9%A6%E7%AC%94%E8%AE%B0/">读书笔记 </a>
+    
+</div>
+    </section>
+
+    
+
+    <section class="widget">
+        <h3 class="widget-title">RSS</h3>
+        <ul class="widget-list">
+            <li><a href="https://code0xff.org/index.xml">文章 RSS</a></li>
+        </ul>
+    </section>
+</div>
+            </div>
+        </div>
+    </div>
+    <footer id="footer">
+    <div>
+        &copy; 2023 <a href="https://code0xff.org/">记录每个瞬间 By 老王</a>
+        
+    </div>
+    <br />
+    <div>
+        <div class="github-badge">
+            <a href="https://gohugo.io/" target="_black" rel="nofollow"><span class="badge-subject">Powered by</span><span class="badge-value bg-blue">Hugo</span></a>
+        </div>
+        <div class="github-badge">
+            <a href="https://github.com/flysnow-org/maupassant-hugo" target="_black"><span class="badge-subject">Theme</span><span class="badge-value bg-yellowgreen">Maupassant</span></a>
+        </div>
+    </div>
+    <div>
+        网站备案编号：<a href="https://beian.miit.gov.cn">京ICP备19014975号-1</a>
+    </div>
+</footer>
+
+
+    
+    <script type="text/javascript">
+        window.MathJax = {
+            tex2jax: {
+                inlineMath: [['$', '$']],
+                processEscapes: true
+                }
+            };
+    </script>
+    <script src='https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.5/MathJax.js?config=TeX-MML-AM_CHTML' async></script><script src="https://cdn.bootcdn.net/ajax/libs/fancybox/3.5.7/jquery.fancybox.min.js"></script>
+
+<a id="rocket" href="#top"></a>
+<script type="text/javascript" src='/js/totop.js?v=0.0.0' async=""></script>
+
+<script type="application/javascript">
+var doNotTrack = false;
+if (!doNotTrack) {
+	window.ga=window.ga||function(){(ga.q=ga.q||[]).push(arguments)};ga.l=+new Date;
+	ga('create', 'GA ID', 'auto');
+	
+	ga('send', 'pageview');
+}
+</script>
+<script async src='https://www.google-analytics.com/analytics.js'></script>
+
+
+
+    <script type="text/javascript" src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js" async></script>
+
+
+
+
+</body>
+
+</html>
