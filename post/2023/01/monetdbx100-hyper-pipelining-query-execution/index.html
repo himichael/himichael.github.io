@@ -89,6 +89,12 @@
       <ul>
         <li><a href="#介绍">介绍</a></li>
         <li><a href="#cpu是如何工作的">CPU是如何工作的</a></li>
+        <li><a href="#microbenchmark-tpc-h-query-1">Microbenchmark: TPC-H Query 1</a>
+          <ul>
+            <li><a href="#query-1-baseline-performance">Query 1: Baseline Performance</a></li>
+          </ul>
+        </li>
+        <li><a href="#参考">参考</a></li>
       </ul>
     </li>
   </ul>
@@ -148,11 +154,228 @@
 奔腾是 31 * 3 = 93，可以同时运行 93 个指令<br>
 不过这么高的并行度有时候没啥用，如果不能好好利用的话，还不如低并行度的 <br>
 测试过程中也发现了，两个CPU的并行度差别挺大，但实际跑出来的效果其实差不多</p>
-<p>
+<p>这里有一个概念，叫：<code>loop pipelining</code>，循环流水线<br>
+循环中可能会有很多分支预测行为，这对于CPU并不友好，而一般的语法并不会控制CPU指令行为，这些都是编译器的优化行为 <br>
+所以好的编译器优化，可以最大程度的利用CPU，比如它们生成的指令是完全流水线的，或者乱序的，这样就可以充分利用CPU的流水线行为<br>
+这里要提一下安腾的编译器，能最大化的利用CPU的流水线，生成的指令并行度是很高的</p>
+<p>像这样的指令：</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-cpp" data-lang="cpp"><span style="display:flex;"><span>F(A[<span style="color:#bd93f9">0</span>]),G(A[<span style="color:#bd93f9">0</span>]), F(A[<span style="color:#bd93f9">1</span>]),G(A[<span style="color:#bd93f9">1</span>]),.. F(A[n]),G(A[n])
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>经过优化就变成了：</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-cpp" data-lang="cpp"><span style="display:flex;"><span>F(A[<span style="color:#bd93f9">0</span>]),F(A[<span style="color:#bd93f9">1</span>]),F(A[<span style="color:#bd93f9">2</span>]), G(A[<span style="color:#bd93f9">0</span>]),G(A[<span style="color:#bd93f9">1</span>]),G(A[<span style="color:#bd93f9">2</span>]), F(A[<span style="color:#bd93f9">3</span>]),..
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>这样的好处是充分的并行化，假设F会 延迟两个周期，等待G(A[0]，按照上面的执行顺序<br>
+F(A[0])之后是：F(A[1])、F(A[2])，然后是G(A[0])，中间正好是2个指令，就可以做到完全不等待效率非常高</p>
+<p>假设有这么一个查询:</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-sql" data-lang="sql"><span style="display:flex;"><span><span style="color:#ff79c6">SELECT</span> oid <span style="color:#ff79c6">FROM</span> <span style="color:#ff79c6">table</span> <span style="color:#ff79c6">WHERE</span> col <span style="color:#ff79c6">&lt;</span> X
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>其 x 随机分布在[0, 100]之间，这就会导致一个分支行为<br>
+
         <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/boncz-cidr2005/2.jpg">
             <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/boncz-cidr2005/2.jpg" />
         </a>
+    <br>
+像有的CPU，AthlonMP就会出现很差的行为，50%的执行都是浪费的 <br>
+而改变了代码，则会大幅度提高CPU使用率<br>
+另外一点，CPU中 大概30%的指令是用于 内存 load，store，这也很浪费性能<br>
+因为要读主板上的内存，大概会由50纳秒的延迟<br>
+像数据库领域中，很多都不是缓存友好的，于是会出现cache misses这种行为，效率低效<br>
+所以就出现了如</p>
+<ul>
+<li>缓存对其的 B树</li>
+<li>列风格的数据布局，如PAXX、DSM</li>
+<li>限制查询的随机CPU访问，将查询范围限制在CPU缓存中</li>
+<li>如基数分区的hash-join 可以大幅提升性能</li>
+</ul>
+<p>将下面这些改进之后，可能会提升几个数量级</p>
+<ul>
+<li>改进分支行为，变成直接/预测机制</li>
+<li>提升cache的命中率</li>
+<li>提升内存的loads、stores行为</li>
+</ul>
+<p>因为数据库分析领域有大量的CPU计算行为，所以仍然有很大的提升空间</p>
+<h2 id="microbenchmark-tpc-h-query-1">Microbenchmark: TPC-H Query 1</h2>
+<p>这里选择用 TPC-H 的第一个查询来做分析，选择这个SQL 的原因是相对简单，没有join等复杂场景，就是一个单表查询</p>
+<ul>
+<li>它有两列相减、一列相加、三列相乘</li>
+<li>还有8个 聚合函数，其中4个sum、4个avg、1个count</li>
+<li>聚合只在两个单字符列上，产生4个唯一组，因此可以用小的hash表完成，不需要额外的I/O</li>
+</ul>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-sql" data-lang="sql"><span style="display:flex;"><span><span style="color:#ff79c6">SELECT</span> l_returnflag, l_linestatus,
+</span></span><span style="display:flex;"><span>	<span style="color:#ff79c6">sum</span>(l_quantity) <span style="color:#ff79c6">AS</span> sum_qty,
+</span></span><span style="display:flex;"><span>	<span style="color:#ff79c6">sum</span>(l_extendedprice) <span style="color:#ff79c6">AS</span> sum_base_price,
+</span></span><span style="display:flex;"><span>	<span style="color:#ff79c6">sum</span>	(l_extendedprice <span style="color:#ff79c6">*</span> (<span style="color:#bd93f9">1</span> <span style="color:#ff79c6">-</span> l_discount))
+</span></span><span style="display:flex;"><span>	    <span style="color:#ff79c6">AS</span> sum_disc_price,
+</span></span><span style="display:flex;"><span>	<span style="color:#ff79c6">sum</span>(l_extendedprice <span style="color:#ff79c6">*</span> (<span style="color:#bd93f9">1</span> <span style="color:#ff79c6">-</span> l_discount) <span style="color:#ff79c6">*</span>
+</span></span><span style="display:flex;"><span>	    (<span style="color:#bd93f9">1</span> <span style="color:#ff79c6">+</span> l_tax)) <span style="color:#ff79c6">AS</span> sum_charge,
+</span></span><span style="display:flex;"><span>	<span style="color:#ff79c6">avg</span>(l_quantity) <span style="color:#ff79c6">AS</span> avg_qty,
+</span></span><span style="display:flex;"><span>	<span style="color:#ff79c6">avg</span>(l_extendedprice) <span style="color:#ff79c6">AS</span> avg_price,
+</span></span><span style="display:flex;"><span>	<span style="color:#ff79c6">avg</span>(l_discount) <span style="color:#ff79c6">AS</span> avg_disc,
+</span></span><span style="display:flex;"><span>	<span style="color:#ff79c6">count</span>(<span style="color:#ff79c6">*</span>) <span style="color:#ff79c6">AS</span> count_order
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">FROM</span> lineitem
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">WHERE</span> l_shipdate <span style="color:#ff79c6">&lt;=</span> <span style="color:#8be9fd;font-style:italic">date</span> ’<span style="color:#bd93f9">1998</span><span style="color:#ff79c6">-</span><span style="color:#bd93f9">09</span><span style="color:#ff79c6">-</span><span style="color:#bd93f9">02</span>’
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">GROUP</span> <span style="color:#ff79c6">BY</span> l_returnflag, l_linestatus
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>下面部分是TPC-H 官网拿到的商业数据库的测试报告，跟MySQL的比较类似，所以怀疑 同样有MySQL的问题<br>
+也就是没有完全流水线化，CPU使用率比较低<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/boncz-cidr2005/t1.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/boncz-cidr2005/t1.jpg" />
+        </a>
     </p>
+<p>火山模型是一个很不错的设计，但是需要有大量的解释开销<br>
+下面是MySQL的执行过程统计</p>
+<ul>
+<li>第一列是累计的时间</li>
+<li>第二列执行时间的百分比</li>
+<li>第三列是call调用的次数</li>
+<li>第四、第五列是指令的执行时间
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/boncz-cidr2005/t2.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/boncz-cidr2005/t2.jpg" />
+        </a>
+    <br>
+首先看看上面 5个加粗的指令，用于完成所有工作的指令，只占到10%<br>
+而28%的时间用于hash表中的查找，剩余的68%用于指令调用<br>
+每次查询相关的指令是<code>38</code>个，而这个机器每个周期可以执行 3个指令<br>
+一个简单的算数操作 + (double src1, double src2) 这样的<br>
+其RISC指令如下：</li>
+</ul>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-asm" data-lang="asm"><span style="display:flex;"><span><span style="color:#50fa7b">LOAD</span> src1,reg1
+</span></span><span style="display:flex;"><span><span style="color:#50fa7b">LOAD</span> src2,reg2
+</span></span><span style="display:flex;"><span><span style="color:#50fa7b">ADD</span> reg1,reg2,reg3
+</span></span><span style="display:flex;"><span><span style="color:#50fa7b">STOR</span> dst,reg3
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>相当于每 3个周期做一次： one *(double,double) <br>
+而MySQL这边是需要 49个周期<br>
+一个解释原因是 缺少 循环流水线，很多指令都处理等待状态，导致效率很低<br>
+MySQL使用的是一次一个tuple方式</p>
+<ul>
+<li>Item func plus::val只执行了一个加法，限制了编译器做流水线，导致流水线出现等待，3个周期变成20个周期</li>
+<li>调用的成本分摊到一个操作上，又增加了一倍的成本</li>
+</ul>
+<p>MonetDB消除了MySQL 的那些问题，其90%的时间都花在执行上了，但由于使用了物化方式，变成了双刃剑 <br>
+MonetDB是列存的，它是一个二进制关联表BAT，一个表两个列，head和value<br>
+如果计算：  join(BAT[tl ,te] A, BAT[te,tr] B)   其结果相当于 tl,tr <br>
+相当于把A的头，B的尾结合在一起，这里就是指针反转，几乎没什么开销<br>
+而它的另一些计算如：extprice * (1 - tax)</p>
+<ul>
+<li>tmp1 := [-](1, tax)</li>
+<li>tmp2 := [*](extprice, tmp1)</li>
+</ul>
+<p>有点像lambda ，把map 映射到每个值上面，然后产生一个物化的中间结果<br>
+而就是这个中间结果导致了很多不必要的内存拷贝，导致了很多无意义的工作<br>
+这就是双刃剑的原因，避免了MySQL的低效流水线，但是也出现了无意义的工作，最后也变得低效<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/boncz-cidr2005/t3.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/boncz-cidr2005/t3.jpg" />
+        </a>
+    </p>
+<h3 id="query-1-baseline-performance">Query 1: Baseline Performance</h3>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">15
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">16
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">17
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">18
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">19
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">20
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">21
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">22
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">23
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-cpp" data-lang="cpp"><span style="display:flex;"><span><span style="color:#ff79c6">static</span> <span style="color:#8be9fd">void</span> <span style="color:#50fa7b">tpch_query1</span>(<span style="color:#8be9fd">int</span> n, <span style="color:#8be9fd">int</span> hi_date,
+</span></span><span style="display:flex;"><span>	<span style="color:#8be9fd">unsigned</span> <span style="color:#8be9fd">char</span><span style="color:#ff79c6">*</span>__restrict__ p_returnflag,
+</span></span><span style="display:flex;"><span>	<span style="color:#8be9fd">unsigned</span> <span style="color:#8be9fd">char</span><span style="color:#ff79c6">*</span>__restrict__ p_linestatus,
+</span></span><span style="display:flex;"><span>	<span style="color:#8be9fd">double</span><span style="color:#ff79c6">*</span>__restrict__ p_quantity,
+</span></span><span style="display:flex;"><span>	<span style="color:#8be9fd">double</span><span style="color:#ff79c6">*</span>__restrict__ p_extendedprice,
+</span></span><span style="display:flex;"><span>	<span style="color:#8be9fd">double</span><span style="color:#ff79c6">*</span>__restrict__ p_discount,
+</span></span><span style="display:flex;"><span>	<span style="color:#8be9fd">double</span><span style="color:#ff79c6">*</span>__restrict__ p_tax,
+</span></span><span style="display:flex;"><span>	<span style="color:#8be9fd">int</span><span style="color:#ff79c6">*</span>__restrict__ p_shipdate,
+</span></span><span style="display:flex;"><span>	aggr_t1<span style="color:#ff79c6">*</span>__restrict__ hashtab)
+</span></span><span style="display:flex;"><span>{
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">for</span>(<span style="color:#8be9fd">int</span> i<span style="color:#ff79c6">=</span><span style="color:#bd93f9">0</span>; i<span style="color:#ff79c6">&lt;</span>n; i<span style="color:#ff79c6">++</span>) {
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">if</span> (p_shipdate[i] <span style="color:#ff79c6">&lt;=</span> hi_date) {
+</span></span><span style="display:flex;"><span>			aggr_t1 <span style="color:#ff79c6">*</span>entry <span style="color:#ff79c6">=</span> hashtab <span style="color:#ff79c6">+</span>
+</span></span><span style="display:flex;"><span>			(p_returnflag[i]<span style="color:#ff79c6">&lt;&lt;</span><span style="color:#bd93f9">8</span>) <span style="color:#ff79c6">+</span> p_linestatus[i];
+</span></span><span style="display:flex;"><span>			<span style="color:#8be9fd">double</span> discount <span style="color:#ff79c6">=</span> p_discount[i];
+</span></span><span style="display:flex;"><span>			<span style="color:#8be9fd">double</span> extprice <span style="color:#ff79c6">=</span> p_extendedprice[i];
+</span></span><span style="display:flex;"><span>			entry<span style="color:#ff79c6">-&gt;</span>count<span style="color:#ff79c6">++</span>;
+</span></span><span style="display:flex;"><span>			entry<span style="color:#ff79c6">-&gt;</span>sum_qty <span style="color:#ff79c6">+=</span> p_quantity[i];
+</span></span><span style="display:flex;"><span>			entry<span style="color:#ff79c6">-&gt;</span>sum_disc <span style="color:#ff79c6">+=</span> discount;
+</span></span><span style="display:flex;"><span>			entry<span style="color:#ff79c6">-&gt;</span>sum_base_price <span style="color:#ff79c6">+=</span> extprice;
+</span></span><span style="display:flex;"><span>			entry<span style="color:#ff79c6">-&gt;</span>sum_disc_price <span style="color:#ff79c6">+=</span> (extprice <span style="color:#ff79c6">*=</span> (<span style="color:#bd93f9">1</span><span style="color:#ff79c6">-</span>discount));
+</span></span><span style="display:flex;"><span>			entry<span style="color:#ff79c6">-&gt;</span>sum_charge <span style="color:#ff79c6">+=</span> extprice<span style="color:#ff79c6">*</span>(<span style="color:#bd93f9">1</span><span style="color:#ff79c6">-</span>p_tax[i]);
+</span></span><span style="display:flex;"><span>}}}
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>Figure 4: Hard-Coded UDF for Query 1 in C</p>
+<h2 id="参考">参考</h2>
+<ul>
+<li><a href="https://zhuanlan.zhihu.com/p/385842627">超级方便的Linux自带性能分析工具！gprof介绍、安装、使用及实践</a></li>
+<li><a href="https://blog.csdn.net/weixin_42670653/article/details/82147911">C/C++性能测试工具&mdash;-gprof</a></li>
+</ul>
 
 			<script type="text/javascript"
         async
