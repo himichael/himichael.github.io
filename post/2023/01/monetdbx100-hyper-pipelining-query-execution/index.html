@@ -94,6 +94,8 @@
             <li><a href="#query-1-baseline-performance">Query 1: Baseline Performance</a></li>
           </ul>
         </li>
+        <li><a href="#x100-a-vectorized-query-processor">X100: A Vectorized Query Processor</a></li>
+        <li><a href="#tpc-h-实验">TPC-H 实验</a></li>
         <li><a href="#参考">参考</a></li>
       </ul>
     </li>
@@ -318,6 +320,8 @@ MonetDB是列存的，它是一个二进制关联表BAT，一个表两个列，h
         </a>
     </p>
 <h3 id="query-1-baseline-performance">Query 1: Baseline Performance</h3>
+<p>下面是一个 Monet的UDF，这里手动加上了 <code>__restrict__</code> 关键字，告诉编译器不同的指针指向的区域是不重叠的 <br>
+这样编译器就可以做并行优化</p>
 <div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
 <table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
 <pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
@@ -371,10 +375,225 @@ MonetDB是列存的，它是一个二进制关联表BAT，一个表两个列，h
 </span></span></code></pre></td></tr></table>
 </div>
 </div><p>Figure 4: Hard-Coded UDF for Query 1 in C</p>
+<h2 id="x100-a-vectorized-query-processor">X100: A Vectorized Query Processor</h2>
+<p>实现了 X100的向量化查询处理模块</p>
+<ul>
+<li>磁盘，都是顺序扫描，数据是向量化布局的</li>
+<li>内存，使用SSE预抓取指令，数据压缩，这样节省空间和带宽</li>
+<li>cache，类似火山模型，但一次取1000个，可以放到cache中加速处理，另外压缩/解压也在这里</li>
+<li>CPU，利用并行化执行</li>
+</ul>
+<p>整个架构如下：
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/boncz-cidr2005/5.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/boncz-cidr2005/5.jpg" />
+        </a>
+    </p>
+<p>简化后的查询语句如下：</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-sql" data-lang="sql"><span style="display:flex;"><span>Aggr(
+</span></span><span style="display:flex;"><span>	Project(
+</span></span><span style="display:flex;"><span>		<span style="color:#ff79c6">Select</span>(
+</span></span><span style="display:flex;"><span>			<span style="color:#ff79c6">Table</span>(lineitem),
+</span></span><span style="display:flex;"><span>			<span style="color:#ff79c6">&lt;</span> (shipdate, <span style="color:#8be9fd;font-style:italic">date</span>(’<span style="color:#bd93f9">1998</span><span style="color:#ff79c6">-</span><span style="color:#bd93f9">09</span><span style="color:#ff79c6">-</span><span style="color:#bd93f9">03</span>’))),
+</span></span><span style="display:flex;"><span>			[ discountprice <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">*</span>( <span style="color:#ff79c6">-</span>( flt(’<span style="color:#bd93f9">1</span>.<span style="color:#bd93f9">0</span>’), discount),
+</span></span><span style="display:flex;"><span>			extendedprice) ]),
+</span></span><span style="display:flex;"><span>		[ returnflag ],
+</span></span><span style="display:flex;"><span>	[ sum_disc_price <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">sum</span>(discountprice) ]
+</span></span><span style="display:flex;"><span>)
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>下面是整体的执行过程</p>
+<ul>
+<li>首先是scan，scan的时候只扫描必要的列</li>
+<li>之后是select，对于discount这些列不做任何修改，直接转到更上层</li>
+<li>project、agg对列做一些处理，计算每个元组在哈希表中的位置，然后使用这些数据更新聚合结果
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/boncz-cidr2005/6.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/boncz-cidr2005/6.jpg" />
+        </a>
+    </li>
+</ul>
+<p>下面是X100支持的关系代数，table是物化关系，而Dataflow只是流水线上流过的tuple<br>
+有些操作会产生多组tuple，有些不改变原生形状，有些会产生一些新的形状<br>
+聚合包括：直接的聚合、hash、顺序聚合等<br>
+join目前只支持 left-deep join<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/boncz-cidr2005/7.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/boncz-cidr2005/7.jpg" />
+        </a>
+    </p>
+<p>使用列风格并非是优化内存布局，而是为了CPU更好的优化<br>
+执行过程中只需要操作对应的列即可，而不需要知道他们的布局，也就是列的offset   <br>
+通过这种方式编译器就可以最大限度的并行化指令，实现 聚合循环流水线<br>
+比如一个向量化的浮点加法</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">15
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-cpp" data-lang="cpp"><span style="display:flex;"><span>map_plus_double_col_double_col(<span style="color:#8be9fd">int</span> n,
+</span></span><span style="display:flex;"><span>	<span style="color:#8be9fd">double</span><span style="color:#ff79c6">*</span>__restrict__ res,
+</span></span><span style="display:flex;"><span>	<span style="color:#8be9fd">double</span><span style="color:#ff79c6">*</span>__restrict__ col1, <span style="color:#8be9fd">double</span><span style="color:#ff79c6">*</span>__restrict__ col2,
+</span></span><span style="display:flex;"><span>	<span style="color:#8be9fd">int</span><span style="color:#ff79c6">*</span>__restrict__ sel) {
+</span></span><span style="display:flex;"><span>		<span style="color:#ff79c6">if</span> (sel) {
+</span></span><span style="display:flex;"><span>			<span style="color:#ff79c6">for</span>(<span style="color:#8be9fd">int</span> j<span style="color:#ff79c6">=</span><span style="color:#bd93f9">0</span>;j<span style="color:#ff79c6">&lt;</span>n; j<span style="color:#ff79c6">++</span>) {
+</span></span><span style="display:flex;"><span>				<span style="color:#8be9fd">int</span> i <span style="color:#ff79c6">=</span> sel[j];
+</span></span><span style="display:flex;"><span>				res[i] <span style="color:#ff79c6">=</span> col1[i] <span style="color:#ff79c6">+</span> col2[i];
+</span></span><span style="display:flex;"><span>			}
+</span></span><span style="display:flex;"><span>		} <span style="color:#ff79c6">else</span> {
+</span></span><span style="display:flex;"><span>			<span style="color:#ff79c6">for</span>(<span style="color:#8be9fd">int</span> i<span style="color:#ff79c6">=</span><span style="color:#bd93f9">0</span>;i<span style="color:#ff79c6">&lt;</span>n; i<span style="color:#ff79c6">++</span>)
+</span></span><span style="display:flex;"><span>				res[i] <span style="color:#ff79c6">=</span> col1[i] <span style="color:#ff79c6">+</span> col2[i];
+</span></span><span style="display:flex;"><span>			} 
+</span></span><span style="display:flex;"><span>		}
+</span></span><span style="display:flex;"><span>}		
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>这里的<code>sel</code>参数可以为NULL，或者是一个数组的位置<br>
+X100包含类似这样的原语大概100多个<br>
+比如，下面是两个相同类型但没有任何类型限制的加法，并产生相同类型</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-cpp" data-lang="cpp"><span style="display:flex;"><span>any<span style="color:#ff79c6">::</span><span style="color:#bd93f9">1</span> <span style="color:#ff79c6">+</span>(any<span style="color:#ff79c6">::</span><span style="color:#bd93f9">1</span> x,any<span style="color:#ff79c6">::</span><span style="color:#bd93f9">1</span> y) plus <span style="color:#ff79c6">=</span> x <span style="color:#ff79c6">+</span> y
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>比如下面是一个复合运行，求 曼哈顿距离</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-cpp" data-lang="cpp"><span style="display:flex;"><span><span style="color:#ff79c6">/</span>(square(<span style="color:#ff79c6">-</span>(<span style="color:#8be9fd">double</span><span style="color:#ff79c6">*</span>, <span style="color:#8be9fd">double</span><span style="color:#ff79c6">*</span>)), <span style="color:#8be9fd">double</span><span style="color:#ff79c6">*</span>)
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>X100的优缺点</p>
+<ul>
+<li>其存储是不可变的，对于查询来说很好，列存可以避免不必要的检索</li>
+<li>假设压缩可以进一步减少I/O，内存带宽开销</li>
+<li>也支持目录索引，比如max、min，在range谓词中可以过滤很多数据</li>
+<li>但是更新代价会更好，需要额外的列指明是否是删除的</li>
+<li>插入只是append操作
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/boncz-cidr2005/8.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/boncz-cidr2005/8.jpg" />
+        </a>
+    </li>
+</ul>
+<h2 id="tpc-h-实验">TPC-H 实验</h2>
+<p>以下是分析结果<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/boncz-cidr2005/t4.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/boncz-cidr2005/t4.jpg" />
+        </a>
+    </p>
+<p>下面是 query 1的 X100 关系代数</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">15
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">16
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">17
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">18
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">19
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">20
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">21
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">22
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-sql" data-lang="sql"><span style="display:flex;"><span><span style="color:#ff79c6">Order</span>(
+</span></span><span style="display:flex;"><span>	Project(
+</span></span><span style="display:flex;"><span>		Aggr(
+</span></span><span style="display:flex;"><span>			<span style="color:#ff79c6">Select</span>(
+</span></span><span style="display:flex;"><span>				<span style="color:#ff79c6">Table</span>(lineitem)
+</span></span><span style="display:flex;"><span>				<span style="color:#ff79c6">&lt;</span> ( l_shipdate, <span style="color:#8be9fd;font-style:italic">date</span>(’<span style="color:#bd93f9">1998</span><span style="color:#ff79c6">-</span><span style="color:#bd93f9">09</span><span style="color:#ff79c6">-</span><span style="color:#bd93f9">03</span>’))),
+</span></span><span style="display:flex;"><span>				[ l_returnflag, l_linestatus ],
+</span></span><span style="display:flex;"><span>				[ sum_qty <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">sum</span>(l_quantity),
+</span></span><span style="display:flex;"><span>				sum_base_price <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">sum</span>(l_extendedprice),
+</span></span><span style="display:flex;"><span>				sum_disc_price <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">sum</span>(
+</span></span><span style="display:flex;"><span>					discountprice <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">*</span>( <span style="color:#ff79c6">-</span>(flt(’<span style="color:#bd93f9">1</span>.<span style="color:#bd93f9">0</span>’), l_discount),
+</span></span><span style="display:flex;"><span>							l_extendedprice ) ),
+</span></span><span style="display:flex;"><span>				sum_charge <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">sum</span>(<span style="color:#ff79c6">*</span>( <span style="color:#ff79c6">+</span>( flt(’<span style="color:#bd93f9">1</span>.<span style="color:#bd93f9">0</span>’), l_tax),
+</span></span><span style="display:flex;"><span>					discountprice ) ),
+</span></span><span style="display:flex;"><span>				sum_disc <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">sum</span>(l_discount),
+</span></span><span style="display:flex;"><span>				count_order <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">count</span>() ]),
+</span></span><span style="display:flex;"><span>				[ l_returnflag, l_linestatus, sum_qty,
+</span></span><span style="display:flex;"><span>					sum_base_price, sum_disc_price, sum_charge,
+</span></span><span style="display:flex;"><span>					avg_qty <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">/</span>( sum_qty, cnt<span style="color:#ff79c6">=</span>dbl(count_order)),
+</span></span><span style="display:flex;"><span>					avg_price <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">/</span>( sum_base_price, cnt),
+</span></span><span style="display:flex;"><span>					avg_disc <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">/</span>( sum_disc, cnt), count_order ]),
+</span></span><span style="display:flex;"><span>				[ l_returnflag <span style="color:#ff79c6">ASC</span>, l_linestatus <span style="color:#ff79c6">ASC</span>])
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>Figure 9: Query 1 in X100 Algebra</p>
+<p>之后发现</p>
+<ul>
+<li>性能有了明显提升，6个周期一个指令，比之前MySQL的49个周期好很多</li>
+<li>由于数据都保持在cache中，执行带宽大幅度提高，从500M/s，到现在的7.5G/s</li>
+<li>枚举值会自动放到 枚举表中，通过Fetch1Joins来检索，大概2个周期
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/boncz-cidr2005/t5.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/boncz-cidr2005/t5.jpg" />
+        </a>
+    </li>
+</ul>
+<p>当size = 1时，就退回了当初 一次一个tuple这种模式，性能很差<br>
+当size增加时候性能大幅度提升<br>
+随着size不断增加，cache已经放不下了，性能开始降低<br>
+之后开始用到L2、L3 cache，性能继续下降<br>
+直到size 更大，只能放到主内存中，相当于退化到之前的物化模式了，性能进一步降低 <br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/boncz-cidr2005/10.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/boncz-cidr2005/10.jpg" />
+        </a>
+    </p>
 <h2 id="参考">参考</h2>
 <ul>
 <li><a href="https://zhuanlan.zhihu.com/p/385842627">超级方便的Linux自带性能分析工具！gprof介绍、安装、使用及实践</a></li>
 <li><a href="https://blog.csdn.net/weixin_42670653/article/details/82147911">C/C++性能测试工具&mdash;-gprof</a></li>
+<li><a href="https://blog.csdn.net/qq_41822235/article/details/83479562">关键字_restrict</a></li>
 </ul>
 
 			<script type="text/javascript"
