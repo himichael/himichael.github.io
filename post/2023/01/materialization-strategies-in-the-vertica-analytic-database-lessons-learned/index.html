@@ -9,20 +9,20 @@
     <meta name="referrer" content="no-referrer-when-downgrade">
     
 
-    <title>MillWheel | 记录每个瞬间</title>
-    <meta property="og:title" content="MillWheel - 记录每个瞬间">
+    <title>Materialization Strategies in the Vertica Analytic Database: Lessons Learned | 记录每个瞬间</title>
+    <meta property="og:title" content="Materialization Strategies in the Vertica Analytic Database: Lessons Learned - 记录每个瞬间">
     <meta property="og:type" content="article">
         
-    <meta property="article:published_time" content='2022-11-18T08:35:19&#43;08:00'>
+    <meta property="article:published_time" content='2023-01-07T20:05:19&#43;08:00'>
         
         
-    <meta property="article:modified_time" content='2022-11-18T08:35:19&#43;08:00'>
+    <meta property="article:modified_time" content='2023-01-07T20:05:19&#43;08:00'>
         
     <meta name="Keywords" content="">
-    <meta name="description" content="MillWheel">
+    <meta name="description" content="Materialization Strategies in the Vertica Analytic Database: Lessons Learned">
         <meta name="author" content="隔壁老王">
         
-    <meta property="og:url" content="https://code0xff.org/post/2023/01/millwheel/">
+    <meta property="og:url" content="https://code0xff.org/post/2023/01/materialization-strategies-in-the-vertica-analytic-database-lessons-learned/">
     <link rel="shortcut icon" href='/favicon.ico'  type="image/x-icon">
 
     <link rel="stylesheet" href='/css/normalize.css'>
@@ -78,18 +78,17 @@
     
     <article class="post">
         <header>
-            <h1 class="post-title">MillWheel</h1>
+            <h1 class="post-title">Materialization Strategies in the Vertica Analytic Database: Lessons Learned</h1>
         </header>
         <date class="post-meta meta-date">
-            2022年11月18日
+            2023年1月7日
         </date>
 <nav id="TableOfContents">
   <ul>
     <li>
       <ul>
-        <li><a href="#introduction">INTRODUCTION</a></li>
-        <li><a href="#system-overview">SYSTEM OVERVIEW</a></li>
-        <li><a href="#core-concepts">CORE CONCEPTS</a></li>
+        <li><a href="#介绍">介绍</a></li>
+        <li><a href="#其他">其他</a></li>
       </ul>
     </li>
   </ul>
@@ -99,7 +98,7 @@
             
             <span class="post-meta meta-tags">
                 <ul class="clearfix">
-                    <a href='/categories/%E5%A4%A7%E6%95%B0%E6%8D%AE'>大数据</a>
+                    <a href='/categories/%E6%95%B0%E6%8D%AE%E5%BA%93'>数据库</a>
                 </ul>
             </span>
             
@@ -114,147 +113,79 @@
         
         <div class="post-content">
             <blockquote>
-<p>论文：  <br>
-<a href="https://storage.googleapis.com/pub-tools-public-publication-data/pdf/41378.pdf">MillWheel: Fault-Tolerant Stream Processing at
-Internet Scale</a></p>
+<p>原文 <br>
+<a href="https://15721.courses.cs.cmu.edu/spring2020/papers/13-execution/shrinivas-icde2013.pdf">https://15721.courses.cs.cmu.edu/spring2020/papers/13-execution/shrinivas-icde2013.pdf</a></p>
 </blockquote>
-<h2 id="introduction">INTRODUCTION</h2>
-<p>MillWheel是谷歌搞的一套分布式、低延迟的数据处理框架</p>
+<h2 id="介绍">介绍</h2>
+<p>列存在物理上是完全隔离的，查询的时候会通过物化技术，将不同的列柔和为一行<br>
+这种也叫tuple的重建策略(物化策略)
+具体来说有两种实现方式</p>
 <ul>
-<li>支持各种数据模型</li>
-<li>天生支持容错</li>
-<li>低延迟</li>
-<li>可以做到精确一次</li>
+<li>早期物化，Early materialization</li>
+<li>延迟物化，Last materialization</li>
 </ul>
-<p>其他的如</p>
+<p>一般来说，延迟物化的性能会比 早起物化要好，但是实现起来会更复杂，需要维持更多的参数<br>
+而物化的本质上，是对 join 来说的，他们不适合放在内存，产生了 spilling join，也就是join溢出<br>
+通过对早起物化的一些优化也能达到不错的性能</p>
+<p>早起物化又细分为两种</p>
 <ul>
-<li>Spark Streaming、Sonora限制了用户代码能力</li>
-<li>S4 不提供完全容错的持久状态</li>
-<li>Strom提供精确一次</li>
-<li>Trident 限制了事务操作的顺序</li>
-</ul>
-<p>谷歌内部有这个需求：需要统计热点趋势信息，比如电视收视率情况<br>
-这需要根据查询构建出历史信息，而且新来的数据需要存储下来，为以后的查询使用<br>
-查询可以反映出波峰和低谷的，如果统计出有异常，需要报告给其他系统并发出通知<br>
+<li>EM并行化</li>
+<li>EM流水线化
+他们的区别如下：<br>
 
-        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2022/11/millwheel/1.jpg">
-            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2022/11/millwheel/1.jpg" />
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/shrinivas-icde2013/1.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/shrinivas-icde2013/1.jpg" />
         </a>
-    </p>
-<p>MillWheel需要实现如下逻辑</p>
-<ul>
-<li>当数据可用时，需要立刻被发布出去</li>
-<li>需要提供持久状态，并整合到系统的一致性模型中</li>
-<li>要能处理乱序数据</li>
-<li>系统能根据一个单调递增的低水印时间戳来计算</li>
-<li>当增加更多机器时，延迟应该继续保持常数不变</li>
-<li>系统能提供精确一次的记录交付</li>
+    <br>
+Fig. 1. Early materialization strategies<br>
+所谓的并行化，就是同时去查两个列，然后列拼在一起，最后做数据过滤，取出想要的行<br>
+而流水线化，则是直接去列中过滤数据，这样取出来的就已经过滤掉很多数据了<br>
+Vertica 使用的就是 EM-流水线的方式</li>
 </ul>
-<h2 id="system-overview">SYSTEM OVERVIEW</h2>
-<p>从一个高层的角度看，MillWheel就是 基于输入数据的用户定义的转换图<br>
-这里会自动搞定底层的那些事情，而用户无需关系 <br>
-输入和输出表示为：(key, value, timestamp) 三元组</p>
-<ul>
-<li>key是系统内部的元数据字段</li>
-<li>value表示真实数据的字节数组，可以是任何的值</li>
-<li>timestamp是用户设置的任意值，一般为墙上时钟</li>
-</ul>
-<p>MillWheel 根据这些值来计算 低水印<br>
-比如，用户想聚合搜索词的每秒计数，他们可能希望在执行搜索时分配一个对应的时间戳<br>
+<p>延迟物化，是只抓取查询计划中需要的列，对于多个join来说，只抓取join中需要的列<br>
+join的输出是只匹配那些需要的行，并用来匹配剩下的查询<br>
+Vertica采用hash join的方式来做早起物化</p>
+<p>下面是 早期物化 vs 延迟物化<br>
 
-        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2022/11/millwheel/2.jpg">
-            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2022/11/millwheel/2.jpg" />
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/shrinivas-icde2013/2.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/shrinivas-icde2013/2.jpg" />
         </a>
-    </p>
-<p>概念</p>
-<ul>
-<li>用户的计算会形成一个 计算流图、</li>
-<li>用户可以随意添加、删除计算逻辑，不用重启系统</li>
-<li>每条数据的处理是冥等的</li>
-<li>所有的记录都保证精确处理一次</li>
-</ul>
-<h2 id="core-concepts">CORE CONCEPTS</h2>
-<p>用户可以定义他们自己的逻辑，对应到MillWhell中，就是一堆输入、输出，对应的是有向图中的边</p>
-<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
-<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
-<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
-</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
-</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
-</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
-</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
-</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
-</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
-</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
-</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
-</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
-</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
-</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
-</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
-</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
-</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">15
-</span></code></pre></td>
-<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
-<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-cpp" data-lang="cpp"><span style="display:flex;"><span>computation SpikeDetector {
-</span></span><span style="display:flex;"><span>	input_streams {
-</span></span><span style="display:flex;"><span>		stream model_updates {
-</span></span><span style="display:flex;"><span>			key_extractor <span style="color:#ff79c6">=</span> ’SearchQuery’
-</span></span><span style="display:flex;"><span>		}
-</span></span><span style="display:flex;"><span>		stream window_counts {
-</span></span><span style="display:flex;"><span>			key_extractor <span style="color:#ff79c6">=</span> ’SearchQuery’
-</span></span><span style="display:flex;"><span>		}
-</span></span><span style="display:flex;"><span>	}
-</span></span><span style="display:flex;"><span>	output_streams {
-</span></span><span style="display:flex;"><span>		stream anomalies {
-</span></span><span style="display:flex;"><span>			record_format <span style="color:#ff79c6">=</span> ’AnomalyMessage’
-</span></span><span style="display:flex;"><span>		}
-</span></span><span style="display:flex;"><span>	}
-</span></span><span style="display:flex;"><span>}
-</span></span></code></pre></td></tr></table>
-</div>
-</div><p>Figure 3: Definition of a single node in a MillWheel topology. Input streams and output streams correspond to directed edges in the graph</p>
-<p>计算</p>
-<ul>
-<li>用户的逻辑被封装到计算中，当有输入数据时，就会触发到用户逻辑</li>
-<li>用户逻辑可以是任意代码，包括连接外部系统、管理MillWhell、输出数据</li>
-<li>连接外部系统时，需要由用户自己保证冥等性</li>
-<li>处理key是串行执行的，但是多个key可以并行执行
-
-        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2022/11/millwheel/4.jpg">
-            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2022/11/millwheel/4.jpg" />
-        </a>
-    </li>
-</ul>
-<p>key</p>
-<ul>
-<li>主要是用来比较两条记录，以及做聚合使用的</li>
-<li>消费者会指定一个key来提取这些记录</li>
-<li>计算逻辑只处理跟key相关的上下文</li>
-<li>比如可以用cookie作为指纹当做key来计算是否为垃圾邮件</li>
-<li>多个计算逻辑，可以从相同的流上提取不同的key，而key是被流的消费者指定
-
-        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2022/11/millwheel/5.jpg">
-            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2022/11/millwheel/5.jpg" />
-        </a>
-    </li>
-</ul>
-<p>streams</p>
-<ul>
-<li>MillWhell中不同计算之间的传递机制</li>
-<li>一个计算可以订阅0 到多个输入流，并产生1 到多个输出流</li>
-<li>每个消费者在每各流上，基于指定的key来消费</li>
-<li>所以多个消费者可以订阅相同的流，然后以不同的方式处理(聚合)这些数据</li>
-<li>流是由他们的名字做唯一识别的</li>
-</ul>
-<p>persistent state</p>
-<ul>
-<li>最基本的格式，是一个不透明的byte string，基于每个key管理</li>
-<li>用户提供序列化/反序列化方式，如Protocol Buffers，将其转为基本格式</li>
-<li>持久化状态则由底层的分布式高可用存储来保证，如BigTable、Spanner，其确保数据完整性的保证对终端用户完全透明</li>
-<li>状态一般包括： 在记录窗口之上的聚合统计，join的buffer数据等</li>
-</ul>
+    
+Fig. 2. Late and Early Materialized Joins in Vertica for the query “SELECT C1,C2,D1,D2 FROM C,D WHERE C1=D1”</p>
+<h2 id="其他">其他</h2>
 <p>
-        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2022/11/millwheel/16.jpg">
-            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2022/11/millwheel/16.jpg" />
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/shrinivas-icde2013/3.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/shrinivas-icde2013/3.jpg" />
+        </a>
+    
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/shrinivas-icde2013/5.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/shrinivas-icde2013/5.jpg" />
+        </a>
+    
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/shrinivas-icde2013/6.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/shrinivas-icde2013/6.jpg" />
+        </a>
+    
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/shrinivas-icde2013/7.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/shrinivas-icde2013/7.jpg" />
+        </a>
+    
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/shrinivas-icde2013/8.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/shrinivas-icde2013/8.jpg" />
+        </a>
+    
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/shrinivas-icde2013/9.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/shrinivas-icde2013/9.jpg" />
+        </a>
+    
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/shrinivas-icde2013/10.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/shrinivas-icde2013/10.jpg" />
         </a>
     </p>
 
@@ -299,7 +230,7 @@ code.has-jax {
 <div class="post-archive">
     <ul class="post-copyright">
         <li><strong>原文作者：</strong><a rel="author" href="https://code0xff.org/">老王</a></li>
-        <li style="word-break:break-all"><strong>原文链接：</strong><a href="https://code0xff.org/post/2023/01/millwheel/">https://code0xff.org/post/2023/01/millwheel/</a></li>
+        <li style="word-break:break-all"><strong>原文链接：</strong><a href="https://code0xff.org/post/2023/01/materialization-strategies-in-the-vertica-analytic-database-lessons-learned/">https://code0xff.org/post/2023/01/materialization-strategies-in-the-vertica-analytic-database-lessons-learned/</a></li>
         <li><strong>版权声明：</strong>本作品采用<a rel="license" href="https://creativecommons.org/licenses/by-nc-nd/4.0/">知识共享署名-非商业性使用-禁止演绎 4.0 国际许可协议</a>进行许可，非商业转载请注明出处（作者，原文链接），商业转载请联系作者获得授权。</li>
     </ul>
 </div>
@@ -313,15 +244,15 @@ code.has-jax {
     <h2>相关文章</h2>
     <ul class="listing">
         
-        <li><a href="/post/2022/11/how-to-read-a-paper/">How to Read a Paper</a></li>
+        <li><a href="/post/2023/01/monetdbx100-hyper-pipelining-query-execution/">MonetDB/X100: Hyper-Pipelining Query Execution</a></li>
         
-        <li><a href="/post/2022/11/flumejava%E8%AE%BA%E6%96%87/">FlumeJava: Easy, Efficient Data-Parallel Pipelines</a></li>
+        <li><a href="/post/2023/01/access-path-selection-in-main-memory-optimized-data-systems-should-i-scan-or-should-i-probe/">Access Path Selection in Main-Memory Optimized Data Systems Should I Scan or Should I Probe</a></li>
         
-        <li><a href="/post/2022/09/architecture-of-a-database-system/">Architecture of a Database System论文翻译</a></li>
+        <li><a href="/post/2023/01/photon-a-fast-query-engine-for-lakehouse-systems/">Photon A Fast Query Engine for Lakehouse Systems</a></li>
         
-        <li><a href="/post/2022/08/%E7%A1%AE%E5%AE%9A%E8%A6%81%E5%9C%A8dbms%E4%B8%AD%E7%94%A8mmap%E5%90%97/">确定要在DBMS中用mmap吗</a></li>
+        <li><a href="/post/2022/11/multi-tenant-cloud-data-services/">关于云环境中多租户问题的论文</a></li>
         
-        <li><a href="/post/2022/07/whats-really-new-with-newsql%E8%AE%BA%E6%96%87/">What&#39;s Really New with NewSQL论文</a></li>
+        <li><a href="/post/2023/01/millwheel/">MillWheel</a></li>
         
     </ul>
 </div>
@@ -331,9 +262,9 @@ code.has-jax {
             
             <ul class="clearfix">
                 
-                <li><a href='/tags/%E8%AE%BA%E6%96%87'>论文</a></li>
+                <li><a href='/tags/%E6%9F%A5%E8%AF%A2%E4%BC%98%E5%8C%96'>查询优化</a></li>
                 
-                <li><a href='/tags/%E5%A4%A7%E6%95%B0%E6%8D%AE'>大数据</a></li>
+                <li><a href='/tags/%E8%AE%BA%E6%96%87'>论文</a></li>
                 
             </ul>
             
