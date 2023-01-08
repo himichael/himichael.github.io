@@ -94,7 +94,15 @@
             <li><a href="#purage">purage</a></li>
           </ul>
         </li>
-        <li><a href="#锁">锁</a></li>
+        <li><a href="#锁">锁</a>
+          <ul>
+            <li><a href="#基础部分">基础部分</a></li>
+            <li><a href="#行锁结构">行锁结构</a></li>
+            <li><a href="#加锁语句分析">加锁语句分析</a></li>
+            <li><a href="#死锁">死锁</a></li>
+            <li><a href="#锁模式和类型">锁模式和类型</a></li>
+          </ul>
+        </li>
         <li><a href="#参考">参考</a></li>
       </ul>
     </li>
@@ -230,7 +238,640 @@ delete、update的 undo需要支持MVCC还不能删除</p>
 </ul>
 <h2 id="锁">锁</h2>
 <p><a href="/post/2022/10/b+%E6%A0%91%E6%89%A7%E8%A1%8C%E8%BF%87%E7%A8%8B/">B+树的执行过程</a></p>
-<h2 id="参考">参考</h2>
+<h3 id="基础部分">基础部分</h3>
+<p>锁定读</p>
+<ul>
+<li>共享锁</li>
+<li>独占锁</li>
+</ul>
+<p>加 S 锁的读取</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-sql" data-lang="sql"><span style="display:flex;"><span><span style="color:#ff79c6">SELECT</span> ... <span style="color:#ff79c6">LOCK</span> <span style="color:#ff79c6">IN</span> <span style="color:#ff79c6">SHARE</span> <span style="color:#ff79c6">MODE</span>;
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>加 X 锁的读取</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-sql" data-lang="sql"><span style="display:flex;"><span><span style="color:#ff79c6">SELECT</span> ... <span style="color:#ff79c6">FOR</span> <span style="color:#ff79c6">UPDATE</span>;
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>写操作</p>
+<ul>
+<li>DELETE，先定位到这条记录，加 X锁，然后执行 delete_mark 操作</li>
+<li>UPDATE(新旧记录大小相等)，先定位到这条记录，加 X锁，然后原地更新</li>
+<li>UPDATE(新旧记录大小不同)，先定位到这条记录，加X锁然后彻底删掉(移动到垃圾链表中)，再插入一条记录</li>
+<li>UPDATE(修改主键值)，也是先删除，再插入</li>
+<li>INSERT，插入一条记录受 隐式锁包含，不需要在内存中生成对应的锁结构</li>
+</ul>
+<p>多粒度锁</p>
+<ul>
+<li>表级 S锁，LOCK TABLES t READ</li>
+<li>表级 X锁，LOCK TABLES t WRITE</li>
+<li>表级 意向共享锁 Intention Shared Lock</li>
+<li>表级 意向独占锁 Intention Exclusive Lock</li>
+<li>表级 AUTO-INC 锁
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2022/07/CMU%E6%95%B0%E6%8D%AE%E5%BA%93%E8%AF%BE%E7%A8%8B-3/Two-Phase-Locking-16.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2022/07/CMU%E6%95%B0%E6%8D%AE%E5%BA%93%E8%AF%BE%E7%A8%8B-3/Two-Phase-Locking-16.jpg" />
+        </a>
+    </li>
+</ul>
+<p>行锁</p>
+<ul>
+<li>Record Lock，记录锁 只对记录本身加锁</li>
+<li>Gap Lock，锁住记录前的间隙，防止别的事物向该间隙插入新纪录。在repeatable read隔离级别下可以很大程度解决幻读，解决方案有两种：一种是MVCC，另一种就是使用这种锁</li>
+<li>Next-Key Lock，Record Lock与Gap Lock的结合体，既保护记录本身，也防止别的事务插入记录</li>
+<li>Insert Intention Lock，插入时如果有gap锁会在内存中生成一个锁结构，表明有事务想在间歇锁中插入新记录，现处于等待状态</li>
+<li>隐式锁，对聚集索引有 trx_id 隐藏列，如果其他事务想对此记录加S/X锁，需查看该记录的 trx_Id是否活跃，如果活跃则帮助此事务建立一个锁结构，然后自身的is_waiting设置为false；二级索引的Page Header有一个 PAGE_MAX_TRX_ID结构，如果小于当前活跃事务说明已提交可以访问，否则回表找到主记录建立锁</li>
+</ul>
+<h3 id="行锁结构">行锁结构</h3>
+<p>InnoDB中锁的结构如下：<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E7%9A%84%E5%B9%B6%E5%8F%91/2.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E7%9A%84%E5%B9%B6%E5%8F%91/2.jpg" />
+        </a>
+    <br>
+解释一下</p>
+<ul>
+<li>锁所在的事务信息：任何锁都属于一个事务，这里记载对应的事务信息。</li>
+<li>索引信息：对于行级锁来说，需要记录加锁的记录属于哪个索引。</li>
+<li>表/行锁信息：记录的对应的信息。</li>
+<li>type_mode：32比特的数，包含lock_mode、lock_type、rec_lock_type这三部分</li>
+<li>lock_mode（锁模式）占用低4比特
+<ul>
+<li>LOCK_IS（十进制的0）：共享意向锁。</li>
+<li>LOCK_IX（十进制的1）：独占意向锁。</li>
+<li>LOCK_S（十进制的2）：共享锁。</li>
+<li>LOCK_X（十进制的3）：独占锁。</li>
+<li>LOCK_AUTO_INC（十进制的4）：AUTO_INC锁，轻量级锁。</li>
+</ul>
+</li>
+<li>lock_type（锁类型）占用第5-8位
+<ul>
+<li>LOCK_TABLE（十进制的16）：也就是当第五比特设置为1时，表示表级锁</li>
+<li>LOCK_REC（十进制的32）：也就是当第六比特设置为1时，表示行级锁</li>
+<li>当lock_type为行级锁时，才会由更多信息</li>
+<li>LOCK_ORDINARY，十进制0，表示 next-key</li>
+<li>LOCK_GAP，十进制512，表示gap锁</li>
+<li>LOCK_REC_NOT_GAP，十进制1024，表示记录锁</li>
+<li>LOCK_INSERT_INTENTION，十进制1024，表示插入意向锁</li>
+</ul>
+</li>
+<li>LOCK_WAIT，第9bit为1时表示登台，为0时表示获取到了锁</li>
+<li>n_bits，一条激流对应者一个bit，一个page中包含很多记录，用不同bit来区分到底为哪条记录加锁的</li>
+</ul>
+<p><strong>rec lock</strong><br>
+n_bit 计算公式：</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-cpp" data-lang="cpp"><span style="display:flex;"><span>n_bits <span style="color:#ff79c6">=</span> (<span style="color:#bd93f9">1</span> <span style="color:#ff79c6">+</span> ((n_recs <span style="color:#ff79c6">+</span> LOCK_PAGE<span style="color:#ff79c6">+</span>BITMAP_MARGIN) <span style="color:#ff79c6">+</span> <span style="color:#bd93f9">8</span>)) <span style="color:#ff79c6">*</span> <span style="color:#bd93f9">8</span>
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>举个例子说明一下。假设page no为3这个Page中有250行记录，变量n_bits=250+64=314，那么是即位图需要40个字节用于位图的管理（n_bytes=1+314/8=40）。若Page中heap_no为2、3、4、5的记录上都已经上锁，则Page中记录与内存数据结构lock_rec_t的关系如下图所示<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E7%9A%84%E5%B9%B6%E5%8F%91/3.png">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E7%9A%84%E5%B9%B6%E5%8F%91/3.png" />
+        </a>
+    <br>
+由图可见，在页142-3中，前4条用户记录都有锁，因此在对应的数据结构的lock_rec_t中对应的heap no位图值都为1</p>
+<p>type_mode计算方式：</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-cpp" data-lang="cpp"><span style="display:flex;"><span>type_mode <span style="color:#ff79c6">=</span> LOCK_X <span style="color:#ff79c6">|</span> LOCK_REC <span style="color:#ff79c6">|</span> LOCK_ORDINARY <span style="color:#ff79c6">|</span> LOCK_WAIT
+</span></span><span style="display:flex;"><span>type_mode <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">3</span> <span style="color:#ff79c6">|</span><span style="color:#bd93f9">32</span> <span style="color:#ff79c6">|</span> <span style="color:#bd93f9">0</span> <span style="color:#ff79c6">|</span> <span style="color:#bd93f9">256</span> <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">291</span>
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p><strong>gap lock</strong>
+假设表数据如下：<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E7%9A%84%E5%B9%B6%E5%8F%91/4.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E7%9A%84%E5%B9%B6%E5%8F%91/4.jpg" />
+        </a>
+    </p>
+<p>如图所示（红色三角形所指的位置）得到5个区间：(infimum,2)、(2,4)、(4,6)、(6,8)、(8,supremum)，这些个区间就是间隙，间隙锁就是加在这些间隙上的<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E7%9A%84%E5%B9%B6%E5%8F%91/5.png">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E7%9A%84%E5%B9%B6%E5%8F%91/5.png" />
+        </a>
+    </p>
+<p>设置为 可重复读</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-sql" data-lang="sql"><span style="display:flex;"><span><span style="color:#ff79c6">SET</span> tx_isolation<span style="color:#ff79c6">=</span><span style="color:#f1fa8c">&#39;REPEATABLE-READ&#39;</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">SELECT</span> <span style="color:#ff79c6">@@</span>tx_isolation;
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">#</span> MySQL <span style="color:#bd93f9">8</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">SELECT</span> <span style="color:#ff79c6">@@</span>TRANSACTION_ISOLATION;
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">SET</span> <span style="color:#ff79c6">GLOBAL</span> innodb_status_output_locks <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">ON</span>;
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">BEGIN</span>;
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">SELECT</span> <span style="color:#ff79c6">*</span> <span style="color:#ff79c6">FROM</span> xx <span style="color:#ff79c6">WHERE</span> a <span style="color:#ff79c6">IN</span> (<span style="color:#bd93f9">3</span>,<span style="color:#bd93f9">5</span>,<span style="color:#bd93f9">7</span>) <span style="color:#ff79c6">FOR</span> <span style="color:#ff79c6">UPDATE</span>;
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">SHOW</span> ENGINE INNODB STATUS;
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">COMMIT</span>;
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E7%9A%84%E5%B9%B6%E5%8F%91/6.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E7%9A%84%E5%B9%B6%E5%8F%91/6.jpg" />
+        </a>
+     <br>
+重点：<br>
+2 lock struct(s), heap size 1192, 3 row lock(s)</p>
+<p>locks gap before rec，见名知意就是：锁住的是以下记录（4、6、8）之前的间隙，锁类型是X（排他）锁<br>
+InnoDB存储引擎的间隙锁是“纯粹的抑制性”，这意味着它们的唯一目的是防止其他事务插入到间隙中。间隙锁是可以并存的，一个间隙锁被一个事务持有的时候不会阻止另一个事务对这个间隙持有间隙锁，前提是这个间隙是没有数据的（防止往这个间隙写数据，防止别的事务往这个间隙写数据发生幻读）。共享和独占间隙锁之间没有区别。它们彼此不冲突，并且执行相同的功能。</p>
+<p><strong>next-key lock</strong><br>
+临键锁是索引记录上的记录锁和索引记录之前的间隙上的间隙锁的组合，即：Next-Key Lock = Gap Lock + Record Lock，锁定的是一个范围，同时也会锁定记录本身</p>
+<p>假设表有记录 10, 11, 13, 20<br>
+那么生成的 next-key-lock可能性如下：</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">5
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-cpp" data-lang="cpp"><span style="display:flex;"><span>(negative infinity, <span style="color:#bd93f9">10</span>]
+</span></span><span style="display:flex;"><span>(<span style="color:#bd93f9">10</span>, <span style="color:#bd93f9">11</span>]
+</span></span><span style="display:flex;"><span>(<span style="color:#bd93f9">11</span>, <span style="color:#bd93f9">13</span>]
+</span></span><span style="display:flex;"><span>(<span style="color:#bd93f9">13</span>, <span style="color:#bd93f9">20</span>]
+</span></span><span style="display:flex;"><span>(<span style="color:#bd93f9">20</span>, positive infinity)
+</span></span></code></pre></td></tr></table>
+</div>
+</div><h3 id="加锁语句分析">加锁语句分析</h3>
+<p>几种锁定读语句</p>
+<ul>
+<li>SELECT &hellip; LOCK IN SHARE MODE</li>
+<li>SELECT &hellip; FOR UPDATE</li>
+<li>UPDATE</li>
+<li>DELETE</li>
+</ul>
+<p>匹配模式</p>
+<ul>
+<li>如果是一个单点扫描区间，此匹配模式为 <strong>精确匹配</strong></li>
+<li>a = 1、 a = 1 AND b = 1 都是精确匹配</li>
+<li>a = 1 AND b &gt;= 1 不是精确匹配</li>
+</ul>
+<p>唯一性搜索</p>
+<ul>
+<li>如果能事先确定扫描区间最多只包含 一条记录，这种情况就是 唯一性搜索</li>
+<li>匹配模式为 精确匹配时</li>
+<li>使用主键索引、或者唯一二级索引</li>
+<li>不能有 IS NULL这种搜索条件</li>
+<li>如果索引中包含多个列，在生成扫描区间时，每个列都得被用到</li>
+</ul>
+<p>加锁条件受很多情况影响</p>
+<ul>
+<li>事务隔离级别</li>
+<li>使用的索引类型，主索引、唯一二级索引、普通索引</li>
+<li>是否精确匹配</li>
+<li>是否唯一性搜索</li>
+<li>具体的执行语句，CURD ?</li>
+</ul>
+<p>一般情况下，读取某个扫描区间中的记录过程如下：</p>
+<blockquote>
+<ol>
+<li>快速定位到 B+树中扫描区间中的第一条记录，称为当前记录</li>
+<li>为当前记录加锁，当前隔离级别是(读未提交、读已提交)时加：LOCK_REC_NOT_GAP(rec lock`)；隔离级别为(可重复读、串行化)时加： LOCK_ORDINARY(next-key lock)</li>
+<li>判断索引下推是否成立，符合跳到(4)，否则读下一条记录并重复(2)；如果读取到头了，则跳过(4)、(5) 像server层返回查询结束</li>
+<li>执行回表操作</li>
+<li>判断是否查询完毕，是否到达边界了</li>
+<li>srver层判断其余条件是否成立</li>
+<li>获取下一条记录，并重复(2)</li>
+</ol>
+</blockquote>
+<p><strong>实例1</strong></p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-sql" data-lang="sql"><span style="display:flex;"><span><span style="color:#ff79c6">SELECT</span> <span style="color:#ff79c6">*</span> <span style="color:#ff79c6">FROM</span> xx <span style="color:#ff79c6">WHERE</span> <span style="color:#8be9fd;font-style:italic">number</span> <span style="color:#ff79c6">&gt;</span> <span style="color:#bd93f9">1</span> <span style="color:#ff79c6">AND</span> <span style="color:#8be9fd;font-style:italic">number</span> <span style="color:#ff79c6">&lt;=</span> <span style="color:#bd93f9">15</span> <span style="color:#ff79c6">AND</span> contry <span style="color:#ff79c6">=</span> <span style="color:#f1fa8c">&#39;aa&#39;</span> <span style="color:#ff79c6">LOCK</span> <span style="color:#ff79c6">IN</span> <span style="color:#ff79c6">SHARE</span> <span style="color:#ff79c6">MODE</span>;
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>隔离级别为：读未提交、读已提交时，其加锁示意图  <br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E7%9A%84%E5%B9%B6%E5%8F%91/7.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E7%9A%84%E5%B9%B6%E5%8F%91/7.jpg" />
+        </a>
+    </p>
+<p>隔离级别为：可重复读、串行化时，其加锁示意图<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E7%9A%84%E5%B9%B6%E5%8F%91/8.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E7%9A%84%E5%B9%B6%E5%8F%91/8.jpg" />
+        </a>
+    </p>
+<p><strong>实例2</strong></p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-sql" data-lang="sql"><span style="display:flex;"><span><span style="color:#ff79c6">SELECT</span> <span style="color:#ff79c6">*</span> <span style="color:#ff79c6">FROM</span> 信息<span style="color:#ff79c6">FORCE</span> <span style="color:#ff79c6">INDEX</span>(idx_name) <span style="color:#ff79c6">WHERE</span> name <span style="color:#ff79c6">&gt;</span> <span style="color:#f1fa8c">&#39;C&#39;</span> <span style="color:#ff79c6">AND</span> name <span style="color:#ff79c6">&lt;=</span> <span style="color:#f1fa8c">&#39;X&#39;</span> <span style="color:#ff79c6">AND</span> country <span style="color:#ff79c6">!=</span> ’xx5<span style="color:#f1fa8c">&#39; LOCK IN SHARE MODE;
+</span></span></span></code></pre></td></tr></table>
+</div>
+</div><p>隔离级别为：读未提交、读已提交时，其加锁示意图</p>
+<ul>
+<li>首先读一个二级索引，name为L</li>
+<li>给这个二级索引加 S型rec_lock</li>
+<li>判断是否可以索引下推，满足条件</li>
+<li>回表，给聚集索引加 S型rec_lock</li>
+<li>判断是否满足边界条件</li>
+<li>server层继续判断其他条件，如country != &lsquo;xx5&rsquo; 满足条件，返回给客户端</li>
+<li>获取下一条记录，继续判断
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E7%9A%84%E5%B9%B6%E5%8F%91/9.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E7%9A%84%E5%B9%B6%E5%8F%91/9.jpg" />
+        </a>
+    </li>
+</ul>
+<p>隔离级别为：可重复读、串行化时，其加锁示意图</p>
+<ul>
+<li>跟二级索引的(读未提交、读已提交)比较，二级索引加的是 next-key lock</li>
+<li>二级索引会判断是否下推，然后回表</li>
+<li>二级索引加锁后就不再释放</li>
+<li>聚集索引加的是 S型rec lock，跟(读未提交、读已提交)差不多，只是最后一条记录没有释放锁
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E7%9A%84%E5%B9%B6%E5%8F%91/10.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E7%9A%84%E5%B9%B6%E5%8F%91/10.jpg" />
+        </a>
+    </li>
+</ul>
+<p><strong>实例3</strong><br>
+对于 FOR UPDATE 跟 LOCK IN SHARE MODE 类似，只不过是换乘了 X 型rec lock</p>
+<p><strong>实例4</strong></p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-sql" data-lang="sql"><span style="display:flex;"><span><span style="color:#ff79c6">UPDATE</span> xx <span style="color:#ff79c6">SET</span> name <span style="color:#ff79c6">=</span> <span style="color:#f1fa8c">&#39;CC&#39;</span> <span style="color:#ff79c6">WHERE</span> <span style="color:#8be9fd;font-style:italic">number</span> <span style="color:#ff79c6">&gt;</span> <span style="color:#bd93f9">1</span> <span style="color:#ff79c6">AND</span> <span style="color:#8be9fd;font-style:italic">number</span> <span style="color:#ff79c6">&lt;=</span> <span style="color:#bd93f9">15</span> <span style="color:#ff79c6">AND</span> country <span style="color:#ff79c6">=</span> <span style="color:#f1fa8c">&#39;ww&#39;</span>
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>隔离级别为：读未提交、读已提交时，其加锁示意图</p>
+<ul>
+<li>先扫描聚集索引，所有更新二级索引都需要加 X型 rec lock</li>
+<li>跟查询二级索引正好相反，这次是主索引再找到二级索引
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E7%9A%84%E5%B9%B6%E5%8F%91/11.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E7%9A%84%E5%B9%B6%E5%8F%91/11.jpg" />
+        </a>
+    </li>
+</ul>
+<p>隔离级别为：可重复读、串行化时，其加锁示意图<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E7%9A%84%E5%B9%B6%E5%8F%91/12.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E7%9A%84%E5%B9%B6%E5%8F%91/12.jpg" />
+        </a>
+    </p>
+<p><strong>实例5</strong><br>
+对于 DELETE 场景，跟UPDATE类似，都是要加 X型 rec lock</p>
+<p><strong>实例6</strong></p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-sql" data-lang="sql"><span style="display:flex;"><span><span style="color:#ff79c6">SELECT</span> <span style="color:#ff79c6">*</span> <span style="color:#ff79c6">FROM</span> xx <span style="color:#ff79c6">WHERE</span> name <span style="color:#ff79c6">=</span> <span style="color:#f1fa8c">&#39;C&#39;</span> <span style="color:#ff79c6">FOR</span> <span style="color:#ff79c6">UPDATE</span>;
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>隔离级别为：读未提交、读已提交时，其加锁示意图</p>
+<ul>
+<li>由于是精确匹配，不会为下一条记录加锁
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E7%9A%84%E5%B9%B6%E5%8F%91/13.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E7%9A%84%E5%B9%B6%E5%8F%91/13.jpg" />
+        </a>
+    </li>
+</ul>
+<p>隔离级别为：可重复读、串行化时，其加锁示意图</p>
+<ul>
+<li>跟上述类似，只是换成了 netx-key lock
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E7%9A%84%E5%B9%B6%E5%8F%91/14.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E7%9A%84%E5%B9%B6%E5%8F%91/14.jpg" />
+        </a>
+    </li>
+</ul>
+<p><strong>实例7</strong><br>
+对于不是精确匹配，并且没有找到对应的记录时</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-sql" data-lang="sql"><span style="display:flex;"><span><span style="color:#ff79c6">SELECT</span> <span style="color:#ff79c6">*</span><span style="color:#ff79c6">FROM</span> xx <span style="color:#ff79c6">WHERE</span> name <span style="color:#ff79c6">&gt;</span> <span style="color:#f1fa8c">&#39;D&#34; AND name &lt; &#39;</span>L<span style="color:#f1fa8c">&#39; FOR UPDATE;
+</span></span></span></code></pre></td></tr></table>
+</div>
+</div><p>隔离级别为：读未提交、读已提交时，其加锁示意图<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E7%9A%84%E5%B9%B6%E5%8F%91/15.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E7%9A%84%E5%B9%B6%E5%8F%91/15.jpg" />
+        </a>
+    </p>
+<p>隔离级别为：可重复读、串行化时，其加锁示意图  <br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E7%9A%84%E5%B9%B6%E5%8F%91/16.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E7%9A%84%E5%B9%B6%E5%8F%91/16.jpg" />
+        </a>
+    </p>
+<p><strong>实例8</strong><br>
+对于从大到小反向读取时</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-sql" data-lang="sql"><span style="display:flex;"><span><span style="color:#ff79c6">SELECT</span> <span style="color:#ff79c6">*</span><span style="color:#ff79c6">FROM</span> xx FROCE <span style="color:#ff79c6">INDEX</span>(idx_name) <span style="color:#ff79c6">WHERE</span> name <span style="color:#ff79c6">&gt;</span> <span style="color:#f1fa8c">&#39;C&#39;</span> <span style="color:#ff79c6">AND</span> name <span style="color:#ff79c6">&lt;=</span> <span style="color:#f1fa8c">&#39;X&#39;</span> <span style="color:#ff79c6">AND</span> country <span style="color:#ff79c6">!=</span> <span style="color:#f1fa8c">&#39;xx5&#39;</span> 
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">ORDER</span> <span style="color:#ff79c6">BY</span> name <span style="color:#ff79c6">DESC</span> <span style="color:#ff79c6">FOR</span> <span style="color:#ff79c6">UPDATE</span>;
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>隔离级别为：可重复读、串行化时，其加锁示意图<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E7%9A%84%E5%B9%B6%E5%8F%91/17.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2022/12/MySQL%E7%9A%84%E5%B9%B6%E5%8F%91/17.jpg" />
+        </a>
+    </p>
+<p><strong>一致性读</strong></p>
+<ul>
+<li>利用MVCC进行的读取操作，称为一致性读 Consistent Read，或者无锁一致性读</li>
+<li>所有普通SELECT在 读已提交、可重复读场景下，都是 一致性读</li>
+<li>一致性读不会对表中任何记录加锁</li>
+</ul>
+<p><strong>半一致性读</strong></p>
+<ul>
+<li>夹在一致性读、锁定读之间的读取方式</li>
+<li>当隔离级别为 读未提交、读已提交时，如果执行UPDATE就使用半一致性读</li>
+<li>如果UPDATE语句读取到的记录已经被其他事务加锁了</li>
+<li>仍然读出来，然后判断是否与 UPDATE中的条件相匹配，如果不匹配则不加锁，继续查找下一条</li>
+<li>只有匹配时才加锁等待</li>
+</ul>
+<p><strong>INSERT语句</strong><br>
+对于重复记录，也就是主键、唯一二级索引 需要检查 id是否重复</p>
+<ul>
+<li>当隔离级别为 读未提交、读已提交时，加的是 S型rec lock</li>
+<li>当隔离级别为  可重复读、串行化时，加的是 S型 next-key lock</li>
+</ul>
+<p>外键检查，插入子表，检查主键的key是否存在</p>
+<ul>
+<li>如果存在 则加 S型 rec lock</li>
+<li>如果不存在，隔离级别为：读未提交、读已提交时，不加锁</li>
+<li>如果不存在，隔离级别为：可重复读、串行化时，加 gap lock</li>
+</ul>
+<h3 id="死锁">死锁</h3>
+<p>两个事务模拟死锁</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">15
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">16
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">17
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">18
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">19
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">20
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">21
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">22
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">23
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">24
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">25
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">26
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">27
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">28
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">29
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">30
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">31
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">32
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">33
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">34
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">35
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">36
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">37
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">38
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">39
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">40
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">41
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">42
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">43
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">44
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">45
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">46
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">47
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-sql" data-lang="sql"><span style="display:flex;"><span><span style="color:#6272a4">------------------------
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>LATEST DETECTED DEADLOCK
+</span></span><span style="display:flex;"><span><span style="color:#6272a4">------------------------
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span><span style="color:#bd93f9">2023</span><span style="color:#ff79c6">-</span><span style="color:#bd93f9">01</span><span style="color:#ff79c6">-</span><span style="color:#bd93f9">08</span> <span style="color:#bd93f9">03</span>:<span style="color:#bd93f9">30</span>:<span style="color:#bd93f9">33</span> <span style="color:#bd93f9">0</span>x7efdb376b700
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">***</span> (<span style="color:#bd93f9">1</span>) <span style="color:#ff79c6">TRANSACTION</span>:
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">TRANSACTION</span> <span style="color:#bd93f9">113977</span>, ACTIVE <span style="color:#bd93f9">32</span> sec STARTING <span style="color:#ff79c6">INDEX</span> <span style="color:#ff79c6">READ</span>
+</span></span><span style="display:flex;"><span>mysql TABLES <span style="color:#ff79c6">IN</span> USE <span style="color:#bd93f9">1</span>, locked <span style="color:#bd93f9">1</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">LOCK</span> WAIT <span style="color:#bd93f9">3</span> <span style="color:#ff79c6">LOCK</span> struct(s), HEAP <span style="color:#ff79c6">size</span> <span style="color:#bd93f9">1136</span>, <span style="color:#bd93f9">2</span> <span style="color:#ff79c6">ROW</span> <span style="color:#ff79c6">LOCK</span>(s)
+</span></span><span style="display:flex;"><span>MySQL thread id <span style="color:#bd93f9">25</span>, OS thread handle <span style="color:#bd93f9">139628102186752</span>, QUERY id <span style="color:#bd93f9">2169</span> <span style="color:#bd93f9">10</span>.<span style="color:#bd93f9">202</span>.<span style="color:#bd93f9">61</span>.<span style="color:#bd93f9">6</span> root <span style="color:#ff79c6">statistics</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">SELECT</span> <span style="color:#ff79c6">*</span> <span style="color:#ff79c6">FROM</span> xx <span style="color:#ff79c6">WHERE</span> a <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">2</span> <span style="color:#ff79c6">FOR</span> <span style="color:#ff79c6">UPDATE</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">***</span> (<span style="color:#bd93f9">1</span>) WAITING <span style="color:#ff79c6">FOR</span> THIS <span style="color:#ff79c6">LOCK</span> <span style="color:#ff79c6">TO</span> BE <span style="color:#ff79c6">GRANTED</span>:
+</span></span><span style="display:flex;"><span>RECORD LOCKS <span style="color:#ff79c6">SPACE</span> id <span style="color:#bd93f9">46</span> page <span style="color:#ff79c6">NO</span> <span style="color:#bd93f9">3</span> n bits <span style="color:#bd93f9">72</span> <span style="color:#ff79c6">INDEX</span> <span style="color:#ff79c6">PRIMARY</span> <span style="color:#ff79c6">of</span> <span style="color:#ff79c6">TABLE</span> <span style="color:#ff79c6">`</span>test<span style="color:#ff79c6">`</span>.<span style="color:#ff79c6">`</span>xx<span style="color:#ff79c6">`</span> trx id <span style="color:#bd93f9">113977</span> lock_mode X LOCKS rec but <span style="color:#ff79c6">NOT</span> gap waiting
+</span></span><span style="display:flex;"><span>Record <span style="color:#ff79c6">LOCK</span>, HEAP <span style="color:#ff79c6">NO</span> <span style="color:#bd93f9">2</span> PHYSICAL RECORD: n_fields <span style="color:#bd93f9">6</span>; COMPACT FORMAT; info bits <span style="color:#bd93f9">0</span>
+</span></span><span style="display:flex;"><span> <span style="color:#bd93f9">0</span>: len <span style="color:#bd93f9">4</span>; HEX <span style="color:#bd93f9">80000002</span>; <span style="color:#ff79c6">ASC</span>     ;;
+</span></span><span style="display:flex;"><span> <span style="color:#bd93f9">1</span>: len <span style="color:#bd93f9">6</span>; HEX <span style="color:#bd93f9">00000001</span>bd29; <span style="color:#ff79c6">ASC</span>      );;
+</span></span><span style="display:flex;"><span> <span style="color:#bd93f9">2</span>: len <span style="color:#bd93f9">7</span>; HEX a5000001190110; <span style="color:#ff79c6">ASC</span>        ;;
+</span></span><span style="display:flex;"><span> <span style="color:#bd93f9">3</span>: len <span style="color:#bd93f9">4</span>; HEX <span style="color:#bd93f9">80000004</span>; <span style="color:#ff79c6">ASC</span>     ;;
+</span></span><span style="display:flex;"><span> <span style="color:#bd93f9">4</span>: len <span style="color:#bd93f9">4</span>; HEX <span style="color:#bd93f9">80000006</span>; <span style="color:#ff79c6">ASC</span>     ;;
+</span></span><span style="display:flex;"><span> <span style="color:#bd93f9">5</span>: len <span style="color:#bd93f9">4</span>; HEX <span style="color:#bd93f9">80000008</span>; <span style="color:#ff79c6">ASC</span>     ;;
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">***</span> (<span style="color:#bd93f9">2</span>) <span style="color:#ff79c6">TRANSACTION</span>:
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">TRANSACTION</span> <span style="color:#bd93f9">113978</span>, ACTIVE <span style="color:#bd93f9">27</span> sec STARTING <span style="color:#ff79c6">INDEX</span> <span style="color:#ff79c6">READ</span>
+</span></span><span style="display:flex;"><span>mysql TABLES <span style="color:#ff79c6">IN</span> USE <span style="color:#bd93f9">1</span>, locked <span style="color:#bd93f9">1</span>
+</span></span><span style="display:flex;"><span><span style="color:#bd93f9">3</span> <span style="color:#ff79c6">LOCK</span> struct(s), HEAP <span style="color:#ff79c6">size</span> <span style="color:#bd93f9">1136</span>, <span style="color:#bd93f9">2</span> <span style="color:#ff79c6">ROW</span> <span style="color:#ff79c6">LOCK</span>(s)
+</span></span><span style="display:flex;"><span>MySQL thread id <span style="color:#bd93f9">22</span>, OS thread handle <span style="color:#bd93f9">139628102727424</span>, QUERY id <span style="color:#bd93f9">2175</span> <span style="color:#bd93f9">10</span>.<span style="color:#bd93f9">202</span>.<span style="color:#bd93f9">61</span>.<span style="color:#bd93f9">6</span> root <span style="color:#ff79c6">statistics</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">SELECT</span> <span style="color:#ff79c6">*</span> <span style="color:#ff79c6">FROM</span> xx <span style="color:#ff79c6">WHERE</span> a <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">4</span> <span style="color:#ff79c6">FOR</span> <span style="color:#ff79c6">UPDATE</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">***</span> (<span style="color:#bd93f9">2</span>) HOLDS THE <span style="color:#ff79c6">LOCK</span>(S):
+</span></span><span style="display:flex;"><span>RECORD LOCKS <span style="color:#ff79c6">SPACE</span> id <span style="color:#bd93f9">46</span> page <span style="color:#ff79c6">NO</span> <span style="color:#bd93f9">3</span> n bits <span style="color:#bd93f9">72</span> <span style="color:#ff79c6">INDEX</span> <span style="color:#ff79c6">PRIMARY</span> <span style="color:#ff79c6">of</span> <span style="color:#ff79c6">TABLE</span> <span style="color:#ff79c6">`</span>test<span style="color:#ff79c6">`</span>.<span style="color:#ff79c6">`</span>xx<span style="color:#ff79c6">`</span> trx id <span style="color:#bd93f9">113978</span> lock_mode X LOCKS rec but <span style="color:#ff79c6">NOT</span> gap
+</span></span><span style="display:flex;"><span>Record <span style="color:#ff79c6">LOCK</span>, HEAP <span style="color:#ff79c6">NO</span> <span style="color:#bd93f9">2</span> PHYSICAL RECORD: n_fields <span style="color:#bd93f9">6</span>; COMPACT FORMAT; info bits <span style="color:#bd93f9">0</span>
+</span></span><span style="display:flex;"><span> <span style="color:#bd93f9">0</span>: len <span style="color:#bd93f9">4</span>; HEX <span style="color:#bd93f9">80000002</span>; <span style="color:#ff79c6">ASC</span>     ;;
+</span></span><span style="display:flex;"><span> <span style="color:#bd93f9">1</span>: len <span style="color:#bd93f9">6</span>; HEX <span style="color:#bd93f9">00000001</span>bd29; <span style="color:#ff79c6">ASC</span>      );;
+</span></span><span style="display:flex;"><span> <span style="color:#bd93f9">2</span>: len <span style="color:#bd93f9">7</span>; HEX a5000001190110; <span style="color:#ff79c6">ASC</span>        ;;
+</span></span><span style="display:flex;"><span> <span style="color:#bd93f9">3</span>: len <span style="color:#bd93f9">4</span>; HEX <span style="color:#bd93f9">80000004</span>; <span style="color:#ff79c6">ASC</span>     ;;
+</span></span><span style="display:flex;"><span> <span style="color:#bd93f9">4</span>: len <span style="color:#bd93f9">4</span>; HEX <span style="color:#bd93f9">80000006</span>; <span style="color:#ff79c6">ASC</span>     ;;
+</span></span><span style="display:flex;"><span> <span style="color:#bd93f9">5</span>: len <span style="color:#bd93f9">4</span>; HEX <span style="color:#bd93f9">80000008</span>; <span style="color:#ff79c6">ASC</span>     ;;
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">***</span> (<span style="color:#bd93f9">2</span>) WAITING <span style="color:#ff79c6">FOR</span> THIS <span style="color:#ff79c6">LOCK</span> <span style="color:#ff79c6">TO</span> BE <span style="color:#ff79c6">GRANTED</span>:
+</span></span><span style="display:flex;"><span>RECORD LOCKS <span style="color:#ff79c6">SPACE</span> id <span style="color:#bd93f9">46</span> page <span style="color:#ff79c6">NO</span> <span style="color:#bd93f9">3</span> n bits <span style="color:#bd93f9">72</span> <span style="color:#ff79c6">INDEX</span> <span style="color:#ff79c6">PRIMARY</span> <span style="color:#ff79c6">of</span> <span style="color:#ff79c6">TABLE</span> <span style="color:#ff79c6">`</span>test<span style="color:#ff79c6">`</span>.<span style="color:#ff79c6">`</span>xx<span style="color:#ff79c6">`</span> trx id <span style="color:#bd93f9">113978</span> lock_mode X LOCKS rec but <span style="color:#ff79c6">NOT</span> gap waiting
+</span></span><span style="display:flex;"><span>Record <span style="color:#ff79c6">LOCK</span>, HEAP <span style="color:#ff79c6">NO</span> <span style="color:#bd93f9">3</span> PHYSICAL RECORD: n_fields <span style="color:#bd93f9">6</span>; COMPACT FORMAT; info bits <span style="color:#bd93f9">0</span>
+</span></span><span style="display:flex;"><span> <span style="color:#bd93f9">0</span>: len <span style="color:#bd93f9">4</span>; HEX <span style="color:#bd93f9">80000004</span>; <span style="color:#ff79c6">ASC</span>     ;;
+</span></span><span style="display:flex;"><span> <span style="color:#bd93f9">1</span>: len <span style="color:#bd93f9">6</span>; HEX <span style="color:#bd93f9">00000001</span>bd2a; <span style="color:#ff79c6">ASC</span>      <span style="color:#ff79c6">*</span>;;
+</span></span><span style="display:flex;"><span> <span style="color:#bd93f9">2</span>: len <span style="color:#bd93f9">7</span>; HEX a60000011a0110; <span style="color:#ff79c6">ASC</span>        ;;
+</span></span><span style="display:flex;"><span> <span style="color:#bd93f9">3</span>: len <span style="color:#bd93f9">4</span>; HEX <span style="color:#bd93f9">80000006</span>; <span style="color:#ff79c6">ASC</span>     ;;
+</span></span><span style="display:flex;"><span> <span style="color:#bd93f9">4</span>: len <span style="color:#bd93f9">4</span>; HEX <span style="color:#bd93f9">80000008</span>; <span style="color:#ff79c6">ASC</span>     ;;
+</span></span><span style="display:flex;"><span> <span style="color:#bd93f9">5</span>: len <span style="color:#bd93f9">4</span>; HEX <span style="color:#bd93f9">8000000</span>a; <span style="color:#ff79c6">ASC</span>     ;;
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">***</span> WE ROLL BACK <span style="color:#ff79c6">TRANSACTION</span> (<span style="color:#bd93f9">2</span>)
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>InnoDB 只会显示最近一次发生的死锁，如果想将所有 死锁信息都打印出来，可以设置：</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-sql" data-lang="sql"><span style="display:flex;"><span>innodb_print_all_deadlocks
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>设置为 ON，就会将每次发生的死锁，记录到 log中了</p>
+<h3 id="锁模式和类型">锁模式和类型</h3>
+<p>位置在： /mysql8-src/storage/innobase/include/lock0lock.h</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">15
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">16
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">17
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">18
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">19
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">20
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">21
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">22
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">23
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">24
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">25
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">26
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">27
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">28
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">29
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">30
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">31
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">32
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">33
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">34
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">35
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">36
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">37
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">38
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">39
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">40
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">41
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">42
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">43
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">44
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">45
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">46
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">47
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">48
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">49
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">50
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">51
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">52
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">53
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-c" data-lang="c"><span style="display:flex;"><span><span style="color:#6272a4">/** Lock modes and types */</span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4">/** @{ */</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">#define LOCK_MODE_MASK                          \
+</span></span></span><span style="display:flex;"><span><span style="color:#ff79c6">  0xFUL </span><span style="color:#6272a4">/*!&lt; mask used to extract mode from the \
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">        type_mode field in a lock */</span><span style="color:#ff79c6">
+</span></span></span><span style="display:flex;"><span><span style="color:#ff79c6"></span><span style="color:#6272a4">/** Lock types */</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">#define LOCK_TABLE 16 </span><span style="color:#6272a4">/*!&lt; table lock */</span><span style="color:#ff79c6">
+</span></span></span><span style="display:flex;"><span><span style="color:#ff79c6">#define LOCK_REC 32   </span><span style="color:#6272a4">/*!&lt; record lock */</span><span style="color:#ff79c6">
+</span></span></span><span style="display:flex;"><span><span style="color:#ff79c6">#define LOCK_TYPE_MASK                                \
+</span></span></span><span style="display:flex;"><span><span style="color:#ff79c6">  0xF0UL </span><span style="color:#6272a4">/*!&lt; mask used to extract lock type from the \
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">         type_mode field in a lock */</span><span style="color:#ff79c6">
+</span></span></span><span style="display:flex;"><span><span style="color:#ff79c6">#if LOCK_MODE_MASK &amp; LOCK_TYPE_MASK
+</span></span></span><span style="display:flex;"><span><span style="color:#ff79c6">#error &#34;LOCK_MODE_MASK &amp; LOCK_TYPE_MASK&#34;
+</span></span></span><span style="display:flex;"><span><span style="color:#ff79c6">#endif
+</span></span></span><span style="display:flex;"><span><span style="color:#ff79c6"></span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">#define LOCK_WAIT                          \
+</span></span></span><span style="display:flex;"><span><span style="color:#ff79c6">  256 </span><span style="color:#6272a4">/*!&lt; Waiting lock flag; when set, it \
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">      means that the lock has not yet been \
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">      granted, it is just waiting for its  \
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">      turn in the wait queue */</span><span style="color:#ff79c6">
+</span></span></span><span style="display:flex;"><span><span style="color:#ff79c6"></span><span style="color:#6272a4">/* Precise modes */</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">#define LOCK_ORDINARY                     \
+</span></span></span><span style="display:flex;"><span><span style="color:#ff79c6">  0 </span><span style="color:#6272a4">/*!&lt; this flag denotes an ordinary    \
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">    next-key lock in contrast to LOCK_GAP \
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">    or LOCK_REC_NOT_GAP */</span><span style="color:#ff79c6">
+</span></span></span><span style="display:flex;"><span><span style="color:#ff79c6">#define LOCK_GAP                                     \
+</span></span></span><span style="display:flex;"><span><span style="color:#ff79c6">  512 </span><span style="color:#6272a4">/*!&lt; when this bit is set, it means that the   \
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">      lock holds only on the gap before the record;  \
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">      for instance, an x-lock on the gap does not    \
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">      give permission to modify the record on which  \
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">      the bit is set; locks of this type are created \
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">      when records are removed from the index chain  \
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">      of records */</span><span style="color:#ff79c6">
+</span></span></span><span style="display:flex;"><span><span style="color:#ff79c6">#define LOCK_REC_NOT_GAP                            \
+</span></span></span><span style="display:flex;"><span><span style="color:#ff79c6">  1024 </span><span style="color:#6272a4">/*!&lt; this bit means that the lock is only on \
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">       the index record and does NOT block inserts  \
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">       to the gap before the index record; this is  \
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">       used in the case when we retrieve a record   \
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">       with a unique key, and is also used in       \
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">       locking plain SELECTs (not part of UPDATE    \
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">       or DELETE) when the user has set the READ    \
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">       COMMITTED isolation level */</span><span style="color:#ff79c6">
+</span></span></span><span style="display:flex;"><span><span style="color:#ff79c6">#define LOCK_INSERT_INTENTION                                             \
+</span></span></span><span style="display:flex;"><span><span style="color:#ff79c6">  2048                       </span><span style="color:#6272a4">/*!&lt; this bit is set when we place a waiting \
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">                          gap type record lock request in order to let    \
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">                          an insert of an index record to wait until      \
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">                          there are no conflicting locks by other         \
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">                          transactions on the gap; note that this flag    \
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">                          remains set when the waiting lock is granted,   \
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">                          or if the lock is inherited to a neighboring    \
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">                          record */</span><span style="color:#ff79c6">
+</span></span></span><span style="display:flex;"><span><span style="color:#ff79c6">#define LOCK_PREDICATE 8192  </span><span style="color:#6272a4">/*!&lt; Predicate lock */</span><span style="color:#ff79c6">
+</span></span></span><span style="display:flex;"><span><span style="color:#ff79c6">#define LOCK_PRDT_PAGE 16384 </span><span style="color:#6272a4">/*!&lt; Page lock */</span><span style="color:#ff79c6">
+</span></span></span></code></pre></td></tr></table>
+</div>
+</div><h2 id="参考">参考</h2>
 <ul>
 <li><a href="http://catkang.github.io/2022/01/27/btree-lock.html">B+树数据库加锁历史</a></li>
 <li><a href="http://catkang.github.io/2018/09/19/concurrency-control.html">浅析数据库并发控制机制</a></li>
@@ -244,6 +885,9 @@ delete、update的 undo需要支持MVCC还不能删除</p>
 <li><a href="https://zhuanlan.zhihu.com/p/420777227">数据库恢复机制：ARIES算法论文</a></li>
 <li><a href="https://blog.csdn.net/weixin_34123613/article/details/92562478">图解数据库Aries事务Recovery算法</a></li>
 <li><a href="https://zhuanlan.zhihu.com/p/143173278">不衰的经典: ARIES事务恢复 [数据库学习的成人试炼]</a></li>
+<li><a href="https://dev.mysql.com/doc/refman/5.7/en/innodb-locking.html#innodb-next-key-locks">InnoDB Locking</a></li>
+<li><a href="https://dev.mysql.com/doc/refman/5.7/en/innodb-standard-monitor.html">InnoDB Standard Monitor and Lock Monitor Output</a></li>
+<li><a href="https://www.modb.pro/db/411876">MySQL之锁详解（三）：InnoDB的Record锁、Gap锁和Next-Key锁</a></li>
 </ul>
 
 			<script type="text/javascript"
@@ -387,7 +1031,7 @@ code.has-jax {
     </li>
     
     <li>
-        <a href="https://code0xff.org/post/2022/12/mysql%E6%96%87%E4%BB%B6%E5%AD%98%E5%82%A8%E7%BB%93%E6%9E%84/" title="MySQL文件存储结构">MySQL文件存储结构</a>
+        <a href="https://code0xff.org/post/2022/12/2022%E5%B9%B4%E6%80%BB%E7%BB%93/" title="2022年看过的书籍、电影，旅游过的地方">2022年看过的书籍、电影，旅游过的地方</a>
     </li>
     
 </ul>
@@ -407,7 +1051,7 @@ code.has-jax {
     
     <li><a href="https://code0xff.org/categories/%E5%A4%A7%E6%95%B0%E6%8D%AE/">大数据 (22)</a></li>
     
-    <li><a href="https://code0xff.org/categories/%E6%95%B0%E6%8D%AE%E5%BA%93/">数据库 (12)</a></li>
+    <li><a href="https://code0xff.org/categories/%E6%95%B0%E6%8D%AE%E5%BA%93/">数据库 (14)</a></li>
     
     <li><a href="https://code0xff.org/categories/%E6%97%85%E8%A1%8C/">旅行 (10)</a></li>
     
@@ -421,7 +1065,7 @@ code.has-jax {
     
     <li><a href="https://code0xff.org/categories/%E8%AF%BB%E4%B9%A6%E7%AC%94%E8%AE%B0/">读书笔记 (9)</a></li>
     
-    <li><a href="https://code0xff.org/categories/%E9%9A%8F%E4%BE%BF%E5%86%99%E5%86%99/">随便写写 (4)</a></li>
+    <li><a href="https://code0xff.org/categories/%E9%9A%8F%E4%BE%BF%E5%86%99%E5%86%99/">随便写写 (5)</a></li>
     
 </ul>
     </section>
@@ -430,9 +1074,9 @@ code.has-jax {
         <h3 class="widget-title">归档</a></h3>
 <ul class="widget-list">
     
-    <li><a href="https://code0xff.org/years/2021%E5%B9%B4/">2021年 (30)</a></li>
+    <li><a href="https://code0xff.org/years/2021%E5%B9%B4/">2021年 (31)</a></li>
     
-    <li><a href="https://code0xff.org/years/2022%E5%B9%B4/">2022年 (54)</a></li>
+    <li><a href="https://code0xff.org/years/2022%E5%B9%B4/">2022年 (56)</a></li>
     
     <li><a href="https://code0xff.org/years/2023%E5%B9%B4/">2023年 (4)</a></li>
     
@@ -495,11 +1139,15 @@ code.has-jax {
     
     <a href="https://code0xff.org/tags/%E5%BE%AE%E6%9C%8D%E5%8A%A1/">微服务 </a>
     
+    <a href="https://code0xff.org/tags/%E6%80%BB%E7%BB%93/">总结 </a>
+    
     <a href="https://code0xff.org/tags/%E6%95%B0%E6%8D%AE%E5%BA%93/">数据库 </a>
     
     <a href="https://code0xff.org/tags/%E6%9F%A5%E8%AF%A2%E4%BC%98%E5%8C%96/">查询优化 </a>
     
     <a href="https://code0xff.org/tags/%E6%B1%87%E7%BC%96/">汇编 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%B5%8B%E8%AF%95/">测试 </a>
     
     <a href="https://code0xff.org/tags/%E6%B9%96%E4%BB%93%E4%B8%80%E4%BD%93/">湖仓一体 </a>
     
