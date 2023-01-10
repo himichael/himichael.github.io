@@ -88,6 +88,7 @@
     <li>
       <ul>
         <li><a href="#介绍">介绍</a></li>
+        <li><a href="#数据模型vertica的磁盘存储">数据模型、Vertica的磁盘存储</a></li>
         <li><a href="#其他">其他</a></li>
       </ul>
     </li>
@@ -137,11 +138,11 @@
             <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/shrinivas-icde2013/1.jpg" />
         </a>
     <br>
-Fig. 1. Early materialization strategies<br>
-所谓的并行化，就是同时去查两个列，然后列拼在一起，最后做数据过滤，取出想要的行<br>
-而流水线化，则是直接去列中过滤数据，这样取出来的就已经过滤掉很多数据了<br>
-Vertica 使用的就是 EM-流水线的方式</li>
+Fig. 1. Early materialization strategies</li>
 </ul>
+<p>所谓的并行化，就是同时去查两个列，然后列拼在一起，最后做数据过滤，取出想要的行<br>
+而流水线化，则是直接去列中过滤数据，这样取出来的就已经过滤掉很多数据了<br>
+Vertica 使用的就是 EM-流水线的方式</p>
 <p>延迟物化，是只抓取查询计划中需要的列，对于多个join来说，只抓取join中需要的列<br>
 join的输出是只匹配那些需要的行，并用来匹配剩下的查询<br>
 Vertica采用hash join的方式来做早起物化</p>
@@ -152,6 +153,47 @@ Vertica采用hash join的方式来做早起物化</p>
         </a>
     
 Fig. 2. Late and Early Materialized Joins in Vertica for the query “SELECT C1,C2,D1,D2 FROM C,D WHERE C1=D1”</p>
+<p>延迟物化的优点</p>
+<ul>
+<li>可以大幅度提升性能</li>
+<li>对于join来说，可以大幅度减少需要scan的I/O数量</li>
+</ul>
+<p>缺点</p>
+<ul>
+<li>需要跟踪哪些列需要在什么时间点做物化</li>
+<li>执行引擎也需要跟着配合</li>
+<li>对于部分聚合来说，实现起来非常困难，因为需要评估 基数减少后的收益，需要对聚合的额外列做评估</li>
+<li>对于多个列中不同值做评估也非常困难，特别是存在谓词的情况</li>
+</ul>
+<p>延迟物化在join两边输入数据都无法放到内存时，还不如早期物化</p>
+<ul>
+<li>此时需要sort-merge-join，或者混合hash-join</li>
+<li>混合hash-join，根据join的key做重分区，放入一个桶中，这样数据就能放到内存中了</li>
+<li>如果join只输出row id，那么在join之后的tuple重构，需要多次扫描外部输入，和桶的数量一样多</li>
+<li>类似的，sort-merge join也需要根据join的key排序</li>
+<li>如果join只输出row id，那么它就是乱序的，因此重构tuple需要根据row id排序，或者除join本身之外的随机I/O</li>
+</ul>
+<p>当join会溢出时，想对其评估使用早期物化、或者延迟物化非常困难<br>
+Vertica最初是将这个锅甩给用户，让用户自己决定，如果join溢出那么延迟物化会执行出错，于是退回到早期物化重新执行<br>
+最近修改了策略，都采用延迟物化，如果出错则退回到早期物化，这样用户就不用选择物化策略了</p>
+<p><strong>Sideways Information Passing (SIP)</strong> 是一系列的技术集合，可以用于改进join的性能<br>
+它将查询计划的一部分信息，传递给其他部分，允许尽早过滤不必要的信息，这些技术包含</p>
+<ul>
+<li>Bloom joins，跟半连接类似，只是缓存了bloom方式</li>
+<li>two-way semi joins，比如R和S，R的属性会存储起来，当发生join时会去查找并重建tuple</li>
+<li>magic sets</li>
+</ul>
+<p>这些策略可以对所有查询找到最佳的性能<br>
+相当于是早期物化的增强<br>
+比如，对于Figure 2(b)，如果能将<code>D1</code>传递给<code>C1</code>，那么在扫描<code>C2</code>时就可以过滤不必要的信息</p>
+<p>对于早期物化EM、延迟物化LM、侧边信息传递SIP，得到的结论是</p>
+<ul>
+<li>延迟物化实现起来更困难，优化器需要保存更多的信息，来记录在哪些列在什么时间点做物化，在查询优化期间还需要记录代价模型</li>
+<li>延迟物化的性能更好，除了一种场景：溢出join(两边输入信息内存都放不下)</li>
+<li>SIP结合EM比普通EM性能更好，而且没有溢出join的情况，基本跟LM性能差不多</li>
+</ul>
+<h2 id="数据模型vertica的磁盘存储">数据模型、Vertica的磁盘存储</h2>
+<p>。。。</p>
 <h2 id="其他">其他</h2>
 <p>
         <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/shrinivas-icde2013/3.jpg">
