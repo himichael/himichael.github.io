@@ -1,0 +1,748 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    
+    <meta name="referrer" content="no-referrer-when-downgrade">
+    
+
+    <title>Accelerating Analytics with Dynamic In-Memory Expressions | 记录每个瞬间</title>
+    <meta property="og:title" content="Accelerating Analytics with Dynamic In-Memory Expressions - 记录每个瞬间">
+    <meta property="og:type" content="article">
+        
+    <meta property="article:published_time" content='2023-01-13T14:05:19&#43;08:00'>
+        
+        
+    <meta property="article:modified_time" content='2023-01-13T14:05:19&#43;08:00'>
+        
+    <meta name="Keywords" content="">
+    <meta name="description" content="Accelerating Analytics with Dynamic In-Memory Expressions">
+        <meta name="author" content="隔壁老王">
+        
+    <meta property="og:url" content="https://code0xff.org/post/2023/01/accelerating-analytics-with-dynamic-in-memory-expressions/">
+    <link rel="shortcut icon" href='/favicon.ico'  type="image/x-icon">
+
+    <link rel="stylesheet" href='/css/normalize.css'>
+    <link rel="stylesheet" href='/css/style.css'>
+    <script type="text/javascript" src="//cdn.bootcdn.net/ajax/libs/jquery/3.4.1/jquery.min.js"></script>
+
+    
+    
+    
+        <link href="https://cdn.bootcdn.net/ajax/libs/fancybox/3.5.7/jquery.fancybox.min.css" rel="stylesheet">
+    
+    
+    
+    
+</head>
+
+
+<body>
+    <header id="header" class="clearfix">
+    <div class="container">
+        <div class="col-group">
+            <div class="site-name ">
+                
+                    <a id="logo" href="https://code0xff.org/">
+                        记录每个瞬间
+                    </a>
+                
+                
+            </div>
+            <div>
+                <nav id="nav-menu" class="clearfix">
+                    <a class="current" href="https://code0xff.org/">首页</a>
+                    
+                    <a  href="https://code0xff.org/linked/" title="链接">链接</a>
+                    
+                    <a  href="https://code0xff.org/archives/" title="归档">归档</a>
+                    
+                    <a  href="https://code0xff.org/about/" title="关于">关于</a>
+                    
+                </nav>
+            </div>
+        </div>
+    </div>
+</header>
+
+    <div id="body">
+        <div class="container">
+            <div class="col-group">
+
+                <div class="col-8" id="main">
+                    
+<div class="res-cons">
+    
+    <article class="post">
+        <header>
+            <h1 class="post-title">Accelerating Analytics with Dynamic In-Memory Expressions</h1>
+        </header>
+        <date class="post-meta meta-date">
+            2023年1月13日
+        </date>
+<nav id="TableOfContents">
+  <ul>
+    <li>
+      <ul>
+        <li><a href="#介绍">介绍</a></li>
+        <li><a href="#识别候选表达式">识别候选表达式</a></li>
+        <li><a href="#dime的创建和维护">DIME的创建和维护</a></li>
+        <li><a href="#利用idme加速查询">利用IDME加速查询</a></li>
+        <li><a href="#性能评估">性能评估</a></li>
+      </ul>
+    </li>
+  </ul>
+</nav>
+        
+        <div class="post-meta">
+            
+            <span class="post-meta meta-tags">
+                <ul class="clearfix">
+                    <a href='/categories/%E6%95%B0%E6%8D%AE%E5%BA%93'>数据库</a>
+                </ul>
+            </span>
+            
+        </div>
+        
+        
+        <div class="post-meta">
+            <span id="busuanzi_container_page_pv">|<span id="busuanzi_value_page_pv"></span><span>
+                    阅读</span></span>
+        </div>
+        
+        
+        <div class="post-content">
+            <blockquote>
+<p>原文 <br>
+<a href="https://15721.courses.cs.cmu.edu/spring2020/papers/13-execution/p1437-mishra.pdf">https://15721.courses.cs.cmu.edu/spring2020/papers/13-execution/p1437-mishra.pdf</a></p>
+</blockquote>
+<h2 id="介绍">介绍</h2>
+<p>Oracle Database In-Memory <code>DBIM</code>使用</p>
+<ul>
+<li>内存列存格式</li>
+<li>SMID向量化处理</li>
+<li>内存索引</li>
+</ul>
+<p>来加速访问，能达到数量级的提升<br>
+而在Oracle12.2中，又引入了一个新技术，Dynamic In-Memory Expressions  <code>DIME</code><br>
+对于那些频繁访问的表达式，使用 DIME优化后，可以避免表达式编译，而DIME是基于内存的，对于 DBIM完全兼容，底层表结构也不需要变动<br>
+由于省去了 列计算、物化视图、cubes的开销，又能带来数量级的性能提升</p>
+<p>Oracle Database In-Memory(DBIM)对scan、join、谓词评估、聚合做了优化，来适配分析场景<br>
+比如下面SQL</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-sql" data-lang="sql"><span style="display:flex;"><span><span style="color:#ff79c6">SELECT</span> item_name,
+</span></span><span style="display:flex;"><span>	price <span style="color:#ff79c6">*</span> (<span style="color:#bd93f9">1</span> – discount)
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">FROM</span> sales
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">WHERE</span> category <span style="color:#ff79c6">=</span> ‘household’;
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>如果<code>sales</code>是列存格式的，那么扫描<code>household</code>速度会非常快，大概十亿/秒<br>
+但是<code>price * (1 – discount)</code>会牵扯到 数值计算，其计算成本就比较高了</p>
+<p>通常的解决办法有这么一些</p>
+<ul>
+<li>对于基表增加 预计算列</li>
+<li>创建物化视图</li>
+<li>预定义 cubes</li>
+</ul>
+<p>这些方式不太适合<code>ad-hoc</code>这种场景，而且一旦底层表结构变化，维护成本也很高<br>
+另一个优化手段是：common subexpression elimination(CSE)，将一个查询的表达式缓存，后续同样的查询就可以复用了<br>
+缺点是，对并发场景不好，其他查询可能用不上</p>
+<p>而Oracle Database In-Memory(DBIM)，会表达式的计算结果放到  Expression Statistics Store(ESS)中<br>
+随后的相同的查询表达式就可以利用这个结果避免重复计算<br>
+DBIM 采用了混合的双重格式，持久存储层是按照<code>ro</code>来存储的，而内存中是按<code>columnar</code>存储的<br>
+内存中的列不需要log和checkpoint，DML的修改直接作用于底层的 行表上<br>
+对列的修改通过事务保持一致性<br>
+高选择性(如scan)就执行用行模式完成，而分析场景使用内存优化的列格式<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/p1437-mishra/1.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/p1437-mishra/1.jpg" />
+        </a>
+    <br>
+Figure 1. Dual-Format In-Memory Database</p>
+<p>磁盘上的行经过处理转为内存中的列格式 In-Memory Compression Units，同时会对列做压缩处理，压缩方式也是自定义 <br>
+可以存储 50 - 100W行数据，并使用SIMD来处理 IMCU<br>
+每个IMCU还包含了 min、max等信息，用来跳过不需要的scan<br>
+每个IMCU还关联了 Snapshot Metadata Unit(SMU)，SMU跟踪 自IMCU创建以来的所有DML更改<br>
+这里的隔离模式使用的是：Consistent Read(CR)，每个操作都关联一个 System Change Number(SCN)<br>
+只允许修改者自身，或者已经提交过的SCN可见，而当 IMCU的更改超过了一个 阈值，会再创建一个新版本的 IMCU
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/p1437-mishra/2.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/p1437-mishra/2.jpg" />
+        </a>
+      <br>
+Figure 2. SIMD vector-processing in the IM column store</p>
+<h2 id="识别候选表达式">识别候选表达式</h2>
+<p>所谓的表达式就是SQL查询中的一部分，比如算数运算、逻辑运算等<br>
+比如<code>+</code>、<code>-</code>，以及内置的SQL函数、UDF函数<br>
+表达式可以出现在 SELECT、WHERE、GROUP BY、HAVING中，如下：</p>
+<table>
+<thead>
+<tr>
+<th>ID</th>
+<th>QUERY</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Q1</td>
+<td>SELECT (sal + bonus) FROM emp</td>
+</tr>
+<tr>
+<td>Q2</td>
+<td>SELECT SUM((sal + bonus)*(1-taxrate)) FROM emp WHERE UPPER(job) = ‘MANAGER’</td>
+</tr>
+<tr>
+<td>Q3</td>
+<td>SELECT MAX(sal) FROM emp GROUP BY EXTRACT(year FROM hiredate)</td>
+</tr>
+</tbody>
+</table>
+<p>查询1 中的<code>(sal + bonus) </code><br>
+查询2 中的<code>(sal + bonus)*(1-taxrate) i</code>，以及<code>UPPER(job)</code><br>
+查询3 中的<code>EXTRACT(year FROM hiredate)</code></p>
+<p>有些表达式是 根表达式，又包含很多子表达式，比如</p>
+<ul>
+<li>(sal + bonus)*(1-taxrate) 是根表达式</li>
+<li>子表达式：(sal + bonus)</li>
+<li>子表达式：(1-taxrate)</li>
+</ul>
+<p>有些时候，优化器会生成一些隐式的表达式，用于加速复杂分析查询，以及join操作，比如：</p>
+<ul>
+<li>c1=c2，会变成 c1 - c2 = 0这样的</li>
+<li>数据转换</li>
+<li>hash计算</li>
+<li>列拼接</li>
+</ul>
+<p>而为了识别这些重复的表达式，就通过一个新组件 Expressions Statistics Store(ESS)，由它来管理维护各种查询表达式的统计信息<br>
+之后可以利用 SIMD向量化来加速查询</p>
+<p>Expression Statistics Store是由优化器来维护的，SQL引擎生成各种表达式后就会交给优化器<br>
+优化器会做转换、消除、并生成新的表达式，而在完成了这一系列动作之后，就会将这些信息保存到 ESS中<br>
+ESS会为每个表达式生成唯一的ID</p>
+<ul>
+<li>这里的表达式是需要做过滤处理的</li>
+<li>比如对表A 的(a + b) 和 (b + a) 是一个意思，所以要对表达式做<strong>规范化</strong>处理</li>
+<li>T1、T2两个表都有一个upper(c)表达式，会被认为是不同的表达式</li>
+</ul>
+<p>ESS包含两种类型，静态和动态</p>
+<ul>
+<li>静态属性，特殊表达式的固定信息，不同查询的表达式不会改变</li>
+<li>如 表达式中的SQL文本表示，表达式中的列引用列表，优化器的预计算等</li>
+<li>动态属性，比如不同查询中会变的信息，表达式counts计算，表达式时间戳计算、基于运行时反馈的动态代码</li>
+<li>动态属性计算count，最精确的方式是：跟踪表达式中count结果，也就是跟踪计算处理的计数器，复杂而且影响性能</li>
+<li>另一种实现方式是 基于启发式方式</li>
+<li>这里采用了一种：row source statistics 方式，它是一个迭代控制结构，会统计子节点输入、父节点的输出</li>
+<li>SQL引擎中的行源包括：scan、join、分区的行源，会计算其流入流出row数量，用于后续的count统计计算</li>
+<li>比如，scan行源有两个表达式：round(price)、upper(item_name)</li>
+<li>通过计算前面一个，其结果可能就是几行，这样第二个计算时就只需要扫描几行即可，大大节省了时间</li>
+<li>表达式的静态、动态属性会存储到 System Global Area(SGA)中，这个每个Oracle实例都可以共享读取的地方，重启实例后可以继续读取</li>
+<li>ESS根据时间维度维护了两种统计快照</li>
+<li>累计值，也就是第一次计算至今的统计值，当前值(比如最近24小时的)</li>
+<li>每隔一段时间就会将当前值合并到累计值中</li>
+</ul>
+<p>对表达式做排名</p>
+<ul>
+<li>ESS中会保存所有表达式中的统计信息、元数据等</li>
+<li>给每个表达式一个权重，当前值的权重 比 累计值的权重更高</li>
+<li>计算成本是重要的评判标准</li>
+<li>后台会有模块周期的统计表达式排名，并统计 top N</li>
+<li>统计全部表达式并物化能让所有查询性能提升，但是代价很多，所以根据权重选择重要的表达式
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/p1437-mishra/3.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/p1437-mishra/3.jpg" />
+        </a>
+    </li>
+</ul>
+<p>Virtual Columns</p>
+<ul>
+<li>用于表示 表的一个、多个列，不占用实际物理存储空间</li>
+<li>查询计划执行到对应表达式后，会自动替换</li>
+<li>隐藏虚拟列是系统自动生成的，用户无法感知也操控不了</li>
+<li>热表达式会随工作负载的变化而改变，因此冷的表达式需要从内存中移除，此时可以用 虚拟列来标记</li>
+<li>这里还支持用户定义的虚拟列，用于设置对某些虚拟列的压缩行为，以及是否存在在内存中</li>
+<li>比如包括：FOR DML、FOR QUERY、FOR CAPACITY</li>
+</ul>
+<h2 id="dime的创建和维护">DIME的创建和维护</h2>
+<p>InMemory Expression Units</p>
+<ul>
+<li>动态内存表达式 会被物化到内存中，叫做：IMEU</li>
+<li>IMEU来自于共享全局区域 SGA</li>
+<li>回想一下 IMCU，它把一行数据按照<strong>列</strong>存储，放到内存中</li>
+<li>而 IMEU是IMCU的逻辑扩展，存储的是列的表达式</li>
+<li>IMCU 和 IMEU是分开存储的，每个IMEU大概存储50W行</li>
+<li>IMCU 有一个指针，指向 IMEU</li>
+<li>IMEU 跟 IMCU 有相同的分区、复制方式，所以同样具有高可用、容错性、扩展性</li>
+<li>IMEU 也具有类似的压缩模式、优先级顺序等
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/p1437-mishra/4.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/p1437-mishra/4.jpg" />
+        </a>
+    <br>
+Figure 4. Columns A and B in an IMCU with n-rows and expressions A+B and A*B in the corresponding IMEU</li>
+</ul>
+<p>IMEU创建</p>
+<ul>
+<li>IMEU 是由后台模块创建的，这种创建机制跟 IMCU类似</li>
+<li>IMCU读取了磁盘上的某些数据块(分区)，而IMEU跟 IMCU横跨相同的行</li>
+<li>所以IMCU跟IMEU有相同的并发保证，比如ALTER/DROP TABLE、DROP TABLESPACE的影响都是一样的</li>
+<li>后台模块会从磁盘上数据块中读取行，转为列格式，并应用压缩模式</li>
+<li>之后IMCU就变为在线状态，就可以跟踪这些状态，然后应用IMEU</li>
+<li>由于IMCU 和 IMEU创建的时间有延迟，这里时间闪回技术，来保证数据的一致性</li>
+<li>这里的闪回利用的是 SCN，也就是undo log来实现的 
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/p1437-mishra/5.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/p1437-mishra/5.jpg" />
+        </a>
+    <br>
+Figure 5. Top-level IMEU population (with IMCU and SMU)</li>
+</ul>
+<p>重新填充IMEU</p>
+<ul>
+<li>一旦IMEU被物化到内存中，查询就可以直接访问内存的值了</li>
+<li>而DML操作会使row无效，此时就不能直接查询IMEU了，需要重新计算，此时性能就会下降</li>
+<li>这时候需要有后台模块，周期性的刷新 IMCU-IMEU，并重建SCN</li>
+<li>刷新基于两种方式，操作数量的阈值、时间戳</li>
+<li>当新增一个DIME或者删除一个冷的DIME时，就需要重新填充IMEU了</li>
+<li>而IMCU不需要动，这就是IMCU 和 IMEU分离的好处</li>
+<li>如果热表达式集合发生了很大变化，也需要重新填充
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/p1437-mishra/6.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/p1437-mishra/6.jpg" />
+        </a>
+     
+Figure 6. Repopulation of IMCU-IMEU</li>
+</ul>
+<h2 id="利用idme加速查询">利用IDME加速查询</h2>
+<p>当 DIME 被填充完毕后，就可以被访问了<br>
+下一个阶段就是，重写SQL编译器生成的查询计划，变为：在表达式执行期间利用DIME的 运行时执行计划<br>
+当scan的时候，虚拟列会识别出对应的列，然后只需要很的修改，就可以实现加速效果</p>
+<p><strong>SQL编译和优化</strong><br>
+比如对于下面这个SQL</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-sql" data-lang="sql"><span style="display:flex;"><span><span style="color:#ff79c6">SELECT</span> <span style="color:#ff79c6">UPPER</span>(item_name) <span style="color:#ff79c6">FROM</span> sales
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">WHERE</span> category <span style="color:#ff79c6">=</span> ‘household’ <span style="color:#ff79c6">and</span>
+</span></span><span style="display:flex;"><span>	price <span style="color:#ff79c6">*</span> (<span style="color:#bd93f9">1</span><span style="color:#ff79c6">-</span>discount) <span style="color:#ff79c6">&gt;</span> <span style="color:#bd93f9">1000</span>;
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>SELECT中包含了表达式：UPPER(item_name)<br>
+WHERE中的表达式：price * (1-discount) &gt; 1000<br>
+根据这个SQL生成的查询计划如下：<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/p1437-mishra/7.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/p1437-mishra/7.jpg" />
+        </a>
+     
+Figure 7. Logical expression tree showing top-level expression <code>price*(1-discount)</code> as <code>DIME#1</code> and sub-expression <code>(1-discount)</code> as <code>DIME#2</code></p>
+<p>之后会评估 DIME是否在内存中，是否内存执行开销更小等<br>
+如果都满足则替换子树，否则还是按照原始的执行计划执行，如下：<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/p1437-mishra/8.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/p1437-mishra/8.jpg" />
+        </a>
+    </p>
+<p>如果DIME1 满足则变成下面左边的执行计划<br>
+如果DIME1 不满足，但是 DIME2 满足，则变成下面 右边的执行计划<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/p1437-mishra/9.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/p1437-mishra/9.jpg" />
+        </a>
+    </p>
+<p>其他一些优化</p>
+<ul>
+<li>存储索引中包含了min、max，在扫描时候可以跳过不需要的 IMEU</li>
+<li>向量化执行</li>
+<li>字典编码格式化，如：upper(substr(a, 1, 3)) = ‘DOG’，如果substr(a,1,3)在 DIME中，则可以替换为 upper(DIME) = ‘DOG’</li>
+<li>延迟物化</li>
+</ul>
+<h2 id="性能评估">性能评估</h2>
+<p>
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/p1437-mishra/10-a.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/p1437-mishra/10-a.jpg" />
+        </a>
+     
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/p1437-mishra/10-b.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/p1437-mishra/10-b.jpg" />
+        </a>
+     
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/p1437-mishra/11.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/p1437-mishra/11.jpg" />
+        </a>
+     
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/p1437-mishra/12.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/p1437-mishra/12.jpg" />
+        </a>
+     
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/p1437-mishra/13.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/p1437-mishra/13.jpg" />
+        </a>
+    </p>
+
+			<script type="text/javascript"
+        async
+        src="https://cdn.bootcss.com/mathjax/2.7.3/MathJax.js?config=TeX-AMS-MML_HTMLorMML">
+MathJax.Hub.Config({
+  tex2jax: {
+    inlineMath: [['$','$'], ['\\(','\\)']],
+    displayMath: [['$$','$$'], ['\[\[','\]\]']],
+    processEscapes: true,
+    processEnvironments: true,
+    skipTags: ['script', 'noscript', 'style', 'textarea', 'pre'],
+    TeX: { equationNumbers: { autoNumber: "AMS" },
+         extensions: ["AMSmath.js", "AMSsymbols.js"] }
+  }
+});
+
+MathJax.Hub.Queue(function() {
+    
+    
+    
+    var all = MathJax.Hub.getAllJax(), i;
+    for(i = 0; i < all.length; i += 1) {
+        all[i].SourceElement().parentNode.className += ' has-jax';
+    }
+});
+</script>
+
+<style>
+code.has-jax {
+    font: inherit;
+    font-size: 100%;
+    background: inherit;
+    border: inherit;
+    color: #515151;
+}
+</style>
+        </div>
+
+        
+
+
+        
+
+<div class="post-archive">
+    <h2>相关文章</h2>
+    <ul class="listing">
+        
+        <li><a href="/post/2023/01/materialization-strategies-in-the-vertica-analytic-database-lessons-learned/">Materialization Strategies in the Vertica Analytic Database: Lessons Learned</a></li>
+        
+        <li><a href="/post/2023/01/monetdbx100-hyper-pipelining-query-execution/">MonetDB/X100: Hyper-Pipelining Query Execution</a></li>
+        
+        <li><a href="/post/2023/01/access-path-selection-in-main-memory-optimized-data-systems-should-i-scan-or-should-i-probe/">Access Path Selection in Main-Memory Optimized Data Systems Should I Scan or Should I Probe</a></li>
+        
+        <li><a href="/post/2023/01/photon-a-fast-query-engine-for-lakehouse-systems/">Photon A Fast Query Engine for Lakehouse Systems</a></li>
+        
+        <li><a href="/post/2022/11/multi-tenant-cloud-data-services/">关于云环境中多租户问题的论文</a></li>
+        
+    </ul>
+</div>
+
+
+        <div class="post-meta meta-tags">
+            
+            <ul class="clearfix">
+                
+                <li><a href='/tags/%E6%9F%A5%E8%AF%A2%E4%BC%98%E5%8C%96'>查询优化</a></li>
+                
+                <li><a href='/tags/%E8%AE%BA%E6%96%87'>论文</a></li>
+                
+            </ul>
+            
+        </div>
+    </article>
+    
+    
+
+    
+    
+    <div class="post bg-white">
+      <script src="https://utteranc.es/client.js"
+            repo= "himichael/hugoblogtalks"
+            issue-term="pathname"
+            theme="github-light"
+            crossorigin="anonymous"
+            async>
+      </script>
+    </div>
+    
+</div>
+
+
+                </div>
+
+                <div id="secondary">
+    <section class="widget">
+        <form id="search" action='https://code0xff.org/search/' method="get" accept-charset="utf-8" target="_blank" _lpchecked="1">
+      
+      <input type="text" name="q" maxlength="20" placeholder="Search">
+      <input type="hidden" name="sitesearch" value="https://code0xff.org/">
+      <button type="submit" class="submit icon-search"></button>
+</form>
+    </section>
+    
+    <section class="widget">
+        <h3 class="widget-title">最近文章</h3>
+<ul class="widget-list">
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/01/accelerating-analytics-with-dynamic-in-memory-expressions/" title="Accelerating Analytics with Dynamic In-Memory Expressions">Accelerating Analytics with Dynamic In-Memory Expressions</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/01/materialization-strategies-in-the-vertica-analytic-database-lessons-learned/" title="Materialization Strategies in the Vertica Analytic Database: Lessons Learned">Materialization Strategies in the Vertica Analytic Database: Lessons Learned</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/01/monetdbx100-hyper-pipelining-query-execution/" title="MonetDB/X100: Hyper-Pipelining Query Execution">MonetDB/X100: Hyper-Pipelining Query Execution</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/01/access-path-selection-in-main-memory-optimized-data-systems-should-i-scan-or-should-i-probe/" title="Access Path Selection in Main-Memory Optimized Data Systems Should I Scan or Should I Probe">Access Path Selection in Main-Memory Optimized Data Systems Should I Scan or Should I Probe</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/01/photon-a-fast-query-engine-for-lakehouse-systems/" title="Photon A Fast Query Engine for Lakehouse Systems">Photon A Fast Query Engine for Lakehouse Systems</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/01/mysql%E7%9A%84%E5%B9%B6%E5%8F%91/" title="MySQL的并发">MySQL的并发</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2022/12/mysql%E7%9A%84%E6%81%A2%E5%A4%8D/" title="MySQL的恢复">MySQL的恢复</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2022/12/mysql%E7%9A%84%E7%BC%93%E5%AD%98/" title="MySQL的缓存">MySQL的缓存</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2022/12/mysql%E6%9F%A5%E8%AF%A2%E5%88%86%E6%9E%90/" title="MySQL查询分析">MySQL查询分析</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2022/12/%E7%94%A8%E5%B7%A5%E5%85%B7%E5%88%86%E6%9E%90mysql%E5%AD%98%E5%82%A8%E6%96%87%E4%BB%B6/" title="用工具分析MySQL存储文件">用工具分析MySQL存储文件</a>
+    </li>
+    
+</ul>
+    </section>
+
+    
+
+    <section class="widget">
+        <h3 class="widget-title"><a href='/categories/'>分类</a></h3>
+<ul class="widget-list">
+    
+    <li><a href="https://code0xff.org/categories/%E5%88%86%E5%B8%83%E5%BC%8F/">分布式 (6)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E5%8E%9F%E7%90%86%E5%88%86%E6%9E%90/">原理分析 (6)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E5%95%86%E4%B8%9A/">商业 (3)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E5%A4%A7%E6%95%B0%E6%8D%AE/">大数据 (22)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%95%B0%E6%8D%AE%E5%BA%93/">数据库 (15)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%97%85%E8%A1%8C/">旅行 (10)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%9E%B6%E6%9E%84/">架构 (1)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E7%AE%97%E6%B3%95/">算法 (8)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E7%B3%BB%E7%BB%9F/">系统 (5)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E7%BC%96%E7%A8%8B%E8%AF%AD%E8%A8%80/">编程语言 (2)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E8%AF%BB%E4%B9%A6%E7%AC%94%E8%AE%B0/">读书笔记 (9)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E9%9A%8F%E4%BE%BF%E5%86%99%E5%86%99/">随便写写 (5)</a></li>
+    
+</ul>
+    </section>
+
+    <section class="widget">
+        <h3 class="widget-title">归档</a></h3>
+<ul class="widget-list">
+    
+    <li><a href="https://code0xff.org/years/2021%E5%B9%B4/">2021年 (31)</a></li>
+    
+    <li><a href="https://code0xff.org/years/2022%E5%B9%B4/">2022年 (55)</a></li>
+    
+    <li><a href="https://code0xff.org/years/2023%E5%B9%B4/">2023年 (6)</a></li>
+    
+</ul>
+    </section>
+
+    <section class="widget">
+        <h3 class="widget-title"><a href='/tags/'>标签</a></h3>
+<div class="tagcloud">
+    
+    <a href="https://code0xff.org/tags/b%E6%A0%91/">B树 </a>
+    
+    <a href="https://code0xff.org/tags/flink/">flink </a>
+    
+    <a href="https://code0xff.org/tags/hive/">Hive </a>
+    
+    <a href="https://code0xff.org/tags/k8s/">k8s </a>
+    
+    <a href="https://code0xff.org/tags/kudu/">kudu </a>
+    
+    <a href="https://code0xff.org/tags/manacher/">Manacher </a>
+    
+    <a href="https://code0xff.org/tags/mapreduce/">MapReduce </a>
+    
+    <a href="https://code0xff.org/tags/mysql/">MySQL </a>
+    
+    <a href="https://code0xff.org/tags/paxos/">paxos </a>
+    
+    <a href="https://code0xff.org/tags/raft/">raft </a>
+    
+    <a href="https://code0xff.org/tags/scala/">scala </a>
+    
+    <a href="https://code0xff.org/tags/snowflake/">snowflake </a>
+    
+    <a href="https://code0xff.org/tags/spark/">spark </a>
+    
+    <a href="https://code0xff.org/tags/unix/">unix </a>
+    
+    <a href="https://code0xff.org/tags/%E4%BA%8C%E5%88%86%E6%9F%A5%E6%89%BE/">二分查找 </a>
+    
+    <a href="https://code0xff.org/tags/%E4%BA%8C%E5%8F%89%E6%A0%91%E9%81%8D%E5%8E%86/">二叉树遍历 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%88%86%E5%B8%83%E5%BC%8F/">分布式 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%8A%A8%E6%80%81%E6%B3%A8%E5%85%A5/">动态注入 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%8E%86%E5%8F%B2/">历史 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%9B%9E%E6%BA%AF/">回溯 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%9B%BD%E5%86%85%E6%97%85%E8%A1%8C/">国内旅行 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%9B%BD%E5%A4%96%E6%97%85%E8%A1%8C/">国外旅行 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%A4%A7%E6%95%B0%E6%8D%AE/">大数据 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%AD%98%E5%82%A8/">存储 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%B7%A5%E4%BD%9C%E8%AE%B0%E5%BD%95/">工作记录 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%BE%AE%E6%9C%8D%E5%8A%A1/">微服务 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%80%BB%E7%BB%93/">总结 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%95%B0%E6%8D%AE%E5%BA%93/">数据库 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%9F%A5%E8%AF%A2%E4%BC%98%E5%8C%96/">查询优化 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%B1%87%E7%BC%96/">汇编 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%B5%8B%E8%AF%95/">测试 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%B9%96%E4%BB%93%E4%B8%80%E4%BD%93/">湖仓一体 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%94%9F%E6%B4%BB/">生活 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%94%B5%E5%BD%B1/">电影 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%AE%97%E6%B3%95/">算法 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BB%8F%E6%B5%8E/">经济 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BC%93%E5%AD%98/">缓存 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BC%96%E8%AF%91%E5%8E%9F%E7%90%86/">编译原理 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BD%91%E7%BB%9C/">网络 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AE%A1%E7%AE%97%E6%A1%86%E6%9E%B6/">计算框架 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AE%BA%E6%96%87/">论文 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AF%BB%E4%B9%A6%E7%AC%94%E8%AE%B0/">读书笔记 </a>
+    
+</div>
+    </section>
+
+    
+
+    <section class="widget">
+        <h3 class="widget-title">RSS</h3>
+        <ul class="widget-list">
+            <li><a href="https://code0xff.org/index.xml">文章 RSS</a></li>
+        </ul>
+    </section>
+</div>
+            </div>
+        </div>
+    </div>
+    <footer id="footer">
+    <div>
+        &copy; 2023 <a href="https://code0xff.org/">记录每个瞬间 By 老王</a>
+        
+    </div>
+    <br />
+    <div>
+        <div class="github-badge">
+            <a href="https://gohugo.io/" target="_black" rel="nofollow"><span class="badge-subject">Powered by</span><span class="badge-value bg-blue">Hugo</span></a>
+        </div>
+        <div class="github-badge">
+            <a href="https://github.com/flysnow-org/maupassant-hugo" target="_black"><span class="badge-subject">Theme</span><span class="badge-value bg-yellowgreen">Maupassant</span></a>
+        </div>
+    </div>
+</footer>
+
+
+    
+    <script type="text/javascript">
+        window.MathJax = {
+            tex2jax: {
+                inlineMath: [['$', '$']],
+                processEscapes: true
+                }
+            };
+    </script>
+    <script src='https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.5/MathJax.js?config=TeX-MML-AM_CHTML' async></script><script src="https://cdn.bootcdn.net/ajax/libs/fancybox/3.5.7/jquery.fancybox.min.js"></script>
+
+<a id="rocket" href="#top"></a>
+<script type="text/javascript" src='/js/totop.js?v=0.0.0' async=""></script>
+
+<script type="application/javascript">
+var doNotTrack = false;
+if (!doNotTrack) {
+	window.ga=window.ga||function(){(ga.q=ga.q||[]).push(arguments)};ga.l=+new Date;
+	ga('create', 'GA ID', 'auto');
+	
+	ga('send', 'pageview');
+}
+</script>
+<script async src='https://www.google-analytics.com/analytics.js'></script>
+
+
+
+    <script type="text/javascript" src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js" async></script>
+
+
+
+
+</body>
+
+</html>

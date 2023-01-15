@@ -88,8 +88,15 @@
     <li>
       <ul>
         <li><a href="#介绍">介绍</a></li>
-        <li><a href="#数据模型vertica的磁盘存储">数据模型、Vertica的磁盘存储</a></li>
-        <li><a href="#其他">其他</a></li>
+        <li><a href="#数据模型和磁盘存储">数据模型和磁盘存储</a></li>
+        <li><a href="#边信息传递">边信息传递</a>
+          <ul>
+            <li><a href="#算法">算法</a></li>
+            <li><a href="#sip-filter评估">SIP filter评估</a></li>
+            <li><a href="#额外收益">额外收益</a></li>
+          </ul>
+        </li>
+        <li><a href="#性能评估">性能评估</a></li>
       </ul>
     </li>
   </ul>
@@ -192,44 +199,430 @@ Vertica最初是将这个锅甩给用户，让用户自己决定，如果join溢
 <li>延迟物化的性能更好，除了一种场景：溢出join(两边输入信息内存都放不下)</li>
 <li>SIP结合EM比普通EM性能更好，而且没有溢出join的情况，基本跟LM性能差不多</li>
 </ul>
-<h2 id="数据模型vertica的磁盘存储">数据模型、Vertica的磁盘存储</h2>
-<p>。。。</p>
-<h2 id="其他">其他</h2>
-<p>
+<p>相关的列存数据库</p>
+<ul>
+<li>HANA</li>
+<li>MonetDB</li>
+<li>Blink</li>
+</ul>
+<h2 id="数据模型和磁盘存储">数据模型和磁盘存储</h2>
+<p>Vertica 中的数据是按照<strong>投影</strong>来存储的，每个表至少要包含一个 超级投影，它包含了每列的位置<br>
+这种投影 projections 不同于标准的物化视图，它是一种数据的物理存储结构，而不是辅助索引结构   <br>
+解释</p>
+<ul>
+<li>投影可以分为 replicated、segmented</li>
+<li>复制是将tuple的copy存储到每个投影node上</li>
+<li>分片是 hash(col)，将数据分布到不同node上，一般按照 primary key分片</li>
+<li>数据存储在标准文件系统上的多个container中</li>
+<li>每个容器逻辑上包含一定数量的tuple，根据投影的排序顺序存储</li>
+<li>Vertica是按列存储的，每个列包含 数据文件、元数据文件、位置索引</li>
+<li>位置信息是隐式包含的，还包含 min、max信息</li>
+<li>完整tuple通过获取相		
+
         <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/shrinivas-icde2013/3.jpg">
             <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/shrinivas-icde2013/3.jpg" />
         </a>
-    
+    </li>
+</ul>
+<h2 id="边信息传递">边信息传递</h2>
+<p>一个具体的例子</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-sql" data-lang="sql"><span style="display:flex;"><span><span style="color:#ff79c6">SELECT</span> <span style="color:#ff79c6">*</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">FROM</span> fact,dim
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">WHERE</span> fact.FK <span style="color:#ff79c6">=</span> dim.PK
+</span></span><span style="display:flex;"><span>	<span style="color:#ff79c6">AND</span> dim.B <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">5</span>;
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>Fig. 4. Example Join Query 1.</p>
+<p>在没有 边信息传递 SIP时，join的情况如下，此时需要扫码实事表的每个tuple<br>
 
         <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/shrinivas-icde2013/5.jpg">
             <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/shrinivas-icde2013/5.jpg" />
         </a>
-    
+    </p>
+<p>有SIP的情况时，跟之前差不多，变化是 node2，这里会做一个SIP的过滤</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-cpp" data-lang="cpp"><span style="display:flex;"><span>hash(FK) IN <span style="color:#ff79c6">&lt;</span>hash<span style="color:#ff79c6">-</span>table <span style="color:#ff79c6">for</span> dim.PK<span style="color:#ff79c6">&gt;</span>
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>检查 实事表 的FK 是否在 维度表的PK中，如下图所示：   <br>
 
         <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/shrinivas-icde2013/6.jpg">
             <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/shrinivas-icde2013/6.jpg" />
         </a>
     
+Fig. 6. SIPS Evaluation for Query 1</p>
+<h3 id="算法">算法</h3>
+<p>1、SIP 过滤器的创建<br>
+会创建 表达式数量 + 1个 SIP filter，比如：</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-sql" data-lang="sql"><span style="display:flex;"><span>fact.A1 <span style="color:#ff79c6">=</span> dim.B1 <span style="color:#ff79c6">AND</span> fact.A2 <span style="color:#ff79c6">=</span> dim.B2 <span style="color:#ff79c6">AND</span> fact.A3 <span style="color:#ff79c6">=</span> dim.B3.
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>这里有<code>3</code>个表达式，分别创建，再加上一个表达式合并，一共<code>4</code>个</p>
+<ul>
+<li>fact.A1 IN (检查是否在hash dim.B1中)</li>
+<li>fact.A2 IN (检查是否在hash dim.B2中)</li>
+<li>fact.A3 IN (检查是否在hash dim.B3中)</li>
+<li>fact.A1, fact.A2, fact.A3</li>
+</ul>
+<p>2、SIP 过滤器的分布</p>
+<ul>
+<li>首先是根据每个join操作来创建过滤器</li>
+<li>然后按照规则进行push down</li>
+</ul>
+<p>规则</p>
+<ol>
+<li>如果当前操作时 left outer join、full outer join、anti-join(由NOT IN生成)、设置ALL操作的semi-join，则停止push down</li>
+<li>如果当前是join，且outer部分(join左边)不包含SIP filter谓词评估的所有列，则停止push down</li>
+<li>如果当前是join，且outer部分需要跨网络发送数据，则停止push down</li>
+<li>如果当前是group-by，且SIP filter包含任何聚合函数(不仅仅是对表达式分组)，则停止push down</li>
+</ol>
+<p>比如下图，查询计划包含 n1 和 n2，n2包含的条件为：fact.FK1 = dim.PK，n4表示对事实表scan，n5对DIM1做scan<br>
+n1的条件就是 fact.FK2 = dim2.PK，n2是作为n1 的outer，而n1的inner是scan DIM2表<br>
+之后根据n1、n2分别创建SIP filter，之后开始 push down，它也满足4个rule   <br>
 
         <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/shrinivas-icde2013/7.jpg">
             <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/shrinivas-icde2013/7.jpg" />
         </a>
-    
+    <br>
+Fig. 7. SIP Filter Creation and Distribution Example.</p>
+<p>下图中 两个SIP</p>
+<ul>
+<li>fact.FK1 = dim1.PK</li>
+<li>fact.FK2 + dim1.C = dim2.PK</li>
+</ul>
+<p>filter2被下推到 n2 的位置，filter1 被下推到 n4 的位置<br>
 
         <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/shrinivas-icde2013/8.jpg">
             <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/shrinivas-icde2013/8.jpg" />
         </a>
     
+Fig. 8. An Example Push Down Avoided by Rule 2.</p>
+<h3 id="sip-filter评估">SIP filter评估</h3>
+<p>这里使用了多种手段来加速</p>
+<ul>
+<li>hash表 是基于之前创建的</li>
+<li>每个列存储文件中还包含了 min、max信息</li>
+<li>而数据是按照hash分片的，根据min、max就可以过滤掉很多不需要读取的block</li>
+</ul>
+<p>假设条件为： fact.FK = dim.PK<br>
+谓词条件为： dim.B = 5 <br>
+根据谓词从 dim 表中查找合适的条件，找到 min = 3，max=8<br>
+也就是[3,8]这段满足 dim.PK，根据这些PK 建立hash表<br>
+之后事实表去hash表中匹配，完成 merge join操作<br>
 
         <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/shrinivas-icde2013/9.jpg">
             <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/shrinivas-icde2013/9.jpg" />
         </a>
-    
+       <br>
+Fig. 9. SIP Evaluation for Merge Joins.</p>
+<p>还有一些特殊场景：</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-sql" data-lang="sql"><span style="display:flex;"><span><span style="color:#ff79c6">SELECT</span> c_mktsegment, <span style="color:#ff79c6">SUM</span>(o_totalprice)
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">FROM</span> orders <span style="color:#ff79c6">JOIN</span> customer
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">ON</span> o_custkey <span style="color:#ff79c6">=</span> c_custkey
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">GROUP</span> <span style="color:#ff79c6">BY</span> c_mktsegment;
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>比如选择性很高的时候，建立SIP再评估就有点浪费了，此时会评估 输入/输出 数据的比例，如果<strong>高于</strong><code>0.9</code>则不建立 SIP</p>
+<p>Algorithm 1 The SIP Filter Creation Algorithm, CreateSIPFilters<br>
+Input: Root R of a Query Plan P.<br>
+Output: Query Plan, Ps with initialized SIP Expressions.<br>
+伪代码如下：</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">15
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">16
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">17
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">18
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">19
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">20
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">21
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">22
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">23
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">24
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">25
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">26
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">27
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">28
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">29
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">30
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">31
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">32
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">33
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">34
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">35
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">36
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">37
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-cpp" data-lang="cpp"><span style="display:flex;"><span><span style="color:#ff79c6">if</span> R is not a Join <span style="color:#ff79c6">operator</span> then
+</span></span><span style="display:flex;"><span>	<span style="color:#50fa7b">CreateSIPFilters</span>(Input(R));
+</span></span><span style="display:flex;"><span>	<span style="color:#ff79c6">return</span>; {Just process child and exit}
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">else</span>
+</span></span><span style="display:flex;"><span>	join ← R;
+</span></span><span style="display:flex;"><span>	<span style="color:#ff79c6">if</span> join is a Left<span style="color:#ff79c6">-</span>Outer Join or Full<span style="color:#ff79c6">-</span>Outer Join or AntiJoin or Semi<span style="color:#ff79c6">-</span>Join with ALL <span style="color:#ff79c6">operator</span> then 
+</span></span><span style="display:flex;"><span>		{Rule <span style="color:#bd93f9">1</span>}
+</span></span><span style="display:flex;"><span>		CreateSIPFilters(InnerInput(join));
+</span></span><span style="display:flex;"><span>		CreateSIPFilters(OuterInput(join));
+</span></span><span style="display:flex;"><span>		<span style="color:#ff79c6">return</span>; {Just process children and exit}
+</span></span><span style="display:flex;"><span>	end <span style="color:#ff79c6">if</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>	<span style="color:#ff79c6">if</span> <span style="color:#50fa7b">OuterInput</span>(join) needs a network operation then
+</span></span><span style="display:flex;"><span>		{Rule <span style="color:#bd93f9">3</span>}
+</span></span><span style="display:flex;"><span>		CreateSIPFilters(InnerInput(join));
+</span></span><span style="display:flex;"><span>		CreateSIPFilters(OuterInput(join));
+</span></span><span style="display:flex;"><span>		<span style="color:#ff79c6">return</span>; {Just process children and exit}
+</span></span><span style="display:flex;"><span>	end <span style="color:#ff79c6">if</span>
+</span></span><span style="display:flex;"><span> 
+</span></span><span style="display:flex;"><span>	Initialize a SIP Filter List, runtimeFilters;
+</span></span><span style="display:flex;"><span>	joinPredicates ← getJoinPredicatesFor(join);
+</span></span><span style="display:flex;"><span>	<span style="color:#ff79c6">for</span> each predicate pred in joinPredicates <span style="color:#ff79c6">do</span>
+</span></span><span style="display:flex;"><span>		<span style="color:#ff79c6">if</span> pred is an equality predicate then
+</span></span><span style="display:flex;"><span>			Create a SIP filter s <span style="color:#ff79c6">for</span> pred;
+</span></span><span style="display:flex;"><span>			Add s to runtimeFilters;
+</span></span><span style="display:flex;"><span>		end <span style="color:#ff79c6">if</span>
+</span></span><span style="display:flex;"><span>	end <span style="color:#ff79c6">for</span>
+</span></span><span style="display:flex;"><span> 
+</span></span><span style="display:flex;"><span>	<span style="color:#ff79c6">if</span> <span style="color:#50fa7b">size</span>(runtimeFilters) <span style="color:#ff79c6">&gt;</span> <span style="color:#bd93f9">1</span> then
+</span></span><span style="display:flex;"><span>		Create a SIP filter s <span style="color:#ff79c6">for</span> all join keys involved in equality predicates;
+</span></span><span style="display:flex;"><span>		Add s to runtimeFilters;
+</span></span><span style="display:flex;"><span>	end <span style="color:#ff79c6">if</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>	Store runtimeFilters in <span style="color:#50fa7b">OuterInput</span>(join);
+</span></span><span style="display:flex;"><span>	CreateSIPFilters(InnerInput(join));
+</span></span><span style="display:flex;"><span>	CreateSIPFilters(OuterInput(join));
+</span></span><span style="display:flex;"><span>end <span style="color:#ff79c6">if</span>
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>Algorithm 2 The SIP Filter Distribution Algorithm, DistributeSIPFilters<br>
+Input: Root R of Query Plan Ps with initialized SIP Expressions.<br>
+Output: Query Plan, Pd with distributed SIP Expressions.<br>
+伪代码如下：</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">15
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">16
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">17
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">18
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">19
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">20
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">21
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">22
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">23
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">24
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">25
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">26
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">27
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">28
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">29
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">30
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">31
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">32
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">33
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">34
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">35
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">36
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">37
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">38
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">39
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-cpp" data-lang="cpp"><span style="display:flex;"><span><span style="color:#ff79c6">if</span> R is a Group<span style="color:#ff79c6">-</span>By <span style="color:#ff79c6">operator</span> then
+</span></span><span style="display:flex;"><span>	groupby ← R
+</span></span><span style="display:flex;"><span>	runtimeFilters ← getSIPFiltersFor(groupby);
+</span></span><span style="display:flex;"><span>	<span style="color:#ff79c6">for</span> each filter in runtimeFilters <span style="color:#ff79c6">do</span>
+</span></span><span style="display:flex;"><span>		<span style="color:#ff79c6">if</span> filter is in terms of just grouping keys of groupby then 
+</span></span><span style="display:flex;"><span>			{Rule <span style="color:#bd93f9">4</span>}
+</span></span><span style="display:flex;"><span>			Push filter to <span style="color:#50fa7b">Input</span>(groupby);
+</span></span><span style="display:flex;"><span>		end <span style="color:#ff79c6">if</span>
+</span></span><span style="display:flex;"><span>	end <span style="color:#ff79c6">for</span>
+</span></span><span style="display:flex;"><span>	<span style="color:#50fa7b">DistributeSIPFilters</span>(Input(groupby));
+</span></span><span style="display:flex;"><span>	<span style="color:#ff79c6">return</span>;
+</span></span><span style="display:flex;"><span>end <span style="color:#ff79c6">if</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">if</span> R is a Join <span style="color:#ff79c6">operator</span> then
+</span></span><span style="display:flex;"><span>	join ← R;
+</span></span><span style="display:flex;"><span>	<span style="color:#ff79c6">if</span> join is a Left<span style="color:#ff79c6">-</span>Outer Join or Full<span style="color:#ff79c6">-</span>Outer Join or AntiJoin or Semi<span style="color:#ff79c6">-</span>Join with ALL <span style="color:#ff79c6">operator</span> then 
+</span></span><span style="display:flex;"><span>		{Rule <span style="color:#bd93f9">1</span>}
+</span></span><span style="display:flex;"><span>		DistributeSIPFilters(InnerInput(join));
+</span></span><span style="display:flex;"><span>		DistributeSIPFilters(OuterInput(join));
+</span></span><span style="display:flex;"><span>		<span style="color:#ff79c6">return</span>; {Just process children and exit}
+</span></span><span style="display:flex;"><span>	end <span style="color:#ff79c6">if</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>	<span style="color:#ff79c6">if</span> <span style="color:#50fa7b">OuterInput</span>(join) needs a network operation then
+</span></span><span style="display:flex;"><span>		{Rule <span style="color:#bd93f9">3</span>}
+</span></span><span style="display:flex;"><span>		DistributeSIPFilters(InnerInput(join));
+</span></span><span style="display:flex;"><span>		DistributeSIPFilters(OuterInput(join));
+</span></span><span style="display:flex;"><span>		<span style="color:#ff79c6">return</span>; {Just process children and exit}
+</span></span><span style="display:flex;"><span>	end <span style="color:#ff79c6">if</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>	runtimeFilters ← getSIPFiltersFor(join);
+</span></span><span style="display:flex;"><span>	<span style="color:#ff79c6">for</span> each filter in runtimeFilters <span style="color:#ff79c6">do</span>
+</span></span><span style="display:flex;"><span>		<span style="color:#ff79c6">if</span> filter can be applied in <span style="color:#50fa7b">OuterInput</span>(join) then 
+</span></span><span style="display:flex;"><span>			{Rule <span style="color:#bd93f9">2</span>}
+</span></span><span style="display:flex;"><span>			Push filter to <span style="color:#50fa7b">OuterInput</span>(join);
+</span></span><span style="display:flex;"><span>		end <span style="color:#ff79c6">if</span>
+</span></span><span style="display:flex;"><span>	end <span style="color:#ff79c6">for</span>
+</span></span><span style="display:flex;"><span>	<span style="color:#50fa7b">DistributeSIPFilters</span>(InnerInput(join));
+</span></span><span style="display:flex;"><span>	DistributeSIPFilters(OuterInput(join));
+</span></span><span style="display:flex;"><span>end <span style="color:#ff79c6">if</span>
+</span></span></code></pre></td></tr></table>
+</div>
+</div><h3 id="额外收益">额外收益</h3>
+<p>这里介绍边信息传递 SIP的两种特殊场景，用的好可以提升性能<br>
+1、谓词评估顺序</p>
+<ul>
+<li>列存对于 push down的顺序，其重要性大于行存</li>
+<li>如果按照投影扫描的顺序来评估谓词，其效率更高</li>
+<li>比如(o_orderdate, o_shippriority) 这样的列</li>
+<li>如果先评估o_orderdate 则效果更好，因为靠近前面的列压缩比更高，可以节省I/O</li>
+<li>延迟物化时，评估的列顺序跟 扫描时的列顺序可能不同</li>
+<li>而延迟物化是在 join的时候才评估列的，这可能会导致其性能比push down时要差</li>
+<li>本质上这是一种权衡：基于投影的顺序执行join  VS  基于评估的选择性、代价执行join</li>
+</ul>
+<p>实际执行时</p>
+<ul>
+<li>优化器根据选择性、成本来执行join</li>
+<li>而执行引擎根据投影扫描的顺序应用 SIP过滤器和下推谓词</li>
+</ul>
+<p>2、编码的影响</p>
+<ul>
+<li>使用的是  run-length 编码，可以直接作用到数据，省去了解码的时间</li>
+<li>下面的SQL会创建 3个SIP</li>
+<li>如果 fact.a1 经过run-length编码，而 fact.a2 没有，则需要解码</li>
+<li>如果执行SIP下推，fact.a1 IN <!-- raw HTML omitted --></li>
+<li>可以直接作用于编码数据，如果hash表数据很少，又能提升很多性能</li>
+</ul>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">5
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-sql" data-lang="sql"><span style="display:flex;"><span><span style="color:#ff79c6">SELECT</span> <span style="color:#ff79c6">*</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">FROM</span> fact <span style="color:#ff79c6">JOIN</span> dim <span style="color:#ff79c6">ON</span>
+</span></span><span style="display:flex;"><span>fact.A1 <span style="color:#ff79c6">=</span> dim.B1 <span style="color:#ff79c6">AND</span>
+</span></span><span style="display:flex;"><span>fact.A2 <span style="color:#ff79c6">=</span> dim.B2
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">WHERE</span> dim.B3 <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">5</span>;
+</span></span></code></pre></td></tr></table>
+</div>
+</div><h2 id="性能评估">性能评估</h2>
+<p>对比：</p>
+<ul>
+<li>早期物化 EM</li>
+<li>延迟物化 LM</li>
+<li>带有边信息传递的早期物化 EMSIP</li>
+</ul>
+<p>将 EM 作为基准，测试 TPC-DH 的几个查询用例<br>
 
         <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/shrinivas-icde2013/10.jpg">
             <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/shrinivas-icde2013/10.jpg" />
         </a>
-    </p>
+    
+查询 5 的LM性能并不好，因为出现了 join溢出<br>
+这里使用的都是冷缓存，而query5执行后，相当于把数据加载到cache中了，虽然join溢出重新执行了 ME<br>
+但是数据在缓存中，加速其查询速度<br>
+查询17、18、20 采用了SIP下推，得到了很好的效果，比LM性能更好<br>
+查询10 显示了 EMSIP比LM有些场景下要差，但是比 EM还是有30%的性能提升</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">6
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-sql" data-lang="sql"><span style="display:flex;"><span><span style="color:#ff79c6">SELECT</span> o_orderpriority, <span style="color:#ff79c6">COUNT</span>(<span style="color:#ff79c6">*</span>)
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">FROM</span> orders
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">WHERE</span> o_orderdate <span style="color:#ff79c6">in</span> (<span style="color:#ff79c6">SELECT</span> date_col
+</span></span><span style="display:flex;"><span>			<span style="color:#ff79c6">FROM</span> date_filter)
+</span></span><span style="display:flex;"><span>		<span style="color:#ff79c6">AND</span> o_totalprice <span style="color:#ff79c6">&gt;</span> <span style="color:#bd93f9">1000</span>.<span style="color:#bd93f9">0</span>
+</span></span><span style="display:flex;"><span>		<span style="color:#ff79c6">GROUP</span> <span style="color:#ff79c6">BY</span> o_orderpriority;
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>该查询本质上计算每个订单优先级的订单数量，对于在单独的表中指定的订单日期列表，其中每个订单超过1000美元<br>
+一般由 BI 工具生成<br>
+对比 Table II， EMSIP相比EM、LM有了50倍的性能提升<br>
+这是因为执行引擎在应用普通谓词之前，先将SIP应用于<code>o_orderdate</code>
+<code>o_orderdate</code>是投影扫描顺序的第一列，也是 run-length 编码的，因此执行谓词评估非常快<br>
+而 LM 评估的第一个谓词不是<code>o_orderdate</code>，因此浪费了很多时间</p>
+<p>考虑如下查询：</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">5
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-sql" data-lang="sql"><span style="display:flex;"><span><span style="color:#ff79c6">SELECT</span> <span style="color:#ff79c6">COUNT</span>(<span style="color:#ff79c6">*</span>) <span style="color:#ff79c6">FROM</span> lineitem
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">WHERE</span> (l_shipdate, l_orderkey) <span style="color:#ff79c6">IN</span>
+</span></span><span style="display:flex;"><span>	(<span style="color:#ff79c6">SELECT</span> o_orderdate<span style="color:#ff79c6">+</span><span style="color:#bd93f9">1</span>, o_orderkey
+</span></span><span style="display:flex;"><span>	<span style="color:#ff79c6">FROM</span> orders
+</span></span><span style="display:flex;"><span>	<span style="color:#ff79c6">WHERE</span> o_totalprice <span style="color:#ff79c6">&gt;</span> <span style="color:#bd93f9">550000</span>.<span style="color:#bd93f9">0</span>);
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>该查询本质上是查找在订购后一天发货的行项目的数量，对于高价的订单(大于550000美元)  <br>
+投影在<code>lineitem</code>列上，也是 run-length 编码的，这个查询跟上面的查询类似<br>
+使用 EMSIP会带来巨大的性能提升，大概比 EM、LM有两个数量级提升</p>
 
 			<script type="text/javascript"
         async
@@ -338,6 +731,10 @@ code.has-jax {
 <ul class="widget-list">
     
     <li>
+        <a href="https://code0xff.org/post/2023/01/accelerating-analytics-with-dynamic-in-memory-expressions/" title="Accelerating Analytics with Dynamic In-Memory Expressions">Accelerating Analytics with Dynamic In-Memory Expressions</a>
+    </li>
+    
+    <li>
         <a href="https://code0xff.org/post/2023/01/materialization-strategies-in-the-vertica-analytic-database-lessons-learned/" title="Materialization Strategies in the Vertica Analytic Database: Lessons Learned">Materialization Strategies in the Vertica Analytic Database: Lessons Learned</a>
     </li>
     
@@ -373,10 +770,6 @@ code.has-jax {
         <a href="https://code0xff.org/post/2022/12/%E7%94%A8%E5%B7%A5%E5%85%B7%E5%88%86%E6%9E%90mysql%E5%AD%98%E5%82%A8%E6%96%87%E4%BB%B6/" title="用工具分析MySQL存储文件">用工具分析MySQL存储文件</a>
     </li>
     
-    <li>
-        <a href="https://code0xff.org/post/2022/12/2022%E5%B9%B4%E6%80%BB%E7%BB%93/" title="2022年看过的书籍、电影，旅游过的地方">2022年看过的书籍、电影，旅游过的地方</a>
-    </li>
-    
 </ul>
     </section>
 
@@ -394,7 +787,7 @@ code.has-jax {
     
     <li><a href="https://code0xff.org/categories/%E5%A4%A7%E6%95%B0%E6%8D%AE/">大数据 (22)</a></li>
     
-    <li><a href="https://code0xff.org/categories/%E6%95%B0%E6%8D%AE%E5%BA%93/">数据库 (14)</a></li>
+    <li><a href="https://code0xff.org/categories/%E6%95%B0%E6%8D%AE%E5%BA%93/">数据库 (15)</a></li>
     
     <li><a href="https://code0xff.org/categories/%E6%97%85%E8%A1%8C/">旅行 (10)</a></li>
     
@@ -421,7 +814,7 @@ code.has-jax {
     
     <li><a href="https://code0xff.org/years/2022%E5%B9%B4/">2022年 (55)</a></li>
     
-    <li><a href="https://code0xff.org/years/2023%E5%B9%B4/">2023年 (5)</a></li>
+    <li><a href="https://code0xff.org/years/2023%E5%B9%B4/">2023年 (6)</a></li>
     
 </ul>
     </section>
