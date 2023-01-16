@@ -370,31 +370,255 @@ Figure 7. Logical expression tree showing top-level expression <code>price*(1-di
 <li>延迟物化</li>
 </ul>
 <h2 id="性能评估">性能评估</h2>
-<p>
+<p>主要有以下改善：</p>
+<ul>
+<li>改进响应时间</li>
+<li>减少CPU使用率</li>
+<li>OLTP、OLAP混合场景下提高吞吐量</li>
+</ul>
+<p><strong>In-Memory Virtual Columns</strong></p>
+<ul>
+<li>1亿行，8G大小，采用内存压缩配置</li>
+<li>四个虚拟列、5个查询如下</li>
+</ul>
+<p>Table 2. List of user-defined VCs</p>
+<table>
+<thead>
+<tr>
+<th>VC Name</th>
+<th>Expression</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>VC1</td>
+<td>(rand64k/1000)+(rand1m/1000)</td>
+</tr>
+<tr>
+<td>VC2</td>
+<td>((1-(rand15/100))+(rand1m/10)+rand64k)</td>
+</tr>
+<tr>
+<td>VC3</td>
+<td>(0.3*rand15)</td>
+</tr>
+<tr>
+<td>VC4</td>
+<td>SUBSTR(randstringsize26,10,5)</td>
+</tr>
+</tbody>
+</table>
+<p>Table 3. Point queries on Atomics table</p>
+<table>
+<thead>
+<tr>
+<th>ID</th>
+<th>QUERY</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Q1</td>
+<td>SELECT MAX(rand15) FROM atomics WHERE((rand64k/1000)+(rand1m/1000))=10;</td>
+</tr>
+<tr>
+<td>Q2</td>
+<td>SELECT MAX((1-(rand15/100))+(rand1m/10)+rand64k) FROM atomics;</td>
+</tr>
+<tr>
+<td>Q3</td>
+<td>SELECT MAX(uniq100m) FROM atomics WHERE ((1-(rand15/100))+(rand1m/10)+rand64k)=10000;</td>
+</tr>
+<tr>
+<td>Q4</td>
+<td>SELECT MAX(uniq100m) FROM atomics WHERE (0.3*rand15)+((rand64k/1000)+(rand1m/1000))&lt;100;</td>
+</tr>
+<tr>
+<td>Q5</td>
+<td>SELECT MAX(rand15) FROM atomics WHERE UPPER(SUBSTR(randstringsize26,10,5))=&lsquo;limja&rsquo;;</td>
+</tr>
+</tbody>
+</table>
+<p>发现 top-level 的表达式有了 1000倍的加速(图10-a)，而子表达式有 2倍 加速(图10-b)     <br>
+
         <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/p1437-mishra/10-a.jpg">
             <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/p1437-mishra/10-a.jpg" />
         </a>
-     
-
+    <br>
+Figure 10a. Speed-up in Atomics queries with top-level expressions materialized as DIMEs</p>
+<p>
         <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/p1437-mishra/10-b.jpg">
             <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/p1437-mishra/10-b.jpg" />
         </a>
-     
-
+    <br>
+Figure 10b. Speed-up in Atomics queries with only subexpressions materialized as DIMEs</p>
+<p><strong>Analytic Workload: Auto-capture of DIMEs and Query Acceleration</strong><br>
+这里使用了 TPC-H 的测试集，TPC-H一共包含了 8 个表<br>
+下面展示了 LINEITEM 和 ORDERS 两张表的表达式，以及相关的 3个查询</p>
+<ul>
+<li>Q1是执行基于表达式的过滤</li>
+<li>Q2是基于表达式的聚合</li>
+<li>Q3更复杂，执行聚合和分组</li>
+</ul>
+<p>由于Q1 和 Q2都在 DIME中，加速效果最好，其中Q2加速最好</p>
+<p>Table 4. Top expressions captured by ESS</p>
+<table>
+<thead>
+<tr>
+<th>Table Name</th>
+<th>Expression</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>LINEITEM</td>
+<td>l_extendedprice * (1-l_discount)</td>
+</tr>
+<tr>
+<td>LINEITEM</td>
+<td>l_extendedprice * (1-l_discount) * (1+l_tax)</td>
+</tr>
+<tr>
+<td>ORDERS</td>
+<td>CASE when (o_orderpriority&lt;&gt;(1-urgent) and o_orderpriority&lt;&gt;(2-high)) then 1 else 0 END</td>
+</tr>
+<tr>
+<td>ORDERS</td>
+<td>CASE when (o_orderpriority&lt;&gt;(1-urgent) and o_orderpriority&lt;&gt;(2-high)) then 1 else 0 END</td>
+</tr>
+<tr>
+<td>LINEITEM</td>
+<td>CASE when l_receiptdate &gt; l_commitdate then 1 else 0 END</td>
+</tr>
+<tr>
+<td>ORDERS</td>
+<td>SYS_OP_BLOOM_FILTER(:BF0000, o_custkey)</td>
+</tr>
+<tr>
+<td>LINEITEM</td>
+<td>SYS_OP_BLOOM_FILTER(:BF0000, l_partkey)</td>
+</tr>
+</tbody>
+</table>
+<table>
+<thead>
+<tr>
+<th>ID</th>
+<th>QUERY</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Q1</td>
+<td>SELECT SUM(l_quantity) FROM lineitem<!-- raw HTML omitted -->WHERE (l_extendedprice*(1-l_discount))&gt;  (SELECT AVG(l_extendedprice*(1-l_discount))  FROM lineitem); <!-- raw HTML omitted --></td>
+</tr>
+<tr>
+<td>Q2</td>
+<td>SELECT MAX(l_extendedprice*(1-l_discount)) FROM lineitem;</td>
+</tr>
+<tr>
+<td>Q3</td>
+<td>SELECT l_returnflag, l_linestatus, SUM(l_quantity),SUM(l_extendedprice), SUM(l_extendedprice*(1-l_discount)),SUM(l_extendedprice*(1-l_discount)<em>(1+l_tax)), COUNT(</em>) FROM lineitemGROUP BY l_returnflag, l_linestatus;</td>
+</tr>
+</tbody>
+</table>
+<p>
         <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/p1437-mishra/11.jpg">
             <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/p1437-mishra/11.jpg" />
         </a>
-     
-
+    <br>
+Figure 11. Speed-up in analytic queries on LINEITEM with l_extendedprice * (1-l_discount) materialized as a DIME</p>
+<p><strong>JSON Query Acceleration</strong><br>
+Oracle于2014年引入JSON支持，支持其存储格式，以及SQL透明查询<br>
+JSON_VALUE是 json值到SQL值的桥接<br>
+总数据大概 40G，两个表达式</p>
+<ul>
+<li>JSON_VALUE(jobj, &lsquo;$.num&rsquo; RETURNING NUMBER)</li>
+<li>JSON_VALUE(jobj, &lsquo;$.dyn1&rsquo; RETURNING NUMBER)</li>
+</ul>
+<table>
+<thead>
+<tr>
+<th>ID</th>
+<th>QUERY</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Q1</td>
+<td>SELECT COUNT(*) FROM nobench_main WHERE json_value(jobj,&rsquo;$.num&rsquo; returning NUMBER) BETWEEN 1 AND 1000;</td>
+</tr>
+<tr>
+<td>Q2</td>
+<td>SELECT COUNT(*) FROM nobench_main WHERE json_value(jobj,&rsquo;$.num&rsquo; returning NUMBER) BETWEEN 1 AND 100000 GROUP BY json_value(jobj, &lsquo;$.thousandth&rsquo;);</td>
+</tr>
+<tr>
+<td>Q3</td>
+<td>SELECT COUNT(*) FROM nobench_main WHERE json_value(jobj, &lsquo;$.dyn1&rsquo; returning NUMBER) BETWEEN 1 AND 1000;</td>
+</tr>
+</tbody>
+</table>
+<p>Q1 和 Q2 直接基于内存物化的结果，可以达到20倍的加速，而Q3需要基于JSON_VALUE表达式再聚合，提升 5倍性能</p>
+<p>
         <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/p1437-mishra/12.jpg">
             <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/p1437-mishra/12.jpg" />
         </a>
-     
+    <br>
+Figure 12. Performance boost in JSON query processing with JSON_VALUE DIMEs</p>
+<p><strong>Accelerate OLTAP Mixed Workloads</strong><br>
+Oracle是第一款工业级别的混合 行 和 列格式存储的数据库<br>
+使用内存中的列来加速分析场景，使用 DIME 来加速OLTP场景<br>
+吞吐量的为 2000/s， 99%的DML操作，1%的分析操作</p>
+<p>Table 7. List of DIMEs materialized in-memory</p>
+<table>
+<thead>
+<tr>
+<th>ID</th>
+<th>Expression</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>E1</td>
+<td>ROUND(n2 /1000000+n3/1000000)</td>
+</tr>
+<tr>
+<td>E2</td>
+<td>1+(n2/1000000)+(n3/1000000)+(n4/1000000)</td>
+</tr>
+</tbody>
+</table>
+<p>Table 8. Analytic queries in synthetic OLTAP workload</p>
+<table>
+<thead>
+<tr>
+<th>ID</th>
+<th>Expression</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Q1</td>
+<td>SELECT MAX(( 1+(n2/1000000)+(n3/1000000)+(n4/1000000))) FROM c101_6p1m_hash;</td>
+</tr>
+<tr>
+<td>Q2</td>
+<td>SELECT MAX(n2) FROM c101_6p1m_hash WHERE ROUND(n2 /1000000+n3/1000000)= 10;</td>
+</tr>
+<tr>
+<td>Q3</td>
+<td>SELECT MAX(n3) FROM c101_6p1m_hash WHERE (1+(n2/1000000)+(n3/1000000)+(n4/1000000))= 8;</td>
+</tr>
+</tbody>
+</table>
+<p>Q1、Q2、Q3是分析查询，在OLTP场景中，其中值有200倍提升，吞吐量为 2000/s<br>
+CPU使用率为 28.6%，而没有DIME时，吞吐量下降，CPU使用率达到100%<br>
 
         <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/p1437-mishra/13.jpg">
             <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/p1437-mishra/13.jpg" />
         </a>
-    </p>
+     
+Figure 13. Speed-up in minimum, median and maximum response times of queries in OLTAP workload with DIMEs</p>
 
 			<script type="text/javascript"
         async
