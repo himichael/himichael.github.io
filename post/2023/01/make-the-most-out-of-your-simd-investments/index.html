@@ -1,0 +1,1170 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    
+    <meta name="referrer" content="no-referrer-when-downgrade">
+    
+
+    <title>Make the most out of your SIMD investments: counter control flow divergence in compiled query pipelines | 记录每个瞬间</title>
+    <meta property="og:title" content="Make the most out of your SIMD investments: counter control flow divergence in compiled query pipelines - 记录每个瞬间">
+    <meta property="og:type" content="article">
+        
+    <meta property="article:published_time" content='2023-01-17T06:35:19&#43;08:00'>
+        
+        
+    <meta property="article:modified_time" content='2023-01-17T06:35:19&#43;08:00'>
+        
+    <meta name="Keywords" content="">
+    <meta name="description" content="Make the most out of your SIMD investments: counter control flow divergence in compiled query pipelines">
+        <meta name="author" content="隔壁老王">
+        
+    <meta property="og:url" content="https://code0xff.org/post/2023/01/make-the-most-out-of-your-simd-investments/">
+    <link rel="shortcut icon" href='/favicon.ico'  type="image/x-icon">
+
+    <link rel="stylesheet" href='/css/normalize.css'>
+    <link rel="stylesheet" href='/css/style.css'>
+    <script type="text/javascript" src="//cdn.bootcdn.net/ajax/libs/jquery/3.4.1/jquery.min.js"></script>
+
+    
+    
+    
+        <link href="https://cdn.bootcdn.net/ajax/libs/fancybox/3.5.7/jquery.fancybox.min.css" rel="stylesheet">
+    
+    
+    
+    
+</head>
+
+
+<body>
+    <header id="header" class="clearfix">
+    <div class="container">
+        <div class="col-group">
+            <div class="site-name ">
+                
+                    <a id="logo" href="https://code0xff.org/">
+                        记录每个瞬间
+                    </a>
+                
+                
+            </div>
+            <div>
+                <nav id="nav-menu" class="clearfix">
+                    <a class="current" href="https://code0xff.org/">首页</a>
+                    
+                    <a  href="https://code0xff.org/linked/" title="链接">链接</a>
+                    
+                    <a  href="https://code0xff.org/archives/" title="归档">归档</a>
+                    
+                    <a  href="https://code0xff.org/about/" title="关于">关于</a>
+                    
+                </nav>
+            </div>
+        </div>
+    </div>
+</header>
+
+    <div id="body">
+        <div class="container">
+            <div class="col-group">
+
+                <div class="col-8" id="main">
+                    
+<div class="res-cons">
+    
+    <article class="post">
+        <header>
+            <h1 class="post-title">Make the most out of your SIMD investments: counter control flow divergence in compiled query pipelines</h1>
+        </header>
+        <date class="post-meta meta-date">
+            2023年1月17日
+        </date>
+<nav id="TableOfContents">
+  <ul>
+    <li>
+      <ul>
+        <li><a href="#背景">背景</a>
+          <ul>
+            <li><a href="#avx512指令集">AVX512指令集</a></li>
+            <li><a href="#向量化流水线">向量化流水线</a></li>
+          </ul>
+        </li>
+        <li><a href="#填充算法">填充算法</a>
+          <ul>
+            <li><a href="#memory-to-register">Memory to register</a></li>
+            <li><a href="#register-to-register">Register to register</a></li>
+            <li><a href="#variants">Variants</a></li>
+          </ul>
+        </li>
+        <li><a href="#重填充策略">重填充策略</a></li>
+        <li><a href="#性能评估">性能评估</a>
+          <ul>
+            <li><a href="#table-scan">Table scan</a></li>
+            <li><a href="#hashjoin">Hashjoin</a></li>
+            <li><a href="#approximate-geospatial-join">Approximate geospatial join</a></li>
+            <li><a href="#overhead">Overhead</a></li>
+            <li><a href="#summary">summary</a></li>
+          </ul>
+        </li>
+        <li><a href="#参考">参考</a></li>
+      </ul>
+    </li>
+  </ul>
+</nav>
+        
+        <div class="post-meta">
+            
+            <span class="post-meta meta-tags">
+                <ul class="clearfix">
+                    <a href='/categories/%E5%A4%A7%E6%95%B0%E6%8D%AE'>大数据</a>
+                </ul>
+            </span>
+            
+        </div>
+        
+        
+        <div class="post-meta">
+            <span id="busuanzi_container_page_pv">|<span id="busuanzi_value_page_pv"></span><span>
+                    阅读</span></span>
+        </div>
+        
+        
+        <div class="post-content">
+            <blockquote>
+<p>原文 <br>
+<a href="https://15721.courses.cs.cmu.edu/spring2023/papers/08-vectorization/lang-vldbj2020.pdf">https://15721.courses.cs.cmu.edu/spring2023/papers/08-vectorization/lang-vldbj2020.pdf</a></p>
+</blockquote>
+<h2 id="背景">背景</h2>
+<p>最近十年，越来越多的数据库系统使用了<code>SIMD</code>，主要用于这几种操作</p>
+<ul>
+<li>SELECT</li>
+<li>JOIN</li>
+<li>分区</li>
+<li>排序</li>
+<li>CSV 解析</li>
+<li>正则表达式匹配</li>
+<li>压缩/解压缩</li>
+</ul>
+<p>SIMD主要用于解释执行数据库，对于编译执行的数据库，如HyPer则使用的很少<br>
+而现代CPU的寄存器更宽了，并行度更高了<br>
+比如<code>AVX-512</code>，可以使整个向量化查询流水线化，得到更高的并行度，同时可以将整个CPU cache放入单个指令中，多个64位指令可以打包到单个指令中</p>
+<p>使整个查询流水线会带来很多挑战</p>
+<ul>
+<li>在查询求值期间，保持所有的SIMD执行都繁忙</li>
+<li>但有些动态的tuple不满足控制流，比如不满足谓词计算，那么对应的SIMD流水线就会受到影响</li>
+<li>一个非向量化的流水可以返回一个 分支控制流，然后抓取下一个tuple</li>
+<li>但是向量化的不行，要不就全满足、或者全不满足；只有部分满足的会导致其他指令会继续执行，从而影响效率</li>
+<li>一种方式：忽略那些不规范的tuple，不引入分支逻辑，通过bitmap来记录那些不满足的tuple，当中间结果需要物化，那些不规范的tuple就不写</li>
+<li>这种方式缺点是，活跃和不活跃的元素都被执行了，也影响了开销</li>
+<li>关键点在于，有些vector-processing units VPC，向量处理单元并非<strong>充分利用</strong></li>
+<li>好的算法需要统计这些未<strong>充分利用</strong>的向量处理单元</li>
+<li>一般的做法是将tuple物化到内存中，但这会使管道断开也影响了效率</li>
+<li>这篇论文中引入的算法、策略是尽量不断开管道</li>
+</ul>
+<h3 id="avx512指令集">AVX512指令集</h3>
+<p>这里简单的介绍下<code>AVX512</code>指令集</p>
+<ul>
+<li>掩码指令</li>
+<li>排列指令</li>
+<li>压缩/扩展指令</li>
+</ul>
+<p><strong>1、掩码指令</strong><br>
+一个<code>add</code>指令需要 a、b两个操作符，以及目标寄存器<br>
+AVX512中，变成这样：</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-cpp" data-lang="cpp"><span style="display:flex;"><span>dst <span style="color:#ff79c6">=</span> mask_add(src,mask,a,b)   
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>这是在原始<code>add</code>指令基础上，增加了<strong>掩码</strong>操作<br>
+对 掩码指定的a、b中的向量执行加法，其余掩码为 0 的元素，从src 复制到 dst<br>
+掩码指令可以预防单个向量组件被修改<br>
+掩码指定被用于比较指令，存储到特定的掩码寄存器中，现在的宽度为256bit</p>
+<p><strong>2、重排列</strong><br>
+相当于一个shuffle操作，根据给定的index 向量，来shuffle输入的向量<br>
+这个指令在之前的版本中就有了，能实现一次两个元素操作，现在是四个   <br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/Make%20the%20most%20out%20of%20your%20SIMD%20investments/0-a.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/Make%20the%20most%20out%20of%20your%20SIMD%20investments/0-a.jpg" />
+        </a>
+    </p>
+<p><strong>3、压缩/扩展</strong><br>
+这是 AVX512指令集中新引入的<br>
+压缩指令，存储掩码指定的活跃元素，将他们连续保存到目标寄存器中<br>
+扩展指令，根据0、1指定目标位置是否有元素，然后将连续的 src填充上
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/Make%20the%20most%20out%20of%20your%20SIMD%20investments/0-b.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/Make%20the%20most%20out%20of%20your%20SIMD%20investments/0-b.jpg" />
+        </a>
+    </p>
+<h3 id="向量化流水线">向量化流水线</h3>
+<p>对于编译型数据库如 Hyper，它的控制流无论到达哪个算子，都能确定当前肯定是 只有一个tuple被执行<br>
+但是向量化就不同了，因为同时会执行多个tuple，他们的控制流可能不同，这就导致了一个问题</p>
+<ul>
+<li>当触发一个分支操作时，某些 SIMD 的执行可能不是活跃的，如果至少有一个tuple满足条件，分支就会被触发</li>
+<li>如果向量长度为 n，那么最多可能会有 n - 1 个元素是<strong>不活跃</strong>的</li>
+</ul>
+<p>比如下面的操作，包含scan、select、join<br>
+初始时，所有的scan都是活跃的，因为执行select、join某些元素可能会变得<strong>不活跃</strong>(由 x 标记)，但是没有走到 no match分支，因为一些元素仍是<strong>活跃</strong>的   <br>
+比如道路<code>4</code>第一次就找到了join的伙伴，但是<code>1</code>和<code>6</code>要迭代三次才行，这就导致了出现等待</p>
+<p>
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/Make%20the%20most%20out%20of%20your%20SIMD%20investments/1.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/Make%20the%20most%20out%20of%20your%20SIMD%20investments/1.jpg" />
+        </a>
+     
+Fig. 1 During query processing, individual SIMD lanes may (temporarily) become inactive due to different control flows. The resulting underutilization of vector-processing units causes performance degradations. We propose efficient algorithms and strategies to fill these gaps</p>
+<h2 id="填充算法">填充算法</h2>
+<p>这个算法的本质是，将新元素 复制到目标寄存器中所需的位置<br>
+这里期望的位置，就是不活跃元素的位置，活跃/不活跃 是通过<strong>比特位</strong>控制的，如果设置了这个bit，就表示活跃的   <br>
+需要识别两种情况</p>
+<ul>
+<li>新元素是从源内存地址中拷贝的</li>
+<li>元素已经在向量中了</li>
+</ul>
+<h3 id="memory-to-register">Memory to register</h3>
+<p>从内存中填充一般出现在scan算子中，从内存中读取连续的元素 <br>
+这里需要两个指令</p>
+<ul>
+<li>一个掩码指令，里面包含的是活跃的元素，取反就能获得哪些元素是<strong>不活跃</strong>的</li>
+<li>一个向量指令 expand load，用来执行实际的加载</li>
+</ul>
+<p>总体上，这些操作可以直接使用 AVX512提供的指令来完成    <br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/Make%20the%20most%20out%20of%20your%20SIMD%20investments/2.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/Make%20the%20most%20out%20of%20your%20SIMD%20investments/2.jpg" />
+        </a>
+    
+Fig. 2 Refilling empty SIMD lanes from memory using the AVX-512 expand load instruction</p>
+<p>table scan会产出一个额外的输出向量，包含最新加载属性的tuple标识符 TID<br>
+TID是从当前读位置导出并使用的，延迟加载不同列的属性值、或重建tuple顺序<br>
+下图说明如何使用 图2中的读位置、掩码位置更新 TID向量寄存器内容<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/Make%20the%20most%20out%20of%20your%20SIMD%20investments/3.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/Make%20the%20most%20out%20of%20your%20SIMD%20investments/3.jpg" />
+        </a>
+    <br>
+Fig. 3 TIDs are derived from the current read position and assigned to a TID vector register</p>
+<h3 id="register-to-register">Register to register</h3>
+<p>这是要求在两个 向量寄存器之间移动，主要使用了 compress 和 expand 两个指令</p>
+<ul>
+<li>首先从 源寄存器中找出活跃的元素</li>
+<li>通过掩码、compress指令，将源中 活跃的元素写入中间存储</li>
+<li>之后计算目标寄存器中 不活跃 的元素</li>
+<li>通过expand指令，将中间结果写入到目标寄存器中</li>
+<li>更新目标寄存器的 bitmark</li>
+<li>如果要更新多个源/目标寄存器，则计算 排列的开销会跟后面的源/目标寄存器 平摊</li>
+<li>可能需要拷贝多个属性</li>
+<li>如果不是所有元素都要移动，则需要更新源寄存器
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/Make%20the%20most%20out%20of%20your%20SIMD%20investments/4.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/Make%20the%20most%20out%20of%20your%20SIMD%20investments/4.jpg" />
+        </a>
+    <br>
+Fig. 4 Computation of the permutation indices and the permutation mask based on positions of the active elements in the source register and the inactive elements in the destination register</li>
+</ul>
+<p>
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/Make%20the%20most%20out%20of%20your%20SIMD%20investments/5.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/Make%20the%20most%20out%20of%20your%20SIMD%20investments/5.jpg" />
+        </a>
+     
+Fig. 5 If not all elements could be moved from the source to the destination register, the source mask needs to be updated accordingly</p>
+<p>下面是填充代码</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-cpp" data-lang="cpp"><span style="display:flex;"><span>[...]
+</span></span><span style="display:flex;"><span><span style="color:#6272a4">//Prepare the refill.
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>fill_rr r(src_mask, dst_mask);
+</span></span><span style="display:flex;"><span><span style="color:#6272a4">//Copy elements from src to dst.
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>r.apply(src_tid, dst_tid);
+</span></span><span style="display:flex;"><span>r.apply(src_attr_a, dst_attr_a);
+</span></span><span style="display:flex;"><span>r.apply(src_attr_b, dst_attr_b);
+</span></span><span style="display:flex;"><span>r.apply(..., ...);
+</span></span><span style="display:flex;"><span><span style="color:#6272a4">//Update the destination mask,
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>r.update_dst_mask(dst_mask);
+</span></span><span style="display:flex;"><span><span style="color:#6272a4">//and optionally the source mask.
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>r.update_src_mask(src_mask);
+</span></span><span style="display:flex;"><span>[...]
+</span></span></code></pre></td></tr></table>
+</div>
+</div><h3 id="variants">Variants</h3>
+<p>下面是两个填充算法</p>
+<ul>
+<li>第一个是普通的，第二个是带压缩的</li>
+<li>这里适配了所有场景</li>
+<li>活跃元素存储在随机位置</li>
+<li>活跃元素连续存储
+Listing 1 Generic refill algorithm</li>
+</ul>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">15
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">16
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">17
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">18
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">19
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">20
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">21
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">22
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">23
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">24
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">25
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">26
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">27
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">28
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">29
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-cpp" data-lang="cpp"><span style="display:flex;"><span><span style="color:#ff79c6">struct</span> <span style="color:#50fa7b">fill_rr</span> {
+</span></span><span style="display:flex;"><span>    __mmask8 permutation_mask;
+</span></span><span style="display:flex;"><span>    __m512i permutation_idxs;
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#6272a4">//Prepare the permutation.
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>    fill_rr(<span style="color:#ff79c6">const</span> __mmask8 src_mask,<span style="color:#ff79c6">const</span> __mmask8 dst_mask) {
+</span></span><span style="display:flex;"><span>        __m512i src_idxs <span style="color:#ff79c6">=</span> _mm512_mask_compress_epi64(ALL, src_mask, SEQUENCE);
+</span></span><span style="display:flex;"><span>        __mmask8 write_mask <span style="color:#ff79c6">=</span> _mm512_knot(dst_mask);
+</span></span><span style="display:flex;"><span>        permutation_idxs <span style="color:#ff79c6">=</span> _mm512_mask_expand_epi64(ALL, write_mask, src_idxs);
+</span></span><span style="display:flex;"><span>        permutation_mask <span style="color:#ff79c6">=</span> _mm512_mask_cmpneq_epu64_mask(write_mask, permutation_idxs, ALL);
+</span></span><span style="display:flex;"><span>    }
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#6272a4">//Move elements from ’src’ to ’dst’.
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>    <span style="color:#8be9fd">void</span> <span style="color:#50fa7b">apply</span>(<span style="color:#ff79c6">const</span> __m512i src, __m512i<span style="color:#ff79c6">&amp;</span> dst) <span style="color:#ff79c6">const</span>{
+</span></span><span style="display:flex;"><span>        dst <span style="color:#ff79c6">=</span> _mm512_mask_permutexvar_epi64(dst, permutation_mask, permutation_idxs, src);
+</span></span><span style="display:flex;"><span>    }
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#8be9fd">void</span> <span style="color:#50fa7b">update_src_mask</span>(__mmask8<span style="color:#ff79c6">&amp;</span> src_mask) <span style="color:#ff79c6">const</span> {
+</span></span><span style="display:flex;"><span>        __mmask8 compressed_mask <span style="color:#ff79c6">=</span>
+</span></span><span style="display:flex;"><span>        _pext_u32(<span style="color:#ff79c6">~</span><span style="color:#bd93f9">0u</span>, permutation_mask);
+</span></span><span style="display:flex;"><span>        __m512i a <span style="color:#ff79c6">=</span> _mm512_maskz_mov_epi64(compressed_mask, ALL);
+</span></span><span style="display:flex;"><span>        __m512i b <span style="color:#ff79c6">=</span> _mm512_maskz_expand_epi64(src_mask, a);
+</span></span><span style="display:flex;"><span>        src_mask <span style="color:#ff79c6">=</span> _mm512_mask_cmpeq_epu64_mask(src_mask, b, ZERO);
+</span></span><span style="display:flex;"><span>    }
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#8be9fd">void</span> <span style="color:#50fa7b">update_dst_mask</span>(__mmask8<span style="color:#ff79c6">&amp;</span> dst_mask) <span style="color:#ff79c6">const</span> {
+</span></span><span style="display:flex;"><span>        dst_mask <span style="color:#ff79c6">=</span>_mm512_kor(dst_mask, permutation_mask);
+</span></span><span style="display:flex;"><span>    }
+</span></span><span style="display:flex;"><span>};
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>Listing 2 Refill algorithm for compressed vectors</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">15
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">16
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">17
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">18
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">19
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">20
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">21
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">22
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">23
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">24
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">25
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">26
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">27
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">28
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">29
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">30
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">31
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">32
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-cpp" data-lang="cpp"><span style="display:flex;"><span><span style="color:#ff79c6">struct</span> <span style="color:#50fa7b">fill_cc</span> {
+</span></span><span style="display:flex;"><span>    __mmask8 permutation_mask;
+</span></span><span style="display:flex;"><span>    __m512i permutation_idxs;
+</span></span><span style="display:flex;"><span>    <span style="color:#8be9fd">uint32_t</span> cnt;
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#6272a4">//Prepare the permutation.
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>    fill_cc(<span style="color:#ff79c6">const</span> <span style="color:#8be9fd">uint32_t</span> src_cnt, <span style="color:#ff79c6">const</span> <span style="color:#8be9fd">uint32_t</span> dst_cnt) {
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">const</span> <span style="color:#ff79c6">auto</span> src_empty_cnt <span style="color:#ff79c6">=</span> LANE_CNT <span style="color:#ff79c6">-</span> src_cnt;
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">const</span> <span style="color:#ff79c6">auto</span> dst_empty_cnt <span style="color:#ff79c6">=</span> LANE_CNT <span style="color:#ff79c6">-</span> dst_cnt;
+</span></span><span style="display:flex;"><span>        <span style="color:#6272a4">//Determine the number of elements to be moved.
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>        cnt <span style="color:#ff79c6">=</span> std<span style="color:#ff79c6">::</span>min(src_cnt, dst_empty_cnt);
+</span></span><span style="display:flex;"><span>        <span style="color:#8be9fd">bool</span> all_fit <span style="color:#ff79c6">=</span> (dst_empty_cnt <span style="color:#ff79c6">&gt;=</span> src_cnt);
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">auto</span> d <span style="color:#ff79c6">=</span> all_fit <span style="color:#ff79c6">?</span> <span style="color:#8be9fd;font-style:italic">dst_cnt</span> : src_empty_cnt;
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">const</span> __m512i d_vec <span style="color:#ff79c6">=</span> _mm512_set1_epi64(d);
+</span></span><span style="display:flex;"><span>        <span style="color:#6272a4">//Note: No compress/expand instructions required
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>        permutation_idxs <span style="color:#ff79c6">=</span> _mm512_sub_epi64(SEQUENCE, d_vec);
+</span></span><span style="display:flex;"><span>        permutation_mask <span style="color:#ff79c6">=</span> ((<span style="color:#bd93f9">1u</span> <span style="color:#ff79c6">&lt;&lt;</span> cnt) <span style="color:#ff79c6">-</span> <span style="color:#bd93f9">1</span>) <span style="color:#ff79c6">&lt;&lt;</span> dst_cnt;
+</span></span><span style="display:flex;"><span>    }
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#6272a4">//Move elements from ’src’ to ’dst’.
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>    <span style="color:#8be9fd">void</span> <span style="color:#50fa7b">apply</span>(<span style="color:#ff79c6">const</span> __m512i src, __m512i<span style="color:#ff79c6">&amp;</span> dst) <span style="color:#ff79c6">const</span>{
+</span></span><span style="display:flex;"><span>        dst <span style="color:#ff79c6">=</span> _mm512_mask_permutexvar_epi64(dst, permutation_mask, permutation_idxs, src);
+</span></span><span style="display:flex;"><span>    }
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#8be9fd">void</span> <span style="color:#50fa7b">update_src_cnt</span>(<span style="color:#8be9fd">uint32_t</span><span style="color:#ff79c6">&amp;</span> src_cnt) <span style="color:#ff79c6">const</span> {
+</span></span><span style="display:flex;"><span>        src_cnt <span style="color:#ff79c6">-=</span> cnt;
+</span></span><span style="display:flex;"><span>    }
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#8be9fd">void</span> <span style="color:#50fa7b">update_dst_cnt</span>(<span style="color:#8be9fd">uint32_t</span><span style="color:#ff79c6">&amp;</span> dst_cnt) <span style="color:#ff79c6">const</span> {
+</span></span><span style="display:flex;"><span>        dst_cnt <span style="color:#ff79c6">+=</span> cnt;
+</span></span><span style="display:flex;"><span>    }
+</span></span><span style="display:flex;"><span>};
+</span></span></code></pre></td></tr></table>
+</div>
+</div><h2 id="重填充策略">重填充策略</h2>
+<p>将填充算法整合到查询中<br>
+这里主要包含两个策略<code>consume()</code>和<code>produce()</code><br>
+采用的是<code>DFS</code>遍历<br>
+生成顺序是</p>
+<ol>
+<li>produce父节点</li>
+<li>produce子节点</li>
+<li>consume</li>
+</ol>
+<p>由 <code>if</code>语句来控制，确保只有在 SIMD 寄存器足够满的情况下才执行</p>
+<p><strong>Consume everything</strong><br>
+主要策略</p>
+<ul>
+<li>这里使用了一个额外的<code>buffer</code>寄存器</li>
+<li>如果if条件不满足则会推迟执行</li>
+<li>当触发到 else分支时，将所有 活跃的 tuple移动到 buffer中</li>
+<li>这里采用的就是之前提到的 填充策略算法</li>
+<li>并将buffer中的tuple 加载到未使用的SIMD管道中</li>
+<li>这里还会使用一个 阈值来控制触发填充的动作</li>
+</ul>
+<p>当控制流返回的时候，SIMD所有管道都是空的，所以叫做：consume everything <br>
+核心策略如下：<br>
+Listing 3 Code skeleton of a buffering operator.</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">15
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">16
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">17
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">18
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">19
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">20
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">21
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">22
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">23
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">24
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">25
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">26
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-cpp" data-lang="cpp"><span style="display:flex;"><span>[...]
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">auto</span> active_lane_cnt <span style="color:#ff79c6">=</span> popcount(mask);
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">if</span> (active_lane_cnt <span style="color:#ff79c6">+</span> buffer_cnt <span style="color:#ff79c6">&lt;</span> THRESHOLD <span style="color:#ff79c6">&amp;&amp;</span> <span style="color:#ff79c6">!</span>flush_pipeline) {
+</span></span><span style="display:flex;"><span>	[...]<span style="color:#6272a4">//Buffer the input.
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>}
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">else</span> {
+</span></span><span style="display:flex;"><span>	<span style="color:#ff79c6">const</span> <span style="color:#ff79c6">auto</span> bail_out_threshold <span style="color:#ff79c6">=</span> flush_pipeline <span style="color:#ff79c6">?</span> <span style="color:#bd93f9">0</span> <span style="color:#ff79c6">:</span> THRESHOLD;
+</span></span><span style="display:flex;"><span>	<span style="color:#ff79c6">while</span> (active_lane_cnt <span style="color:#ff79c6">+</span> buffer_cnt <span style="color:#ff79c6">&gt;</span> bail_out_threshold) {
+</span></span><span style="display:flex;"><span>		<span style="color:#ff79c6">if</span> (active_lane_cnt <span style="color:#ff79c6">&lt;</span> THRESHOLD) {
+</span></span><span style="display:flex;"><span>			[...]<span style="color:#6272a4">//Refill lanes with buffered elements.
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>		}
+</span></span><span style="display:flex;"><span>		<span style="color:#6272a4">//===---------------------------------===//
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>		<span style="color:#6272a4">//The actual operator code and
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>		<span style="color:#6272a4">//consume code of subsequent operators.
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>		[...]
+</span></span><span style="display:flex;"><span>		<span style="color:#6272a4">//===---------------------------------===//
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>		active_lane_cnt <span style="color:#ff79c6">=</span> popcount(mask);
+</span></span><span style="display:flex;"><span>	}
+</span></span><span style="display:flex;"><span>	<span style="color:#ff79c6">if</span> (likely(active_lane_cnt <span style="color:#ff79c6">!=</span> <span style="color:#bd93f9">0</span>)) {
+</span></span><span style="display:flex;"><span>		[...]<span style="color:#6272a4">//Buffer the remaining elements.
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>	}
+</span></span><span style="display:flex;"><span>}
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4">//All lanes empty (consume everything semantics).
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>mask <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">0</span>;
+</span></span><span style="display:flex;"><span>[...]
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p><strong>Partial consume</strong><br>
+在这个场景下，就不再处理全部输入了，consume 会推迟执行，并返回给前面的算子<br>
+另外活跃的管道中包含了推迟的tuple，所以不能覆盖、不能重写，需要有保护机制<br>
+也就是管道的<strong>拥有者</strong>，当然，如果tuple不满足条件的话，会放弃这个所有权<br>
+tuple包含机制需要额外的记录信息</p>
+<ul>
+<li>刚刚到达的tuple</li>
+<li>被早起迭代算子本身保护起来了</li>
+<li>已经走到流水线的后期阶段</li>
+</ul>
+<p>这里需要两个额外的掩码</p>
+<ul>
+<li>识别当前算子拥有的管道</li>
+<li>识别延迟算子拥有的管道</li>
+</ul>
+<p>Listing 4 Code skeleton of a partial consume operator</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">15
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">16
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">17
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">18
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-cpp" data-lang="cpp"><span style="display:flex;"><span>[...]
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">auto</span> active_lane_cnt <span style="color:#ff79c6">=</span> popcount(mask);
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">if</span> (active_lane_cnt <span style="color:#ff79c6">&lt;</span> THRESHOLD <span style="color:#ff79c6">&amp;&amp;</span> <span style="color:#ff79c6">!</span>flush_pipeline){
+</span></span><span style="display:flex;"><span>	<span style="color:#6272a4">//Take ownership of newly arrived elements.
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>	this_stage_mask <span style="color:#ff79c6">=</span> mask <span style="color:#ff79c6">^</span> later_stage_mask;
+</span></span><span style="display:flex;"><span>}
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">else</span> {
+</span></span><span style="display:flex;"><span>	<span style="color:#6272a4">//===---------------------------------===//
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>	<span style="color:#6272a4">//The actual operator code and
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>	<span style="color:#6272a4">//consume code of subsequent operators.
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>	[...]
+</span></span><span style="display:flex;"><span>	<span style="color:#6272a4">//The later_stage_mask is set by the
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>	<span style="color:#6272a4">//consumer.
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>	<span style="color:#6272a4">//===---------------------------------===//
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>}
+</span></span><span style="display:flex;"><span><span style="color:#6272a4">//Protect lanes in the preceding operator.
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>mask <span style="color:#ff79c6">=</span> this_stage_mask <span style="color:#ff79c6">|</span> later_stage_mask;
+</span></span><span style="display:flex;"><span>[...]
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>对比</p>
+<ul>
+<li>6-a 是没有充分利用的场景，6-b是充分利用的场景</li>
+<li>这里包含了 scan、select、join几种典型的场景</li>
+<li>在6-b中，紫色、黑色的线表示读、写buffer，设置阈值为75%利用率</li>
+<li>6-c 中，紫色的线是保护状态，利用率阈值设置为 50%</li>
+<li>但6-c中，如果把保护状态，当做  空闲的，那么利用率总体是下降的，这也是缺点
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/Make%20the%20most%20out%20of%20your%20SIMD%20investments/6.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/Make%20the%20most%20out%20of%20your%20SIMD%20investments/6.jpg" />
+        </a>
+    <br>
+Fig. 6 SIMD lane utilization using different strategies.</li>
+<li>In a, no refilling is performed to visualize the divergence.</li>
+<li>b Uses the consume everything strategy, which performs refills when the utilization falls below 75%. The dashed purple lines indicate a write to buffer registers, black lines a read.</li>
+<li>c shows a partial consume throughout the entire pipeline with the minimum required utilization set to 50%. Lanes colored in purple are protected (color figure online)</li>
+</ul>
+<p><strong>对两种策略的讨论</strong></p>
+<ul>
+<li>这两种策略不是排斥的，是可以共存的</li>
+<li>只要buffer能感知到，就可以包含这个管道，混合策略</li>
+<li>当然，如果处理的代价很低，则不做任何策略处理也是可以的</li>
+<li>消费所有，需要额外的寄存器，如果寄存器不够，会溢出到内存</li>
+<li>消费部分也需要额外寄存器，但用的是掩码，需求量要小一些</li>
+<li>消费部分第一个算子用来填充空的管道，但如果其他算子处于非充分利用时，就会将控制流返回到前面算子</li>
+<li>这个流程增加会导致效率降低</li>
+<li>全部消费是写到buffer中，只跟buffer大小有关，buffer大小依赖于</li>
+<li>沿着管道传递的属性数量、保存算子内部状态的寄存器数量</li>
+</ul>
+<h2 id="性能评估">性能评估</h2>
+<p>主要包括这几种</p>
+<ul>
+<li>scan中带有谓词求值的</li>
+<li>hash join</li>
+<li>近似地理位置join</li>
+</ul>
+<p>软硬件环境</p>
+<ul>
+<li>Intel Skylake-X</li>
+<li>Intel Knights Landing</li>
+<li>都支持512位的向量</li>
+<li>GCC5.4 + -O3</li>
+<li>tuple是2^16 &ndash; 2^20</li>
+</ul>
+<h3 id="table-scan">Table scan</h3>
+<p>使用 TPC-H的 Q1，这是一个单表查询，基于group by的聚合的几个算数操作<br>
+几乎所有的tuple都被选择了，选择率为 0.98  <br>
+为了对比，改变扫描谓词对shipdate属性的选择性<br>
+这里包含了好几组不同的实现</p>
+<ul>
+<li>scalar，非SIMD实现</li>
+<li>divergent，根据《Exploring Query Execution Strategies for JIT, Vectorization and SIMD》这个论文做了一些修改，原始版所有tuple都通过流水线，不满足的会被忽略，这里是允许，16个元素并行处理</li>
+<li>Partial/Buffered，使用了重填充算法，不再使用SIMD对其加载，而使用gather指令，都设置了最小利用率阈值</li>
+<li>Materialization，使用内存作为输出，当buffer满了就执行</li>
+</ul>
+<p>7-a看起来整体差别不大<br>
+7-b时，当选择率大于 0.001时，divergent 比 scalar要慢<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/Make%20the%20most%20out%20of%20your%20SIMD%20investments/7.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/Make%20the%20most%20out%20of%20your%20SIMD%20investments/7.jpg" />
+        </a>
+    <br>
+Fig. 7 Performance of TPC-H Q1 with varying selectivities</p>
+<p>8-a，这里固定了选择性为 0.01，物化方式的峰值在 &gt;= 1024 时最好<br>
+8-b，buffer(全消费)方式 &gt;=6，性能就开始不断增加，16时到达峰值<br>
+而 部分消费，太小太大 时性能都不是最好的<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/Make%20the%20most%20out%20of%20your%20SIMD%20investments/8.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/Make%20the%20most%20out%20of%20your%20SIMD%20investments/8.jpg" />
+        </a>
+     
+Fig. 8 Performance of TPC-H Q1 performance on SKX when varying algorithm parameters</p>
+<h3 id="hashjoin">Hashjoin</h3>
+<p>仍然是几种不同的实现对比</p>
+<ul>
+<li>scalar，非SIMD实现</li>
+<li>Divergent，8个tuple并行处理</li>
+<li>Partial/Buffered，重填充算法</li>
+</ul>
+<p>图9 - 图10显示了性能结果<br>
+hash表size为 10K - 45M，依赖于输入大小<br>
+9-a，9-b来看，随着hash size增大，性能也变差，这是因为L1、L2装不下了，变差L3或者内存了<br>
+使用20线程时，buffer方式提高了32%，部分方式提升了19%<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/Make%20the%20most%20out%20of%20your%20SIMD%20investments/9.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/Make%20the%20most%20out%20of%20your%20SIMD%20investments/9.jpg" />
+        </a>
+     
+Fig. 9 Hashjoin performance when varying build sizes. SKX</p>
+<p>
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/Make%20the%20most%20out%20of%20your%20SIMD%20investments/10.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/Make%20the%20most%20out%20of%20your%20SIMD%20investments/10.jpg" />
+        </a>
+     
+Fig. 10 Hashjoin performance when varying build sizes. KNL, 128 threads</p>
+<p>当使用20线程时，吞吐量比 10线程提高了一倍<br>
+部分方式跟buffer的有些不同，差不多在5线程时比较好<br>
+物化时 128 - 1024时，是最佳的 <br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/Make%20the%20most%20out%20of%20your%20SIMD%20investments/11.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/Make%20the%20most%20out%20of%20your%20SIMD%20investments/11.jpg" />
+        </a>
+     
+Fig. 11 Hashjoin performance when varying algorithm parameters</p>
+<p>影响吞吐量的其他因素包含</p>
+<ul>
+<li>匹配概率</li>
+<li>填充因子</li>
+</ul>
+<p>scalar方式在低匹配率时表现较好，达到50%时最差<br>
+匹配概率为100%时，也不是很好，会在其他地方浪费时间<br>
+divergent、以及两个填充算法，当匹配概率变高时效率也变好，因为有更多活跃元素<br>
+但因为要查找冲突链表，效率也不会好很多</p>
+<p>装载因子是，hash表桶的数量 / hash表中key数量<br>
+装在因子小碰撞也高<br>
+更大的装在因子，其吞吐量是 小的 3倍  <br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/Make%20the%20most%20out%20of%20your%20SIMD%20investments/12.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/Make%20the%20most%20out%20of%20your%20SIMD%20investments/12.jpg" />
+        </a>
+    
+Fig. 12 Hashjoin performance for varying match probabilities (a), hash table load factors (b). SKX, 20 threads</p>
+<h3 id="approximate-geospatial-join">Approximate geospatial join</h3>
+<p>利用四叉树，加上基数树，显示的NY临近图布局<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/Make%20the%20most%20out%20of%20your%20SIMD%20investments/13.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/Make%20the%20most%20out%20of%20your%20SIMD%20investments/13.jpg" />
+        </a>
+     
+Fig. 13 Quadtree-based cell-approximation of neighborhood polygons in NYC</p>
+<p>查询流水线包括</p>
+<ul>
+<li>Scan point data (source)</li>
+<li>Prefix check</li>
+<li>Tree traversal</li>
+<li>Output point-polygon pairs (sink)
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/Make%20the%20most%20out%20of%20your%20SIMD%20investments/14.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/Make%20the%20most%20out%20of%20your%20SIMD%20investments/14.jpg" />
+        </a>
+     
+Fig. 14 Geospatial join performance for varying workloads and precisions</li>
+</ul>
+<p>
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/Make%20the%20most%20out%20of%20your%20SIMD%20investments/15.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/Make%20the%20most%20out%20of%20your%20SIMD%20investments/15.jpg" />
+        </a>
+    <br>
+Fig. 15 Varying thresholds. KNL, 128 threads</p>
+<p>
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/Make%20the%20most%20out%20of%20your%20SIMD%20investments/16.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/Make%20the%20most%20out%20of%20your%20SIMD%20investments/16.jpg" />
+        </a>
+     
+Fig. 16 2-Way divergence handling</p>
+<h3 id="overhead">Overhead</h3>
+<p>使用一个简化的查询</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-sql" data-lang="sql"><span style="display:flex;"><span><span style="color:#ff79c6">select</span> <span style="color:#ff79c6">sum</span> (a1), <span style="color:#ff79c6">sum</span>(a2),..., <span style="color:#ff79c6">sum</span>(aN) <span style="color:#ff79c6">from</span>...
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>两种选择率</p>
+<ul>
+<li>sel = 1</li>
+<li>sel = 0.125</li>
+</ul>
+<p>sel=1时，几种方式表现的差不多，而当属性数量增加时，物化方式越来越差   、
+bffer的方式也有点差，因为要物化到内存中<br>
+sel=0.125时，总体表现跟之前的差不多<br>
+部分消费随着属性的增加没有出现性能影响，这是因为受保护的记录开销相对是 恒定的<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/Make%20the%20most%20out%20of%20your%20SIMD%20investments/17.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/Make%20the%20most%20out%20of%20your%20SIMD%20investments/17.jpg" />
+        </a>
+     
+Fig. 17 Overhead of divergence handling for varying number of attributes</p>
+<h3 id="summary">summary</h3>
+<p>部分消费表现的不错，但是在复杂场景，如近似地理位置join表现会下降<br>
+原因如下</p>
+<ul>
+<li>包含SIMD管道的内在开销，导致利用率下降</li>
+<li>重填充管道源是基于内存的</li>
+<li>部分消费只读取了一些元素，会导致并行利用率不高</li>
+<li>未对其会导致性能下降，在scan重的场景下会更严重，顺序扫描会下降25%</li>
+</ul>
+<p>物化方式</p>
+<ul>
+<li>对于底层的硬件非常敏感</li>
+<li>如果作用于算子的边界，读/写一次，则性能比in-register更好</li>
+<li>如果多次随机访问(hash table)会导致内存延迟，不能将数据放入L1、L2</li>
+<li>如果数据能放入缓存，或者重计算的场景，in-register方式会很好</li>
+</ul>
+<p>buffer</p>
+<ul>
+<li>全消费场景中，较大的buffer一般会来带更好的性能</li>
+<li>但对于部分消费影响就不大了</li>
+</ul>
+<p>开放问题，如何设置阈值</p>
+<ul>
+<li>通过运行时自动调整</li>
+<li>重填充的代价</li>
+<li>未充分利用的线路成本</li>
+<li>输入数据</li>
+</ul>
+<p>虽然SIMD是并行执行的，但是因为利用率问题，并不能真正的做到完全并行化<br>
+在能放入cache的场景中，两个填充策略表现的很好，是scalar的两倍</p>
+<h2 id="参考">参考</h2>
+<ul>
+<li><a href="https://github.com/harald-lang/simd_divergence">simd_divergence github代码示例</a></li>
+<li><a href="https://www.intel.com/content/www/us/en/docs/intrinsics-guide/index.html">Intel® Intrinsics Guide</a></li>
+<li><a href="https://www.cnblogs.com/ThousandPine/p/16964553.html">SSE与AVX指令基础介绍与使用</a></li>
+<li><a href="https://zhuanlan.zhihu.com/p/437657452">Intel AVX 系列指令基础介绍</a></li>
+<li><a href="https://arrow.apache.org/">arrow</a></li>
+<li><a href="https://stackoverflow.com/questions/36932240/avx2-what-is-the-most-efficient-way-to-pack-left-based-on-a-mask">AVX2 what is the most efficient way to pack left based on a mask?</a></li>
+</ul>
+
+			<script type="text/javascript"
+        async
+        src="https://cdn.bootcss.com/mathjax/2.7.3/MathJax.js?config=TeX-AMS-MML_HTMLorMML">
+MathJax.Hub.Config({
+  tex2jax: {
+    inlineMath: [['$','$'], ['\\(','\\)']],
+    displayMath: [['$$','$$'], ['\[\[','\]\]']],
+    processEscapes: true,
+    processEnvironments: true,
+    skipTags: ['script', 'noscript', 'style', 'textarea', 'pre'],
+    TeX: { equationNumbers: { autoNumber: "AMS" },
+         extensions: ["AMSmath.js", "AMSsymbols.js"] }
+  }
+});
+
+MathJax.Hub.Queue(function() {
+    
+    
+    
+    var all = MathJax.Hub.getAllJax(), i;
+    for(i = 0; i < all.length; i += 1) {
+        all[i].SourceElement().parentNode.className += ' has-jax';
+    }
+});
+</script>
+
+<style>
+code.has-jax {
+    font: inherit;
+    font-size: 100%;
+    background: inherit;
+    border: inherit;
+    color: #515151;
+}
+</style>
+        </div>
+
+        
+
+
+        
+
+<div class="post-archive">
+    <h2>相关文章</h2>
+    <ul class="listing">
+        
+        <li><a href="/post/2023/01/accelerating-analytics-with-dynamic-in-memory-expressions/">Accelerating Analytics with Dynamic In-Memory Expressions</a></li>
+        
+        <li><a href="/post/2023/01/materialization-strategies-in-the-vertica-analytic-database-lessons-learned/">Materialization Strategies in the Vertica Analytic Database: Lessons Learned</a></li>
+        
+        <li><a href="/post/2023/01/monetdbx100-hyper-pipelining-query-execution/">MonetDB/X100: Hyper-Pipelining Query Execution</a></li>
+        
+        <li><a href="/post/2023/01/access-path-selection-in-main-memory-optimized-data-systems-should-i-scan-or-should-i-probe/">Access Path Selection in Main-Memory Optimized Data Systems Should I Scan or Should I Probe</a></li>
+        
+        <li><a href="/post/2023/01/photon-a-fast-query-engine-for-lakehouse-systems/">Photon A Fast Query Engine for Lakehouse Systems</a></li>
+        
+    </ul>
+</div>
+
+
+        <div class="post-meta meta-tags">
+            
+            <ul class="clearfix">
+                
+                <li><a href='/tags/%E5%90%91%E9%87%8F%E5%8C%96'>向量化</a></li>
+                
+                <li><a href='/tags/simd'>SIMD</a></li>
+                
+                <li><a href='/tags/%E8%AE%BA%E6%96%87'>论文</a></li>
+                
+            </ul>
+            
+        </div>
+    </article>
+    
+    
+
+    
+    
+    <div class="post bg-white">
+      <script src="https://utteranc.es/client.js"
+            repo= "himichael/hugoblogtalks"
+            issue-term="pathname"
+            theme="github-light"
+            crossorigin="anonymous"
+            async>
+      </script>
+    </div>
+    
+</div>
+
+
+                </div>
+
+                <div id="secondary">
+    <section class="widget">
+        <form id="search" action='https://code0xff.org/search/' method="get" accept-charset="utf-8" target="_blank" _lpchecked="1">
+      
+      <input type="text" name="q" maxlength="20" placeholder="Search">
+      <input type="hidden" name="sitesearch" value="https://code0xff.org/">
+      <button type="submit" class="submit icon-search"></button>
+</form>
+    </section>
+    
+    <section class="widget">
+        <h3 class="widget-title">最近文章</h3>
+<ul class="widget-list">
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/01/make-the-most-out-of-your-simd-investments/" title="Make the most out of your SIMD investments: counter control flow divergence in compiled query pipelines">Make the most out of your SIMD investments: counter control flow divergence in compiled query pipelines</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/01/accelerating-analytics-with-dynamic-in-memory-expressions/" title="Accelerating Analytics with Dynamic In-Memory Expressions">Accelerating Analytics with Dynamic In-Memory Expressions</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/01/materialization-strategies-in-the-vertica-analytic-database-lessons-learned/" title="Materialization Strategies in the Vertica Analytic Database: Lessons Learned">Materialization Strategies in the Vertica Analytic Database: Lessons Learned</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/01/monetdbx100-hyper-pipelining-query-execution/" title="MonetDB/X100: Hyper-Pipelining Query Execution">MonetDB/X100: Hyper-Pipelining Query Execution</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/01/access-path-selection-in-main-memory-optimized-data-systems-should-i-scan-or-should-i-probe/" title="Access Path Selection in Main-Memory Optimized Data Systems Should I Scan or Should I Probe">Access Path Selection in Main-Memory Optimized Data Systems Should I Scan or Should I Probe</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/01/photon-a-fast-query-engine-for-lakehouse-systems/" title="Photon A Fast Query Engine for Lakehouse Systems">Photon A Fast Query Engine for Lakehouse Systems</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/01/mysql%E7%9A%84%E5%B9%B6%E5%8F%91/" title="MySQL的并发">MySQL的并发</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2022/12/mysql%E7%9A%84%E6%81%A2%E5%A4%8D/" title="MySQL的恢复">MySQL的恢复</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2022/12/mysql%E7%9A%84%E7%BC%93%E5%AD%98/" title="MySQL的缓存">MySQL的缓存</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2022/12/mysql%E6%9F%A5%E8%AF%A2%E5%88%86%E6%9E%90/" title="MySQL查询分析">MySQL查询分析</a>
+    </li>
+    
+</ul>
+    </section>
+
+    
+
+    <section class="widget">
+        <h3 class="widget-title"><a href='/categories/'>分类</a></h3>
+<ul class="widget-list">
+    
+    <li><a href="https://code0xff.org/categories/%E5%88%86%E5%B8%83%E5%BC%8F/">分布式 (6)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E5%8E%9F%E7%90%86%E5%88%86%E6%9E%90/">原理分析 (6)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E5%95%86%E4%B8%9A/">商业 (3)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E5%A4%A7%E6%95%B0%E6%8D%AE/">大数据 (23)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%95%B0%E6%8D%AE%E5%BA%93/">数据库 (15)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%97%85%E8%A1%8C/">旅行 (10)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%9E%B6%E6%9E%84/">架构 (1)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E7%AE%97%E6%B3%95/">算法 (8)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E7%B3%BB%E7%BB%9F/">系统 (5)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E7%BC%96%E7%A8%8B%E8%AF%AD%E8%A8%80/">编程语言 (2)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E8%AF%BB%E4%B9%A6%E7%AC%94%E8%AE%B0/">读书笔记 (9)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E9%9A%8F%E4%BE%BF%E5%86%99%E5%86%99/">随便写写 (5)</a></li>
+    
+</ul>
+    </section>
+
+    <section class="widget">
+        <h3 class="widget-title">归档</a></h3>
+<ul class="widget-list">
+    
+    <li><a href="https://code0xff.org/years/2021%E5%B9%B4/">2021年 (31)</a></li>
+    
+    <li><a href="https://code0xff.org/years/2022%E5%B9%B4/">2022年 (55)</a></li>
+    
+    <li><a href="https://code0xff.org/years/2023%E5%B9%B4/">2023年 (7)</a></li>
+    
+</ul>
+    </section>
+
+    <section class="widget">
+        <h3 class="widget-title"><a href='/tags/'>标签</a></h3>
+<div class="tagcloud">
+    
+    <a href="https://code0xff.org/tags/b%E6%A0%91/">B树 </a>
+    
+    <a href="https://code0xff.org/tags/flink/">flink </a>
+    
+    <a href="https://code0xff.org/tags/hive/">Hive </a>
+    
+    <a href="https://code0xff.org/tags/k8s/">k8s </a>
+    
+    <a href="https://code0xff.org/tags/kudu/">kudu </a>
+    
+    <a href="https://code0xff.org/tags/manacher/">Manacher </a>
+    
+    <a href="https://code0xff.org/tags/mapreduce/">MapReduce </a>
+    
+    <a href="https://code0xff.org/tags/mysql/">MySQL </a>
+    
+    <a href="https://code0xff.org/tags/paxos/">paxos </a>
+    
+    <a href="https://code0xff.org/tags/raft/">raft </a>
+    
+    <a href="https://code0xff.org/tags/scala/">scala </a>
+    
+    <a href="https://code0xff.org/tags/simd/">SIMD </a>
+    
+    <a href="https://code0xff.org/tags/snowflake/">snowflake </a>
+    
+    <a href="https://code0xff.org/tags/spark/">spark </a>
+    
+    <a href="https://code0xff.org/tags/unix/">unix </a>
+    
+    <a href="https://code0xff.org/tags/%E4%BA%8C%E5%88%86%E6%9F%A5%E6%89%BE/">二分查找 </a>
+    
+    <a href="https://code0xff.org/tags/%E4%BA%8C%E5%8F%89%E6%A0%91%E9%81%8D%E5%8E%86/">二叉树遍历 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%88%86%E5%B8%83%E5%BC%8F/">分布式 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%8A%A8%E6%80%81%E6%B3%A8%E5%85%A5/">动态注入 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%8E%86%E5%8F%B2/">历史 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%90%91%E9%87%8F%E5%8C%96/">向量化 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%9B%9E%E6%BA%AF/">回溯 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%9B%BD%E5%86%85%E6%97%85%E8%A1%8C/">国内旅行 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%9B%BD%E5%A4%96%E6%97%85%E8%A1%8C/">国外旅行 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%A4%A7%E6%95%B0%E6%8D%AE/">大数据 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%AD%98%E5%82%A8/">存储 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%B7%A5%E4%BD%9C%E8%AE%B0%E5%BD%95/">工作记录 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%BE%AE%E6%9C%8D%E5%8A%A1/">微服务 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%80%BB%E7%BB%93/">总结 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%95%B0%E6%8D%AE%E5%BA%93/">数据库 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%9F%A5%E8%AF%A2%E4%BC%98%E5%8C%96/">查询优化 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%B1%87%E7%BC%96/">汇编 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%B5%8B%E8%AF%95/">测试 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%B9%96%E4%BB%93%E4%B8%80%E4%BD%93/">湖仓一体 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%94%9F%E6%B4%BB/">生活 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%94%B5%E5%BD%B1/">电影 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%AE%97%E6%B3%95/">算法 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BB%8F%E6%B5%8E/">经济 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BC%93%E5%AD%98/">缓存 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BC%96%E8%AF%91%E5%8E%9F%E7%90%86/">编译原理 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BD%91%E7%BB%9C/">网络 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AE%A1%E7%AE%97%E6%A1%86%E6%9E%B6/">计算框架 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AE%BA%E6%96%87/">论文 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AF%BB%E4%B9%A6%E7%AC%94%E8%AE%B0/">读书笔记 </a>
+    
+</div>
+    </section>
+
+    
+
+    <section class="widget">
+        <h3 class="widget-title">RSS</h3>
+        <ul class="widget-list">
+            <li><a href="https://code0xff.org/index.xml">文章 RSS</a></li>
+        </ul>
+    </section>
+</div>
+            </div>
+        </div>
+    </div>
+    <footer id="footer">
+    <div>
+        &copy; 2023 <a href="https://code0xff.org/">记录每个瞬间 By 老王</a>
+        
+    </div>
+    <br />
+    <div>
+        <div class="github-badge">
+            <a href="https://gohugo.io/" target="_black" rel="nofollow"><span class="badge-subject">Powered by</span><span class="badge-value bg-blue">Hugo</span></a>
+        </div>
+        <div class="github-badge">
+            <a href="https://github.com/flysnow-org/maupassant-hugo" target="_black"><span class="badge-subject">Theme</span><span class="badge-value bg-yellowgreen">Maupassant</span></a>
+        </div>
+    </div>
+</footer>
+
+
+    
+    <script type="text/javascript">
+        window.MathJax = {
+            tex2jax: {
+                inlineMath: [['$', '$']],
+                processEscapes: true
+                }
+            };
+    </script>
+    <script src='https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.5/MathJax.js?config=TeX-MML-AM_CHTML' async></script><script src="https://cdn.bootcdn.net/ajax/libs/fancybox/3.5.7/jquery.fancybox.min.js"></script>
+
+<a id="rocket" href="#top"></a>
+<script type="text/javascript" src='/js/totop.js?v=0.0.0' async=""></script>
+
+<script type="application/javascript">
+var doNotTrack = false;
+if (!doNotTrack) {
+	window.ga=window.ga||function(){(ga.q=ga.q||[]).push(arguments)};ga.l=+new Date;
+	ga('create', 'GA ID', 'auto');
+	
+	ga('send', 'pageview');
+}
+</script>
+<script async src='https://www.google-analytics.com/analytics.js'></script>
+
+
+
+    <script type="text/javascript" src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js" async></script>
+
+
+
+
+</body>
+
+</html>
