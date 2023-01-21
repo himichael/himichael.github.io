@@ -1,0 +1,748 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    
+    <meta name="referrer" content="no-referrer-when-downgrade">
+    
+
+    <title>SIMD-Scan: Ultra Fast in-Memory Table Scan using onChip Vector Processing Units | 记录每个瞬间</title>
+    <meta property="og:title" content="SIMD-Scan: Ultra Fast in-Memory Table Scan using onChip Vector Processing Units - 记录每个瞬间">
+    <meta property="og:type" content="article">
+        
+    <meta property="article:published_time" content='2023-01-19T10:35:19&#43;08:00'>
+        
+        
+    <meta property="article:modified_time" content='2023-01-19T10:35:19&#43;08:00'>
+        
+    <meta name="Keywords" content="">
+    <meta name="description" content="SIMD-Scan: Ultra Fast in-Memory Table Scan using onChip Vector Processing Units">
+        <meta name="author" content="隔壁老王">
+        
+    <meta property="og:url" content="https://code0xff.org/post/2023/01/ultra-fast-in-memory-table-scan-using-onchip-vector-processing-units/">
+    <link rel="shortcut icon" href='/favicon.ico'  type="image/x-icon">
+
+    <link rel="stylesheet" href='/css/normalize.css'>
+    <link rel="stylesheet" href='/css/style.css'>
+    <script type="text/javascript" src="//cdn.bootcdn.net/ajax/libs/jquery/3.4.1/jquery.min.js"></script>
+
+    
+    
+    
+        <link href="https://cdn.bootcdn.net/ajax/libs/fancybox/3.5.7/jquery.fancybox.min.css" rel="stylesheet">
+    
+    
+    
+    
+</head>
+
+
+<body>
+    <header id="header" class="clearfix">
+    <div class="container">
+        <div class="col-group">
+            <div class="site-name ">
+                
+                    <a id="logo" href="https://code0xff.org/">
+                        记录每个瞬间
+                    </a>
+                
+                
+            </div>
+            <div>
+                <nav id="nav-menu" class="clearfix">
+                    <a class="current" href="https://code0xff.org/">首页</a>
+                    
+                    <a  href="https://code0xff.org/linked/" title="链接">链接</a>
+                    
+                    <a  href="https://code0xff.org/archives/" title="归档">归档</a>
+                    
+                    <a  href="https://code0xff.org/about/" title="关于">关于</a>
+                    
+                </nav>
+            </div>
+        </div>
+    </div>
+</header>
+
+    <div id="body">
+        <div class="container">
+            <div class="col-group">
+
+                <div class="col-8" id="main">
+                    
+<div class="res-cons">
+    
+    <article class="post">
+        <header>
+            <h1 class="post-title">SIMD-Scan: Ultra Fast in-Memory Table Scan using onChip Vector Processing Units</h1>
+        </header>
+        <date class="post-meta meta-date">
+            2023年1月19日
+        </date>
+<nav id="TableOfContents">
+  <ul>
+    <li>
+      <ul>
+        <li><a href="#背景">背景</a></li>
+        <li><a href="#概念和实现">概念和实现</a>
+          <ul>
+            <li><a href="#vectorized-value-decompression">Vectorized Value Decompression</a></li>
+            <li><a href="#vectorized-predicate-handling">Vectorized Predicate Handling</a></li>
+            <li><a href="#实现和评估">实现和评估</a></li>
+          </ul>
+        </li>
+        <li><a href="#参考">参考</a></li>
+      </ul>
+    </li>
+  </ul>
+</nav>
+        
+        <div class="post-meta">
+            
+            <span class="post-meta meta-tags">
+                <ul class="clearfix">
+                    <a href='/categories/%E5%A4%A7%E6%95%B0%E6%8D%AE'>大数据</a>
+                </ul>
+            </span>
+            
+        </div>
+        
+        
+        <div class="post-meta">
+            <span id="busuanzi_container_page_pv">|<span id="busuanzi_value_page_pv"></span><span>
+                    阅读</span></span>
+        </div>
+        
+        
+        <div class="post-content">
+            <blockquote>
+<p>原文 <br>
+<a href="https://15721.courses.cs.cmu.edu/spring2023/papers/08-vectorization/willhalm-vldb2009.pdf">https://15721.courses.cs.cmu.edu/spring2023/papers/08-vectorization/willhalm-vldb2009.pdf</a></p>
+</blockquote>
+<h2 id="背景">背景</h2>
+<p>随着硬件容量的提高，面向磁盘的数据库 开始转向 面向内存的数据库<br>
+SAP® Netweaver® Business Warehouse Accelerator BWA 利用轻量级的压缩来进一步提升内存带宽<br>
+比如</p>
+<ul>
+<li>run-length编码</li>
+<li>固定长度编码的多版本</li>
+<li>bit位编码的字典压缩，默认算法，通过字典来引用列，而且引用是 run-length编码的</li>
+</ul>
+<p>访问都是直接基于压缩数据的，会隐式的解压数据，所以数据解压就很重要，变成查询执行的一部分了 <br>
+CPU处理能力的 增加 &gt; 数据带宽的增加，这就引入了更多的复杂算法，用来全表扫描<br>
+这就将 I/O 瓶颈转移到了 CPU瓶颈<br>
+为了能在内存中尽可能多的处理更多的压缩数据，出现了一些新的研究领域，也就是利用多核处理能力，用各种并行化能力加速表扫描<br>
+但是其 向量处理单元 Vector Processing Units VPU 并没有真正发挥其能力<br>
+这篇论文就引入SIMD的能力，为每个核提供有效的 解压内存表列数据，并以低延迟方式搜索数据<br>
+当然这些技术就只限于多线程场景<br>
+SIMD技术如下，利用一个指令，来实现并行化数据处理</p>
+<p>
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/willhalm-vldb2009/1.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/willhalm-vldb2009/1.jpg" />
+        </a>
+     
+Figure 1. SIMD execution model: In (a) scalar mode: one operation produces one result. In (b) SIMD mode: one operation produces multiple results</p>
+<p>全表扫描是主内存列式数据库中一个很重要的操作，它可以避免创建索引减少内存消耗<br>
+论文中提出了两项改进操作</p>
+<ul>
+<li>Vectorized Value Decompression，这里使用一种快速的SIMD解压方式，用于轻量级数字压缩技术</li>
+<li>Vectorized Predicate Handling，用于等值、范围查找，这里也是使用SIMD方式</li>
+</ul>
+<p>这些方式都比较通用，对于大多数数据库都是适用的<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/willhalm-vldb2009/2.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/willhalm-vldb2009/2.jpg" />
+        </a>
+    <br>
+Figure 2. Vectorized table scan operations</p>
+<p>数据库压缩研究集中在两个方面</p>
+<ul>
+<li>压缩算法、以及将它们整合到数据库系统中</li>
+<li>压缩性能方面，如对查询响应时间加速，节省磁盘存储空间等</li>
+</ul>
+<p>相关论文</p>
+<ul>
+<li>《The Implementation and Performance of Compressed Databases》，一个轻量级的压缩算法，整合到DB中并提速</li>
+<li>《Data Compression and Database Performance》，尽可能长的保持数据压缩，只有当需要时才解压</li>
+<li>《How to Barter Bits for Chronons: Compression and Bandwidth Trade Offs for Database Scans》压缩和带宽之间的权衡，将压缩数据拆分成bolock，不同线程并行处理</li>
+<li>《Row-wise parallel predicate evaluation》，通过高效布局实现谓词求值</li>
+</ul>
+<p>轻量级压缩算法包括</p>
+<ul>
+<li>数值压缩</li>
+<li>string压缩</li>
+<li>字典压缩</li>
+</ul>
+<p>这些压缩算法可以用于文件级别，page，row，以及最小的字段级别<br>
+也就是说每个字段都可以独立的 压缩/解压缩，没有任何依赖</p>
+<p>比如LWC-NC压缩，对于4字节的整数 <code>3</code>，可以存储为<code>11b</code>，忽略其他 30个 0<br>
+对于整数数组，假设这个数字包含了 1024个 无符号整数，需要1024 * 32 = 4K存储量，假设最大数字为 511<br>
+则最多只需要 9个bit就可以了   $n = \lfloor log_{2}m \rfloor$<br>
+其压缩比例为 $r = \frac{n}{sizeof(int)}$<br>
+这里的压缩比例为 0.28，也就是可以节省 72%的空间</p>
+<p>前缀压缩，对于0可以忽略，这是变长压缩<br>
+帧引用，保留一个block中的最小值，然后每个值 - 最小值</p>
+<p>使用向量化的方式有四种</p>
+<ul>
+<li>内嵌汇编</li>
+<li>intrinsics，硬件厂商提供的跨平台库函数</li>
+<li>编译器指示符，如 #pragma simd</li>
+<li>编译器自动优化</li>
+</ul>
+<p>每种方式都是在 可用性、可控性之间的权衡  <br>
+比如编译器自动优化的可用性最高，但是可控性最低</p>
+<p>SIMD提供了如下一些操作：</p>
+<ul>
+<li>Arithmetic Operations: 加减乘除等</li>
+<li>Logic Operations: and、or、移位等</li>
+<li>Compare Operations: string压缩，block压缩等</li>
+<li>Data Movement: Load/Store, String copy, Block copy等</li>
+<li>Miscellaneous Operations: Data-type conversion, Shuffling, Concatenation, Cache-ability</li>
+</ul>
+<p>假设系统是32位的，所有的整数(压缩和未压缩的)都存储在按字节访问的内存中，是按地址连续存储的<br>
+那么32bit的数据，开始地址为 a，结束地址为 a&rsquo; + ( 4 * n)<br>
+也允许我们将两个 64位整数，当做一个 128位数来访问<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/willhalm-vldb2009/3.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/willhalm-vldb2009/3.jpg" />
+        </a>
+    <br>
+Figure 3. System model: (a) the SIMD register model, (b) the memory layout model</p>
+<h2 id="概念和实现">概念和实现</h2>
+<h3 id="vectorized-value-decompression">Vectorized Value Decompression</h3>
+<p>这里通过SIMD来优化 内存中解压LWC-NC压缩数据，主要分为三个阶段</p>
+<ul>
+<li>16字节对齐</li>
+<li>4 字节对齐</li>
+<li>bit对齐</li>
+</ul>
+<p><strong>16-Byte Alignment</strong><br>
+主要用来处理 loading、copy(shuffling)、extracting(shifting)、按顺序存储压缩值<br>
+对应的 SIMD 解压算法代码如下：<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/willhalm-vldb2009/code_1.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/willhalm-vldb2009/code_1.jpg" />
+        </a>
+     
+上述算法中几个重要变量介绍</p>
+<ul>
+<li><code>n</code>是最大的bit数，计算公式为：$n = \lfloor log_{2}m \rfloor$</li>
+<li>max_index = sizeof(input)，max_index 除以 128，表示一次可以处理 128个bit</li>
+<li>变量 $b_{a}$、$c_{a}$、$b_{b}$、$c_{b}$，这是向量变量持有的四个 LWC-NC压缩整数</li>
+<li>shuffle掩码 $m_{a}$、$m_{b}$是移位的总量，依赖于 n，而不是 j</li>
+</ul>
+<p>将128位的压缩数据，拷贝到 RL寄存器中，拷贝数量 n 取决于要表示多少bit<br>
+如果用 9-bit，可以保持14个压缩整数值，注意第 15个值，它是不完整的，所以不能被解压<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/willhalm-vldb2009/4.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/willhalm-vldb2009/4.jpg" />
+        </a>
+    <br>
+Figure 4. Loading 128-bit compressed block to a SIMD register (9-bit compression).</p>
+<p>上图中，一次加载 a、a + 1，但是v14是不完整的，解决办法</p>
+<ul>
+<li>第二次加载时，从v13开始加载，这样前面6个bit是无效的，这样就能得到完整的整数，缺点是这样就不对齐了效率会降低</li>
+<li>将两个128位的寄存器 拼接在一起，放到 256位的寄存器中，再做移位操作，这种是对其的</li>
+</ul>
+<p>
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/willhalm-vldb2009/5.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/willhalm-vldb2009/5.jpg" />
+        </a>
+    <br>
+Figure 5. Concatenating two SIMD registers for value alignment in one hardware instruction</p>
+<p>如上，将两个寄存器拼接，然后 256寄存器做移位，移位15字节<br>
+将v13放在新 RL 的第一位，这样整体就是完全对其了，效率就有保证</p>
+<p><strong>4-Byte Alignment</strong><br>
+这里是拷贝四个独立的 压缩整数到 寄存器RC 中<br>
+使用 shuffle 和掩码指令，将 RL 拷贝到 RC中<br>
+下面所有 黑色的都是有效的，但这不是对齐的，后面会继续使用 bit对齐的方式来修正<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/willhalm-vldb2009/6.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/willhalm-vldb2009/6.jpg" />
+        </a>
+    <br>
+Figure 6. Copying four 9-bit values to separate DWs</p>
+<p>另一个问题是，有些元素是横跨了几个寄存器的<br>
+这时可以用shuffle指令，将前面 4个值拷贝到 RC1，然后做一次右移指令<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/willhalm-vldb2009/7.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/willhalm-vldb2009/7.jpg" />
+        </a>
+     
+Figure 7. Spanning-value issue with 27-bit compression</p>
+<p><strong>Bit Alignment</strong><br>
+目标是对其四个值，并屏蔽掉尾部的无效位<br>
+如下所有独立的值都做 左移位，然后将无效的bit清除<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/willhalm-vldb2009/8.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/willhalm-vldb2009/8.jpg" />
+        </a>
+    <br>
+Figure 8. Extracting the four 9-bit values</p>
+<p>之后将寄存器中 四个对其的提取后的 解压值，存储回内存位置<br>
+这样后续的执行引擎就可以继续使用这些整数值了<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/willhalm-vldb2009/9.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/willhalm-vldb2009/9.jpg" />
+        </a>
+     
+Figure 9. Storing the decompressed integer values</p>
+<h3 id="vectorized-predicate-handling">Vectorized Predicate Handling</h3>
+<p>表扫描操作中，用于决定一个值，或者一个值范围<br>
+搜索算法会返回搜索范围内的压缩值索引，也可以使用bit位来映射查找范围<br>
+比如数组范围是升序的 0d &ndash; 255d，查找条件是 1d to 5d<br>
+查找结构是256bit的向量，如 011111000&hellip;0b， 数组索引是1d、2d、3d、4d、5d<br>
+这里不是解压整个数据然后 从头搜索，而是基于一个查找条件(谓词)，直接在LWC-NC的压缩数据上比较</p>
+<p>
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/willhalm-vldb2009/10.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/willhalm-vldb2009/10.jpg" />
+        </a>
+     
+Figure 10. Vectorized scan-value search with predicate<br>
+如上，通过对RC做 min值 的比较指令，结果寄存器会保持4个结果，如果对应的结果为0，表示没有落在这个范围内<br>
+这样就可以生成一个索引数组的位向量   <br>
+搜索算法的代码如下：
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/willhalm-vldb2009/code_2.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/willhalm-vldb2009/code_2.jpg" />
+        </a>
+     
+n 的值是通过公式 $n = \lfloor log_{2}m \rfloor$ 计算出来的<br>
+$min_{a}$、$min_{b}$、$max_{a}$、$max_{b}$、$b_{a}$、$c_{a}$、$b_{b}$、$c_{b}$ 是向量变量，用来存储4个整数</p>
+<h3 id="实现和评估">实现和评估</h3>
+<p>SIMD的实现包括</p>
+<ul>
+<li>Inter的SSE，SSE2、SSE3、SSE4</li>
+<li>AMR的 3DNow!</li>
+</ul>
+<p>这里选择SSE指令集，并预抓取内存中的128bit 压缩数据到内存中<br>
+使用了 Inter提供的 &lt;intrinsic.h&gt; 库函数<br>
+使用之前介绍的 concatenate/shift 指令，避免未对齐的情况，而 Intel® Xeon® Processor 5500 提供了快速的未对齐访问方式</p>
+<p>4字节对齐通过选择拷贝的值，到独立的目的地址<br>
+通过shffule和mark指令完成 <br>
+bit字节也是类似的，先提取出来，将无效的bit去掉，然后重新存储到内存中</p>
+<p>实现中海油其他的一些压缩对齐方式，他们也有加速效果，但只能用于特定的case<br>
+乘法可以用于所有场景，而且效果都很好<br>
+也不是所有的SIMD实现都支持假设指令，需要用不同方式替代<br>
+之后要讲这些实现整合到 SAP® Netweaver® Business Warehouse Accelerator (BWA)<br>
+这是SAP 和 Inter联合开发的</p>
+<ul>
+<li>它用一个高度压缩的索引结构来加载内存中的用户请求数据</li>
+<li>使用高性能的聚合技术，在内存中处理请求</li>
+<li>并将结果导回到 BWA中</li>
+</ul>
+<p>具体实现包括两种，使用SSE实现</p>
+<ul>
+<li>只解压缩表的列</li>
+<li>将查询谓词整合到scan中，但不解包数据</li>
+</ul>
+<p>图11 显示了，经过优化的，使用了最小化cache丢失比例、海量的循环展开，允许预计算位移参数，以及掩码<br>
+对比未优化的没有做循环展开的版本，这个未优化的有很大延迟<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/willhalm-vldb2009/11.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/willhalm-vldb2009/11.jpg" />
+        </a>
+     <br>
+Figure 11: Time to decompress 1B integers</p>
+<p>图12 显示了并行8个bit的处理，这里使用的是SSE寄存器，平均有 1.58倍的提升
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/willhalm-vldb2009/12.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/willhalm-vldb2009/12.jpg" />
+        </a>
+     <br>
+Figure 12. Speedup for decompression by vectorization</p>
+<p>图13 是全表扫描的情况，31bit的情况下，向量化还不如scalar扫描，平均有2.16倍加速<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/willhalm-vldb2009/13.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/willhalm-vldb2009/13.jpg" />
+        </a>
+    <br>
+Figure 13. Speedup of full-table scan by vectorization</p>
+<p>图14是全表扫描，但加入了选择率这个条件，下图中每个黑点代表加速比列，平均有1.63倍的加速<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/willhalm-vldb2009/14.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/willhalm-vldb2009/14.jpg" />
+        </a>
+    <br>
+Figure 14. Speedup of full-table scan by selectivity</p>
+<p>下面是整合到真实场景中的加速情况<br>
+一般来说 8 - 16bit是比较好的，平均来说，全表扫描有 2.45倍加速<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/willhalm-vldb2009/15.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/willhalm-vldb2009/15.jpg" />
+        </a>
+    <br>
+Figure 15: Running time distribution for customer workload</p>
+<p>下面是 8核，测试可扩展情况，基本上是使用带宽是线性扩展的<br>
+最高能达到 13.1G/s<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/willhalm-vldb2009/16.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/willhalm-vldb2009/16.jpg" />
+        </a>
+    <br>
+Figure 16. Scalability of vectorized full table scan</p>
+<h2 id="参考">参考</h2>
+<ul>
+<li><a href="https://www.slideserve.com/cher/simd-scan-ultra-fast-in-memory-table-scan-using-on-chip-vector-processing-units">PPT</a></li>
+</ul>
+
+			<script type="text/javascript"
+        async
+        src="https://cdn.bootcss.com/mathjax/2.7.3/MathJax.js?config=TeX-AMS-MML_HTMLorMML">
+MathJax.Hub.Config({
+  tex2jax: {
+    inlineMath: [['$','$'], ['\\(','\\)']],
+    displayMath: [['$$','$$'], ['\[\[','\]\]']],
+    processEscapes: true,
+    processEnvironments: true,
+    skipTags: ['script', 'noscript', 'style', 'textarea', 'pre'],
+    TeX: { equationNumbers: { autoNumber: "AMS" },
+         extensions: ["AMSmath.js", "AMSsymbols.js"] }
+  }
+});
+
+MathJax.Hub.Queue(function() {
+    
+    
+    
+    var all = MathJax.Hub.getAllJax(), i;
+    for(i = 0; i < all.length; i += 1) {
+        all[i].SourceElement().parentNode.className += ' has-jax';
+    }
+});
+</script>
+
+<style>
+code.has-jax {
+    font: inherit;
+    font-size: 100%;
+    background: inherit;
+    border: inherit;
+    color: #515151;
+}
+</style>
+        </div>
+
+        
+
+
+        
+
+<div class="post-archive">
+    <h2>相关文章</h2>
+    <ul class="listing">
+        
+        <li><a href="/post/2023/01/make-the-most-out-of-your-simd-investments/">Make the most out of your SIMD investments: counter control flow divergence in compiled query pipelines</a></li>
+        
+        <li><a href="/post/2023/01/accelerating-analytics-with-dynamic-in-memory-expressions/">Accelerating Analytics with Dynamic In-Memory Expressions</a></li>
+        
+        <li><a href="/post/2023/01/materialization-strategies-in-the-vertica-analytic-database-lessons-learned/">Materialization Strategies in the Vertica Analytic Database: Lessons Learned</a></li>
+        
+        <li><a href="/post/2023/01/monetdbx100-hyper-pipelining-query-execution/">MonetDB/X100: Hyper-Pipelining Query Execution</a></li>
+        
+        <li><a href="/post/2023/01/access-path-selection-in-main-memory-optimized-data-systems-should-i-scan-or-should-i-probe/">Access Path Selection in Main-Memory Optimized Data Systems Should I Scan or Should I Probe</a></li>
+        
+    </ul>
+</div>
+
+
+        <div class="post-meta meta-tags">
+            
+            <ul class="clearfix">
+                
+                <li><a href='/tags/%E5%90%91%E9%87%8F%E5%8C%96'>向量化</a></li>
+                
+                <li><a href='/tags/%E8%AE%BA%E6%96%87'>论文</a></li>
+                
+                <li><a href='/tags/simd'>SIMD</a></li>
+                
+            </ul>
+            
+        </div>
+    </article>
+    
+    
+
+    
+    
+    <div class="post bg-white">
+      <script src="https://utteranc.es/client.js"
+            repo= "himichael/hugoblogtalks"
+            issue-term="pathname"
+            theme="github-light"
+            crossorigin="anonymous"
+            async>
+      </script>
+    </div>
+    
+</div>
+
+
+                </div>
+
+                <div id="secondary">
+    <section class="widget">
+        <form id="search" action='https://code0xff.org/search/' method="get" accept-charset="utf-8" target="_blank" _lpchecked="1">
+      
+      <input type="text" name="q" maxlength="20" placeholder="Search">
+      <input type="hidden" name="sitesearch" value="https://code0xff.org/">
+      <button type="submit" class="submit icon-search"></button>
+</form>
+    </section>
+    
+    <section class="widget">
+        <h3 class="widget-title">最近文章</h3>
+<ul class="widget-list">
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/01/ultra-fast-in-memory-table-scan-using-onchip-vector-processing-units/" title="SIMD-Scan: Ultra Fast in-Memory Table Scan using onChip Vector Processing Units">SIMD-Scan: Ultra Fast in-Memory Table Scan using onChip Vector Processing Units</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/01/make-the-most-out-of-your-simd-investments/" title="Make the most out of your SIMD investments: counter control flow divergence in compiled query pipelines">Make the most out of your SIMD investments: counter control flow divergence in compiled query pipelines</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/01/accelerating-analytics-with-dynamic-in-memory-expressions/" title="Accelerating Analytics with Dynamic In-Memory Expressions">Accelerating Analytics with Dynamic In-Memory Expressions</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/01/materialization-strategies-in-the-vertica-analytic-database-lessons-learned/" title="Materialization Strategies in the Vertica Analytic Database: Lessons Learned">Materialization Strategies in the Vertica Analytic Database: Lessons Learned</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/01/monetdbx100-hyper-pipelining-query-execution/" title="MonetDB/X100: Hyper-Pipelining Query Execution">MonetDB/X100: Hyper-Pipelining Query Execution</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/01/access-path-selection-in-main-memory-optimized-data-systems-should-i-scan-or-should-i-probe/" title="Access Path Selection in Main-Memory Optimized Data Systems Should I Scan or Should I Probe">Access Path Selection in Main-Memory Optimized Data Systems Should I Scan or Should I Probe</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/01/photon-a-fast-query-engine-for-lakehouse-systems/" title="Photon A Fast Query Engine for Lakehouse Systems">Photon A Fast Query Engine for Lakehouse Systems</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/01/mysql%E7%9A%84%E5%B9%B6%E5%8F%91/" title="MySQL的并发">MySQL的并发</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2022/12/mysql%E7%9A%84%E6%81%A2%E5%A4%8D/" title="MySQL的恢复">MySQL的恢复</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2022/12/mysql%E7%9A%84%E7%BC%93%E5%AD%98/" title="MySQL的缓存">MySQL的缓存</a>
+    </li>
+    
+</ul>
+    </section>
+
+    
+
+    <section class="widget">
+        <h3 class="widget-title"><a href='/categories/'>分类</a></h3>
+<ul class="widget-list">
+    
+    <li><a href="https://code0xff.org/categories/%E5%88%86%E5%B8%83%E5%BC%8F/">分布式 (6)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E5%8E%9F%E7%90%86%E5%88%86%E6%9E%90/">原理分析 (6)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E5%95%86%E4%B8%9A/">商业 (3)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E5%A4%A7%E6%95%B0%E6%8D%AE/">大数据 (24)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%95%B0%E6%8D%AE%E5%BA%93/">数据库 (15)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%97%85%E8%A1%8C/">旅行 (10)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%9E%B6%E6%9E%84/">架构 (1)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E7%AE%97%E6%B3%95/">算法 (8)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E7%B3%BB%E7%BB%9F/">系统 (5)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E7%BC%96%E7%A8%8B%E8%AF%AD%E8%A8%80/">编程语言 (2)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E8%AF%BB%E4%B9%A6%E7%AC%94%E8%AE%B0/">读书笔记 (9)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E9%9A%8F%E4%BE%BF%E5%86%99%E5%86%99/">随便写写 (5)</a></li>
+    
+</ul>
+    </section>
+
+    <section class="widget">
+        <h3 class="widget-title">归档</a></h3>
+<ul class="widget-list">
+    
+    <li><a href="https://code0xff.org/years/2021%E5%B9%B4/">2021年 (31)</a></li>
+    
+    <li><a href="https://code0xff.org/years/2022%E5%B9%B4/">2022年 (55)</a></li>
+    
+    <li><a href="https://code0xff.org/years/2023%E5%B9%B4/">2023年 (8)</a></li>
+    
+</ul>
+    </section>
+
+    <section class="widget">
+        <h3 class="widget-title"><a href='/tags/'>标签</a></h3>
+<div class="tagcloud">
+    
+    <a href="https://code0xff.org/tags/b%E6%A0%91/">B树 </a>
+    
+    <a href="https://code0xff.org/tags/flink/">flink </a>
+    
+    <a href="https://code0xff.org/tags/hive/">Hive </a>
+    
+    <a href="https://code0xff.org/tags/k8s/">k8s </a>
+    
+    <a href="https://code0xff.org/tags/kudu/">kudu </a>
+    
+    <a href="https://code0xff.org/tags/manacher/">Manacher </a>
+    
+    <a href="https://code0xff.org/tags/mapreduce/">MapReduce </a>
+    
+    <a href="https://code0xff.org/tags/mysql/">MySQL </a>
+    
+    <a href="https://code0xff.org/tags/paxos/">paxos </a>
+    
+    <a href="https://code0xff.org/tags/raft/">raft </a>
+    
+    <a href="https://code0xff.org/tags/scala/">scala </a>
+    
+    <a href="https://code0xff.org/tags/simd/">SIMD </a>
+    
+    <a href="https://code0xff.org/tags/snowflake/">snowflake </a>
+    
+    <a href="https://code0xff.org/tags/spark/">spark </a>
+    
+    <a href="https://code0xff.org/tags/unix/">unix </a>
+    
+    <a href="https://code0xff.org/tags/%E4%BA%8C%E5%88%86%E6%9F%A5%E6%89%BE/">二分查找 </a>
+    
+    <a href="https://code0xff.org/tags/%E4%BA%8C%E5%8F%89%E6%A0%91%E9%81%8D%E5%8E%86/">二叉树遍历 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%88%86%E5%B8%83%E5%BC%8F/">分布式 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%8A%A8%E6%80%81%E6%B3%A8%E5%85%A5/">动态注入 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%8E%86%E5%8F%B2/">历史 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%90%91%E9%87%8F%E5%8C%96/">向量化 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%9B%9E%E6%BA%AF/">回溯 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%9B%BD%E5%86%85%E6%97%85%E8%A1%8C/">国内旅行 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%9B%BD%E5%A4%96%E6%97%85%E8%A1%8C/">国外旅行 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%A4%A7%E6%95%B0%E6%8D%AE/">大数据 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%AD%98%E5%82%A8/">存储 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%B7%A5%E4%BD%9C%E8%AE%B0%E5%BD%95/">工作记录 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%BE%AE%E6%9C%8D%E5%8A%A1/">微服务 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%80%BB%E7%BB%93/">总结 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%95%B0%E6%8D%AE%E5%BA%93/">数据库 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%9F%A5%E8%AF%A2%E4%BC%98%E5%8C%96/">查询优化 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%B1%87%E7%BC%96/">汇编 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%B5%8B%E8%AF%95/">测试 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%B9%96%E4%BB%93%E4%B8%80%E4%BD%93/">湖仓一体 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%94%9F%E6%B4%BB/">生活 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%94%B5%E5%BD%B1/">电影 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%AE%97%E6%B3%95/">算法 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BB%8F%E6%B5%8E/">经济 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BC%93%E5%AD%98/">缓存 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BC%96%E8%AF%91%E5%8E%9F%E7%90%86/">编译原理 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BD%91%E7%BB%9C/">网络 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AE%A1%E7%AE%97%E6%A1%86%E6%9E%B6/">计算框架 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AE%BA%E6%96%87/">论文 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AF%BB%E4%B9%A6%E7%AC%94%E8%AE%B0/">读书笔记 </a>
+    
+</div>
+    </section>
+
+    
+
+    <section class="widget">
+        <h3 class="widget-title">RSS</h3>
+        <ul class="widget-list">
+            <li><a href="https://code0xff.org/index.xml">文章 RSS</a></li>
+        </ul>
+    </section>
+</div>
+            </div>
+        </div>
+    </div>
+    <footer id="footer">
+    <div>
+        &copy; 2023 <a href="https://code0xff.org/">记录每个瞬间 By 老王</a>
+        
+    </div>
+    <br />
+    <div>
+        <div class="github-badge">
+            <a href="https://gohugo.io/" target="_black" rel="nofollow"><span class="badge-subject">Powered by</span><span class="badge-value bg-blue">Hugo</span></a>
+        </div>
+        <div class="github-badge">
+            <a href="https://github.com/flysnow-org/maupassant-hugo" target="_black"><span class="badge-subject">Theme</span><span class="badge-value bg-yellowgreen">Maupassant</span></a>
+        </div>
+    </div>
+</footer>
+
+
+    
+    <script type="text/javascript">
+        window.MathJax = {
+            tex2jax: {
+                inlineMath: [['$', '$']],
+                processEscapes: true
+                }
+            };
+    </script>
+    <script src='https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.5/MathJax.js?config=TeX-MML-AM_CHTML' async></script><script src="https://cdn.bootcdn.net/ajax/libs/fancybox/3.5.7/jquery.fancybox.min.js"></script>
+
+<a id="rocket" href="#top"></a>
+<script type="text/javascript" src='/js/totop.js?v=0.0.0' async=""></script>
+
+<script type="application/javascript">
+var doNotTrack = false;
+if (!doNotTrack) {
+	window.ga=window.ga||function(){(ga.q=ga.q||[]).push(arguments)};ga.l=+new Date;
+	ga('create', 'GA ID', 'auto');
+	
+	ga('send', 'pageview');
+}
+</script>
+<script async src='https://www.google-analytics.com/analytics.js'></script>
+
+
+
+    <script type="text/javascript" src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js" async></script>
+
+
+
+
+</body>
+
+</html>
