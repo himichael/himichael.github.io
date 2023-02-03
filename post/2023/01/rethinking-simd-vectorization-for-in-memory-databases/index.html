@@ -1,0 +1,1048 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    
+    <meta name="referrer" content="no-referrer-when-downgrade">
+    
+
+    <title>Rethinking SIMD Vectorization for In-Memory Databases | 记录每个瞬间</title>
+    <meta property="og:title" content="Rethinking SIMD Vectorization for In-Memory Databases - 记录每个瞬间">
+    <meta property="og:type" content="article">
+        
+    <meta property="article:published_time" content='2023-01-27T10:35:19&#43;08:00'>
+        
+        
+    <meta property="article:modified_time" content='2023-01-27T10:35:19&#43;08:00'>
+        
+    <meta name="Keywords" content="">
+    <meta name="description" content="Rethinking SIMD Vectorization for In-Memory Databases">
+        <meta name="author" content="隔壁老王">
+        
+    <meta property="og:url" content="https://code0xff.org/post/2023/01/rethinking-simd-vectorization-for-in-memory-databases/">
+    <link rel="shortcut icon" href='/favicon.ico'  type="image/x-icon">
+
+    <link rel="stylesheet" href='/css/normalize.css'>
+    <link rel="stylesheet" href='/css/style.css'>
+    <script type="text/javascript" src="//cdn.bootcdn.net/ajax/libs/jquery/3.4.1/jquery.min.js"></script>
+
+    
+    
+    
+        <link href="https://cdn.bootcdn.net/ajax/libs/fancybox/3.5.7/jquery.fancybox.min.css" rel="stylesheet">
+    
+    
+    
+    
+</head>
+
+
+<body>
+    <header id="header" class="clearfix">
+    <div class="container">
+        <div class="col-group">
+            <div class="site-name ">
+                
+                    <a id="logo" href="https://code0xff.org/">
+                        记录每个瞬间
+                    </a>
+                
+                
+            </div>
+            <div>
+                <nav id="nav-menu" class="clearfix">
+                    <a class="current" href="https://code0xff.org/">首页</a>
+                    
+                    <a  href="https://code0xff.org/linked/" title="链接">链接</a>
+                    
+                    <a  href="https://code0xff.org/archives/" title="归档">归档</a>
+                    
+                    <a  href="https://code0xff.org/about/" title="关于">关于</a>
+                    
+                </nav>
+            </div>
+        </div>
+    </div>
+</header>
+
+    <div id="body">
+        <div class="container">
+            <div class="col-group">
+
+                <div class="col-8" id="main">
+                    
+<div class="res-cons">
+    
+    <article class="post">
+        <header>
+            <h1 class="post-title">Rethinking SIMD Vectorization for In-Memory Databases</h1>
+        </header>
+        <date class="post-meta meta-date">
+            2023年1月27日
+        </date>
+<nav id="TableOfContents">
+  <ul>
+    <li>
+      <ul>
+        <li><a href="#背景">背景</a></li>
+        <li><a href="#实现">实现</a></li>
+        <li><a href="#基本操作">基本操作</a>
+          <ul>
+            <li><a href="#selection-scan">selection scan</a></li>
+            <li><a href="#hash-table">hash table</a></li>
+            <li><a href="#double-hash">double hash</a></li>
+            <li><a href="#cuckoo-hash">cuckoo hash</a></li>
+            <li><a href="#bloom-filter">bloom filter</a></li>
+            <li><a href="#partition">partition</a></li>
+            <li><a href="#sorting">sorting</a></li>
+            <li><a href="#hash-join">hash join</a></li>
+          </ul>
+        </li>
+        <li><a href="#性能评估">性能评估</a>
+          <ul>
+            <li><a href="#selection-scans">Selection Scans</a></li>
+            <li><a href="#hash-tables">Hash Tables</a></li>
+            <li><a href="#bloom-filters">Bloom Filters</a></li>
+            <li><a href="#partitioning">Partitioning</a></li>
+            <li><a href="#sorting--hash-join">Sorting &amp; Hash Join</a></li>
+          </ul>
+        </li>
+        <li><a href="#参考">参考</a></li>
+      </ul>
+    </li>
+  </ul>
+</nav>
+        
+        <div class="post-meta">
+            
+            <span class="post-meta meta-tags">
+                <ul class="clearfix">
+                    <a href='/categories/%E6%95%B0%E6%8D%AE%E5%BA%93'>数据库</a>
+                </ul>
+            </span>
+            
+        </div>
+        
+        
+        <div class="post-meta">
+            <span id="busuanzi_container_page_pv">|<span id="busuanzi_value_page_pv"></span><span>
+                    阅读</span></span>
+        </div>
+        
+        
+        <div class="post-content">
+            <blockquote>
+<p>原文 <br>
+<a href="https://15721.courses.cs.cmu.edu/spring2023/papers/08-vectorization/p1493-polychroniou.pdf">https://15721.courses.cs.cmu.edu/spring2023/papers/08-vectorization/p1493-polychroniou.pdf</a></p>
+</blockquote>
+<h2 id="背景">背景</h2>
+<p>实时分析系统推动了大数据的发展<br>
+现在的客户不仅要求高吞吐的OLTP，也要求交互式的OLAP系统<br>
+现代系统从面向磁盘转向了面向主内存，而主内存系统为了进一步加速也做了一些优化：</p>
+<ul>
+<li>面向列的更高好的压缩
+-整合延迟物化消除不必要的内存列驻留</li>
+</ul>
+<p>此外，硬件提供了三种并行化</p>
+<ul>
+<li>线程并行，对于独立操作，通过拆分输入，将其均摊到；多个操作时，通过查询计划的流水线断开点，将物化数据分发给多个线程</li>
+<li>指令级别并行，将相同的操作整合到tuple块中，编译器再生成紧密的机器代码</li>
+<li>数据并行，每个操作使用SIMD指令来实现</li>
+</ul>
+<p>主流的 CPU 对上述三种都支持了，超标量流水线、10条指令的乱序执行、SIMD能力<br>
+厂商将这些能力放到一个芯片的多个核中 <br>
+而当前更流行一种：<code>many-integrated-cores</code> <strong>MIC架构</strong>，将多个简单的核放到一个芯片中<br>
+移除掉了超标量流水线、乱序执行、L3-cache，每个核很小、耗电量很低，这样就可以增加更多的SIMD指令、并行线程，来加速并行化</p>
+<p>MIC 一开始适用于GPU的，不过现在的目标是高性能计算<br>
+本论文中，介绍了基于内存数据库的SIMD设置原则，不需要修改逻辑，也不需要修改数据布局<br>
+包括：选择scan、hash table、分区(radix、hash、range)   <br>
+并使用这些操作组合更复杂的操作： 排序、join</p>
+<p>相关论文</p>
+<ul>
+<li><input disabled="" type="checkbox"> 《Implementing Database Operations Using SIMD Instructions》SIGMOD 2002</li>
+<li><input disabled="" type="checkbox"> 《hash probes on modern processors》 ICDE 2007</li>
+<li><input checked="" disabled="" type="checkbox"> 《SIMD-scan: ultra fast in-memory table scan using on-chip vector processing units》 PVLDB 2009</li>
+<li><input disabled="" type="checkbox"> 《A new parallel sorting algorithm for multi-core SIMD processors》PACT 2007</li>
+<li><input disabled="" type="checkbox"> 《Efficient implementation of sorting on multi-core SIMD CPU architecture》VLDB 2008</li>
+<li><input disabled="" type="checkbox"> 《 fast architecture sensitive tree search on modern CPUs and GPUs》 SIGMOD 2010</li>
+<li><input disabled="" type="checkbox"> 《High throughput heavy hitter aggregation for modern SIMD processors》 2013</li>
+<li><input disabled="" type="checkbox"> 《 A comprehensive study of main-memory partitioning and its application to large-scale comparison- and radix-sort》 SIGMOD 2014</li>
+<li><input disabled="" type="checkbox"> 《Vectorized Bloom filters for advanced SIMD processors》 2014</li>
+<li><input disabled="" type="checkbox"> 《Improving main memory hash joins on Intel Xeon Phi processors: An experimental approach》 PVLDB 2015</li>
+</ul>
+<h2 id="实现">实现</h2>
+<p>先是定义<code>4</code>个基本操作，然后用这些基本操作完成一些简单的功能，如<br>
+scan、hash-table、分区<br>
+再用上面几个操作，构建更复杂的 排序、join<br>
+相当于层层的搭积木了</p>
+<h2 id="基本操作">基本操作</h2>
+<p>首先是两个空间连续的内存访问，以及两个不连续的内存访问</p>
+<ul>
+<li>selective store</li>
+<li>selective load</li>
+<li>gather</li>
+<li>scatter</li>
+</ul>
+<p><strong>store</strong>是将向量中的一个子集，按照向量寄存器的掩码，或者标量的掩码<br>
+写入到一段连续的内存区域中<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/p1493-polychroniou/1.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/p1493-polychroniou/1.jpg" />
+        </a>
+    <br>
+Figure 1: Selective store operation</p>
+<p><strong>load</strong>跟store类似，也是从内存中读取一段连续的数据<br>
+同样，也是基于掩码的，通过掩码将内存值加载到 向量寄存器中<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/p1493-polychroniou/2.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/p1493-polychroniou/2.jpg" />
+        </a>
+    <br>
+Figure 2: Selective load operation</p>
+<p>存储使用的是两个 KNC 函数模拟的：</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">7
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-cpp" data-lang="cpp"><span style="display:flex;"><span><span style="color:#8be9fd">void</span> <span style="color:#50fa7b">_mm512_mask_packstore_epi32</span>(<span style="color:#8be9fd">int32_t</span> <span style="color:#ff79c6">*</span>p, <span style="color:#6272a4">// pointer
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>								__mmask16 m, <span style="color:#6272a4">// mask
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>								__m512i v) <span style="color:#6272a4">// vector
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>{ 
+</span></span><span style="display:flex;"><span>	_mm512_mask_packstorelo_epi32(<span style="color:#ff79c6">&amp;</span>p[<span style="color:#bd93f9">0</span>], m, v)<span style="color:#ff79c6">:</span>
+</span></span><span style="display:flex;"><span>	_mm512_mask_packstorehi_epi32(<span style="color:#ff79c6">&amp;</span>p[<span style="color:#bd93f9">16</span>], m, v); 
+</span></span><span style="display:flex;"><span>}
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>加载使用的是这两个函数模拟的：</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">7
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-cpp" data-lang="cpp"><span style="display:flex;"><span>__m512i <span style="color:#50fa7b">_mm512_mask_loadunpack_epi32</span>(__m512i v,
+</span></span><span style="display:flex;"><span>									__mmask16 m,
+</span></span><span style="display:flex;"><span>									<span style="color:#ff79c6">const</span> <span style="color:#8be9fd">int32_t</span> <span style="color:#ff79c6">*</span>p){
+</span></span><span style="display:flex;"><span>	v <span style="color:#ff79c6">=</span> _mm512_mask_loadunpacklo_epi32(v, m, <span style="color:#ff79c6">&amp;</span>p[<span style="color:#bd93f9">0</span>])<span style="color:#ff79c6">:</span>
+</span></span><span style="display:flex;"><span>	v <span style="color:#ff79c6">=</span> _mm512_mask_loadunpackhi_epi32(v, m, <span style="color:#ff79c6">&amp;</span>p[<span style="color:#bd93f9">16</span>]);
+</span></span><span style="display:flex;"><span>	<span style="color:#ff79c6">return</span> v; 
+</span></span><span style="display:flex;"><span>}
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p><strong>gather</strong>操作，是非连续的，输入是 索引向量、数组指针<br>
+输出是数组元素对应的值 向量，通过定义掩码操作，就有定义selective gather在向量管道子集上的操作<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/p1493-polychroniou/3.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/p1493-polychroniou/3.jpg" />
+        </a>
+    <br>
+Figure 3: Gather operation</p>
+<p><strong>scatter</strong>操作也是非连续的<br>
+输入也是向量索引、数组指针，值向量，如果多个向量管道指向同一个位置，那么最右边的会写成功<br>
+通过定义掩码，就可以实现 selectively store操作<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/p1493-polychroniou/4.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/p1493-polychroniou/4.jpg" />
+        </a>
+    <br>
+Figure 4: Scatter operation</p>
+<p>gather操作要求一次性操作 W个cache，实际上是做不到的，因为每个CPU周期只能执行 1 - 2次的cache访问<br>
+gather操作对于现代主流CPU已经支持了，但是scatter没有，而老的CPU两者都不支持<br>
+可以通过其他方式来模拟这两个操作，但是性能会有很大损失</p>
+<p>主流CPU对于load、store也不支持，但是可以通过 permutation指令来模拟   <br>
+通过数组索引 来作为掩码，从已生成的table中提取数据，之后会将 <strong>活跃</strong>的向量数据放到寄存器的一边，<strong>不活跃</strong>的放到另一边<br>
+通过混合load、store来替换不活跃的元素，这种技术最初用于向量化的 bloom filter</p>
+<p>gather对应的SIMD函数：</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-cpp" data-lang="cpp"><span style="display:flex;"><span>__m512i _mm512_i32gather_epi32 (__m512i vindex, <span style="color:#8be9fd">void</span> <span style="color:#ff79c6">const</span><span style="color:#ff79c6">*</span> base_addr, <span style="color:#8be9fd">int</span> scale)
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>scatter也有支持的函数，需要的指令集是：<br>
+CPUID Flags: AVX512F + AVX512VL</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-cpp" data-lang="cpp"><span style="display:flex;"><span><span style="color:#8be9fd">void</span> _mm_i32scatter_epi32 (<span style="color:#8be9fd">void</span><span style="color:#ff79c6">*</span> base_addr, <span style="color:#ff79c6">__m128i</span> vindex, <span style="color:#ff79c6">__m128i</span> a, <span style="color:#ff79c6">const</span> <span style="color:#8be9fd">int</span> scale)
+</span></span></code></pre></td></tr></table>
+</div>
+</div><h3 id="selection-scan">selection scan</h3>
+<p>selection scan在现代主内存系统中又重新出现了，用于替代之前的二级索引<br>
+使用如下方式做一些优化：</p>
+<ul>
+<li>轻量级的bit压缩，减少RAM带宽</li>
+<li>生成统计信息跳过不需要的数据块</li>
+<li>使用 bitmaps-zonemaps 跳过cache line</li>
+</ul>
+<p>传统的线性scan的性能，跟分支预测失败有很大关系<br>
+将控制流转为数据流的方式会影响性能，如算法1：<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/p1493-polychroniou/algorithm-1.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/p1493-polychroniou/algorithm-1.jpg" />
+        </a>
+    </p>
+<p>而将分支消除后，可以得到算法2<br>
+这个算法消除了 if，在分支情况下如果不满足就直接忽略，而这个就会执行覆盖操作<br>
+相当于每次遍历都会有一个覆盖操作，这个操作可能是基于cache所以很快   <br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/p1493-polychroniou/algorithm-2.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/p1493-polychroniou/algorithm-2.jpg" />
+        </a>
+    </p>
+<p>向量化的版本，算法3</p>
+<ul>
+<li>使用向量指令，将谓词值存到掩码中，掩码中标记了哪些管道是活跃的</li>
+<li>使用一个cache来保存index，而不是真实的值</li>
+<li>当buffer满了，使用gather获取所有列的真实值，输出到内存中</li>
+<li>使用bypass的方式，绕过cache，将向量寄存器的值，直接写入内存，避免cache污染</li>
+<li>这里使用的是 _mm512_storenrngo_ps指令<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/p1493-polychroniou/algorithm-3.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/p1493-polychroniou/algorithm-3.jpg" />
+        </a>
+    </li>
+</ul>
+<h3 id="hash-table">hash table</h3>
+<p>hash-table用于joi、聚合等场景<br>
+使用SIMD方式先构建一个hash-table桶，也就是一次探测多个key，而不是传统上的单个key探测<br>
+这里又分为两种方式</p>
+<ul>
+<li>horizontal</li>
+<li>vectorization</li>
+</ul>
+<p>有些变种如cuckoo hash支持更高的负载因子<br>
+论文中的hash-table跟传统的不同，它的设计思想是：</p>
+<ul>
+<li>每个向量管道，处理不同的输入key</li>
+<li>之后访问不同的hash-table位置</li>
+</ul>
+<p><strong>Linear Probing</strong><br>
+一种开地址方式，可以插入条目，或者当扫描到空位时终止搜索</p>
+<p>线性探测<strong>Probe</strong>标量版本的如下： <br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/p1493-polychroniou/algorithm-4.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/p1493-polychroniou/algorithm-4.jpg" />
+        </a>
+    </p>
+<p>线程探测<strong>Probe</strong>向量版本</p>
+<ul>
+<li>将多个探测的key放到向量中</li>
+<li>通过gather去hash-table中拿值</li>
+<li>优化：某个很早探测到key，可能一直在向量中(后面没有被探测到早期的就一直残留)</li>
+<li>浪费cpu，当检查到某个管道探测为空时，再加载新的探测key进来<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/p1493-polychroniou/algorithm-5.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/p1493-polychroniou/algorithm-5.jpg" />
+        </a>
+    </li>
+</ul>
+<p>线性探测<strong>Build</strong>标量版本的如下： 
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/p1493-polychroniou/algorithm-6.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/p1493-polychroniou/algorithm-6.jpg" />
+        </a>
+    </p>
+<p>向量的build版本</p>
+<ul>
+<li>跟probe版本类似，也是一个SIMD处理不同的输入key</li>
+<li>同样，如果桶是空的则继续加载元素</li>
+<li>这里会使用scatter将元素加载回内存，同时会检查是否有 冲突</li>
+<li>AVX3 中使用 vpconflictd 指令检查冲突</li>
+<li>为了处理table生最后剩余的一些数据，需要切换回标量版本<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/p1493-polychroniou/algorithm-7.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/p1493-polychroniou/algorithm-7.jpg" />
+        </a>
+    </li>
+</ul>
+<h3 id="double-hash">double hash</h3>
+<p>处理重复key的方式</p>
+<ul>
+<li>使用独立的table，当大多数key都重复时表现很好</li>
+<li>存储重复的key，如果都是唯一的则表现很好</li>
+</ul>
+<p>double hash如下：<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/p1493-polychroniou/algorithm-8.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/p1493-polychroniou/algorithm-8.jpg" />
+        </a>
+    </p>
+<h3 id="cuckoo-hash">cuckoo hash</h3>
+<p>使用多个hash表的方式来探测<br>
+普通的方式是探索hash1 是否满足，不满足则探测hash2<br>
+这样方式会有分支的开销，向量版本是</p>
+<ul>
+<li>同时获取key1、key2函数</li>
+<li>然后用gather+key1、gather+key2分别获取桶中的数据</li>
+<li>使用bit位来比较hash1 是否满足</li>
+<li>之后将向量中的值，放入hash-table中<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/p1493-polychroniou/algorithm-9.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/p1493-polychroniou/algorithm-9.jpg" />
+        </a>
+    </li>
+</ul>
+<p>build过程更复杂</p>
+<ul>
+<li>如果选择的两个桶都不是空的</li>
+<li>此时要创建一个新空间，用来替换其中一个桶中的tuple</li>
+<li>这个过程可能会重复，直到某个选择的桶为空
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/p1493-polychroniou/algorithm-10.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/p1493-polychroniou/algorithm-10.jpg" />
+        </a>
+    </li>
+</ul>
+<h3 id="bloom-filter">bloom filter</h3>
+<p>一个基本的数据结构，在join之前，会应用跨多个表的选择条件<br>
+根据 k 个函数函数判断对应的bit位，来决定对应的tuple是否满足<br>
+向量版本</p>
+<ul>
+<li>使用一个W 个key值的向量</li>
+<li>对于 k 个hash函数，循环 k 次</li>
+<li>每次从向量管道中，根据key计算hash bit，得到一个掩码 m</li>
+<li>再用 掩码去 bloom-filter中探测，如果不满足就淘汰掉</li>
+</ul>
+<p>相关论文<br>
+《 Vectorized Bloom filters for advanced SIMD processors》 2014</p>
+<h3 id="partition">partition</h3>
+<p>这也是硬件中非常重要的一个操作<br>
+比如用 分区函数，将大的数据集，拆分成多个小的，可以驻留内存的子集，并且都是不重叠的<br>
+这样就可以实现线性级别的并行操作</p>
+<p><strong>Radix &amp; Hash Histogram</strong> <br>
+在移动数据之前，先计算数据的边界，这里使用直方图<br>
+为每个key增加一个计数，而key的分配可能会重复，因此将一列 变成多列，这样就不会冲突了<br>
+只有再将多列合并为一列， 每行统计个数  <br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/p1493-polychroniou/algorithm-11.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/p1493-polychroniou/algorithm-11.jpg" />
+        </a>
+    </p>
+<p><strong>Range Histogram</strong><br>
+range分区一般比 radix、hash慢很多<br>
+为了将数据分配到连续的区域，一般会有一个与计算的步骤，先统计分区的数量<br>
+计算各个分区在连续区域中的偏移量，后续就可以并行的向各个分区填充<br>
+range分区使用了并行的二分查找<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/p1493-polychroniou/algorithm-12.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/p1493-polychroniou/algorithm-12.jpg" />
+        </a>
+    </p>
+<p><strong>Shuffling</strong><br>
+通过预计算，就得到了每个分区在全局数据中的起始offset，然后就可以真正的移动数据了<br>
+首先还要考虑tuple冲突问题<br>
+这里使用了 permutation操作，将数据做了翻转<br>
+比如 vector lan：key1、key2、key3<br>
+hash位置：10、15、10<br>
+key1 和 key3冲突了，key3写会被key1覆盖，翻转后世key1被写入，key3的offset+1<br>
+这种分区机制对于像 LSM radixsort排序也很重要      <br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/p1493-polychroniou/algorithm-13.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/p1493-polychroniou/algorithm-13.jpg" />
+        </a>
+    </p>
+<p>shuffling机制如下：  <br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/p1493-polychroniou/algorithm-14.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/p1493-polychroniou/algorithm-14.jpg" />
+        </a>
+    </p>
+<p><strong>Buffered Shuffling</strong><br>
+如果输入数据能保留在cache中则会很快，但随着数据变大性能就会变成</p>
+<ul>
+<li>如果超出了TLB容量，会出现 TLB抖动</li>
+<li>可能会出现很多冲突，最坏的情况下会收到 缓存级联的限制</li>
+<li>触发了cache加载机制，加载会将数据覆盖到cache-line，这相当于减少了带宽</li>
+<li>因此每个分cache有 W个buffer，将cache和TLB 的miss减少到 1/W</li>
+<li>向量化+buffer的版本如下，算法15，比 算法14 无buffer的版本更好，使用了cache驻留而不是直接输出         <br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/p1493-polychroniou/algorithm-15.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/p1493-polychroniou/algorithm-15.jpg" />
+        </a>
+    </li>
+</ul>
+<h3 id="sorting">sorting</h3>
+<p>可以当做 join、聚合的子问题<br>
+排序也可以用于</p>
+<ul>
+<li>去聚合</li>
+<li>索引构建</li>
+<li>压缩</li>
+<li>去重</li>
+</ul>
+<p>最近的研究表明，大规模的排序 等同于分区<br>
+radix-sort和基于range分区的比较排序，使用最大化扇出，以便最小化分区通过的数量<br>
+《A comprehensive study of main-memory partitioning and its application to large-scale comparison- and radix-sort》</p>
+<p>least-significant-bit LSB radix-soft是最快的方式(对于32位key来说)<br>
+这种方式将输入数据拆分到多个线程中，然后所有线程交错的输出分区<br>
+柱状图的生成、shuffling操作时不共享的，这样线程可以最大化并行，使用分区buffer也能最大化数据并行度</p>
+<h3 id="hash-join">hash join</h3>
+<p>是分析查询系统中使用最频繁的操作，也是最耗时的操作<br>
+hash-join，内关系用于构建hash表，而外部关系用于探测hash表，找到匹配的值<br>
+分区可以用于hash-join，具有不同程度的优缺点，有三个变种</p>
+<ul>
+<li>no partition，使用原子操作跨多个线程构建共享hash表，使用barrier同步，探测过程是只读的，但构建过程无法向量化，无SIMD原子指令</li>
+<li>min partition，使用分区来消除原子使用(不构建共享hash表)，构建关系划分为T部，T是线程数量，不跨线程共享的情况下构建T个hash表，探测时选择要搜索的hash表，所有部分都可以完全向量化</li>
+<li>max partition，将左表拆分直到能完全放到cache中，分区结果使用build和probe都可以放到cache中，可以完全向量化</li>
+</ul>
+<h2 id="性能评估">性能评估</h2>
+<p>这里选用三种类型的CPU做测试</p>
+<ul>
+<li>MIC架构的CPU</li>
+<li>多内核的CPU</li>
+<li>高端的4路CPU</li>
+</ul>
+<p>使用了Inter的ICC编译器，以及GCC4.9，所有的case都使用 -O3 优化选型<br>
+Haswell CPU使用了 -mavx2 选型<br>
+Sandy Bridge使用 -mavx 选型<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/p1493-polychroniou/table-1.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/p1493-polychroniou/table-1.jpg" />
+        </a>
+    </p>
+<h3 id="selection-scans">Selection Scans</h3>
+<p>包含 6个观察目标，2个标量的，4个向量的 <br>
+Xeon Phi 的branchless版本的标量反而更差了(较慢的set指令)，而Haswell的branchless标量版本更好 <br>
+两种CPU的向量版本都有大幅度提升，MIC架构有数量级的改变，多核架构有2倍提升<br>
+随着选择率的上升，向量版也开始下降，因为受到内存带宽的影响<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/p1493-polychroniou/5.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/p1493-polychroniou/5.jpg" />
+        </a>
+    <br>
+Figure 5: Selection scan (32-bit key &amp; payload)</p>
+<h3 id="hash-tables">Hash Tables</h3>
+<p>比较了线性探测和probe的性能<br>
+MIC架构下，线程探测大概提升 6倍性能   <br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/p1493-polychroniou/6.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/p1493-polychroniou/6.jpg" />
+        </a>
+    <br>
+Figure 6: Probe linear probing &amp; double hashing tables (shared, 32-bit key → 32-bit probed payload)</p>
+<p>比较cuckoo hash，包括branch和branchless的标量版本<br>
+水平、垂直的向量版本，以及混合向量版本<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/p1493-polychroniou/7.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/p1493-polychroniou/7.jpg" />
+        </a>
+    <br>
+Figure 7: Probe cuckoo hashing table (2 functions,shared, 32-bit key → 32-bit probed payload)</p>
+<p>对比了线程探测LP、双hashDH、cuckoo hash CH<br>
+build和probe比例为1:1 <br>
+可以看到放到L1的时候限量版吞吐量最大，而随着cache放不到进入到内存时，向量版本的优势几乎没了<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/p1493-polychroniou/8.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/p1493-polychroniou/8.jpg" />
+        </a>
+    <br>
+Figure 8: Build &amp; probe linear probing, double hashing, &amp; cuckoo hashing on Xeon Phi (1:1 build– probe, shared-nothing, 2X 32-bit key &amp; payload)</p>
+<p>build和probe的比例为1：10<br>
+上个测试是没有重复key的，这里包含了重复key，以及不匹配的情况<br>
+因为build过程更耗时，在没有重复key情况下有接近7倍加速，5个key重复时有2倍加速<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/p1493-polychroniou/9.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/p1493-polychroniou/9.jpg" />
+        </a>
+    <br>
+Figure 9: Build &amp; probe linear probing, double hashing, &amp; cuckoo hashing on Xeon Phi (1:10 build–probe, L1, shared-nothing, 2X 32-bit key &amp; payload)</p>
+<h3 id="bloom-filters">Bloom Filters</h3>
+<p>选择性load和store<br>
+这里关闭了循环展开，增加了buffer<br>
+MIC架构下有7.8倍加速，多核架构下有3倍加速<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/p1493-polychroniou/10.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/p1493-polychroniou/10.jpg" />
+        </a>
+    <br>
+Figure 10: Bloom filter probing (5 functions, shared,10 bits / item, 5% selectivity, 32-bit key &amp; payload)</p>
+<h3 id="partitioning">Partitioning</h3>
+<p>这里包含了向量化hash/radix的三种版本<br>
+随着分区的增加，L1也放不下了，之后性能开始下降<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/p1493-polychroniou/11.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/p1493-polychroniou/11.jpg" />
+        </a>
+    <br>
+Figure 11: Radix &amp; hash histogram on Xeon Phi</p>
+<p>下面是range分区的，MIC架构下有7-15倍的提升<br>
+多核架构下有2.4 - 2.8倍提升<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/p1493-polychroniou/12.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/p1493-polychroniou/12.jpg" />
+        </a>
+    <br>
+Figure 12: Range function on Xeon Phi (32-bit key)</p>
+<p>当输入数据大于cache时，没有缓存的向量版本就不行了<br>
+带有缓存的标量版本表现也不错，向量+buffer的两个版本都有几倍的提升   <br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/p1493-polychroniou/13.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/p1493-polychroniou/13.jpg" />
+        </a>
+    <br>
+Figure 13: Radix shuffling on Xeon Phi (sharednothing, out-of-cache, 32-bit key &amp; payload)</p>
+<h3 id="sorting--hash-join">Sorting &amp; Hash Join</h3>
+<p>主要是三点</p>
+<ul>
+<li>测量MIC架构，并强调向量化对算法设计的影响</li>
+<li>跟4路高端CPU比较</li>
+<li>研究多列物化、通用实现的成本</li>
+</ul>
+<p><strong>Vectorization Speedup</strong><br>
+LBS的radx-sort比标量版本有2.2倍加速<br>
+主流的CPU带宽基本都饱和了<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/p1493-polychroniou/14.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/p1493-polychroniou/14.jpg" />
+        </a>
+    <br>
+Figure 14: Radixsort on Xeon Phi (LSB)</p>
+<p>比较了hash join的三种变体，no partition、min、max<br>
+no和min只有1.05 - 1.25的加速<br>
+而max有3.3倍加速<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/p1493-polychroniou/15.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/p1493-polychroniou/15.jpg" />
+        </a>
+    <br>
+Figure 15: Multiple hash join variants on Xeon Phi(2 · 10^8 ./ 2 · 10^8 32-bit key &amp; payload)</p>
+<p>下面是测试线程的扩展性，基本都是达到了线性扩展  <br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/p1493-polychroniou/16.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/p1493-polychroniou/16.jpg" />
+        </a>
+    <br>
+Figure 16: Radixsort &amp; hash join scalability (4 · 10^8&amp; 2 · 10^8./ 2 · 10^8 32-bit key &amp; payload, log/log scale)</p>
+<p><strong>Aggregate Performance &amp; Power Efficiency</strong><br>
+高端CPU sandy  bridge SB，以及MIC架构的<br>
+SB高端CPU的内存快饱和了，所以很难利用向量化<br>
+高顿CPU的radix-sort、hash-join都有NUMA感知， 只需要跨CPU传输一次<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/p1493-polychroniou/17.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/p1493-polychroniou/17.jpg" />
+        </a>
+      <br>
+Figure 17: Radixsort &amp; hash join on Xeon Phi 7120P versus 4 Xeon E5 4620 CPUs (sort 4·108 tuples, join 2·108./ 2·108
+tuples, 32-bit key &amp; payload per table)</p>
+<p><strong>Multiple Columns, Types &amp; Materialization</strong><br>
+向量代码不能像标量代码那样容易地处理多种类型     <br>
+下面是radix-sort对于各种数值类型，宽度的比较   <br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/p1493-polychroniou/18.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/p1493-polychroniou/18.jpg" />
+        </a>
+     <br>
+Figure 18: Radixsort with varying payloads on Xeon Payload columnsPhi (2 · 10^8 tuples, 32-bit key)</p>
+<p>下面是has-join的比较，左表和右表的比列不同<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/p1493-polychroniou/19.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/01/p1493-polychroniou/19.jpg" />
+        </a>
+    <br>
+Figure 19: Hash join with varying payload columns on Xeon Phi (10^7 ./ 10^8 tuples, 32-bit keys)</p>
+<h2 id="参考">参考</h2>
+<ul>
+<li><a href="https://mayunlei.github.io/2022/06/16/%E6%B7%B1%E5%85%A5%E6%B5%85%E5%87%BA%E5%90%91%E9%87%8F%E5%8C%96%E6%8A%80%E6%9C%AF/">深入向量化计算技术</a></li>
+<li>《A comprehensive study of main-memory partitioning and its application to large-scale comparison- and radix-sort》</li>
+<li><a href="https://blog.csdn.net/weixin_32371243/article/details/111953390">英特尔的指令集体系结构_Intel MIC初探（一）：MIC架构及编程模型概览</a></li>
+<li><a href="https://zhuanlan.zhihu.com/p/266402829">常见开源OLAP技术架构对比</a></li>
+<li><a href="https://zhuanlan.zhihu.com/p/55327037">SIMD简介</a></li>
+<li><a href="https://zhuanlan.zhihu.com/p/391091872">高性能C++ SIMD 学习</a></li>
+<li><a href="https://blog.csdn.net/weixin_42670653/article/details/82147911">C/C++性能测试工具&mdash;-gprof</a></li>
+<li><a href="https://blog.csdn.net/weixin_41644391/article/details/113526563">c++ SIMD 样例</a></li>
+<li><a href="https://blog.csdn.net/u013939918/article/details/106935865/">C++中使用SIMD</a></li>
+<li><a href="https://blog.csdn.net/yelede2009/article/details/120411361">C++性能优化笔记-11-使用向量操作</a></li>
+<li><a href="https://www.youtube.com/playlist?list=PLTd6ceoshprfg23JMtwGysCm4tlc0I1ou">Computer Hardware and Architecture</a></li>
+<li><a href="https://zhuanlan.zhihu.com/p/478848608">Rethinking SIMD Vectorization for In-Memory Databases 论文解读</a></li>
+<li><a href="https://zhuanlan.zhihu.com/p/432895054">Rethinking SIMD Vectorization for In-Memory Databases</a></li>
+<li><a href="https://blog.csdn.net/loophome/article/details/105250457">perf性能分析工具命令简单实用</a></li>
+<li><a href="https://mp.weixin.qq.com/s?__biz=MzkyODE5NjU2Mw%3D%3D&amp;chksm=c21d343cf56abd2a6abfaef8caff16dd6fb835bdaf3d4901f55e26eea45a059411c1d1bd94ea&amp;idx=1&amp;mid=2247485056&amp;scene=21&amp;sn=5a3e5b93f6d8872aa5fdfeee4e509a9f#wechat_redirect">虚函数真的就那么慢吗</a></li>
+<li><a href="https://www.zhihu.com/question/441518636">代码里充斥着 if-else 分支有什么不好吗</a></li>
+<li><a href="http://hzhcontrols.com/new-533864.html">几款好的C/C++编译器</a></li>
+<li><a href="http://www.cs.columbia.edu/~kar/pubsk/simd.pdf">Implementing Database Operations Using SIMD Instructions</a></li>
+</ul>
+
+			<script type="text/javascript"
+        async
+        src="https://cdn.bootcss.com/mathjax/2.7.3/MathJax.js?config=TeX-AMS-MML_HTMLorMML">
+MathJax.Hub.Config({
+  tex2jax: {
+    inlineMath: [['$','$'], ['\\(','\\)']],
+    displayMath: [['$$','$$'], ['\[\[','\]\]']],
+    processEscapes: true,
+    processEnvironments: true,
+    skipTags: ['script', 'noscript', 'style', 'textarea', 'pre'],
+    TeX: { equationNumbers: { autoNumber: "AMS" },
+         extensions: ["AMSmath.js", "AMSsymbols.js"] }
+  }
+});
+
+MathJax.Hub.Queue(function() {
+    
+    
+    
+    var all = MathJax.Hub.getAllJax(), i;
+    for(i = 0; i < all.length; i += 1) {
+        all[i].SourceElement().parentNode.className += ' has-jax';
+    }
+});
+</script>
+
+<style>
+code.has-jax {
+    font: inherit;
+    font-size: 100%;
+    background: inherit;
+    border: inherit;
+    color: #515151;
+}
+</style>
+        </div>
+
+        
+
+
+        
+
+<div class="post-archive">
+    <h2>相关文章</h2>
+    <ul class="listing">
+        
+        <li><a href="/post/2023/01/ultra-fast-in-memory-table-scan-using-onchip-vector-processing-units/">SIMD-Scan: Ultra Fast in-Memory Table Scan using onChip Vector Processing Units</a></li>
+        
+        <li><a href="/post/2023/01/make-the-most-out-of-your-simd-investments/">Make the most out of your SIMD investments: counter control flow divergence in compiled query pipelines</a></li>
+        
+        <li><a href="/post/2023/01/accelerating-analytics-with-dynamic-in-memory-expressions/">Accelerating Analytics with Dynamic In-Memory Expressions</a></li>
+        
+        <li><a href="/post/2023/01/materialization-strategies-in-the-vertica-analytic-database-lessons-learned/">Materialization Strategies in the Vertica Analytic Database: Lessons Learned</a></li>
+        
+        <li><a href="/post/2023/01/monetdbx100-hyper-pipelining-query-execution/">MonetDB/X100: Hyper-Pipelining Query Execution</a></li>
+        
+    </ul>
+</div>
+
+
+        <div class="post-meta meta-tags">
+            
+            <ul class="clearfix">
+                
+                <li><a href='/tags/%E5%90%91%E9%87%8F%E5%8C%96'>向量化</a></li>
+                
+                <li><a href='/tags/%E8%AE%BA%E6%96%87'>论文</a></li>
+                
+                <li><a href='/tags/simd'>SIMD</a></li>
+                
+            </ul>
+            
+        </div>
+    </article>
+    
+    
+
+    
+    
+    <div class="post bg-white">
+      <script src="https://utteranc.es/client.js"
+            repo= "himichael/hugoblogtalks"
+            issue-term="pathname"
+            theme="github-light"
+            crossorigin="anonymous"
+            async>
+      </script>
+    </div>
+    
+</div>
+
+
+                </div>
+
+                <div id="secondary">
+    <section class="widget">
+        <form id="search" action='https://code0xff.org/search/' method="get" accept-charset="utf-8" target="_blank" _lpchecked="1">
+      
+      <input type="text" name="q" maxlength="20" placeholder="Search">
+      <input type="hidden" name="sitesearch" value="https://code0xff.org/">
+      <button type="submit" class="submit icon-search"></button>
+</form>
+    </section>
+    
+    <section class="widget">
+        <h3 class="widget-title">最近文章</h3>
+<ul class="widget-list">
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/02/implementing-database-operations-using-simd-instructions/" title="Implementing Database Operations Using SIMD Instructions">Implementing Database Operations Using SIMD Instructions</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/01/rethinking-simd-vectorization-for-in-memory-databases/" title="Rethinking SIMD Vectorization for In-Memory Databases">Rethinking SIMD Vectorization for In-Memory Databases</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/01/advanced-database-systems-query-execution-and-processing/" title="Advanced Database Systems: Query Execution &amp; Processing">Advanced Database Systems: Query Execution &amp; Processing</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/01/ultra-fast-in-memory-table-scan-using-onchip-vector-processing-units/" title="SIMD-Scan: Ultra Fast in-Memory Table Scan using onChip Vector Processing Units">SIMD-Scan: Ultra Fast in-Memory Table Scan using onChip Vector Processing Units</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/01/make-the-most-out-of-your-simd-investments/" title="Make the most out of your SIMD investments: counter control flow divergence in compiled query pipelines">Make the most out of your SIMD investments: counter control flow divergence in compiled query pipelines</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/01/accelerating-analytics-with-dynamic-in-memory-expressions/" title="Accelerating Analytics with Dynamic In-Memory Expressions">Accelerating Analytics with Dynamic In-Memory Expressions</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/01/materialization-strategies-in-the-vertica-analytic-database-lessons-learned/" title="Materialization Strategies in the Vertica Analytic Database: Lessons Learned">Materialization Strategies in the Vertica Analytic Database: Lessons Learned</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/01/monetdbx100-hyper-pipelining-query-execution/" title="MonetDB/X100: Hyper-Pipelining Query Execution">MonetDB/X100: Hyper-Pipelining Query Execution</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/01/access-path-selection-in-main-memory-optimized-data-systems-should-i-scan-or-should-i-probe/" title="Access Path Selection in Main-Memory Optimized Data Systems Should I Scan or Should I Probe">Access Path Selection in Main-Memory Optimized Data Systems Should I Scan or Should I Probe</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/01/photon-a-fast-query-engine-for-lakehouse-systems/" title="Photon A Fast Query Engine for Lakehouse Systems">Photon A Fast Query Engine for Lakehouse Systems</a>
+    </li>
+    
+</ul>
+    </section>
+
+    
+
+    <section class="widget">
+        <h3 class="widget-title"><a href='/categories/'>分类</a></h3>
+<ul class="widget-list">
+    
+    <li><a href="https://code0xff.org/categories/%E5%88%86%E5%B8%83%E5%BC%8F/">分布式 (6)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E5%8E%9F%E7%90%86%E5%88%86%E6%9E%90/">原理分析 (6)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E5%95%86%E4%B8%9A/">商业 (3)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E5%A4%A7%E6%95%B0%E6%8D%AE/">大数据 (21)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%95%B0%E6%8D%AE%E5%BA%93/">数据库 (19)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%96%87%E5%AD%A6%E5%92%8C%E8%89%BA%E6%9C%AF/">文学和艺术 (2)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%97%85%E8%A1%8C/">旅行 (10)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%9E%B6%E6%9E%84/">架构 (2)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E7%AE%97%E6%B3%95/">算法 (8)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E7%B3%BB%E7%BB%9F/">系统 (5)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E7%BC%96%E7%A8%8B%E8%AF%AD%E8%A8%80/">编程语言 (2)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E8%AF%BB%E4%B9%A6%E7%AC%94%E8%AE%B0/">读书笔记 (10)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E9%9A%8F%E4%BE%BF%E5%86%99%E5%86%99/">随便写写 (3)</a></li>
+    
+</ul>
+    </section>
+
+    <section class="widget">
+        <h3 class="widget-title">归档</a></h3>
+<ul class="widget-list">
+    
+    <li><a href="https://code0xff.org/years/2021%E5%B9%B4/">2021年 (31)</a></li>
+    
+    <li><a href="https://code0xff.org/years/2022%E5%B9%B4/">2022年 (55)</a></li>
+    
+    <li><a href="https://code0xff.org/years/2023%E5%B9%B4/">2023年 (11)</a></li>
+    
+</ul>
+    </section>
+
+    <section class="widget">
+        <h3 class="widget-title"><a href='/tags/'>标签</a></h3>
+<div class="tagcloud">
+    
+    <a href="https://code0xff.org/tags/b%E6%A0%91/">B树 </a>
+    
+    <a href="https://code0xff.org/tags/cmu-database/">CMU-Database </a>
+    
+    <a href="https://code0xff.org/tags/flink/">flink </a>
+    
+    <a href="https://code0xff.org/tags/hive/">Hive </a>
+    
+    <a href="https://code0xff.org/tags/k8s/">k8s </a>
+    
+    <a href="https://code0xff.org/tags/kudu/">kudu </a>
+    
+    <a href="https://code0xff.org/tags/manacher/">Manacher </a>
+    
+    <a href="https://code0xff.org/tags/mapreduce/">MapReduce </a>
+    
+    <a href="https://code0xff.org/tags/mysql/">MySQL </a>
+    
+    <a href="https://code0xff.org/tags/newsql/">NewSQL </a>
+    
+    <a href="https://code0xff.org/tags/paxos/">paxos </a>
+    
+    <a href="https://code0xff.org/tags/raft/">raft </a>
+    
+    <a href="https://code0xff.org/tags/scala/">scala </a>
+    
+    <a href="https://code0xff.org/tags/simd/">SIMD </a>
+    
+    <a href="https://code0xff.org/tags/snowflake/">snowflake </a>
+    
+    <a href="https://code0xff.org/tags/spark/">spark </a>
+    
+    <a href="https://code0xff.org/tags/unix/">unix </a>
+    
+    <a href="https://code0xff.org/tags/%E4%BA%8C%E5%88%86%E6%9F%A5%E6%89%BE/">二分查找 </a>
+    
+    <a href="https://code0xff.org/tags/%E4%BA%8C%E5%8F%89%E6%A0%91%E9%81%8D%E5%8E%86/">二叉树遍历 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%88%86%E5%B8%83%E5%BC%8F/">分布式 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%8A%A8%E6%80%81%E6%B3%A8%E5%85%A5/">动态注入 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%8E%86%E5%8F%B2/">历史 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%90%91%E9%87%8F%E5%8C%96/">向量化 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%9B%9E%E6%BA%AF/">回溯 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%9B%BD%E5%86%85%E6%97%85%E8%A1%8C/">国内旅行 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%9B%BD%E5%A4%96%E6%97%85%E8%A1%8C/">国外旅行 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%A4%9A%E7%A7%9F%E6%88%B7/">多租户 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%A4%A7%E6%95%B0%E6%8D%AE/">大数据 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%AD%98%E5%82%A8/">存储 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%B7%A5%E4%BD%9C%E8%AE%B0%E5%BD%95/">工作记录 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%BE%AE%E6%9C%8D%E5%8A%A1/">微服务 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%95%B0%E6%8D%AE%E5%BA%93/">数据库 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%9F%A5%E8%AF%A2%E4%BC%98%E5%8C%96/">查询优化 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%B1%87%E7%BC%96/">汇编 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%B5%8B%E8%AF%95/">测试 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%B9%96%E4%BB%93%E4%B8%80%E4%BD%93/">湖仓一体 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%94%9F%E6%B4%BB/">生活 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%94%B5%E5%BD%B1/">电影 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%AE%97%E6%B3%95/">算法 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BB%8F%E6%B5%8E/">经济 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BC%93%E5%AD%98/">缓存 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BC%96%E8%AF%91%E5%8E%9F%E7%90%86/">编译原理 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BD%91%E7%BB%9C/">网络 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AE%A1%E7%AE%97%E6%A1%86%E6%9E%B6/">计算框架 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AE%BA%E6%96%87/">论文 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AF%BB%E4%B9%A6/">读书 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AF%BB%E4%B9%A6%E7%AC%94%E8%AE%B0/">读书笔记 </a>
+    
+</div>
+    </section>
+
+    
+
+    <section class="widget">
+        <h3 class="widget-title">RSS</h3>
+        <ul class="widget-list">
+            <li><a href="https://code0xff.org/index.xml">文章 RSS</a></li>
+        </ul>
+    </section>
+</div>
+            </div>
+        </div>
+    </div>
+    <footer id="footer">
+    <div>
+        &copy; 2023 <a href="https://code0xff.org/">记录每个瞬间 By 老王</a>
+        
+    </div>
+    <br />
+    <div>
+        <div class="github-badge">
+            <a href="https://gohugo.io/" target="_black" rel="nofollow"><span class="badge-subject">Powered by</span><span class="badge-value bg-blue">Hugo</span></a>
+        </div>
+        <div class="github-badge">
+            <a href="https://github.com/flysnow-org/maupassant-hugo" target="_black"><span class="badge-subject">Theme</span><span class="badge-value bg-yellowgreen">Maupassant</span></a>
+        </div>
+    </div>
+</footer>
+
+
+    
+    <script type="text/javascript">
+        window.MathJax = {
+            tex2jax: {
+                inlineMath: [['$', '$']],
+                processEscapes: true
+                }
+            };
+    </script>
+    <script src='https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.5/MathJax.js?config=TeX-MML-AM_CHTML' async></script><script src="https://cdn.bootcdn.net/ajax/libs/fancybox/3.5.7/jquery.fancybox.min.js"></script>
+
+<a id="rocket" href="#top"></a>
+<script type="text/javascript" src='/js/totop.js?v=0.0.0' async=""></script>
+
+<script type="application/javascript">
+var doNotTrack = false;
+if (!doNotTrack) {
+	window.ga=window.ga||function(){(ga.q=ga.q||[]).push(arguments)};ga.l=+new Date;
+	ga('create', 'GA ID', 'auto');
+	
+	ga('send', 'pageview');
+}
+</script>
+<script async src='https://www.google-analytics.com/analytics.js'></script>
+
+
+
+    <script type="text/javascript" src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js" async></script>
+
+
+
+
+</body>
+
+</html>
