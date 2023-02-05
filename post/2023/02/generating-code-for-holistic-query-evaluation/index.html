@@ -1,0 +1,718 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    
+    <meta name="referrer" content="no-referrer-when-downgrade">
+    
+
+    <title>Generating code for holistic query evaluation | 记录每个瞬间</title>
+    <meta property="og:title" content="Generating code for holistic query evaluation - 记录每个瞬间">
+    <meta property="og:type" content="article">
+        
+    <meta property="article:published_time" content='2023-02-04T07:35:19&#43;08:00'>
+        
+        
+    <meta property="article:modified_time" content='2023-02-04T07:35:19&#43;08:00'>
+        
+    <meta name="Keywords" content="">
+    <meta name="description" content="Generating code for holistic query evaluation">
+        <meta name="author" content="隔壁老王">
+        
+    <meta property="og:url" content="https://code0xff.org/post/2023/02/generating-code-for-holistic-query-evaluation/">
+    <link rel="shortcut icon" href='/favicon.ico'  type="image/x-icon">
+
+    <link rel="stylesheet" href='/css/normalize.css'>
+    <link rel="stylesheet" href='/css/style.css'>
+    <script type="text/javascript" src="//cdn.bootcdn.net/ajax/libs/jquery/3.4.1/jquery.min.js"></script>
+
+    
+    
+    
+        <link href="https://cdn.bootcdn.net/ajax/libs/fancybox/3.5.7/jquery.fancybox.min.css" rel="stylesheet">
+    
+    
+    
+    
+</head>
+
+
+<body>
+    <header id="header" class="clearfix">
+    <div class="container">
+        <div class="col-group">
+            <div class="site-name ">
+                
+                    <a id="logo" href="https://code0xff.org/">
+                        记录每个瞬间
+                    </a>
+                
+                
+            </div>
+            <div>
+                <nav id="nav-menu" class="clearfix">
+                    <a class="current" href="https://code0xff.org/">首页</a>
+                    
+                    <a  href="https://code0xff.org/linked/" title="链接">链接</a>
+                    
+                    <a  href="https://code0xff.org/archives/" title="归档">归档</a>
+                    
+                    <a  href="https://code0xff.org/about/" title="关于">关于</a>
+                    
+                </nav>
+            </div>
+        </div>
+    </div>
+</header>
+
+    <div id="body">
+        <div class="container">
+            <div class="col-group">
+
+                <div class="col-8" id="main">
+                    
+<div class="res-cons">
+    
+    <article class="post">
+        <header>
+            <h1 class="post-title">Generating code for holistic query evaluation</h1>
+        </header>
+        <date class="post-meta meta-date">
+            2023年2月4日
+        </date>
+<nav id="TableOfContents">
+  <ul>
+    <li>
+      <ul>
+        <li><a href="#背景">背景</a></li>
+        <li><a href="#实现">实现</a>
+          <ul>
+            <li><a href="#系统的整体架构">系统的整体架构</a></li>
+            <li><a href="#实现-1">实现</a></li>
+          </ul>
+        </li>
+        <li><a href="#评估">评估</a></li>
+        <li><a href="#参考">参考</a></li>
+      </ul>
+    </li>
+  </ul>
+</nav>
+        
+        <div class="post-meta">
+            
+            <span class="post-meta meta-tags">
+                <ul class="clearfix">
+                    <a href='/categories/%E6%95%B0%E6%8D%AE%E5%BA%93'>数据库</a>
+                </ul>
+            </span>
+            
+        </div>
+        
+        
+        <div class="post-meta">
+            <span id="busuanzi_container_page_pv">|<span id="busuanzi_value_page_pv"></span><span>
+                    阅读</span></span>
+        </div>
+        
+        
+        <div class="post-content">
+            <blockquote>
+<p>原文 <br>
+<a href="https://15721.courses.cs.cmu.edu/spring2023/papers/09-compilation/krikellas-icde2010.pdf">https://15721.courses.cs.cmu.edu/spring2023/papers/09-compilation/krikellas-icde2010.pdf</a></p>
+</blockquote>
+<h2 id="背景">背景</h2>
+<p>传统的数据库都是基于磁盘的，所以查询处理算法的主要优化重点是 磁盘I/O<br>
+而现代数据库的内存都很大，可以将大量的数据，甚至全部数据都放到内存，于是查询优化的方向变了，从磁盘I/O转向内存<br>
+所以优化的目标就是如何最大化利用CPU和内存<br>
+而传统的迭代模型很清晰，但是CPU利用率较低，因为有频繁的函数调用</p>
+<p>为了解决上述问题，论文提出了 代码生成技术，用来处理查询求值，这个技术叫：holistic query evaluation<br>
+它会整体的评估并优化然后生成一份源码，并由编译器主动优化生成最终的机器代码<br>
+这种技术可以适用于各种查询类型，而且可以更好的利用硬件特性<br>
+它的优点包括</p>
+<ul>
+<li>查询求值期间，最大限度减少函数调用</li>
+<li>增加了数据本地性，可以更好的将数据驻留在cache中</li>
+<li>针对每个独立查询做单独的性能优化，可以使用额外的编译器优化技术</li>
+<li>可以达到跟手写代码一样的效果</li>
+<li>这种模型也很灵活，不会影响现有系统(如存储管理、并发管理等)</li>
+</ul>
+<p>代码生成是通过魔板技术生成的，根据不同的查询类型，最终生成一份源代码</p>
+<p>现代CPU是有很多流水线的，通过乱序执行能最大化并发度<br>
+通过各种L1、L2、L3缓存，就能低效寄存器和内存之间的延迟
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/02/krikellas-icde2010/1.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/02/krikellas-icde2010/1.jpg" />
+        </a>
+     <br>
+如上，现代CPU一般有L1、L2、L3三种cache<br>
+其中L1又包含数据cache、指令cache<br>
+为了最大化并行度，两种L1 cache还增加了预测模块，也就是基于分支的预测、以及基于顺序访问的预测，也测也就是预抓取   <br>
+此外还包括了基于历史维度的预抓取
+同样L2也包含了预测，也就是预抓取的功能</p>
+<p>通过测试顺序、随机访问场景</p>
+<ul>
+<li>L1的数据指令都是3个CPU cycles</li>
+<li>L2的顺序是9个，随机是14个</li>
+<li>内存访问顺序是28个，随机是77个</li>
+</ul>
+<p>迭代模型的问题</p>
+<ul>
+<li>获取一条数据至少两次函数调用，一次的请求，一次是返回</li>
+<li>虚函数的调用进一步增加开销，需要频繁的更新CPU cache</li>
+<li>维护数据也需要开销，数据从子节点获取然后父节点做更新，也会触发 cache miss</li>
+<li>条件判断包生成了跳转指令，也不利于CPU并行化</li>
+<li>以上这些都不利于CPU的prefetch</li>
+</ul>
+<p>编译器优化</p>
+<ul>
+<li>通过编译器技术，将源码转为更适合目标机器的机器代码</li>
+<li>保持了指定的独立性，可以最大限度流水线化</li>
+<li>优化变量-&gt;寄存器的分布，使的可以重用寄存器</li>
+<li>对相同访问的数据分组，可以最大化cache本地性</li>
+</ul>
+<p>相关场景</p>
+<ul>
+<li>行存NSM对于查询分析并不好，改为列存DMS就更合适</li>
+<li>但这样需要修改查询算法，改动挺大的</li>
+<li>另一种方式是：Partition Attributes Across PAX，它的page按照行存，page内是列布局，这样更容易适配NSM、DSM</li>
+<li>也有人对迭代模型做优化，增加buffer减少了函数调用次数，但是在函数体内的求值调用则去不掉</li>
+<li>MonetDB是最早该为列存的，基于物化方式将中间结果缓存了，之后又做了优化，改成向量化</li>
+<li>于抓取也是一个研究领域，需要对CPU的频率、cache延迟、运行时负载来动态计算，但是评估错误的代价也不小</li>
+<li>IBM System-R是最早使用代码生成技术的，不过后来火山模型成为主流</li>
+</ul>
+<h2 id="实现">实现</h2>
+<h3 id="系统的整体架构">系统的整体架构</h3>
+<p>整体架构</p>
+<ul>
+<li>C++ 和GUN</li>
+<li>存储模型是NSM但不是绑死的，PAX和SDM也支持，包含buffer pool、LRU、表管理、元数据管理、B+树等</li>
+<li>查询解析目前只支持等值join、group、sort，子查询和聚合不支持，但不影响评估效果</li>
+<li>解析完语法生成查询计划后，优化器会使用贪心算法，以最小化中间代码size为目标做优化；也会对每个算子做优化，生成代码</li>
+<li>输出对算子列表 O，做拓扑排序，每个Oi 是一个表，或者是Oj的输出，也就是这个算子是一个scan算子，或者是其他算子的输出</li>
+<li>代码版本组织顺序是 先处理join，然后是聚合、排序</li>
+<li>最终生成一份代码</li>
+</ul>
+<p>
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/02/krikellas-icde2010/2.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/02/krikellas-icde2010/2.jpg" />
+        </a>
+     
+每个算子分成两步完成</p>
+<ul>
+<li>数据阶段，处理所有scan、选择谓词，过滤不需要的列，排序和分区需要预处理，跟scan代码是交织处理的，结果会被物化到磁盘/内存</li>
+<li>整体算法，为每个算子生成代码，生成的是一份完整的代码</li>
+<li>这段代码相当于一个函数，包含了每个算子的具体执行细节，然后查询引擎会调用这个函数</li>
+<li>之后，代码生成器将所有生成的函数，插入到 一个新的 C源码中</li>
+<li>编译器会编译这段代码，还会做一些激进的优化，然后产生动态链接库</li>
+<li>查询引擎会加载这个动态库 并执行，并将结果重定向返回给客户端</li>
+</ul>
+<h3 id="实现-1">实现</h3>
+<p>根据不同的查询计划，会调用到不同的模板，再产出不同的源代码<br>
+代码生成器 把优化器的输出，作为输入，之后产生 针对特定查询的 C源代码<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/02/krikellas-icde2010/3.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/02/krikellas-icde2010/3.jpg" />
+        </a>
+    <br>
+代码生成器会将模板中的参数补填上，这些参数信息包括：谓词的数据类型、算子的输入、主表/中间结果、输出schema<br>
+之后产生join、聚合、sort<br>
+每个输入表执行对应的生成函数，最后会有一个main函数，来调用所有这些函数<br>
+所有生成的函数会被放到一个新的 C源文件中(按照他们生成的顺序)</p>
+<p>生成的目标代码</p>
+<ul>
+<li>确保输入数据能放到L1的数据cache、或者L2中</li>
+<li>最大化重用缓存数据</li>
+<li>尽量将随机访问限制到L1数据cache中</li>
+</ul>
+<p>下面这段代码，就是将scan和filter整合到一起了，这样就减少了函数调用<br>
+而短小的inner loop逻辑让编译器可以进一步优化<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/02/krikellas-icde2010/L-1.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/02/krikellas-icde2010/L-1.jpg" />
+        </a>
+    </p>
+<p><strong>Input staging</strong></p>
+<ul>
+<li>包括sort、partition、以及hybrid方式(一种优化的quick-sort)，适用于L2</li>
+<li>分区可以是细粒度的(value到分区)，或者粗粒度的(hash、取模)</li>
+<li>目标是将输入数据映射到合适的L2-cache中</li>
+</ul>
+<p><strong>Join evaluation</strong><br>
+使用的是 nested-loop join方式<br>
+join之前先将输入数据做排序，其实应该是 merge join + nested-loop
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/02/krikellas-icde2010/L-2.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/02/krikellas-icde2010/L-2.jpg" />
+        </a>
+    </p>
+<p>另一种是 partition join，他是以 Grace hash join为基础的<br>
+所有的输入数据都被适当的排序、分区，以适应cache大小，然后读page，在page上生成循环<br>
+之后再遍历所有tuple，这样就是顺序操作，保持所有操作都在流水线中，有cache本地性</p>
+<p><strong>Aggregation</strong><br>
+依赖输入数据的排序，排序完之后就可以线遍历，然后做分组<br>
+也可以用 hybrid hash-sort 方式<br>
+也就是先分区，再对分区内的数据做排序，可以保证数据足够小，能放入cache中   <br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/02/krikellas-icde2010/4.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/02/krikellas-icde2010/4.jpg" />
+        </a>
+    </p>
+<p>代码生成面临的问题</p>
+<ul>
+<li>模板是通用的，所有的交互都是一个接口</li>
+<li>如何根据不同的操作，找到合适的模板</li>
+<li>生成代码的正确性如何严重</li>
+</ul>
+<p>生成的不同阶段之间，通过物化方式交互<br>
+阶段1 的结果物化后，阶段2将其作为输入</p>
+<h2 id="评估">评估</h2>
+<p>包含这几个方面</p>
+<ul>
+<li>生成代码 对比传统迭代模式的 好处</li>
+<li>编译器优化对代码生成代码的影响</li>
+<li>和其他商业、学术产品的对比</li>
+<li>运行期间 生成代码、编译、链接的消耗</li>
+</ul>
+<p>table-1 是测试使用的CPU和内存环境<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/02/krikellas-icde2010/t-1.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/02/krikellas-icde2010/t-1.jpg" />
+        </a>
+       <br>
+cache 延迟测量工具使用的是：RightMark Memory Analyser<br>
+OProfile性能测试工具，可以测试cache miss，</p>
+<p><strong>Iterators versus holistic code</strong><br>
+迭代、迭代+inline优化、手写、手写优化、代码生成的比较<br>
+code-gen消除了停顿时间，减少了几乎2/3多的指令调用，减少2/3的数据访问，函数调用只有迭代的 1% Figure 5(c)<br>
+Query-2 是两个大表，选择率很低，所以花在输入上的时间就很多了，几个版本都是使用了相同的算法，所以时间看起来都比较类似<br>
+code-gen差不多是迭代的2倍<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/02/krikellas-icde2010/5.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/02/krikellas-icde2010/5.jpg" />
+        </a>
+    </p>
+<p>下面是聚合的比较，code-gen是迭代的 1.6倍，主要是减少了调用，数据访问，和函数调用<br>
+figure-6(c)显示 D1-cache预抓取相比迭代 增加了3倍时间 <br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/02/krikellas-icde2010/6.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/02/krikellas-icde2010/6.jpg" />
+        </a>
+    </p>
+<p>下面是对比编译器优化的效果<br>
+join的两个查询，聚合的两个查询，分别用 -O0 和-O2选项<br>
+手写代码优化效果就没有迭代那么明显了，因为手写的代码已经比较优了<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/02/krikellas-icde2010/t-2.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/02/krikellas-icde2010/t-2.jpg" />
+        </a>
+    </p>
+<p><strong>Performance of holistic algorithms</strong><br>
+下面比较输入数据的各种变化
+figure7(a)显示merge join、以及hybrid版本，基本上hybrid版本的HIQUE是最好的  <br>
+figure-7(c)显示，随着选择率的增加，迭代模型的性能下降非常多<br>
+figure-7(d)是聚合，在小数量场景下 hash表现的最好，但随着数据增大就不行了<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/02/krikellas-icde2010/7.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/02/krikellas-icde2010/7.jpg" />
+        </a>
+    </p>
+<p><strong>TPC-H benchmark</strong><br>
+对比了三种数据库</p>
+<ul>
+<li>PostgreSQL 8，那时候用的还是火山模型，代表传统I/O数据库</li>
+<li>System X，不知道是啥商业数据库，使用了软件预抓取，混合I/O和CPU</li>
+<li>MonetDB，使用DSM，面向主内存的</li>
+</ul>
+<p>由于使用了列存，MonetDB在分析场景下比其他两个数据库更好<br>
+HIQE相比PG有167倍的提升<br>
+而通过上述优化，使的NSM系统能在分析场景下达到 DSM系统的性能  <br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/02/krikellas-icde2010/8.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/02/krikellas-icde2010/8.jpg" />
+        </a>
+    </p>
+<p><strong>Code generation cost</strong><br>
+code-gen的问题是需要编译代码，还包括编译器优化，以及生成动态库，并将动态库导入<br>
+下图中可以看到，解析SQL、优化的时间并不长，编译的时间是比较长的<br>
+而生成的C 源码数量也很大，1W多 - 5W多行，大小都是小于 50Kb<br>
+对于小查询来说，编译时间就太长了，这需要关闭编译器优化  <br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/02/krikellas-icde2010/t-3.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/02/krikellas-icde2010/t-3.jpg" />
+        </a>
+    </p>
+<h2 id="参考">参考</h2>
+<ul>
+<li>内存延迟检查工具：RightMark Memory Analyser</li>
+<li>Linux内核性能分析工具：OProfile</li>
+</ul>
+
+			<script type="text/javascript"
+        async
+        src="https://cdn.bootcss.com/mathjax/2.7.3/MathJax.js?config=TeX-AMS-MML_HTMLorMML">
+MathJax.Hub.Config({
+  tex2jax: {
+    inlineMath: [['$','$'], ['\\(','\\)']],
+    displayMath: [['$$','$$'], ['\[\[','\]\]']],
+    processEscapes: true,
+    processEnvironments: true,
+    skipTags: ['script', 'noscript', 'style', 'textarea', 'pre'],
+    TeX: { equationNumbers: { autoNumber: "AMS" },
+         extensions: ["AMSmath.js", "AMSsymbols.js"] }
+  }
+});
+
+MathJax.Hub.Queue(function() {
+    
+    
+    
+    var all = MathJax.Hub.getAllJax(), i;
+    for(i = 0; i < all.length; i += 1) {
+        all[i].SourceElement().parentNode.className += ' has-jax';
+    }
+});
+</script>
+
+<style>
+code.has-jax {
+    font: inherit;
+    font-size: 100%;
+    background: inherit;
+    border: inherit;
+    color: #515151;
+}
+</style>
+        </div>
+
+        
+
+
+        
+
+<div class="post-archive">
+    <h2>相关文章</h2>
+    <ul class="listing">
+        
+        <li><a href="/post/2023/02/implementing-database-operations-using-simd-instructions/">Implementing Database Operations Using SIMD Instructions</a></li>
+        
+        <li><a href="/post/2023/01/rethinking-simd-vectorization-for-in-memory-databases/">Rethinking SIMD Vectorization for In-Memory Databases</a></li>
+        
+        <li><a href="/post/2023/01/ultra-fast-in-memory-table-scan-using-onchip-vector-processing-units/">SIMD-Scan: Ultra Fast in-Memory Table Scan using onChip Vector Processing Units</a></li>
+        
+        <li><a href="/post/2023/01/make-the-most-out-of-your-simd-investments/">Make the most out of your SIMD investments: counter control flow divergence in compiled query pipelines</a></li>
+        
+        <li><a href="/post/2023/01/accelerating-analytics-with-dynamic-in-memory-expressions/">Accelerating Analytics with Dynamic In-Memory Expressions</a></li>
+        
+    </ul>
+</div>
+
+
+        <div class="post-meta meta-tags">
+            
+            <ul class="clearfix">
+                
+                <li><a href='/tags/%E6%9F%A5%E8%AF%A2%E7%BC%96%E8%AF%91'>查询编译</a></li>
+                
+                <li><a href='/tags/%E8%AE%BA%E6%96%87'>论文</a></li>
+                
+            </ul>
+            
+        </div>
+    </article>
+    
+    
+
+    
+    
+    <div class="post bg-white">
+      <script src="https://utteranc.es/client.js"
+            repo= "himichael/hugoblogtalks"
+            issue-term="pathname"
+            theme="github-light"
+            crossorigin="anonymous"
+            async>
+      </script>
+    </div>
+    
+</div>
+
+
+                </div>
+
+                <div id="secondary">
+    <section class="widget">
+        <form id="search" action='https://code0xff.org/search/' method="get" accept-charset="utf-8" target="_blank" _lpchecked="1">
+      
+      <input type="text" name="q" maxlength="20" placeholder="Search">
+      <input type="hidden" name="sitesearch" value="https://code0xff.org/">
+      <button type="submit" class="submit icon-search"></button>
+</form>
+    </section>
+    
+    <section class="widget">
+        <h3 class="widget-title">最近文章</h3>
+<ul class="widget-list">
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/02/generating-code-for-holistic-query-evaluation/" title="Generating code for holistic query evaluation">Generating code for holistic query evaluation</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/02/implementing-database-operations-using-simd-instructions/" title="Implementing Database Operations Using SIMD Instructions">Implementing Database Operations Using SIMD Instructions</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/01/rethinking-simd-vectorization-for-in-memory-databases/" title="Rethinking SIMD Vectorization for In-Memory Databases">Rethinking SIMD Vectorization for In-Memory Databases</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/01/advanced-database-systems-query-execution-and-processing/" title="Advanced Database Systems: Query Execution &amp; Processing">Advanced Database Systems: Query Execution &amp; Processing</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/01/ultra-fast-in-memory-table-scan-using-onchip-vector-processing-units/" title="SIMD-Scan: Ultra Fast in-Memory Table Scan using onChip Vector Processing Units">SIMD-Scan: Ultra Fast in-Memory Table Scan using onChip Vector Processing Units</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/01/make-the-most-out-of-your-simd-investments/" title="Make the most out of your SIMD investments: counter control flow divergence in compiled query pipelines">Make the most out of your SIMD investments: counter control flow divergence in compiled query pipelines</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/01/accelerating-analytics-with-dynamic-in-memory-expressions/" title="Accelerating Analytics with Dynamic In-Memory Expressions">Accelerating Analytics with Dynamic In-Memory Expressions</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/01/materialization-strategies-in-the-vertica-analytic-database-lessons-learned/" title="Materialization Strategies in the Vertica Analytic Database: Lessons Learned">Materialization Strategies in the Vertica Analytic Database: Lessons Learned</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/01/monetdbx100-hyper-pipelining-query-execution/" title="MonetDB/X100: Hyper-Pipelining Query Execution">MonetDB/X100: Hyper-Pipelining Query Execution</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/01/access-path-selection-in-main-memory-optimized-data-systems-should-i-scan-or-should-i-probe/" title="Access Path Selection in Main-Memory Optimized Data Systems Should I Scan or Should I Probe">Access Path Selection in Main-Memory Optimized Data Systems Should I Scan or Should I Probe</a>
+    </li>
+    
+</ul>
+    </section>
+
+    
+
+    <section class="widget">
+        <h3 class="widget-title"><a href='/categories/'>分类</a></h3>
+<ul class="widget-list">
+    
+    <li><a href="https://code0xff.org/categories/%E5%88%86%E5%B8%83%E5%BC%8F/">分布式 (6)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E5%8E%9F%E7%90%86%E5%88%86%E6%9E%90/">原理分析 (6)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E5%95%86%E4%B8%9A/">商业 (3)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E5%A4%A7%E6%95%B0%E6%8D%AE/">大数据 (22)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%95%B0%E6%8D%AE%E5%BA%93/">数据库 (18)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%96%87%E5%AD%A6%E5%92%8C%E8%89%BA%E6%9C%AF/">文学和艺术 (2)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%97%85%E8%A1%8C/">旅行 (10)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%9E%B6%E6%9E%84/">架构 (2)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E7%AE%97%E6%B3%95/">算法 (8)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E7%B3%BB%E7%BB%9F/">系统 (5)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E7%BC%96%E7%A8%8B%E8%AF%AD%E8%A8%80/">编程语言 (2)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E8%AF%BB%E4%B9%A6%E7%AC%94%E8%AE%B0/">读书笔记 (11)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E9%9A%8F%E4%BE%BF%E5%86%99%E5%86%99/">随便写写 (3)</a></li>
+    
+</ul>
+    </section>
+
+    <section class="widget">
+        <h3 class="widget-title">归档</a></h3>
+<ul class="widget-list">
+    
+    <li><a href="https://code0xff.org/years/2021%E5%B9%B4/">2021年 (31)</a></li>
+    
+    <li><a href="https://code0xff.org/years/2022%E5%B9%B4/">2022年 (55)</a></li>
+    
+    <li><a href="https://code0xff.org/years/2023%E5%B9%B4/">2023年 (12)</a></li>
+    
+</ul>
+    </section>
+
+    <section class="widget">
+        <h3 class="widget-title"><a href='/tags/'>标签</a></h3>
+<div class="tagcloud">
+    
+    <a href="https://code0xff.org/tags/b%E6%A0%91/">B树 </a>
+    
+    <a href="https://code0xff.org/tags/cmu-database/">CMU-Database </a>
+    
+    <a href="https://code0xff.org/tags/flink/">flink </a>
+    
+    <a href="https://code0xff.org/tags/hive/">Hive </a>
+    
+    <a href="https://code0xff.org/tags/k8s/">k8s </a>
+    
+    <a href="https://code0xff.org/tags/kudu/">kudu </a>
+    
+    <a href="https://code0xff.org/tags/kyuubi/">Kyuubi </a>
+    
+    <a href="https://code0xff.org/tags/manacher/">Manacher </a>
+    
+    <a href="https://code0xff.org/tags/mapreduce/">MapReduce </a>
+    
+    <a href="https://code0xff.org/tags/mysql/">MySQL </a>
+    
+    <a href="https://code0xff.org/tags/newsql/">NewSQL </a>
+    
+    <a href="https://code0xff.org/tags/paxos/">paxos </a>
+    
+    <a href="https://code0xff.org/tags/raft/">raft </a>
+    
+    <a href="https://code0xff.org/tags/scala/">scala </a>
+    
+    <a href="https://code0xff.org/tags/simd/">SIMD </a>
+    
+    <a href="https://code0xff.org/tags/snowflake/">snowflake </a>
+    
+    <a href="https://code0xff.org/tags/spark/">spark </a>
+    
+    <a href="https://code0xff.org/tags/unix/">unix </a>
+    
+    <a href="https://code0xff.org/tags/%E4%BA%8C%E5%88%86%E6%9F%A5%E6%89%BE/">二分查找 </a>
+    
+    <a href="https://code0xff.org/tags/%E4%BA%8C%E5%8F%89%E6%A0%91%E9%81%8D%E5%8E%86/">二叉树遍历 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%88%86%E5%B8%83%E5%BC%8F/">分布式 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%8A%A8%E6%80%81%E6%B3%A8%E5%85%A5/">动态注入 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%8E%86%E5%8F%B2/">历史 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%90%91%E9%87%8F%E5%8C%96/">向量化 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%9B%9E%E6%BA%AF/">回溯 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%9B%BD%E5%86%85%E6%97%85%E8%A1%8C/">国内旅行 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%9B%BD%E5%A4%96%E6%97%85%E8%A1%8C/">国外旅行 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%A4%9A%E7%A7%9F%E6%88%B7/">多租户 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%A4%A7%E6%95%B0%E6%8D%AE/">大数据 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%AD%98%E5%82%A8/">存储 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%B7%A5%E4%BD%9C%E8%AE%B0%E5%BD%95/">工作记录 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%BE%AE%E6%9C%8D%E5%8A%A1/">微服务 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%95%B0%E6%8D%AE%E5%BA%93/">数据库 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%9F%A5%E8%AF%A2%E4%BC%98%E5%8C%96/">查询优化 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%9F%A5%E8%AF%A2%E7%BC%96%E8%AF%91/">查询编译 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%B1%87%E7%BC%96/">汇编 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%B5%8B%E8%AF%95/">测试 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%B9%96%E4%BB%93%E4%B8%80%E4%BD%93/">湖仓一体 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%94%9F%E6%B4%BB/">生活 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%94%B5%E5%BD%B1/">电影 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%AE%97%E6%B3%95/">算法 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BB%8F%E6%B5%8E/">经济 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BC%93%E5%AD%98/">缓存 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BC%96%E8%AF%91%E5%8E%9F%E7%90%86/">编译原理 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BD%91%E7%BB%9C/">网络 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AE%A1%E7%AE%97%E6%A1%86%E6%9E%B6/">计算框架 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AE%BA%E6%96%87/">论文 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AF%BB%E4%B9%A6/">读书 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AF%BB%E4%B9%A6%E7%AC%94%E8%AE%B0/">读书笔记 </a>
+    
+</div>
+    </section>
+
+    
+
+    <section class="widget">
+        <h3 class="widget-title">RSS</h3>
+        <ul class="widget-list">
+            <li><a href="https://code0xff.org/index.xml">文章 RSS</a></li>
+        </ul>
+    </section>
+</div>
+            </div>
+        </div>
+    </div>
+    <footer id="footer">
+    <div>
+        &copy; 2023 <a href="https://code0xff.org/">记录每个瞬间 By 老王</a>
+        
+    </div>
+    <br />
+    <div>
+        <div class="github-badge">
+            <a href="https://gohugo.io/" target="_black" rel="nofollow"><span class="badge-subject">Powered by</span><span class="badge-value bg-blue">Hugo</span></a>
+        </div>
+        <div class="github-badge">
+            <a href="https://github.com/flysnow-org/maupassant-hugo" target="_black"><span class="badge-subject">Theme</span><span class="badge-value bg-yellowgreen">Maupassant</span></a>
+        </div>
+    </div>
+</footer>
+
+
+    
+    <script type="text/javascript">
+        window.MathJax = {
+            tex2jax: {
+                inlineMath: [['$', '$']],
+                processEscapes: true
+                }
+            };
+    </script>
+    <script src='https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.5/MathJax.js?config=TeX-MML-AM_CHTML' async></script><script src="https://cdn.bootcdn.net/ajax/libs/fancybox/3.5.7/jquery.fancybox.min.js"></script>
+
+<a id="rocket" href="#top"></a>
+<script type="text/javascript" src='/js/totop.js?v=0.0.0' async=""></script>
+
+<script type="application/javascript">
+var doNotTrack = false;
+if (!doNotTrack) {
+	window.ga=window.ga||function(){(ga.q=ga.q||[]).push(arguments)};ga.l=+new Date;
+	ga('create', 'GA ID', 'auto');
+	
+	ga('send', 'pageview');
+}
+</script>
+<script async src='https://www.google-analytics.com/analytics.js'></script>
+
+
+
+    <script type="text/javascript" src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js" async></script>
+
+
+
+
+</body>
+
+</html>
