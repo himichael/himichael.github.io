@@ -1,0 +1,583 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    
+    <meta name="referrer" content="no-referrer-when-downgrade">
+    
+
+    <title>Efficiently Compiling Efficient Query Plans for Modern Hardware | 记录每个瞬间</title>
+    <meta property="og:title" content="Efficiently Compiling Efficient Query Plans for Modern Hardware - 记录每个瞬间">
+    <meta property="og:type" content="article">
+        
+    <meta property="article:published_time" content='2023-02-04T15:35:19&#43;08:00'>
+        
+        
+    <meta property="article:modified_time" content='2023-02-04T15:35:19&#43;08:00'>
+        
+    <meta name="Keywords" content="">
+    <meta name="description" content="Efficiently Compiling Efficient Query Plans for Modern Hardware">
+        <meta name="author" content="隔壁老王">
+        
+    <meta property="og:url" content="https://code0xff.org/post/2023/02/efficiently-compiling-efficient-query-plans-for-modern-hardware/">
+    <link rel="shortcut icon" href='/favicon.ico'  type="image/x-icon">
+
+    <link rel="stylesheet" href='/css/normalize.css'>
+    <link rel="stylesheet" href='/css/style.css'>
+    <script type="text/javascript" src="//cdn.bootcdn.net/ajax/libs/jquery/3.4.1/jquery.min.js"></script>
+
+    
+    
+    
+        <link href="https://cdn.bootcdn.net/ajax/libs/fancybox/3.5.7/jquery.fancybox.min.css" rel="stylesheet">
+    
+    
+    
+    
+</head>
+
+
+<body>
+    <header id="header" class="clearfix">
+    <div class="container">
+        <div class="col-group">
+            <div class="site-name ">
+                
+                    <a id="logo" href="https://code0xff.org/">
+                        记录每个瞬间
+                    </a>
+                
+                
+            </div>
+            <div>
+                <nav id="nav-menu" class="clearfix">
+                    <a class="current" href="https://code0xff.org/">首页</a>
+                    
+                    <a  href="https://code0xff.org/linked/" title="链接">链接</a>
+                    
+                    <a  href="https://code0xff.org/archives/" title="归档">归档</a>
+                    
+                    <a  href="https://code0xff.org/about/" title="关于">关于</a>
+                    
+                </nav>
+            </div>
+        </div>
+    </div>
+</header>
+
+    <div id="body">
+        <div class="container">
+            <div class="col-group">
+
+                <div class="col-8" id="main">
+                    
+<div class="res-cons">
+    
+    <article class="post">
+        <header>
+            <h1 class="post-title">Efficiently Compiling Efficient Query Plans for Modern Hardware</h1>
+        </header>
+        <date class="post-meta meta-date">
+            2023年2月4日
+        </date>
+<nav id="TableOfContents">
+  <ul>
+    <li>
+      <ul>
+        <li><a href="#背景">背景</a></li>
+        <li><a href="#实现">实现</a></li>
+      </ul>
+    </li>
+  </ul>
+</nav>
+        
+        <div class="post-meta">
+            
+            <span class="post-meta meta-tags">
+                <ul class="clearfix">
+                    <a href='/categories/%E6%95%B0%E6%8D%AE%E5%BA%93'>数据库</a>
+                </ul>
+            </span>
+            
+        </div>
+        
+        
+        <div class="post-meta">
+            <span id="busuanzi_container_page_pv">|<span id="busuanzi_value_page_pv"></span><span>
+                    阅读</span></span>
+        </div>
+        
+        
+        <div class="post-content">
+            <blockquote>
+<p>原文 <br>
+<a href="https://15721.courses.cs.cmu.edu/spring2023/papers/09-compilation/p539-neumann.pdf">https://15721.courses.cs.cmu.edu/spring2023/papers/09-compilation/p539-neumann.pdf</a></p>
+</blockquote>
+<h2 id="背景">背景</h2>
+<p>数据库一般将查询 转换为物理代数中的表达式，然后计算这个代数表达式并产生 查询结果<br>
+传统方式是通过Volcano-style模型来实现的，每个物理算子都会产生一个tuple返回给其输入(父节点)，然后父节点反复调用next函数，不停的获取这个tuple流<br>
+这种设计非常清晰，也非常容易扩展，可以支持任意的算子<br>
+对于I/O为主的数据库来说比较合适，因为CPU不是瓶颈</p>
+<ul>
+<li>每次next函数只会返回一个tuple(当做中间结果/最终结果)，这也消耗了不少时间</li>
+<li>虚函数调用比普通函数调用更耗时，对现代CPU来说导致分支预测下降</li>
+<li>这种模式对于数据本地性来说不好，而且需要复杂的维护机制
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/02/p539-neumann/1.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/02/p539-neumann/1.jpg" />
+        </a>
+    </li>
+</ul>
+<p>改进方式也很简单，每次返回一批tuple就可以了<br>
+不过这样也违背了数据流的特点，必须将数据保存、物化，父节点才能访问，也消耗了一些带宽 <br>
+从手写代码来看，其效率比迭代模式、全量物化模式，以及MonetDB/X100 的向量化模式更好(向量化也达不到手写的性能)   <br>
+由于聚合查询的结果是唯一的，因此执行不好的都属于次优实现</p>
+<p>HIQUE的生成了C源码然后编译，在算子执行期间执行inline物化结果，来消除迭代模型<br>
+其他一些优化包括</p>
+<ul>
+<li>使用SIMD来优化独立表达式</li>
+<li>组合连接的谓词，这需要在分支数量 和 评估谓词数量 之间做权衡</li>
+</ul>
+<p>论文实现了一个新的查询编译策略</p>
+<ul>
+<li>以数据为中心，而不是操作为中心，处理尽可能长的保持在CPU寄存器中，算子的边界变得模糊</li>
+<li>采用push方式，而不是pull方式，这样有更好的数据本地性</li>
+<li>查询编译为原生的机器代码，这里使用的是LLVM编译框架</li>
+</ul>
+<p>这里生成的不是 C、或者C++源码，而是LLVM字节码，后面可以实现更多的优化技巧，而高级语言如C++ 就不好实现<br>
+由于是依靠编译器的，所以当编译器升级了，优化也就自动升级了，而非编译方式的系统，需要手动更新优化模块</p>
+<h2 id="实现">实现</h2>
+<p>这里定义两个概念</p>
+<ul>
+<li>pipeline breaker，如果流入的数据超出了CPU寄存器</li>
+<li>full pipeline breaker，在继续处理之前，物化了所有来自这一端的输入tuple</li>
+</ul>
+<p>所谓断开，就是寄存器、cache放不下，需要溢出到内存了，这样做的目的是尽可能长的，让数据保留在cache中<br>
+火山模型需要有大量调用，每次调用相当于断开管道，都会刷新寄存器<br>
+批模型减少了调用次数，但产生的tuple太多，也会断开管道<br>
+实际上，任何 迭代风格使用的是pull模型，都有断开管道的风险，但有时候产生的tuple数量很少，并不需要拷贝</p>
+<p>
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/02/p539-neumann/2.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/02/p539-neumann/2.jpg" />
+        </a>
+    <br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/02/p539-neumann/3.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/02/p539-neumann/3.jpg" />
+        </a>
+    <br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/02/p539-neumann/4.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/02/p539-neumann/4.jpg" />
+        </a>
+    <br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/02/p539-neumann/5.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/02/p539-neumann/5.jpg" />
+        </a>
+    <br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/02/p539-neumann/6.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/02/p539-neumann/6.jpg" />
+        </a>
+    <br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/02/p539-neumann/7.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/02/p539-neumann/7.jpg" />
+        </a>
+    <br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/02/p539-neumann/8.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/02/p539-neumann/8.jpg" />
+        </a>
+    <br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/02/p539-neumann/9.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/02/p539-neumann/9.jpg" />
+        </a>
+    </p>
+<p>
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/02/p539-neumann/t-1.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/02/p539-neumann/t-1.jpg" />
+        </a>
+      <br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/02/p539-neumann/t-2.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/02/p539-neumann/t-2.jpg" />
+        </a>
+    <br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/02/p539-neumann/t-3.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/02/p539-neumann/t-3.jpg" />
+        </a>
+    </p>
+
+			<script type="text/javascript"
+        async
+        src="https://cdn.bootcss.com/mathjax/2.7.3/MathJax.js?config=TeX-AMS-MML_HTMLorMML">
+MathJax.Hub.Config({
+  tex2jax: {
+    inlineMath: [['$','$'], ['\\(','\\)']],
+    displayMath: [['$$','$$'], ['\[\[','\]\]']],
+    processEscapes: true,
+    processEnvironments: true,
+    skipTags: ['script', 'noscript', 'style', 'textarea', 'pre'],
+    TeX: { equationNumbers: { autoNumber: "AMS" },
+         extensions: ["AMSmath.js", "AMSsymbols.js"] }
+  }
+});
+
+MathJax.Hub.Queue(function() {
+    
+    
+    
+    var all = MathJax.Hub.getAllJax(), i;
+    for(i = 0; i < all.length; i += 1) {
+        all[i].SourceElement().parentNode.className += ' has-jax';
+    }
+});
+</script>
+
+<style>
+code.has-jax {
+    font: inherit;
+    font-size: 100%;
+    background: inherit;
+    border: inherit;
+    color: #515151;
+}
+</style>
+        </div>
+
+        
+
+
+        
+
+<div class="post-archive">
+    <h2>相关文章</h2>
+    <ul class="listing">
+        
+        <li><a href="/post/2023/02/generating-code-for-holistic-query-evaluation/">Generating code for holistic query evaluation</a></li>
+        
+        <li><a href="/post/2023/02/implementing-database-operations-using-simd-instructions/">Implementing Database Operations Using SIMD Instructions</a></li>
+        
+        <li><a href="/post/2023/01/rethinking-simd-vectorization-for-in-memory-databases/">Rethinking SIMD Vectorization for In-Memory Databases</a></li>
+        
+        <li><a href="/post/2023/01/ultra-fast-in-memory-table-scan-using-onchip-vector-processing-units/">SIMD-Scan: Ultra Fast in-Memory Table Scan using onChip Vector Processing Units</a></li>
+        
+        <li><a href="/post/2023/01/make-the-most-out-of-your-simd-investments/">Make the most out of your SIMD investments: counter control flow divergence in compiled query pipelines</a></li>
+        
+    </ul>
+</div>
+
+
+        <div class="post-meta meta-tags">
+            
+            <ul class="clearfix">
+                
+                <li><a href='/tags/%E6%9F%A5%E8%AF%A2%E7%BC%96%E8%AF%91'>查询编译</a></li>
+                
+                <li><a href='/tags/%E8%AE%BA%E6%96%87'>论文</a></li>
+                
+            </ul>
+            
+        </div>
+    </article>
+    
+    
+
+    
+    
+    <div class="post bg-white">
+      <script src="https://utteranc.es/client.js"
+            repo= "himichael/hugoblogtalks"
+            issue-term="pathname"
+            theme="github-light"
+            crossorigin="anonymous"
+            async>
+      </script>
+    </div>
+    
+</div>
+
+
+                </div>
+
+                <div id="secondary">
+    <section class="widget">
+        <form id="search" action='https://code0xff.org/search/' method="get" accept-charset="utf-8" target="_blank" _lpchecked="1">
+      
+      <input type="text" name="q" maxlength="20" placeholder="Search">
+      <input type="hidden" name="sitesearch" value="https://code0xff.org/">
+      <button type="submit" class="submit icon-search"></button>
+</form>
+    </section>
+    
+    <section class="widget">
+        <h3 class="widget-title">最近文章</h3>
+<ul class="widget-list">
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/02/efficiently-compiling-efficient-query-plans-for-modern-hardware/" title="Efficiently Compiling Efficient Query Plans for Modern Hardware">Efficiently Compiling Efficient Query Plans for Modern Hardware</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/02/generating-code-for-holistic-query-evaluation/" title="Generating code for holistic query evaluation">Generating code for holistic query evaluation</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/02/implementing-database-operations-using-simd-instructions/" title="Implementing Database Operations Using SIMD Instructions">Implementing Database Operations Using SIMD Instructions</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/01/rethinking-simd-vectorization-for-in-memory-databases/" title="Rethinking SIMD Vectorization for In-Memory Databases">Rethinking SIMD Vectorization for In-Memory Databases</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/01/advanced-database-systems-query-execution-and-processing/" title="Advanced Database Systems: Query Execution &amp; Processing">Advanced Database Systems: Query Execution &amp; Processing</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/01/ultra-fast-in-memory-table-scan-using-onchip-vector-processing-units/" title="SIMD-Scan: Ultra Fast in-Memory Table Scan using onChip Vector Processing Units">SIMD-Scan: Ultra Fast in-Memory Table Scan using onChip Vector Processing Units</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/01/make-the-most-out-of-your-simd-investments/" title="Make the most out of your SIMD investments: counter control flow divergence in compiled query pipelines">Make the most out of your SIMD investments: counter control flow divergence in compiled query pipelines</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/01/accelerating-analytics-with-dynamic-in-memory-expressions/" title="Accelerating Analytics with Dynamic In-Memory Expressions">Accelerating Analytics with Dynamic In-Memory Expressions</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/01/materialization-strategies-in-the-vertica-analytic-database-lessons-learned/" title="Materialization Strategies in the Vertica Analytic Database: Lessons Learned">Materialization Strategies in the Vertica Analytic Database: Lessons Learned</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/01/monetdbx100-hyper-pipelining-query-execution/" title="MonetDB/X100: Hyper-Pipelining Query Execution">MonetDB/X100: Hyper-Pipelining Query Execution</a>
+    </li>
+    
+</ul>
+    </section>
+
+    
+
+    <section class="widget">
+        <h3 class="widget-title"><a href='/categories/'>分类</a></h3>
+<ul class="widget-list">
+    
+    <li><a href="https://code0xff.org/categories/%E5%88%86%E5%B8%83%E5%BC%8F/">分布式 (6)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E5%8E%9F%E7%90%86%E5%88%86%E6%9E%90/">原理分析 (6)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E5%95%86%E4%B8%9A/">商业 (3)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E5%A4%A7%E6%95%B0%E6%8D%AE/">大数据 (22)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%95%B0%E6%8D%AE%E5%BA%93/">数据库 (19)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%96%87%E5%AD%A6%E5%92%8C%E8%89%BA%E6%9C%AF/">文学和艺术 (2)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%97%85%E8%A1%8C/">旅行 (10)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%9E%B6%E6%9E%84/">架构 (2)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E7%AE%97%E6%B3%95/">算法 (8)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E7%B3%BB%E7%BB%9F/">系统 (5)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E7%BC%96%E7%A8%8B%E8%AF%AD%E8%A8%80/">编程语言 (2)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E8%AF%BB%E4%B9%A6%E7%AC%94%E8%AE%B0/">读书笔记 (11)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E9%9A%8F%E4%BE%BF%E5%86%99%E5%86%99/">随便写写 (3)</a></li>
+    
+</ul>
+    </section>
+
+    <section class="widget">
+        <h3 class="widget-title">归档</a></h3>
+<ul class="widget-list">
+    
+    <li><a href="https://code0xff.org/years/2021%E5%B9%B4/">2021年 (31)</a></li>
+    
+    <li><a href="https://code0xff.org/years/2022%E5%B9%B4/">2022年 (55)</a></li>
+    
+    <li><a href="https://code0xff.org/years/2023%E5%B9%B4/">2023年 (13)</a></li>
+    
+</ul>
+    </section>
+
+    <section class="widget">
+        <h3 class="widget-title"><a href='/tags/'>标签</a></h3>
+<div class="tagcloud">
+    
+    <a href="https://code0xff.org/tags/b%E6%A0%91/">B树 </a>
+    
+    <a href="https://code0xff.org/tags/cmu-database/">CMU-Database </a>
+    
+    <a href="https://code0xff.org/tags/flink/">flink </a>
+    
+    <a href="https://code0xff.org/tags/hive/">Hive </a>
+    
+    <a href="https://code0xff.org/tags/k8s/">k8s </a>
+    
+    <a href="https://code0xff.org/tags/kudu/">kudu </a>
+    
+    <a href="https://code0xff.org/tags/kyuubi/">Kyuubi </a>
+    
+    <a href="https://code0xff.org/tags/manacher/">Manacher </a>
+    
+    <a href="https://code0xff.org/tags/mapreduce/">MapReduce </a>
+    
+    <a href="https://code0xff.org/tags/mysql/">MySQL </a>
+    
+    <a href="https://code0xff.org/tags/newsql/">NewSQL </a>
+    
+    <a href="https://code0xff.org/tags/paxos/">paxos </a>
+    
+    <a href="https://code0xff.org/tags/raft/">raft </a>
+    
+    <a href="https://code0xff.org/tags/scala/">scala </a>
+    
+    <a href="https://code0xff.org/tags/simd/">SIMD </a>
+    
+    <a href="https://code0xff.org/tags/snowflake/">snowflake </a>
+    
+    <a href="https://code0xff.org/tags/spark/">spark </a>
+    
+    <a href="https://code0xff.org/tags/unix/">unix </a>
+    
+    <a href="https://code0xff.org/tags/%E4%BA%8C%E5%88%86%E6%9F%A5%E6%89%BE/">二分查找 </a>
+    
+    <a href="https://code0xff.org/tags/%E4%BA%8C%E5%8F%89%E6%A0%91%E9%81%8D%E5%8E%86/">二叉树遍历 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%88%86%E5%B8%83%E5%BC%8F/">分布式 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%8A%A8%E6%80%81%E6%B3%A8%E5%85%A5/">动态注入 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%8E%86%E5%8F%B2/">历史 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%90%91%E9%87%8F%E5%8C%96/">向量化 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%9B%9E%E6%BA%AF/">回溯 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%9B%BD%E5%86%85%E6%97%85%E8%A1%8C/">国内旅行 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%9B%BD%E5%A4%96%E6%97%85%E8%A1%8C/">国外旅行 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%A4%9A%E7%A7%9F%E6%88%B7/">多租户 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%A4%A7%E6%95%B0%E6%8D%AE/">大数据 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%AD%98%E5%82%A8/">存储 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%B7%A5%E4%BD%9C%E8%AE%B0%E5%BD%95/">工作记录 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%BE%AE%E6%9C%8D%E5%8A%A1/">微服务 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%95%B0%E6%8D%AE%E5%BA%93/">数据库 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%9F%A5%E8%AF%A2%E4%BC%98%E5%8C%96/">查询优化 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%9F%A5%E8%AF%A2%E7%BC%96%E8%AF%91/">查询编译 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%B1%87%E7%BC%96/">汇编 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%B5%8B%E8%AF%95/">测试 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%B9%96%E4%BB%93%E4%B8%80%E4%BD%93/">湖仓一体 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%94%9F%E6%B4%BB/">生活 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%94%B5%E5%BD%B1/">电影 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%AE%97%E6%B3%95/">算法 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BB%8F%E6%B5%8E/">经济 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BC%93%E5%AD%98/">缓存 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BC%96%E8%AF%91%E5%8E%9F%E7%90%86/">编译原理 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BD%91%E7%BB%9C/">网络 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AE%A1%E7%AE%97%E6%A1%86%E6%9E%B6/">计算框架 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AE%BA%E6%96%87/">论文 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AF%BB%E4%B9%A6/">读书 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AF%BB%E4%B9%A6%E7%AC%94%E8%AE%B0/">读书笔记 </a>
+    
+</div>
+    </section>
+
+    
+
+    <section class="widget">
+        <h3 class="widget-title">RSS</h3>
+        <ul class="widget-list">
+            <li><a href="https://code0xff.org/index.xml">文章 RSS</a></li>
+        </ul>
+    </section>
+</div>
+            </div>
+        </div>
+    </div>
+    <footer id="footer">
+    <div>
+        &copy; 2023 <a href="https://code0xff.org/">记录每个瞬间 By 老王</a>
+        
+    </div>
+    <br />
+    <div>
+        <div class="github-badge">
+            <a href="https://gohugo.io/" target="_black" rel="nofollow"><span class="badge-subject">Powered by</span><span class="badge-value bg-blue">Hugo</span></a>
+        </div>
+        <div class="github-badge">
+            <a href="https://github.com/flysnow-org/maupassant-hugo" target="_black"><span class="badge-subject">Theme</span><span class="badge-value bg-yellowgreen">Maupassant</span></a>
+        </div>
+    </div>
+</footer>
+
+
+    
+    <script type="text/javascript">
+        window.MathJax = {
+            tex2jax: {
+                inlineMath: [['$', '$']],
+                processEscapes: true
+                }
+            };
+    </script>
+    <script src='https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.5/MathJax.js?config=TeX-MML-AM_CHTML' async></script><script src="https://cdn.bootcdn.net/ajax/libs/fancybox/3.5.7/jquery.fancybox.min.js"></script>
+
+<a id="rocket" href="#top"></a>
+<script type="text/javascript" src='/js/totop.js?v=0.0.0' async=""></script>
+
+<script type="application/javascript">
+var doNotTrack = false;
+if (!doNotTrack) {
+	window.ga=window.ga||function(){(ga.q=ga.q||[]).push(arguments)};ga.l=+new Date;
+	ga('create', 'GA ID', 'auto');
+	
+	ga('send', 'pageview');
+}
+</script>
+<script async src='https://www.google-analytics.com/analytics.js'></script>
+
+
+
+    <script type="text/javascript" src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js" async></script>
+
+
+
+
+</body>
+
+</html>
