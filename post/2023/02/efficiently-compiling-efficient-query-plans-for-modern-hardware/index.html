@@ -13,10 +13,10 @@
     <meta property="og:title" content="Efficiently Compiling Efficient Query Plans for Modern Hardware - 记录每个瞬间">
     <meta property="og:type" content="article">
         
-    <meta property="article:published_time" content='2023-02-04T15:35:19&#43;08:00'>
+    <meta property="article:published_time" content='2023-02-05T17:35:19&#43;08:00'>
         
         
-    <meta property="article:modified_time" content='2023-02-04T15:35:19&#43;08:00'>
+    <meta property="article:modified_time" content='2023-02-05T17:35:19&#43;08:00'>
         
     <meta name="Keywords" content="">
     <meta name="description" content="Efficiently Compiling Efficient Query Plans for Modern Hardware">
@@ -81,14 +81,42 @@
             <h1 class="post-title">Efficiently Compiling Efficient Query Plans for Modern Hardware</h1>
         </header>
         <date class="post-meta meta-date">
-            2023年2月4日
+            2023年2月5日
         </date>
 <nav id="TableOfContents">
   <ul>
     <li>
       <ul>
         <li><a href="#背景">背景</a></li>
-        <li><a href="#实现">实现</a></li>
+        <li><a href="#实现">实现</a>
+          <ul>
+            <li><a href="#query-processing-architecture">Query Processing Architecture</a></li>
+            <li><a href="#compiling-algebraic-expressions">Compiling Algebraic Expressions</a></li>
+          </ul>
+        </li>
+        <li><a href="#代码生成">代码生成</a>
+          <ul>
+            <li><a href="#generating-machine-code">Generating Machine Code</a></li>
+            <li><a href="#complex-operators">Complex Operators</a></li>
+            <li><a href="#performance-tuning">Performance Tuning</a></li>
+          </ul>
+        </li>
+        <li><a href="#高级并行化技术">高级并行化技术</a></li>
+        <li><a href="#评估">评估</a>
+          <ul>
+            <li><a href="#systems-comparison">Systems Comparison</a></li>
+            <li><a href="#code-quality">Code Quality</a></li>
+          </ul>
+        </li>
+        <li><a href="#附录">附录</a>
+          <ul>
+            <li><a href="#operator-translation">OPERATOR TRANSLATION</a></li>
+            <li><a href="#example">Example</a></li>
+            <li><a href="#微基准测试">微基准测试</a></li>
+            <li><a href="#优化设置">优化设置</a></li>
+          </ul>
+        </li>
+        <li><a href="#参考">参考</a></li>
       </ul>
     </li>
   </ul>
@@ -159,61 +187,783 @@
 火山模型需要有大量调用，每次调用相当于断开管道，都会刷新寄存器<br>
 批模型减少了调用次数，但产生的tuple太多，也会断开管道<br>
 实际上，任何 迭代风格使用的是pull模型，都有断开管道的风险，但有时候产生的tuple数量很少，并不需要拷贝</p>
-<p>
+<h3 id="query-processing-architecture">Query Processing Architecture</h3>
+<p>论文中采用的是 push模型，数据总是从 一个 pipeline-breaker push到另一个  pipeline-breaker<br>
+以一个SQL为例，三个表的join，其中R2是一个子查询，做了group by<br>
+R2会跟R3做join，其结果再跟R1做join   <br>
+
         <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/02/p539-neumann/2.jpg">
             <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/02/p539-neumann/2.jpg" />
         </a>
-    <br>
+    </p>
+<p>传统的方式，比如根节点需要输出(a=b)的join结果，那么会先去左边建立hash表(递归的执行)，然后再去右边节点去探测<br>
+这样的话效率不好<br>
+论文中提出将整个执行过程分成了 4个部分，也就是 4个管道，在管道内部可以最大化CPU利用率，管道之间通过物化方式传递<br>
 
         <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/02/p539-neumann/3.jpg">
             <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/02/p539-neumann/3.jpg" />
         </a>
-    <br>
+    </p>
+<p>下图是整个执行的伪代码，代码中包含了 4个片段，就对应 4个管道</p>
+<ul>
+<li>管道1，filter R1，将结果放入hash 表 (a,b)中</li>
+<li>管道2，类似的遍历R2将结果放入Γz 中</li>
+<li>管道3，将Γz 的结果写入到 hash表 (z=c)中</li>
+<li>管道4，遍历R3，沿着对应的几个hash表，并产出结果<br>
 
         <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/02/p539-neumann/4.jpg">
             <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/02/p539-neumann/4.jpg" />
         </a>
-    <br>
+    </li>
+</ul>
+<p>这些循环保证了 很好的代码本地行，其性能也大大超过了迭代模型</p>
+<h3 id="compiling-algebraic-expressions">Compiling Algebraic Expressions</h3>
+<p>code-gen非常不同于迭代模式，它没有什么规则，其左边的解构 跟右边的完全不同<br>
+从编译器的视角看，每个算子都有两个操作</p>
+<ul>
+<li>produce()</li>
+<li>consume(attributes, source)</li>
+</ul>
+<p>通过调用 produce 函数，对应的算子产生它的结果，然后将其push到 consume算子(通过调用consume函数)<br>
+对于figure3，其执行过程如下：</p>
+<ul>
+<li>查询首先调用 (a=b)produce，用来填充hash表</li>
+<li>这个produce又会调用 σx=7，这会触发R1的produce</li>
+<li>R1这个produce是叶节点，然后产生tuple，这就会调用到 σx=7 来做消费</li>
+<li>σx=7 消费是通过选择某个固定的投影，满足的结果会传递给(a=b)</li>
+<li>这样最上面的那个join的左边就完成了，将其存储到hash表中</li>
+<li>之后控制流重新回到join，它会再调用 (c=z)来对右边的结果做probe</li>
+</ul>
+<p>produce、consume只是一个概念的模型，只是用于代码生成的时候会使用到<br>
+SQL执行还是跟往常一样，只是到了生成物理执行计划时，这步被替代了，使用code-gen生成了一段代码<br>
+code-gen使用produce、consume模型来生成最终的代码<br>
+使用figure5中的规则，应用到 figure3，就能产生出 figure4的伪代码了<br>
 
         <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/02/p539-neumann/5.jpg">
             <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/02/p539-neumann/5.jpg" />
         </a>
-    <br>
+     
+真实的场景自然比这个要复杂很多，包括跟踪加载的属性、牵涉到算子状态、相关子查询中的属性依赖等</p>
+<h2 id="代码生成">代码生成</h2>
+<h3 id="generating-machine-code">Generating Machine Code</h3>
+<p>最初code-gen是生成了C++代码，但这需要编译C++代码</p>
+<ul>
+<li>一个复杂的编译+优化 可能要好几秒</li>
+<li>C++不提供对生成代码的控制，这可能会导致性能不佳</li>
+</ul>
+<p>论文中使用了 Low Level Virtual Machine (LLVM)</p>
+<ul>
+<li>它可以生成跨平台的汇编代码</li>
+<li>之后由LLVM提供的优化的JIT编译器直接执行</li>
+</ul>
+<p>LLVM</p>
+<ul>
+<li>并不是完全的汇编代码，而更像是偏底层的中间代码</li>
+<li>它隐藏了寄存器分配问题，可以提供无限多的寄存器</li>
+<li>LLVM汇编代码是可以跨平台的，会由LLVM JIT来生成具体平台的机器代码</li>
+<li>其代码是强类型的，这样可以发现很多C++代码中的一些bug</li>
+<li>优化能力很强，编译速度非常快：几微秒；而C++编译器可能需要几秒</li>
+</ul>
+<p>不是所有的查询操作都是LLVM代码，这样的化编写起来很麻烦，只有一些复杂的操作是用C++写的<br>
+之后用LLVM把C++代码，和LLVM汇编代码链接起来<br>
+比如：scan部分，这里需要加载复杂的结构，找出next，就是用C++写的<br>
+这部分的逻辑会<strong>驱动</strong>执行流水线，后面的tuple的自身访问、以及filter、物化到hash表中都是LLVM汇编  <br>
+C++和LLVM汇编是交互执行的，比如sort操作会返回到C++部分，一旦操作完了LLVM汇编就会直接操作这些数据块了<br>
+大部分时间都是LLVM工作，而且都是cache和寄存器交互的，所以执行很快<br>
 
         <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/02/p539-neumann/6.jpg">
             <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/02/p539-neumann/6.jpg" />
         </a>
-    <br>
+    </p>
+<h3 id="complex-operators">Complex Operators</h3>
+<p>将复杂的查询编译为单个函数是不可能的、不可取的</p>
+<ul>
+<li>LLVM代码可能在某时调用C++代码接管控制流，比如初始的外排序由LLVM做，控制合并阶段由C++做，根据需要调用LLVM代码</li>
+<li>将整个查询逻辑完全inline到一个函数，可能会导致代码量指数增长</li>
+<li>比如join的inner部分可能调用consume这时候有两个结果，匹配或者不匹配，而这两种结果又会级联调用outer，这就导致了代码指数增长</li>
+<li>所以更好的方式是，确保热点部分不要跨函数调用，统一放到LLVM代码里面</li>
+</ul>
+<p>因篇幅有限这里只展示部分的LLVM代码，也就是scan R2那段的逻辑<br>
 
         <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/02/p539-neumann/7.jpg">
             <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/02/p539-neumann/7.jpg" />
         </a>
     <br>
+主要逻辑</p>
+<ul>
+<li>LLVM代码首先load需要的列</li>
+<li>然后loop所有的tuple，再加载属性 y 放到寄存器中</li>
+<li>如果不满足谓词则继续loop</li>
+<li>如果满足则是then分支，读取属性 z到寄存器计算hash值，使用hash值去hash表中查找(这里使用了C++的数据结构)</li>
+<li>如果没找到匹配的组，检查是否有足够空间分配新的组，没有则调用C++函数分配新空间，如果需要的话会溢出到内存</li>
+<li>主要的热点代码都是由LLVM完成的，核心逻辑都是在 then块内</li>
+<li>注意这里的LLVM是直接调用了C++代码，所以C++和LLVM代码可以相互直接调用，没有性能损失</li>
+</ul>
+<h3 id="performance-tuning">Performance Tuning</h3>
+<p>以TPC-H为例，Query-1是一个单表查询，只有基于hash的聚合，但论文发现，初始化时有50%的时间花在了hash上了   <br>
+另一个花费比较大的是分支</p>
+<ul>
+<li>如果一个分支总是返回true、或者false，那就表现的不错</li>
+<li>但是如果已50%的概率返回结果，那么会对性能有很大影响</li>
+</ul>
+<p>比如下面这段就不是分支友好的</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">5
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-cpp" data-lang="cpp"><span style="display:flex;"><span>Entry<span style="color:#ff79c6">*</span> iter<span style="color:#ff79c6">=</span>hashTable[hash];
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">while</span> (iter) {
+</span></span><span style="display:flex;"><span>	... <span style="color:#6272a4">// inspect the entry
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>	iter<span style="color:#ff79c6">=</span>iter<span style="color:#ff79c6">-&gt;</span>next;
+</span></span><span style="display:flex;"><span>}
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>上面的代码不好的原因while是混合了两件事</p>
+<ul>
+<li>检查指定的hash值是否存在</li>
+<li>检查是否达到了链表末尾</li>
+</ul>
+<p>上述第一次检查的时候几乎总是 true(假设hash表被填充了)<br>
+而第二次检查总是为false(hash碰撞的list很短)</p>
+<p>下面是分支友好的</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">5
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-cpp" data-lang="cpp"><span style="display:flex;"><span>Entry<span style="color:#ff79c6">*</span> iter<span style="color:#ff79c6">=</span>hashTable[hash];
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">if</span> (iter) <span style="color:#ff79c6">do</span> {
+</span></span><span style="display:flex;"><span>	... <span style="color:#6272a4">// inspect the entry
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>	iter<span style="color:#ff79c6">=</span>iter<span style="color:#ff79c6">-&gt;</span>next;
+</span></span><span style="display:flex;"><span>} <span style="color:#ff79c6">while</span> (iter);
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>上面这个小改动，对于hash表探测提升了20%的性能</p>
+<h2 id="高级并行化技术">高级并行化技术</h2>
+<p>目前处理的方式都是一次一个tuple，基本都是线性的<br>
+但我们还是可以整合其他更先进的技术</p>
+<p>传统方式使用块来访问并不是很好，因为需要多的内存访问，但如果将块发能放入寄存器中则非常好<br>
+也就是使用SIMD技术</p>
+<ul>
+<li>首先使用利用现代CPU巨大的加速</li>
+<li>其次，可以缓解分支问题</li>
+</ul>
+<p>LLVM支持SIMD技术，允许将值当做向量处理<br>
+现代CPU都是多核的，所以DBMS如何利用多核加速就很重要了 <br>
+比如对输入数据做分区，然后合并，就可以并行化<br>
+而LLVM的存在，使得figure-7这样的代码块能更好的支持并行化<br>
+因为他们本身都是一个一个的片段，片段内都是紧耦合的，能很好的并行化处理</p>
+<p>五个查询在 论文的附录D 中，这里就不贴了<br>
+OLTP使用了单线程查询，OLAP也是另外不做更新<br>
+对比了Hpyer的原始版本、code-gen版本、MonetDB、以及一个商业数据库<br>
+LOTP</p>
+<h2 id="评估">评估</h2>
+<p>由于存储系统对查询性能影响很大，这里分成两部分</p>
+<ul>
+<li>完整的系统比较，包括代码生成的分析</li>
+<li>基准测试，用于测试特定算子行为</li>
+</ul>
+<h3 id="systems-comparison">Systems Comparison</h3>
+<p>目前这个技术已经整合到Hpyer中了，可以混合OLAP和OLTP<br>
+使用的是 TPC-CH测试集，对于OLTP的使用TPC-C，对于OLAP的使用TPC-H</p>
+<p>OLTP对比如下，TPC来看，C++版本和code-gen差不多，code-gen略好一点<br>
+但是编译时间看，code-gen只需要 十分之一的时间<br>
 
-        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/02/p539-neumann/8.jpg">
-            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/02/p539-neumann/8.jpg" />
-        </a>
-    <br>
-
-        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/02/p539-neumann/9.jpg">
-            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/02/p539-neumann/9.jpg" />
-        </a>
-    </p>
-<p>
         <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/02/p539-neumann/t-1.jpg">
             <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/02/p539-neumann/t-1.jpg" />
         </a>
-      <br>
+    </p>
+<p>下面是OLAP的比较，DB X是面向磁盘的所以比较慢，不过执行的数据集已经能放入内存了<br>
+除了DB X其他几个执行时间都挺快<br>
+HyPer的C++编译时间太长了，都超过了执行时间，这也是需要替换的原因<br>
 
         <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/02/p539-neumann/t-2.jpg">
             <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/02/p539-neumann/t-2.jpg" />
         </a>
-    <br>
+    </p>
+<h3 id="code-quality">Code Quality</h3>
+<p>使用<code>callgrind</code>工具(来自<code>valgrind</code>)分析 5个查询<br>
+是用来分析分支和缓存有效性</p>
+<p>下面是和 MonetDB的对比，除了Q2，其他的分支以及预测失败都比MonetDB少很多<br>
+D1的miss、L2miss也是比MonetDB少很多(除了Q2)<br>
+最后是生成的指令，也是比MonetDB少很多<br>
 
         <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/02/p539-neumann/t-3.jpg">
             <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/02/p539-neumann/t-3.jpg" />
         </a>
     </p>
+<h2 id="附录">附录</h2>
+<h3 id="operator-translation">OPERATOR TRANSLATION</h3>
+<p><strong>Scan</strong><br>
+使用 ScanConsumer 辅助类来访问所有相关的片段，访问的所有tuple都包含在当前的片段中<br>
+在需要的时候注册可用的列，传递tuple到消费算子<br>
+跟关系类型的不同，ScanConsumer可能会创建对C++函数的调研<br>
+由于scan是叶子节点算子，它没有consume部分</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">15
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">16
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">17
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">18
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">19
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">20
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">21
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">22
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">23
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">24
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">25
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">26
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">27
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">28
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">29
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">30
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">31
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">32
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">33
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">34
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">35
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">36
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">37
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">38
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">39
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-cpp" data-lang="cpp"><span style="display:flex;"><span><span style="color:#8be9fd">void</span> TableScanTranslator<span style="color:#ff79c6">::</span>produce(CodeGen<span style="color:#ff79c6">&amp;</span> codegen,Context<span style="color:#ff79c6">&amp;</span> context) <span style="color:#ff79c6">const</span> {
+</span></span><span style="display:flex;"><span>	<span style="color:#6272a4">// Access all relation fragments
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>	llvm<span style="color:#ff79c6">::</span>Value∗ dbPtr<span style="color:#ff79c6">=</span>codegen.getDatabasePointer();
+</span></span><span style="display:flex;"><span>	llvm<span style="color:#ff79c6">::</span>Value∗ relationPtr<span style="color:#ff79c6">=</span>codegen.getPtr(dbPtr,db.layout.relations[table]);
+</span></span><span style="display:flex;"><span>	<span style="color:#ff79c6">auto</span><span style="color:#ff79c6">&amp;</span> required<span style="color:#ff79c6">=</span>scanConsumer.getPartitionPtr();
+</span></span><span style="display:flex;"><span>	ScanConsumer <span style="color:#50fa7b">scanConsumer</span>(codegen,context)
+</span></span><span style="display:flex;"><span>	<span style="color:#ff79c6">for</span> (;db.relations[table]−<span style="color:#ff79c6">&gt;</span>generateScan(codegen,relationPtr,scanConsumer);) {
+</span></span><span style="display:flex;"><span>		<span style="color:#6272a4">// Prepare accessing the current fragment
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>		llvm<span style="color:#ff79c6">::</span>Value∗ partitionPtr<span style="color:#ff79c6">=</span>required;
+</span></span><span style="display:flex;"><span>		ColumnAccess <span style="color:#50fa7b">columnAccess</span>(partitionPtr,required);
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>		<span style="color:#6272a4">// Loop over all tuples
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>		llvm<span style="color:#ff79c6">::</span>Value∗ tid<span style="color:#ff79c6">=</span>codegen.const64(<span style="color:#bd93f9">0</span>);
+</span></span><span style="display:flex;"><span>		llvm<span style="color:#ff79c6">::</span>Value∗ limit<span style="color:#ff79c6">=</span>codegen.load(partitionPtr,getLayout().size);
+</span></span><span style="display:flex;"><span>		Loop <span style="color:#50fa7b">loop</span>(codegen,codegen−<span style="color:#ff79c6">&gt;</span>CreateICmpULT(tid,limit),{{tid,”tid”}}); {
+</span></span><span style="display:flex;"><span>			tid<span style="color:#ff79c6">=</span>loop.getLoopVar(<span style="color:#bd93f9">0</span>);
+</span></span><span style="display:flex;"><span>		
+</span></span><span style="display:flex;"><span>			<span style="color:#6272a4">// Prepare column access code
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>			PartitionAccess<span style="color:#ff79c6">::</span>ColumnAccess<span style="color:#ff79c6">::</span>Row rowAccess(columnAccess,tid);
+</span></span><span style="display:flex;"><span>			vector<span style="color:#ff79c6">&lt;</span>ValueAccess<span style="color:#ff79c6">&gt;</span> access;
+</span></span><span style="display:flex;"><span>			<span style="color:#ff79c6">for</span> (<span style="color:#ff79c6">auto</span> iter<span style="color:#ff79c6">=</span>required.begin(),limit<span style="color:#ff79c6">=</span>required.end();iter<span style="color:#ff79c6">!=</span>limit;<span style="color:#ff79c6">++</span>iter)
+</span></span><span style="display:flex;"><span>				access.push back(rowAccess.loadAttribute(∗iter));
+</span></span><span style="display:flex;"><span>			
+</span></span><span style="display:flex;"><span>				<span style="color:#6272a4">// Register providers in new inner context
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>				ConsumerContext <span style="color:#50fa7b">consumerContext</span>(context);
+</span></span><span style="display:flex;"><span>				<span style="color:#8be9fd">unsigned</span> slot<span style="color:#ff79c6">=</span><span style="color:#bd93f9">0</span>;
+</span></span><span style="display:flex;"><span>				<span style="color:#ff79c6">for</span> (<span style="color:#ff79c6">auto</span> iter<span style="color:#ff79c6">=</span>required.begin(),limit<span style="color:#ff79c6">=</span>required.end();iter<span style="color:#ff79c6">!=</span>limit;<span style="color:#ff79c6">++</span>iter,<span style="color:#ff79c6">++</span>slot)
+</span></span><span style="display:flex;"><span>					consumerContext.registerIUProvider(<span style="color:#ff79c6">&amp;</span>(getOutput()[∗iter].iu),<span style="color:#ff79c6">&amp;</span>access[slot]);
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>					<span style="color:#6272a4">// Push results to consuming operators
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>					getParent()−<span style="color:#ff79c6">&gt;</span>consume(codegen,consumerContext);
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>					<span style="color:#6272a4">// Go to the next tuple
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>					tid<span style="color:#ff79c6">=</span>codegen−<span style="color:#ff79c6">&gt;</span>CreateAdd(tid,codegen.const64(<span style="color:#bd93f9">1</span>));
+</span></span><span style="display:flex;"><span>					loop.loopDone(codegen−<span style="color:#ff79c6">&gt;</span>CreateICmpULT(tid,limit),{tid});
+</span></span><span style="display:flex;"><span>			}
+</span></span><span style="display:flex;"><span>		}
+</span></span><span style="display:flex;"><span>	}
+</span></span><span style="display:flex;"><span>}	
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p><strong>Selection</strong><br>
+这里的produce部分很简单，增加需要的属性到谓词上下文中，然后调用输入端的produce<br>
+consume部分会filter做过滤</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">15
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-cpp" data-lang="cpp"><span style="display:flex;"><span><span style="color:#8be9fd">void</span> SelectTranslator<span style="color:#ff79c6">::</span>produce(CodeGen<span style="color:#ff79c6">&amp;</span> codegen,Context<span style="color:#ff79c6">&amp;</span> context) <span style="color:#ff79c6">const</span> {
+</span></span><span style="display:flex;"><span>	<span style="color:#6272a4">// Ask the input operator to produce tuples
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>	AddRequired <span style="color:#50fa7b">addRequired</span>(context,getCondition().getUsed());
+</span></span><span style="display:flex;"><span>	input−<span style="color:#ff79c6">&gt;</span>produce(codegen,context);
+</span></span><span style="display:flex;"><span>}
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#8be9fd">void</span> SelectTranslator<span style="color:#ff79c6">::</span>consume(CodeGen<span style="color:#ff79c6">&amp;</span> codegen,Context<span style="color:#ff79c6">&amp;</span> context) <span style="color:#ff79c6">const</span> {
+</span></span><span style="display:flex;"><span>	<span style="color:#6272a4">// Evaluate the predicate
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>	ResultValue value<span style="color:#ff79c6">=</span>codegen.deriveValue(getCondition(),context);
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>	<span style="color:#6272a4">// Pass tuple to parent if the predicate is satisfied
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>	CodeGen<span style="color:#ff79c6">::</span>If checkCond(codegen,value); {
+</span></span><span style="display:flex;"><span>		getParent()−<span style="color:#ff79c6">&gt;</span>consume(codegen,context);
+</span></span><span style="display:flex;"><span>	}
+</span></span><span style="display:flex;"><span>}
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p><strong>Projection</strong><br>
+更简单，其consume部分是空的，直接调用其父节点</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-cpp" data-lang="cpp"><span style="display:flex;"><span><span style="color:#8be9fd">void</span> ProjectTranslator<span style="color:#ff79c6">::</span>produce(CodeGen<span style="color:#ff79c6">&amp;</span> codegen,Context<span style="color:#ff79c6">&amp;</span> context) <span style="color:#ff79c6">const</span> {
+</span></span><span style="display:flex;"><span>	<span style="color:#6272a4">// Ask the input operator to produce tuples
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>	SetRequired <span style="color:#50fa7b">setRequired</span>(context,getOutput());
+</span></span><span style="display:flex;"><span>	input−<span style="color:#ff79c6">&gt;</span>produce(codegen,context);
+</span></span><span style="display:flex;"><span>}
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#8be9fd">void</span> ProjectTranslator<span style="color:#ff79c6">::</span>consume(CodeGen<span style="color:#ff79c6">&amp;</span> codegen,Context<span style="color:#ff79c6">&amp;</span> context) <span style="color:#ff79c6">const</span> {
+</span></span><span style="display:flex;"><span>	<span style="color:#6272a4">// No code required here, pass to parent
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>	getParent()−<span style="color:#ff79c6">&gt;</span>consume(codegen,context);
+</span></span><span style="display:flex;"><span>}
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p><strong>Map</strong><br>
+map操作符通过求值函数计算新列<br>
+计算的位置，映射和选择已经由优化器完成了</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">15
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">16
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">17
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">18
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">19
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">20
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">21
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">22
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">23
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">24
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-cpp" data-lang="cpp"><span style="display:flex;"><span><span style="color:#8be9fd">void</span> MapTranslator<span style="color:#ff79c6">::</span>produce(CodeGen<span style="color:#ff79c6">&amp;</span> codegen,Context<span style="color:#ff79c6">&amp;</span> context) <span style="color:#ff79c6">const</span> {
+</span></span><span style="display:flex;"><span>	<span style="color:#6272a4">// Figure out which columns have to be provided by the input operator
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>	IUSet required<span style="color:#ff79c6">=</span>context.getRequired();
+</span></span><span style="display:flex;"><span>	<span style="color:#ff79c6">for</span> (<span style="color:#ff79c6">auto</span> iter<span style="color:#ff79c6">=</span>functions.begin(),limit<span style="color:#ff79c6">=</span>functions.end();iter<span style="color:#ff79c6">!=</span>limit;<span style="color:#ff79c6">++</span>iter) {
+</span></span><span style="display:flex;"><span>		(<span style="color:#ff79c6">*</span>iter).function−<span style="color:#ff79c6">&gt;</span>getUsed(required);
+</span></span><span style="display:flex;"><span>		required.erase((∗iter).result);
+</span></span><span style="display:flex;"><span>	}
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>	<span style="color:#6272a4">// Ask the input operator to produce tuples
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>	SetRequired <span style="color:#50fa7b">setRequired</span>(context,required);
+</span></span><span style="display:flex;"><span>	input−<span style="color:#ff79c6">&gt;</span>produce(codegen,context);
+</span></span><span style="display:flex;"><span>}
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#8be9fd">void</span> MapTranslator<span style="color:#ff79c6">::</span>consume(CodeGen<span style="color:#ff79c6">&amp;</span> codegen,Context<span style="color:#ff79c6">&amp;</span> context) <span style="color:#ff79c6">const</span> {
+</span></span><span style="display:flex;"><span>	<span style="color:#6272a4">// Offer new columns
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>	vector<span style="color:#ff79c6">&lt;</span>ExpressionAccess<span style="color:#ff79c6">&gt;</span> accessors;
+</span></span><span style="display:flex;"><span>	<span style="color:#ff79c6">for</span> (<span style="color:#ff79c6">auto</span> iter<span style="color:#ff79c6">=</span>functions.begin(),limit<span style="color:#ff79c6">=</span>functions.end();iter<span style="color:#ff79c6">!=</span>limit;<span style="color:#ff79c6">++</span>iter)
+</span></span><span style="display:flex;"><span>		accessors.push back(ExpressionAccess(codegen,∗(∗iter).function));
+</span></span><span style="display:flex;"><span>	<span style="color:#ff79c6">for</span> (<span style="color:#8be9fd">unsigned</span> index<span style="color:#ff79c6">=</span><span style="color:#bd93f9">0</span>,limit<span style="color:#ff79c6">=</span>accessors.size();index<span style="color:#ff79c6">&lt;</span>limit;index<span style="color:#ff79c6">++</span>)
+</span></span><span style="display:flex;"><span>		context.registerIUProvider(functions[index].result,<span style="color:#ff79c6">&amp;</span>accessors[index]);
+</span></span><span style="display:flex;"><span>	
+</span></span><span style="display:flex;"><span>	<span style="color:#6272a4">// Pass to parent
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>	getParent()−<span style="color:#ff79c6">&gt;</span>consume(codegen,context);
+</span></span><span style="display:flex;"><span>}
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p><strong>Hash Join</strong><br>
+这部分就很复杂了，LLVM的代码控制流会转回C++<br>
+首先会build hash部分，如果需要会溢出到磁盘，如果内存足够就会调用probe部分<br>
+如果左边build溢出了，则probe部分也要溢出   <br>
+为了简化这里限制为inner join</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">15
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">16
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">17
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">18
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">19
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">20
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">21
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">22
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">23
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">24
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">25
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">26
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">27
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">28
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">29
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">30
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">31
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">32
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">33
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">34
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">35
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">36
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">37
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">38
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">39
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">40
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">41
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">42
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">43
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">44
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">45
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">46
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-cpp" data-lang="cpp"><span style="display:flex;"><span><span style="color:#8be9fd">void</span> HashJoin<span style="color:#ff79c6">::</span>Inner<span style="color:#ff79c6">::</span>produce() {
+</span></span><span style="display:flex;"><span>	<span style="color:#6272a4">// Read the build side
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>	initMem();
+</span></span><span style="display:flex;"><span>	produceLeft();
+</span></span><span style="display:flex;"><span>	<span style="color:#ff79c6">if</span> (inMem) {
+</span></span><span style="display:flex;"><span>		buildHashTable();
+</span></span><span style="display:flex;"><span>	} <span style="color:#ff79c6">else</span> {
+</span></span><span style="display:flex;"><span>		<span style="color:#6272a4">// Spool remaining tuples to disk
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>		spoolLeft();
+</span></span><span style="display:flex;"><span>		finishSpoolLeft();
+</span></span><span style="display:flex;"><span>	}
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>	<span style="color:#6272a4">// Is a in−memory join possible?
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>	<span style="color:#ff79c6">if</span> (inMem) {
+</span></span><span style="display:flex;"><span>		produceRight();
+</span></span><span style="display:flex;"><span>		<span style="color:#ff79c6">return</span>;
+</span></span><span style="display:flex;"><span>	}
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>	<span style="color:#6272a4">// No, spool the right hand side, too
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>	spoolRight();
+</span></span><span style="display:flex;"><span>	<span style="color:#6272a4">// Grace hash join
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>	loadPartition(<span style="color:#bd93f9">0</span>);
+</span></span><span style="display:flex;"><span>	<span style="color:#ff79c6">while</span> (<span style="color:#8be9fd;font-style:italic">true</span>) {
+</span></span><span style="display:flex;"><span>		<span style="color:#6272a4">// More tuples on the right?
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>		<span style="color:#ff79c6">for</span> (;rightScanRemaining;) {
+</span></span><span style="display:flex;"><span>			<span style="color:#ff79c6">const</span> <span style="color:#8be9fd">void</span>∗ rightTuple<span style="color:#ff79c6">=</span>nextRight();
+</span></span><span style="display:flex;"><span>			<span style="color:#ff79c6">for</span> (LookupHash lookup(rightTuple);lookup;<span style="color:#ff79c6">++</span>lookup) {
+</span></span><span style="display:flex;"><span>				join(lookup.data(),rightTuple);
+</span></span><span style="display:flex;"><span>			}
+</span></span><span style="display:flex;"><span>		}
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>		<span style="color:#6272a4">// Handle overflow in n:m case
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>		<span style="color:#ff79c6">if</span> (overflow) {
+</span></span><span style="display:flex;"><span>			loadPartitionLeft();
+</span></span><span style="display:flex;"><span>			resetRightScan();
+</span></span><span style="display:flex;"><span>			<span style="color:#ff79c6">continue</span>;
+</span></span><span style="display:flex;"><span>		}
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>		<span style="color:#6272a4">// Go to the next partition
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>		<span style="color:#ff79c6">if</span> ((<span style="color:#ff79c6">++</span>inMemPartition)<span style="color:#ff79c6">&gt;=</span>partitionCount) {
+</span></span><span style="display:flex;"><span>			<span style="color:#ff79c6">return</span>;
+</span></span><span style="display:flex;"><span>		} <span style="color:#ff79c6">else</span> {
+</span></span><span style="display:flex;"><span>			loadPartition(inMemPartition);
+</span></span><span style="display:flex;"><span>		}
+</span></span><span style="display:flex;"><span>	}
+</span></span><span style="display:flex;"><span>}
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>这里包含了三个函数，produce、consume、join<br>
+当溢出到磁盘时，可以直接调用 join函数<br>
+hash表已经在C++中实现了，所以join只可能在连接候选条件的时候调用<br>
+produce将控制流转回给C++，
+consume部分确定相关的寄存器，并将他们物化到hash-table中</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">15
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">16
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">17
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">18
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">19
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">20
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">21
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">22
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">23
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">24
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">25
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">26
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">27
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">28
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">29
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">30
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">31
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">32
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">33
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">34
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">35
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">36
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">37
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">38
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">39
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">40
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">41
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">42
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">43
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">44
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">45
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">46
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">47
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">48
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">49
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">50
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">51
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">52
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">53
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">54
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">55
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">56
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">57
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">58
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">59
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">60
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">61
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">62
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">63
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">64
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">65
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">66
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">67
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">68
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-cpp" data-lang="cpp"><span style="display:flex;"><span><span style="color:#8be9fd">void</span> HJTranslatorInner<span style="color:#ff79c6">::</span>produce(CodeGen<span style="color:#ff79c6">&amp;</span> codegen,Context<span style="color:#ff79c6">&amp;</span> context) <span style="color:#ff79c6">const</span> {
+</span></span><span style="display:flex;"><span>	<span style="color:#6272a4">// Construct functions that will be be called from the C++ code
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>	{
+</span></span><span style="display:flex;"><span>		AddRequired <span style="color:#50fa7b">addRequired</span>(context,getCondiution().getUsed().limitTo(left));
+</span></span><span style="display:flex;"><span>		produceLeft<span style="color:#ff79c6">=</span>codegen.derivePlanFunction(left,context);
+</span></span><span style="display:flex;"><span>	}
+</span></span><span style="display:flex;"><span>	{
+</span></span><span style="display:flex;"><span>		AddRequired <span style="color:#50fa7b">addRequired</span>(context,getCondiution().getUsed().limitTo(right));
+</span></span><span style="display:flex;"><span>		produceRight<span style="color:#ff79c6">=</span>codegen.derivePlanFunction(right,context);
+</span></span><span style="display:flex;"><span>	}
+</span></span><span style="display:flex;"><span>	<span style="color:#6272a4">// Call the C++ code
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>	codegen.call(HashJoinInnerProxy<span style="color:#ff79c6">::</span>produce.getFunction(codegen),
+</span></span><span style="display:flex;"><span>		{context.getOperator(<span style="color:#ff79c6">this</span>)});
+</span></span><span style="display:flex;"><span>}
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#8be9fd">void</span> HJTranslatorInner<span style="color:#ff79c6">::</span>consume(CodeGen<span style="color:#ff79c6">&amp;</span> codegen,Context<span style="color:#ff79c6">&amp;</span> context) <span style="color:#ff79c6">const</span> {
+</span></span><span style="display:flex;"><span>	llvm<span style="color:#ff79c6">::</span>Value∗ opPtr<span style="color:#ff79c6">=</span>context.getOperator(<span style="color:#ff79c6">this</span>);
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>	<span style="color:#6272a4">// Left side
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>	<span style="color:#ff79c6">if</span> (source<span style="color:#ff79c6">==</span>left) {
+</span></span><span style="display:flex;"><span>		<span style="color:#6272a4">// Collect registers from the left side
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>		vector<span style="color:#ff79c6">&lt;</span>ResultValue<span style="color:#ff79c6">&gt;</span> materializedValues;
+</span></span><span style="display:flex;"><span>		matHelperLeft.collectValues(codegen,context,materializedValues);
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>		<span style="color:#6272a4">// Compute size and hash value
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>		llvm<span style="color:#ff79c6">::</span>Value∗ size<span style="color:#ff79c6">=</span>matHelperLeft.computeSize(codegen,materializedValues);
+</span></span><span style="display:flex;"><span>		llvm<span style="color:#ff79c6">::</span>Value∗ hash<span style="color:#ff79c6">=</span>matHelperLeft.computeHash(codegen,materializedValues);
+</span></span><span style="display:flex;"><span>		<span style="color:#6272a4">// Materialize in hash table, spools to disk if needed
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>		llvm<span style="color:#ff79c6">::</span>Value∗ ptr<span style="color:#ff79c6">=</span>codegen.callBase(HashJoinProxy<span style="color:#ff79c6">::</span>storeLeftInputTuple,
+</span></span><span style="display:flex;"><span>		{opPtr,size,hash});
+</span></span><span style="display:flex;"><span>		matHelperLeft.materialize(codegen,ptr,materializedValues);
+</span></span><span style="display:flex;"><span>		
+</span></span><span style="display:flex;"><span>	<span style="color:#6272a4">// Right side
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>	} <span style="color:#ff79c6">else</span> {
+</span></span><span style="display:flex;"><span>		<span style="color:#6272a4">// Collect registers from the right side
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>		vector<span style="color:#ff79c6">&lt;</span>ResultValue<span style="color:#ff79c6">&gt;</span> materializedValues;
+</span></span><span style="display:flex;"><span>		matHelperRight.collectValues(codegen,context,materializedValues);
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>		<span style="color:#6272a4">// Compute size and hash value
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>		llvm<span style="color:#ff79c6">::</span>Value∗ size<span style="color:#ff79c6">=</span>matHelperRight.computeSize(codegen,materializedValues);
+</span></span><span style="display:flex;"><span>		llvm<span style="color:#ff79c6">::</span>Value∗ hash<span style="color:#ff79c6">=</span>matHelperRight.computeHash(codegen,materializedValues);
+</span></span><span style="display:flex;"><span>	
+</span></span><span style="display:flex;"><span>		<span style="color:#6272a4">// Materialize in memory, spools to disk if needed, implicitly joins
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>		llvm<span style="color:#ff79c6">::</span>Value∗ ptr<span style="color:#ff79c6">=</span>codegen.callBase(HashJoinProxy<span style="color:#ff79c6">::</span>storeRightInputTuple, {opPtr,size});
+</span></span><span style="display:flex;"><span>		matHelperRight.materialize(codegen,ptr,materializedValues);
+</span></span><span style="display:flex;"><span>		codegen.call(HashJoinInnerProxy<span style="color:#ff79c6">::</span>storeRightInputTupleDone,{opPtr,hash});
+</span></span><span style="display:flex;"><span>	}
+</span></span><span style="display:flex;"><span>}
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#8be9fd">void</span> HJTranslatorInner<span style="color:#ff79c6">::</span>join(CodeGen<span style="color:#ff79c6">&amp;</span> codegen,Context<span style="color:#ff79c6">&amp;</span> context) <span style="color:#ff79c6">const</span> {
+</span></span><span style="display:flex;"><span>	llvm<span style="color:#ff79c6">::</span>Value∗ leftPtr<span style="color:#ff79c6">=</span>context.getLeftTuple(),∗rightPtr<span style="color:#ff79c6">=</span>context.getLeftTuple();
+</span></span><span style="display:flex;"><span>	<span style="color:#6272a4">// Load into registers. Actual load may be delayed by optimizer
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>	vector<span style="color:#ff79c6">&lt;</span>ResultValue<span style="color:#ff79c6">&gt;</span> leftValues,rightValues;
+</span></span><span style="display:flex;"><span>	matHelperLeft.dematerialize(codegen,leftPtr,leftValues,context);
+</span></span><span style="display:flex;"><span>	matHelperRight.dematerialize(codegen,rightPtr,rightValues,context);
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>	<span style="color:#6272a4">// Check the join condition, return false for mismatches
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>	llvm<span style="color:#ff79c6">::</span>BasicBlock∗ returnFalseBB<span style="color:#ff79c6">=</span>constructReturnFalseBB(codegen);
+</span></span><span style="display:flex;"><span>	MaterializationHelper<span style="color:#ff79c6">::</span>testValues(codegen,leftValues,rightValues,
+</span></span><span style="display:flex;"><span>		joinPredicateIs,returnFalseBB);
+</span></span><span style="display:flex;"><span>	<span style="color:#ff79c6">for</span> (<span style="color:#ff79c6">auto</span> iter<span style="color:#ff79c6">=</span>residuals.begin(),limit<span style="color:#ff79c6">=</span>residuals.end();iter<span style="color:#ff79c6">!=</span>limit;<span style="color:#ff79c6">++</span>iter) {
+</span></span><span style="display:flex;"><span>		ResultValue v<span style="color:#ff79c6">=</span>codegen.deriveValue(∗∗iter,context);
+</span></span><span style="display:flex;"><span>		CodeGen<span style="color:#ff79c6">::</span>If checkCondition(codegen,v,<span style="color:#bd93f9">0</span>,returnFalseBB);
+</span></span><span style="display:flex;"><span>	}
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>	<span style="color:#6272a4">// Found a match, propagate up
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>	getParent()−<span style="color:#ff79c6">&gt;</span>consume(codegen,context);
+</span></span><span style="display:flex;"><span>}
+</span></span></code></pre></td></tr></table>
+</div>
+</div><h3 id="example">Example</h3>
+<p>一个具体的SQL例子<br>
+首先scan warehouse 表，然后filter，再物化到hash表中，然后scan district并做join</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-sql" data-lang="sql"><span style="display:flex;"><span><span style="color:#ff79c6">select</span> d_tax <span style="color:#ff79c6">from</span> warehouse, district
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">where</span> w_id<span style="color:#ff79c6">=</span>d_w_id <span style="color:#ff79c6">and</span> w_zip<span style="color:#ff79c6">=</span>’<span style="color:#bd93f9">137411111</span>’
+</span></span></code></pre></td></tr></table>
+</div>
+</div><h3 id="微基准测试">微基准测试</h3>
+<p>这里实现了四种不同的场景，都是基于HyPer的，包含以数据为中心的编译、以及迭代风格(编译、解释)，以及块风格的<br>
+数据布局和大小都是完全一样</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-sql" data-lang="sql"><span style="display:flex;"><span><span style="color:#ff79c6">select</span> <span style="color:#ff79c6">count</span>(<span style="color:#ff79c6">*</span>)
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">from</span> orderline
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">where</span> ol_o_id<span style="color:#ff79c6">&gt;</span><span style="color:#bd93f9">0</span> <span style="color:#ff79c6">and</span> ol_d_id<span style="color:#ff79c6">&gt;</span><span style="color:#bd93f9">0</span> <span style="color:#ff79c6">and</span> ol_w_id<span style="color:#ff79c6">&gt;</span><span style="color:#bd93f9">0</span>
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>总体来看，迭代的解释非常慢，改成编译方式就快很多了<br>
+块风格的更快，最快的是code-gen<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/02/p539-neumann/8.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/02/p539-neumann/8.jpg" />
+        </a>
+    </p>
+<p>另一个SQL</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-sql" data-lang="sql"><span style="display:flex;"><span><span style="color:#ff79c6">select</span> <span style="color:#ff79c6">sum</span>(ol_o_id<span style="color:#ff79c6">*</span>ol_d_id<span style="color:#ff79c6">*</span>ol_w_id)
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">from</span> orderline
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>结果如下，code-gen以数据为中心基本达到了内存带宽上限，在不提升硬件的情况下，性能几乎不可能再提升了<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/02/p539-neumann/9.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/02/p539-neumann/9.jpg" />
+        </a>
+    </p>
+<h3 id="优化设置">优化设置</h3>
+<p>使用 g++编译</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-shell" data-lang="shell"><span style="display:flex;"><span>-O3 -fgcse-las -funsafe-loop-optimizations.
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>MonetDB会加上：</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-shell" data-lang="shell"><span style="display:flex;"><span>-ftree-vectorize
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>如果开启了 -funroll-loops，之后又开启了 -fweb 则会影响寄存器分配</p>
+<p>对于LLVM编译器，我们通过手动调度优化通道来使用自定义优化级别。精确的级联是</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">6
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-cpp" data-lang="cpp"><span style="display:flex;"><span>llvm<span style="color:#ff79c6">::</span>createInstructionCombiningPass()
+</span></span><span style="display:flex;"><span>llvm<span style="color:#ff79c6">::</span>createReassociatePass()
+</span></span><span style="display:flex;"><span>llvm<span style="color:#ff79c6">::</span>createGVNPass()
+</span></span><span style="display:flex;"><span>llvm<span style="color:#ff79c6">::</span>createCFGSimplificationPass()
+</span></span><span style="display:flex;"><span>llvm<span style="color:#ff79c6">::</span>createAggressiveDCEPass()
+</span></span><span style="display:flex;"><span>llvm<span style="color:#ff79c6">::</span>createCFGSimplificationPass()
+</span></span></code></pre></td></tr></table>
+</div>
+</div><h2 id="参考">参考</h2>
+<ul>
+<li><a href="https://zhuanlan.zhihu.com/p/383228560">编译优化 | LLVM代码生成技术详解及在数据库中的应用</a></li>
+<li><a href="https://zhuanlan.zhihu.com/p/397262087">LLVM 后端实践笔记 10：汇编</a></li>
+<li><a href="https://llvm.org/docs/LangRef.html#llvm-experimental-constrained-fadd-intrinsic">LLVM Language Reference Manual</a></li>
+<li><a href="https://zhuanlan.zhihu.com/p/92082070">Linux 性能分析valgrind（二）之callgrind使用</a></li>
+</ul>
 
 			<script type="text/javascript"
         async
@@ -280,6 +1030,8 @@ code.has-jax {
             <ul class="clearfix">
                 
                 <li><a href='/tags/%E6%9F%A5%E8%AF%A2%E7%BC%96%E8%AF%91'>查询编译</a></li>
+                
+                <li><a href='/tags/llvm'>LLVM</a></li>
                 
                 <li><a href='/tags/%E8%AE%BA%E6%96%87'>论文</a></li>
                 
@@ -429,6 +1181,8 @@ code.has-jax {
     <a href="https://code0xff.org/tags/kudu/">kudu </a>
     
     <a href="https://code0xff.org/tags/kyuubi/">Kyuubi </a>
+    
+    <a href="https://code0xff.org/tags/llvm/">LLVM </a>
     
     <a href="https://code0xff.org/tags/manacher/">Manacher </a>
     
