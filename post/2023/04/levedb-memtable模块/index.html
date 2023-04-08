@@ -1,0 +1,908 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    
+    <meta name="referrer" content="no-referrer-when-downgrade">
+    
+
+    <title>LevelDB MemTable模块 | 记录每个瞬间</title>
+    <meta property="og:title" content="LevelDB MemTable模块 - 记录每个瞬间">
+    <meta property="og:type" content="article">
+        
+    <meta property="article:published_time" content='2023-04-06T11:32:19&#43;08:00'>
+        
+        
+    <meta property="article:modified_time" content='2023-04-06T11:32:19&#43;08:00'>
+        
+    <meta name="Keywords" content="">
+    <meta name="description" content="LevelDB MemTable模块">
+        <meta name="author" content="隔壁老王">
+        
+    <meta property="og:url" content="https://code0xff.org/post/2023/04/levedb-memtable%E6%A8%A1%E5%9D%97/">
+    <link rel="shortcut icon" href='/favicon.ico'  type="image/x-icon">
+
+    <link rel="stylesheet" href='/css/normalize.css'>
+    <link rel="stylesheet" href='/css/style.css'>
+    <script type="text/javascript" src="//cdn.bootcdn.net/ajax/libs/jquery/3.4.1/jquery.min.js"></script>
+
+    
+    
+    
+        <link href="https://cdn.bootcdn.net/ajax/libs/fancybox/3.5.7/jquery.fancybox.min.css" rel="stylesheet">
+    
+    
+    
+    
+</head>
+
+
+<body>
+    <header id="header" class="clearfix">
+    <div class="container">
+        <div class="col-group">
+            <div class="site-name ">
+                
+                    <a id="logo" href="https://code0xff.org/">
+                        记录每个瞬间
+                    </a>
+                
+                
+            </div>
+            <div>
+                <nav id="nav-menu" class="clearfix">
+                    <a class="current" href="https://code0xff.org/">首页</a>
+                    
+                    <a  href="https://code0xff.org/linked/" title="链接">链接</a>
+                    
+                    <a  href="https://code0xff.org/archives/" title="归档">归档</a>
+                    
+                    <a  href="https://code0xff.org/about/" title="关于">关于</a>
+                    
+                </nav>
+            </div>
+        </div>
+    </div>
+</header>
+
+    <div id="body">
+        <div class="container">
+            <div class="col-group">
+
+                <div class="col-8" id="main">
+                    
+<div class="res-cons">
+    
+    <article class="post">
+        <header>
+            <h1 class="post-title">LevelDB MemTable模块</h1>
+        </header>
+        <date class="post-meta meta-date">
+            2023年4月6日
+        </date>
+<nav id="TableOfContents">
+  <ul>
+    <li>
+      <ul>
+        <li><a href="#跳表">跳表</a></li>
+        <li><a href="#memtable">MemTable</a></li>
+        <li><a href="#生成sstable">生成SSTable</a></li>
+        <li><a href="#参考">参考</a></li>
+      </ul>
+    </li>
+  </ul>
+</nav>
+        
+        <div class="post-meta">
+            
+            <span class="post-meta meta-tags">
+                <ul class="clearfix">
+                    <a href='/categories/%E5%8E%9F%E7%90%86%E5%88%86%E6%9E%90'>原理分析</a>
+                </ul>
+            </span>
+            
+        </div>
+        
+        
+        <div class="post-meta">
+            <span id="busuanzi_container_page_pv">|<span id="busuanzi_value_page_pv"></span><span>
+                    阅读</span></span>
+        </div>
+        
+        
+        <div class="post-content">
+            <h2 id="跳表">跳表</h2>
+<p>跳表是一种可以取代平衡树的数据结构<br>
+跳表使用概率均衡而非严格均衡策略，从而相对于平衡树，大大简化和加速了元素的插入和删除</p>
+<p>跳表的结构<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/04/LeveDB-MemTable%E6%A8%A1%E5%9D%97/1.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/04/LeveDB-MemTable%E6%A8%A1%E5%9D%97/1.jpg" />
+        </a>
+    <br>
+最底下一层都包含完整的数据，从第二层开始，节点的高度是随机产生的<br>
+越往上的节点，其出现的概率越低</p>
+<ul>
+<li>作者从链表讲起，一步步引出了跳表这种结构的由来。</li>
+<li>图a中，所有元素按序排列，被存储在一个链表中，则一次查询之多需要比较N个链表节点；</li>
+<li>图b中，每隔2个链表节点，新增一个额外的指针，该指针指向间距为2的下一个节点，如此以来，借助这些额外的指针，一次查询至多只需要⌈n/2⌉ + 1次比较；</li>
+<li>图c中，在图b的基础上，每隔4个链表节点，新增一个额外的指针，指向间距为4的下一个节点，一次查询至多需要⌈n/4⌉ + 2次比较；</li>
+<li>作者推论，若每隔2^ i个节点，新增一个辅助指针，最终一次节点的查询效率为O(log n)。但是这样不断地新增指针，使得一次插入、删除操作将会变得非常复杂。</li>
+<li>一个拥有k个指针的结点称为一个k层结点（level k node）。按照上面的逻辑，50%的结点为1层节点，25%的结点为2层节点，12.5%的结点为3层节点。若保证每层节点的分布如上述概率所示，则仍然能够相同的查询效率。图e便是一个示例。</li>
+</ul>
+<p>查找和插入<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/04/LeveDB-MemTable%E6%A8%A1%E5%9D%97/2.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/04/LeveDB-MemTable%E6%A8%A1%E5%9D%97/2.jpg" />
+        </a>
+    <br>
+查找 12</p>
+<ul>
+<li>通过头结点，找到 6，再后面是null，所以 6 下降一层</li>
+<li>6下降一层，下一个节点时 25，大于 12，6这个节点再下降一层</li>
+<li>6的下一个是9,9的下一个是25，所以 9这个节点再下降一层</li>
+<li>9的 下一个是12，找到</li>
+</ul>
+<p>插入17</p>
+<ul>
+<li>首先要定位到 17 的前面一个，这个过程跟上面的一样</li>
+<li>再将 17放到 12后面</li>
+</ul>
+<p>LevelDB 的 插入实现</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">15
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">16
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">17
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">18
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">19
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">20
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">21
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">22
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">23
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">24
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">25
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-cpp" data-lang="cpp"><span style="display:flex;"><span><span style="color:#ff79c6">template</span> <span style="color:#ff79c6">&lt;</span><span style="color:#ff79c6">typename</span> Key, <span style="color:#ff79c6">class</span> <span style="color:#50fa7b">Comparator</span><span style="color:#ff79c6">&gt;</span>
+</span></span><span style="display:flex;"><span><span style="color:#8be9fd">void</span> SkipList<span style="color:#ff79c6">&lt;</span>Key, Comparator<span style="color:#ff79c6">&gt;::</span>Insert(<span style="color:#ff79c6">const</span> Key<span style="color:#ff79c6">&amp;</span> key) {
+</span></span><span style="display:flex;"><span>  <span style="color:#6272a4">// 这里的 kMaxHeight 固定为 12，最大高度
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>  <span style="color:#6272a4">// 然后找到前一个节点
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>  Node<span style="color:#ff79c6">*</span> prev[kMaxHeight];
+</span></span><span style="display:flex;"><span>  Node<span style="color:#ff79c6">*</span> x <span style="color:#ff79c6">=</span> FindGreaterOrEqual(key, prev);
+</span></span><span style="display:flex;"><span>  assert(x <span style="color:#ff79c6">==</span> <span style="color:#ff79c6">nullptr</span> <span style="color:#ff79c6">||</span> <span style="color:#ff79c6">!</span>Equal(key, x<span style="color:#ff79c6">-&gt;</span>key));
+</span></span><span style="display:flex;"><span>  <span style="color:#6272a4">// 随机产生一个高度
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>  <span style="color:#8be9fd">int</span> height <span style="color:#ff79c6">=</span> RandomHeight();
+</span></span><span style="display:flex;"><span>  <span style="color:#6272a4">// 如果这个高度 &gt; skip-list的当前高度，则多出来的那部分，其 next 指向 head_.next
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>  <span style="color:#6272a4">// 再保存
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>  <span style="color:#ff79c6">if</span> (height <span style="color:#ff79c6">&gt;</span> GetMaxHeight()) {
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">for</span> (<span style="color:#8be9fd">int</span> i <span style="color:#ff79c6">=</span> GetMaxHeight(); i <span style="color:#ff79c6">&lt;</span> height; i<span style="color:#ff79c6">++</span>) {
+</span></span><span style="display:flex;"><span>      prev[i] <span style="color:#ff79c6">=</span> head_;
+</span></span><span style="display:flex;"><span>    }
+</span></span><span style="display:flex;"><span>    max_height_.store(height, std<span style="color:#ff79c6">::</span>memory_order_relaxed);
+</span></span><span style="display:flex;"><span>  }
+</span></span><span style="display:flex;"><span>  <span style="color:#6272a4">// 创建一个新节点
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>  x <span style="color:#ff79c6">=</span> NewNode(key, height);
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">for</span> (<span style="color:#8be9fd">int</span> i <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">0</span>; i <span style="color:#ff79c6">&lt;</span> height; i<span style="color:#ff79c6">++</span>) {
+</span></span><span style="display:flex;"><span>	<span style="color:#6272a4">// 串联的方式跟单链表类似
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>    x<span style="color:#ff79c6">-&gt;</span>NoBarrier_SetNext(i, prev[i]<span style="color:#ff79c6">-&gt;</span>NoBarrier_Next(i));
+</span></span><span style="display:flex;"><span>    prev[i]<span style="color:#ff79c6">-&gt;</span>SetNext(i, x);
+</span></span><span style="display:flex;"><span>  }
+</span></span><span style="display:flex;"><span>}
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>随机产生的高度</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-cpp" data-lang="cpp"><span style="display:flex;"><span><span style="color:#ff79c6">template</span> <span style="color:#ff79c6">&lt;</span><span style="color:#ff79c6">typename</span> Key, <span style="color:#ff79c6">class</span> <span style="color:#50fa7b">Comparator</span><span style="color:#ff79c6">&gt;</span>
+</span></span><span style="display:flex;"><span><span style="color:#8be9fd">int</span> SkipList<span style="color:#ff79c6">&lt;</span>Key, Comparator<span style="color:#ff79c6">&gt;::</span>RandomHeight() {
+</span></span><span style="display:flex;"><span>  <span style="color:#6272a4">// Increase height with probability 1 in kBranching
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>  <span style="color:#6272a4">// 生产 高度为1 的节点概率为 3/4，高度为 2的节点概率为 1/4
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>  <span style="color:#6272a4">// 层高为3的概率是3/16（1/4×3/4），层高为4的概率是3/64（1/4×1/4×3/4）
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>  <span style="color:#ff79c6">static</span> <span style="color:#ff79c6">const</span> <span style="color:#8be9fd">unsigned</span> <span style="color:#8be9fd">int</span> kBranching <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">4</span>;
+</span></span><span style="display:flex;"><span>  <span style="color:#8be9fd">int</span> height <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">1</span>;
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">while</span> (height <span style="color:#ff79c6">&lt;</span> kMaxHeight <span style="color:#ff79c6">&amp;&amp;</span> rnd_.OneIn(kBranching)) {
+</span></span><span style="display:flex;"><span>    height<span style="color:#ff79c6">++</span>;
+</span></span><span style="display:flex;"><span>  }
+</span></span><span style="display:flex;"><span>  assert(height <span style="color:#ff79c6">&gt;</span> <span style="color:#bd93f9">0</span>);
+</span></span><span style="display:flex;"><span>  assert(height <span style="color:#ff79c6">&lt;=</span> kMaxHeight);
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">return</span> height;
+</span></span><span style="display:flex;"><span>}
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>查找前一个节点</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">15
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">16
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">17
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">18
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">19
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">20
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">21
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">22
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">23
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">24
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">25
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">26
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-cpp" data-lang="cpp"><span style="display:flex;"><span><span style="color:#ff79c6">template</span> <span style="color:#ff79c6">&lt;</span><span style="color:#ff79c6">typename</span> Key, <span style="color:#ff79c6">class</span> <span style="color:#50fa7b">Comparator</span><span style="color:#ff79c6">&gt;</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">typename</span> SkipList<span style="color:#ff79c6">&lt;</span>Key, Comparator<span style="color:#ff79c6">&gt;::</span>Node<span style="color:#ff79c6">*</span>
+</span></span><span style="display:flex;"><span>SkipList<span style="color:#ff79c6">&lt;</span>Key, Comparator<span style="color:#ff79c6">&gt;::</span>FindGreaterOrEqual(<span style="color:#ff79c6">const</span> Key<span style="color:#ff79c6">&amp;</span> key, Node<span style="color:#ff79c6">**</span> prev) <span style="color:#ff79c6">const</span> {
+</span></span><span style="display:flex;"><span>  <span style="color:#6272a4">// 从头结点开始查找，并获取 skip-list 当前最大高度
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>  Node<span style="color:#ff79c6">*</span> x <span style="color:#ff79c6">=</span> head_;
+</span></span><span style="display:flex;"><span>  <span style="color:#8be9fd">int</span> level <span style="color:#ff79c6">=</span> GetMaxHeight() <span style="color:#ff79c6">-</span> <span style="color:#bd93f9">1</span>;
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">while</span> (<span style="color:#8be9fd;font-style:italic">true</span>) {
+</span></span><span style="display:flex;"><span>    <span style="color:#6272a4">// 假设 level 为4，x-&gt;Next(4) 就是头结点高度为 4 层的下一个节点
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>    Node<span style="color:#ff79c6">*</span> next <span style="color:#ff79c6">=</span> x<span style="color:#ff79c6">-&gt;</span>Next(level);
+</span></span><span style="display:flex;"><span>	<span style="color:#6272a4">// 如果当前节点 key &gt; 下一个，则继续往后查找
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>    <span style="color:#ff79c6">if</span> (KeyIsAfterNode(key, next)) {
+</span></span><span style="display:flex;"><span>      x <span style="color:#ff79c6">=</span> next;
+</span></span><span style="display:flex;"><span>    } <span style="color:#ff79c6">else</span> {
+</span></span><span style="display:flex;"><span>	  <span style="color:#6272a4">// 假设当前 level 为 4，x[4] 发现 小于 x-&gt;Next(4)
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>	  <span style="color:#6272a4">// prev[4] = x-&gt;Next(4)
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>      <span style="color:#ff79c6">if</span> (prev <span style="color:#ff79c6">!=</span> <span style="color:#ff79c6">nullptr</span>) prev[level] <span style="color:#ff79c6">=</span> x;
+</span></span><span style="display:flex;"><span>	  <span style="color:#6272a4">// level等于0，就是最下面一层
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>      <span style="color:#ff79c6">if</span> (level <span style="color:#ff79c6">==</span> <span style="color:#bd93f9">0</span>) {
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">return</span> next;
+</span></span><span style="display:flex;"><span>      } <span style="color:#ff79c6">else</span> {
+</span></span><span style="display:flex;"><span>        <span style="color:#6272a4">// 下降一层，level 由 4 变成 3
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>        level<span style="color:#ff79c6">--</span>;
+</span></span><span style="display:flex;"><span>      }
+</span></span><span style="display:flex;"><span>    }
+</span></span><span style="display:flex;"><span>  }
+</span></span><span style="display:flex;"><span>}
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>由于 LSM 树的特性，跳表中没有删除操作，只有 插入、查找操作<br>
+同时也提供了 遍历操作<br>
+包括 向前、向后遍历，由于 LevelDB的跳表是单链表结构，所以向前操作的成本比较高</p>
+<p>LevelDB的跳表中，使用了很多 内存屏障的操作，都是 C++11 中的标准</p>
+<ul>
+<li>std::memory_order_relaxed：不对重排做限制，只保证相关共享内存访问的原子性。</li>
+<li>std::memory_order_acquire: 用在 load 时，保证同线程中该 load 之后的对相关内存读写语句不会被重排到 load 之前，并且其他线程中对同样内存用了 store release 都对其可见。</li>
+<li>std::memory_order_release：用在 store 时，保证同线程中该 store 之后的对相关内存的读写语句不会被重排到 store 之前，并且该线程的所有修改对用了 load acquire 的其他线程都可见。</li>
+</ul>
+<p>相比于平衡树，LevelDB采用跳表的优势</p>
+<ul>
+<li>dump的时候需要快速的顺序扫描，链表更有优势</li>
+<li>不需要删除操作，平衡树的功能显得多余了</li>
+<li>最大限度的并行，使用了内存屏障，如果要在平衡树中最类似功能，代价会更大</li>
+</ul>
+<h2 id="memtable">MemTable</h2>
+<p>MemTable 内部维护了一个跳表的迭代器</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-cpp" data-lang="cpp"><span style="display:flex;"><span>MemTable<span style="color:#ff79c6">::</span>Table<span style="color:#ff79c6">::</span>Iterator iter_;
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">typedef</span> SkipList<span style="color:#ff79c6">&lt;</span><span style="color:#ff79c6">const</span> <span style="color:#8be9fd">char</span><span style="color:#ff79c6">*</span>, KeyComparator<span style="color:#ff79c6">&gt;</span> Table;
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>还有内存分配类，向前、向后迭代器</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-cpp" data-lang="cpp"><span style="display:flex;"><span>Arena arena_;
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">friend</span> <span style="color:#ff79c6">class</span> <span style="color:#50fa7b">MemTableIterator</span>;
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">friend</span> <span style="color:#ff79c6">class</span> <span style="color:#50fa7b">MemTableBackwardIterator</span>;
+</span></span><span style="display:flex;"><span>KeyComparator comparator_;
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>一些重要的函数</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-cpp" data-lang="cpp"><span style="display:flex;"><span>size_t <span style="color:#50fa7b">ApproximateMemoryUsage</span>();
+</span></span><span style="display:flex;"><span>Iterator<span style="color:#ff79c6">*</span> <span style="color:#50fa7b">NewIterator</span>();
+</span></span><span style="display:flex;"><span><span style="color:#8be9fd">void</span> <span style="color:#50fa7b">Add</span>(SequenceNumber seq, ValueType type, <span style="color:#ff79c6">const</span> Slice<span style="color:#ff79c6">&amp;</span> key, <span style="color:#ff79c6">const</span> Slice<span style="color:#ff79c6">&amp;</span> value);
+</span></span><span style="display:flex;"><span><span style="color:#8be9fd">bool</span> <span style="color:#50fa7b">Get</span>(<span style="color:#ff79c6">const</span> LookupKey<span style="color:#ff79c6">&amp;</span> key, std<span style="color:#ff79c6">::</span>string<span style="color:#ff79c6">*</span> value, Status<span style="color:#ff79c6">*</span> s);
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>插入 和 查询 都是调用 sikp-list 实现的
+SkipList中单条数据存放一条Key-Value数据，定义为：</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">5
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-cpp" data-lang="cpp"><span style="display:flex;"><span>SkipList <span style="color:#8be9fd;font-style:italic">Node</span> :<span style="color:#ff79c6">=</span> InternalKey <span style="color:#ff79c6">+</span> ValueString
+</span></span><span style="display:flex;"><span><span style="color:#8be9fd;font-style:italic">InternalKey</span> :<span style="color:#ff79c6">=</span> KeyString <span style="color:#ff79c6">+</span> SequenceNum <span style="color:#ff79c6">+</span> Type
+</span></span><span style="display:flex;"><span><span style="color:#8be9fd;font-style:italic">Type</span> :<span style="color:#ff79c6">=</span> kDelete or kValue
+</span></span><span style="display:flex;"><span><span style="color:#8be9fd;font-style:italic">ValueString</span> :<span style="color:#ff79c6">=</span> ValueLength <span style="color:#ff79c6">+</span> Value
+</span></span><span style="display:flex;"><span><span style="color:#8be9fd;font-style:italic">KeyString</span> :<span style="color:#ff79c6">=</span> UserKeyLength <span style="color:#ff79c6">+</span> UserKey
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/04/LeveDB-MemTable%E6%A8%A1%E5%9D%97/3.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/04/LeveDB-MemTable%E6%A8%A1%E5%9D%97/3.jpg" />
+        </a>
+    </p>
+<p>插入操作，源码中给出的 一条记录格式</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">6
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-cpp" data-lang="cpp"><span style="display:flex;"><span>  <span style="color:#6272a4">// Format of an entry is concatenation of:
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>  <span style="color:#6272a4">//  key_size     : varint32 of internal_key.size()
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>  <span style="color:#6272a4">//  key bytes    : char[internal_key.size()]
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>  <span style="color:#6272a4">//  tag          : uint64((sequence &lt;&lt; 8) | type), type:insert or delete
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>  <span style="color:#6272a4">//  value_size   : varint32 of value.size()
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>  <span style="color:#6272a4">//  value bytes  : char[value.size()]
+</span></span></span></code></pre></td></tr></table>
+</div>
+</div><ul>
+<li>获取编码后的一条记录长度</li>
+<li>Arena分配对应的内存</li>
+<li>将 一条记录 拷贝到Arena 分配的内存中</li>
+<li>调用 SkipList 完成插入</li>
+</ul>
+<p>查找</p>
+<ul>
+<li>根据传入的 key，去 skip-list 中查找</li>
+<li>比较传入的 key 和 找到的 key 是否相等</li>
+<li>如果相等，检查 type，如果是 delete，则返回空</li>
+<li>否则 解析出 value，存入 str::string 中并返回</li>
+</ul>
+<h2 id="生成sstable">生成SSTable</h2>
+<p>mem-table 写 sstable的过程，在
+db/db_impl.cc 的 WriteLevel0Table 函数中<br>
+调用过程：</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-cpp" data-lang="cpp"><span style="display:flex;"><span>后台线程BackgroundCall  <span style="color:#ff79c6">--&gt;</span>  BackgroundCompaction  <span style="color:#ff79c6">--&gt;</span>  CompactMemTable  <span style="color:#ff79c6">--&gt;</span>  WriteLevel0Table  
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>CompactMemTable 还会调用 RemoveObsoleteFiles，用来删除无用的 LOG 文件<br>
+根据代码中的注释，文件类型包括：</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">7
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-cpp" data-lang="cpp"><span style="display:flex;"><span><span style="color:#6272a4">// Owned filenames have the form:
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">//    dbname/CURRENT
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">//    dbname/LOCK
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">//    dbname/LOG
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">//    dbname/LOG.old
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">//    dbname/MANIFEST-[0-9]+
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">//    dbname/[0-9]+.(log|sst|ldb)
+</span></span></span></code></pre></td></tr></table>
+</div>
+</div><p>CompactMemTable过程：</p>
+<ul>
+<li>获取当前版本 Version* base = versions_-&gt;current();</li>
+<li>执行 WriteLevel0Table</li>
+<li>设置 VersionEdit 的log编号，并将此次修改增加到 VersionSet 中</li>
+<li>调用 RemoveObsoleteFiles</li>
+</ul>
+<p>RemoveObsoleteFiles 过程：</p>
+<ul>
+<li>去 DB 路径下拿到文件列表，然后解析这些文件</li>
+<li>主要解析出这些文件的 number：dbname/MANIFEST-[0-9]+、dbname/[0-9]+.(log|sst|ldb)</li>
+<li>如果 number &lt; 当前日志 &amp;&amp; number &lt; 前一个版本日志，这个日志就可以删除了</li>
+<li>如果 manifest 小于 当前 manifest 编号，这个 manifest 文件也可以删除了</li>
+<li>获取 VersionSet 中所有的活跃文件，对于 kTableFile、kTempFile 如果不在活跃文件中，也可以删除</li>
+</ul>
+<p>获取活跃文件的过程：</p>
+<ul>
+<li>Version是通过双链表组织的</li>
+<li>获取每层的元数据集合 std::vector&lt;FileMetaData*&gt;，默认最大层为 7，也就是遍历 7 次</li>
+<li>对每层的元数据列表，将其插入到 活跃列表中 std::set&lt;uint64_t&gt;*</li>
+</ul>
+<hr>
+<p>WriteLevel0Table过程</p>
+<ul>
+<li>得到一个新的 FileMetaData 编号，就是 VersionSet-&gt;next_file_number_++</li>
+<li>调用 BuildTable，其生成的 TableFileName 是根据  FileMetaData的编号得到的</li>
+<li>获取 min、max key，然后确定将 ss-table 推入哪个层级，调用 PickLevelForMemTableOutput</li>
+<li>将 压缩状态存入 CompactionStats[level] 中，这里的 level 固定为 PickLevelForMemTableOutput 返回的层级</li>
+</ul>
+<p>BuildTable 过程：</p>
+<ul>
+<li>从 skip-list 的第一个元素开始遍历，一直到结束，将这些 key-value 加入到 TableBuilder</li>
+<li>同时记录 FileMetaData 的最大、最小、key数量、文件size</li>
+<li>将数据写入到磁盘</li>
+</ul>
+<p>PickLevelForMemTableOutput</p>
+<ul>
+<li>如果跟 0层的有重叠，则推入 0层</li>
+<li>检查方式是，对于 level0，需要遍历所有文件，检查每个文件跟min、max key 是否有重叠</li>
+<li>非 level 0的，则使用 二分查找 当前层的所有文件</li>
+<li>还会检查 level 0、level 1 在其祖父层级(对应的就是 level 2、level 3中，是否重叠太多</li>
+<li>默认的最大单个文件大小为 2M，如果一次重叠的数量 &gt; 20M，PickLevelForMemTableOutput 会继续往更深层级查找</li>
+<li>不过限制了最大查找层级为 2，这也是做了一个权衡</li>
+</ul>
+<p>后台压缩合并过程
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/04/LeveDB-MemTable%E6%A8%A1%E5%9D%97/4.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/04/LeveDB-MemTable%E6%A8%A1%E5%9D%97/4.jpg" />
+        </a>
+    </p>
+<p>min、max-key在不同层级的查找
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/04/LeveDB-MemTable%E6%A8%A1%E5%9D%97/5.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/04/LeveDB-MemTable%E6%A8%A1%E5%9D%97/5.jpg" />
+        </a>
+    </p>
+<p>PickLevelForMemTableOutput的检测过程
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/04/LeveDB-MemTable%E6%A8%A1%E5%9D%97/6.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/04/LeveDB-MemTable%E6%A8%A1%E5%9D%97/6.jpg" />
+        </a>
+    </p>
+<h2 id="参考">参考</h2>
+<ul>
+<li><a href="https://15721.courses.cs.cmu.edu/spring2018/papers/08-oltpindexes1/pugh-skiplists-cacm1990.pdf">Skip Lists: A Probabilistic Alternative to Balanced Trees</a></li>
+<li><a href="https://15721.courses.cs.cmu.edu/spring2018/papers/08-oltpindexes1/skiplists-done-right2016.pdf">Skip Lists: Done Right</a></li>
+<li><a href="https://github.com/google/leveldb/blob/main/doc/index.md">github index</a></li>
+<li><a href="https://llimllib.github.io/bloomfilter-tutorial/zh_CN/">Bloom Filters by Example</a></li>
+<li><a href="https://www.qtmuniao.com/2020/07/03/leveldb-data-structures-skip-list/">漫谈 LevelDB 数据结构（一）：跳表（Skip List）</a></li>
+<li><a href="https://www.qtmuniao.com/2020/11/18/leveldb-data-structures-bloom-filter/">漫谈 LevelDB 数据结构（二）：布隆过滤器（Bloom Filter）</a></li>
+<li><a href="https://www.qtmuniao.com/2021/05/09/levedb-data-structures-lru-cache/">漫谈 LevelDB 数据结构（三）：LRU 缓存（ LRUCache）</a></li>
+<li><a href="https://www.zhihu.com/column/c_1282795241104465920">LevelDB源码剖析</a></li>
+<li><a href="https://sf-zhou.github.io/#/LevelDB">SF-Zhou&rsquo;s Blog</a></li>
+<li><a href="https://leveldb-handbook.readthedocs.io/zh/latest/index.html">leveldb-handbook</a></li>
+<li><a href="http://catkang.github.io/2022/01/27/btree-lock.html">庖丁解LevelDB</a></li>
+<li><a href="https://docs.rs/leveldb/latest/leveldb/">rust使用</a></li>
+<li><a href="https://docs.riak.com/riak/kv/latest/setup/planning/backend/leveldb/index.html">LevelDB使用介绍</a></li>
+<li><a href="https://en.wikipedia.org/wiki/LevelDB">LeveLDB维基百科</a></li>
+<li><a href="https://dbdb.io/db/leveldb">dbdb.io的LevelDB介绍</a></li>
+<li><a href="https://mariadb.com/kb/en/leveldb/">MariaDB的插件</a></li>
+<li><a href="https://item.jd.com/13006589.html">书籍：精通LevelDB</a></li>
+<li><a href="https://yuerblog.cc/wp-content/uploads/leveldb%E5%AE%9E%E7%8E%B0%E8%A7%A3%E6%9E%90.pdf">leveldb 实现解析</a></li>
+<li><a href="https://www.opengroup.org/austin/papers/posix_faq.html">POSIX™ 1003.1 Frequently Asked Questions (FAQ Version 1.18)</a></li>
+<li><a href="https://en.wikipedia.org/wiki/Spurious_wakeup">Spurious wakeup</a></li>
+<li><a href="https://en.wikipedia.org/wiki/Memory_barrier">Memory barrier</a></li>
+<li><a href="http://www.rdrop.com/users/paulmck/scalability/paper/whymb.2010.06.07c.pdf">Memory Barriers: a Hardware View for Software Hackers</a></li>
+<li><a href="https://bean-li.github.io/categories/#leveldb">Bean Li的LevelDB文章汇总</a></li>
+<li><a href="https://zhuanlan.zhihu.com/p/51573929">LevelDB设计与实现 - Compaction</a></li>
+</ul>
+
+			<script type="text/javascript"
+        async
+        src="https://cdn.bootcss.com/mathjax/2.7.3/MathJax.js?config=TeX-AMS-MML_HTMLorMML">
+MathJax.Hub.Config({
+  tex2jax: {
+    inlineMath: [['$','$'], ['\\(','\\)']],
+    displayMath: [['$$','$$'], ['\[\[','\]\]']],
+    processEscapes: true,
+    processEnvironments: true,
+    skipTags: ['script', 'noscript', 'style', 'textarea', 'pre'],
+    TeX: { equationNumbers: { autoNumber: "AMS" },
+         extensions: ["AMSmath.js", "AMSsymbols.js"] }
+  }
+});
+
+MathJax.Hub.Queue(function() {
+    
+    
+    
+    var all = MathJax.Hub.getAllJax(), i;
+    for(i = 0; i < all.length; i += 1) {
+        all[i].SourceElement().parentNode.className += ' has-jax';
+    }
+});
+</script>
+
+<style>
+code.has-jax {
+    font: inherit;
+    font-size: 100%;
+    background: inherit;
+    border: inherit;
+    color: #515151;
+}
+</style>
+        </div>
+
+        
+
+
+        
+
+<div class="post-archive">
+    <h2>相关文章</h2>
+    <ul class="listing">
+        
+        <li><a href="/post/2023/04/levedb-log%E6%A8%A1%E5%9D%97/">LevelDB Log模块</a></li>
+        
+        <li><a href="/post/2023/03/levedb-%E5%85%AC%E5%BC%80%E6%8E%A5%E5%8F%A3/">LevelDB 公开的接口</a></li>
+        
+        <li><a href="/post/2023/03/levedb-%E5%9F%BA%E6%9C%AC%E6%A6%82%E5%BF%B5/">LevelDB 基本概念</a></li>
+        
+    </ul>
+</div>
+
+
+        <div class="post-meta meta-tags">
+            
+            <ul class="clearfix">
+                
+                <li><a href='/tags/leveldb'>LevelDB</a></li>
+                
+            </ul>
+            
+        </div>
+    </article>
+    
+    
+
+    
+    
+    <div class="post bg-white">
+      <script src="https://utteranc.es/client.js"
+            repo= "himichael/hugoblogtalks"
+            issue-term="pathname"
+            theme="github-light"
+            crossorigin="anonymous"
+            async>
+      </script>
+    </div>
+    
+</div>
+
+
+                </div>
+
+                <div id="secondary">
+    <section class="widget">
+        <form id="search" action='https://code0xff.org/search/' method="get" accept-charset="utf-8" target="_blank" _lpchecked="1">
+      
+      <input type="text" name="q" maxlength="20" placeholder="Search">
+      <input type="hidden" name="sitesearch" value="https://code0xff.org/">
+      <button type="submit" class="submit icon-search"></button>
+</form>
+    </section>
+    
+    <section class="widget">
+        <h3 class="widget-title">最近文章</h3>
+<ul class="widget-list">
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/04/levedb-memtable%E6%A8%A1%E5%9D%97/" title="LevelDB MemTable模块">LevelDB MemTable模块</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/04/levedb-log%E6%A8%A1%E5%9D%97/" title="LevelDB Log模块">LevelDB Log模块</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/03/levedb-%E5%85%AC%E5%BC%80%E6%8E%A5%E5%8F%A3/" title="LevelDB 公开的接口">LevelDB 公开的接口</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/03/levedb-%E5%9F%BA%E6%9C%AC%E6%A6%82%E5%BF%B5/" title="LevelDB 基本概念">LevelDB 基本概念</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/03/oceanbase%E5%BC%80%E5%8F%91%E8%80%85%E5%A4%A7%E4%BC%9A/" title="OceanBase开发者大会分享">OceanBase开发者大会分享</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/03/bustub%E6%95%B0%E6%8D%AE%E5%BA%93/" title="bustub数据库">bustub数据库</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/02/cpu-and-cache-efficient-management-of-memory-resident-databases/" title="CPU and Cache Efficient Management of Memory-Resident Databases">CPU and Cache Efficient Management of Memory-Resident Databases</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/02/efficiently-compiling-efficient-query-plans-for-modern-hardware/" title="Efficiently Compiling Efficient Query Plans for Modern Hardware">Efficiently Compiling Efficient Query Plans for Modern Hardware</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/02/generating-code-for-holistic-query-evaluation/" title="Generating code for holistic query evaluation">Generating code for holistic query evaluation</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/02/implementing-database-operations-using-simd-instructions/" title="Implementing Database Operations Using SIMD Instructions">Implementing Database Operations Using SIMD Instructions</a>
+    </li>
+    
+</ul>
+    </section>
+
+    
+
+    <section class="widget">
+        <h3 class="widget-title"><a href='/categories/'>分类</a></h3>
+<ul class="widget-list">
+    
+    <li><a href="https://code0xff.org/categories/%E5%88%86%E5%B8%83%E5%BC%8F/">分布式 (6)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E5%8E%9F%E7%90%86%E5%88%86%E6%9E%90/">原理分析 (10)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E5%95%86%E4%B8%9A/">商业 (3)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E5%A4%A7%E6%95%B0%E6%8D%AE/">大数据 (22)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%95%B0%E6%8D%AE%E5%BA%93/">数据库 (21)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%96%87%E5%AD%A6%E5%92%8C%E8%89%BA%E6%9C%AF/">文学和艺术 (2)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%97%85%E8%A1%8C/">旅行 (10)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%9E%B6%E6%9E%84/">架构 (2)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E7%AE%97%E6%B3%95/">算法 (8)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E7%B3%BB%E7%BB%9F/">系统 (5)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E7%BC%96%E7%A8%8B%E8%AF%AD%E8%A8%80/">编程语言 (2)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E8%A1%8C%E4%B8%9A%E8%A7%82%E5%AF%9F/">行业观察 (1)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E8%AF%BB%E4%B9%A6%E7%AC%94%E8%AE%B0/">读书笔记 (11)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E9%9A%8F%E4%BE%BF%E5%86%99%E5%86%99/">随便写写 (3)</a></li>
+    
+</ul>
+    </section>
+
+    <section class="widget">
+        <h3 class="widget-title">归档</a></h3>
+<ul class="widget-list">
+    
+    <li><a href="https://code0xff.org/years/2021%E5%B9%B4/">2021年 (31)</a></li>
+    
+    <li><a href="https://code0xff.org/years/2022%E5%B9%B4/">2022年 (55)</a></li>
+    
+    <li><a href="https://code0xff.org/years/2023%E5%B9%B4/">2023年 (20)</a></li>
+    
+</ul>
+    </section>
+
+    <section class="widget">
+        <h3 class="widget-title"><a href='/tags/'>标签</a></h3>
+<div class="tagcloud">
+    
+    <a href="https://code0xff.org/tags/b%E6%A0%91/">B树 </a>
+    
+    <a href="https://code0xff.org/tags/cmu-database/">CMU-Database </a>
+    
+    <a href="https://code0xff.org/tags/flink/">flink </a>
+    
+    <a href="https://code0xff.org/tags/hive/">Hive </a>
+    
+    <a href="https://code0xff.org/tags/k8s/">k8s </a>
+    
+    <a href="https://code0xff.org/tags/kudu/">kudu </a>
+    
+    <a href="https://code0xff.org/tags/kyuubi/">Kyuubi </a>
+    
+    <a href="https://code0xff.org/tags/leveldb/">LevelDB </a>
+    
+    <a href="https://code0xff.org/tags/llvm/">LLVM </a>
+    
+    <a href="https://code0xff.org/tags/manacher/">Manacher </a>
+    
+    <a href="https://code0xff.org/tags/mapreduce/">MapReduce </a>
+    
+    <a href="https://code0xff.org/tags/mysql/">MySQL </a>
+    
+    <a href="https://code0xff.org/tags/newsql/">NewSQL </a>
+    
+    <a href="https://code0xff.org/tags/oceanbase/">OceanBase </a>
+    
+    <a href="https://code0xff.org/tags/paxos/">paxos </a>
+    
+    <a href="https://code0xff.org/tags/raft/">raft </a>
+    
+    <a href="https://code0xff.org/tags/scala/">scala </a>
+    
+    <a href="https://code0xff.org/tags/simd/">SIMD </a>
+    
+    <a href="https://code0xff.org/tags/snowflake/">snowflake </a>
+    
+    <a href="https://code0xff.org/tags/spark/">spark </a>
+    
+    <a href="https://code0xff.org/tags/unix/">unix </a>
+    
+    <a href="https://code0xff.org/tags/%E4%BA%8C%E5%88%86%E6%9F%A5%E6%89%BE/">二分查找 </a>
+    
+    <a href="https://code0xff.org/tags/%E4%BA%8C%E5%8F%89%E6%A0%91%E9%81%8D%E5%8E%86/">二叉树遍历 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%88%86%E5%B8%83%E5%BC%8F/">分布式 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%8A%A8%E6%80%81%E6%B3%A8%E5%85%A5/">动态注入 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%8E%86%E5%8F%B2/">历史 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%90%91%E9%87%8F%E5%8C%96/">向量化 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%9B%9E%E6%BA%AF/">回溯 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%9B%BD%E5%86%85%E6%97%85%E8%A1%8C/">国内旅行 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%9B%BD%E5%A4%96%E6%97%85%E8%A1%8C/">国外旅行 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%A4%9A%E7%A7%9F%E6%88%B7/">多租户 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%A4%A7%E6%95%B0%E6%8D%AE/">大数据 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%AD%98%E5%82%A8/">存储 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%B7%A5%E4%BD%9C%E8%AE%B0%E5%BD%95/">工作记录 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%BE%AE%E6%9C%8D%E5%8A%A1/">微服务 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%95%B0%E6%8D%AE%E5%BA%93/">数据库 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%9F%A5%E8%AF%A2%E4%BC%98%E5%8C%96/">查询优化 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%9F%A5%E8%AF%A2%E7%BC%96%E8%AF%91/">查询编译 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%B1%87%E7%BC%96/">汇编 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%B5%8B%E8%AF%95/">测试 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%B9%96%E4%BB%93%E4%B8%80%E4%BD%93/">湖仓一体 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%94%9F%E6%B4%BB/">生活 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%94%B5%E5%BD%B1/">电影 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%AE%97%E6%B3%95/">算法 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BB%8F%E6%B5%8E/">经济 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BC%93%E5%AD%98/">缓存 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BC%96%E8%AF%91%E5%8E%9F%E7%90%86/">编译原理 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BD%91%E7%BB%9C/">网络 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AE%A1%E7%AE%97%E6%A1%86%E6%9E%B6/">计算框架 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AE%BA%E6%96%87/">论文 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AF%BB%E4%B9%A6/">读书 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AF%BB%E4%B9%A6%E7%AC%94%E8%AE%B0/">读书笔记 </a>
+    
+</div>
+    </section>
+
+    
+
+    <section class="widget">
+        <h3 class="widget-title">RSS</h3>
+        <ul class="widget-list">
+            <li><a href="https://code0xff.org/index.xml">文章 RSS</a></li>
+        </ul>
+    </section>
+</div>
+            </div>
+        </div>
+    </div>
+    <footer id="footer">
+    <div>
+        &copy; 2023 <a href="https://code0xff.org/">记录每个瞬间 By 老王</a>
+        
+    </div>
+    <br />
+    <div>
+        <div class="github-badge">
+            <a href="https://gohugo.io/" target="_black" rel="nofollow"><span class="badge-subject">Powered by</span><span class="badge-value bg-blue">Hugo</span></a>
+        </div>
+        <div class="github-badge">
+            <a href="https://github.com/flysnow-org/maupassant-hugo" target="_black"><span class="badge-subject">Theme</span><span class="badge-value bg-yellowgreen">Maupassant</span></a>
+        </div>
+    </div>
+</footer>
+
+
+    
+    <script type="text/javascript">
+        window.MathJax = {
+            tex2jax: {
+                inlineMath: [['$', '$']],
+                processEscapes: true
+                }
+            };
+    </script>
+    <script src='https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.5/MathJax.js?config=TeX-MML-AM_CHTML' async></script><script src="https://cdn.bootcdn.net/ajax/libs/fancybox/3.5.7/jquery.fancybox.min.js"></script>
+
+<a id="rocket" href="#top"></a>
+<script type="text/javascript" src='/js/totop.js?v=0.0.0' async=""></script>
+
+<script type="application/javascript">
+var doNotTrack = false;
+if (!doNotTrack) {
+	window.ga=window.ga||function(){(ga.q=ga.q||[]).push(arguments)};ga.l=+new Date;
+	ga('create', 'GA ID', 'auto');
+	
+	ga('send', 'pageview');
+}
+</script>
+<script async src='https://www.google-analytics.com/analytics.js'></script>
+
+
+
+    <script type="text/javascript" src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js" async></script>
+
+
+
+
+</body>
+
+</html>
