@@ -1,0 +1,833 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    
+    <meta name="referrer" content="no-referrer-when-downgrade">
+    
+
+    <title>LevelDB SSTable模块 | 记录每个瞬间</title>
+    <meta property="og:title" content="LevelDB SSTable模块 - 记录每个瞬间">
+    <meta property="og:type" content="article">
+        
+    <meta property="article:published_time" content='2023-04-09T09:22:11&#43;08:00'>
+        
+        
+    <meta property="article:modified_time" content='2023-04-09T09:22:11&#43;08:00'>
+        
+    <meta name="Keywords" content="">
+    <meta name="description" content="LevelDB SSTable模块">
+        <meta name="author" content="隔壁老王">
+        
+    <meta property="og:url" content="https://code0xff.org/post/2023/04/levedb-sstable%E6%A8%A1%E5%9D%97/">
+    <link rel="shortcut icon" href='/favicon.ico'  type="image/x-icon">
+
+    <link rel="stylesheet" href='/css/normalize.css'>
+    <link rel="stylesheet" href='/css/style.css'>
+    <script type="text/javascript" src="//cdn.bootcdn.net/ajax/libs/jquery/3.4.1/jquery.min.js"></script>
+
+    
+    
+    
+        <link href="https://cdn.bootcdn.net/ajax/libs/fancybox/3.5.7/jquery.fancybox.min.css" rel="stylesheet">
+    
+    
+    
+    
+</head>
+
+
+<body>
+    <header id="header" class="clearfix">
+    <div class="container">
+        <div class="col-group">
+            <div class="site-name ">
+                
+                    <a id="logo" href="https://code0xff.org/">
+                        记录每个瞬间
+                    </a>
+                
+                
+            </div>
+            <div>
+                <nav id="nav-menu" class="clearfix">
+                    <a class="current" href="https://code0xff.org/">首页</a>
+                    
+                    <a  href="https://code0xff.org/linked/" title="链接">链接</a>
+                    
+                    <a  href="https://code0xff.org/archives/" title="归档">归档</a>
+                    
+                    <a  href="https://code0xff.org/about/" title="关于">关于</a>
+                    
+                </nav>
+            </div>
+        </div>
+    </div>
+</header>
+
+    <div id="body">
+        <div class="container">
+            <div class="col-group">
+
+                <div class="col-8" id="main">
+                    
+<div class="res-cons">
+    
+    <article class="post">
+        <header>
+            <h1 class="post-title">LevelDB SSTable模块</h1>
+        </header>
+        <date class="post-meta meta-date">
+            2023年4月9日
+        </date>
+<nav id="TableOfContents">
+  <ul>
+    <li>
+      <ul>
+        <li><a href="#文件格式">文件格式</a></li>
+        <li><a href="#数据块的构建">数据块的构建</a></li>
+        <li><a href="#索引的构建">索引的构建</a></li>
+        <li><a href="#读取">读取</a></li>
+        <li><a href="#参考">参考</a></li>
+      </ul>
+    </li>
+  </ul>
+</nav>
+        
+        <div class="post-meta">
+            
+            <span class="post-meta meta-tags">
+                <ul class="clearfix">
+                    <a href='/categories/%E5%8E%9F%E7%90%86%E5%88%86%E6%9E%90'>原理分析</a>
+                </ul>
+            </span>
+            
+        </div>
+        
+        
+        <div class="post-meta">
+            <span id="busuanzi_container_page_pv">|<span id="busuanzi_value_page_pv"></span><span>
+                    阅读</span></span>
+        </div>
+        
+        
+        <div class="post-content">
+            <h2 id="文件格式">文件格式</h2>
+<p>doc/table_format.md 中介绍了 表格式</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-cpp" data-lang="cpp"><span style="display:flex;"><span><span style="color:#ff79c6">&lt;</span>beginning_of_file<span style="color:#ff79c6">&gt;</span>
+</span></span><span style="display:flex;"><span>[data block <span style="color:#bd93f9">1</span>]
+</span></span><span style="display:flex;"><span>[data block <span style="color:#bd93f9">2</span>]
+</span></span><span style="display:flex;"><span>...
+</span></span><span style="display:flex;"><span>[data block N]
+</span></span><span style="display:flex;"><span>[meta block <span style="color:#bd93f9">1</span>]
+</span></span><span style="display:flex;"><span>...
+</span></span><span style="display:flex;"><span>[meta block K]
+</span></span><span style="display:flex;"><span>[metaindex block]
+</span></span><span style="display:flex;"><span>[index block]
+</span></span><span style="display:flex;"><span>[Footer]        (fixed size; starts at file_size <span style="color:#ff79c6">-</span> <span style="color:#ff79c6">sizeof</span>(Footer))
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">&lt;</span>end_of_file<span style="color:#ff79c6">&gt;</span>
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>sstable 按照 4K大小，分为若干个 block，每个block除了数据外，还有压缩类型，CRC<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/04/LeveDB-SSTable%E6%A8%A1%E5%9D%97/7.jpeg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/04/LeveDB-SSTable%E6%A8%A1%E5%9D%97/7.jpeg" />
+        </a>
+    </p>
+<p>footer 固定为 48个字节，因为采用了变长编码，如果不足长度，需要填充 0</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">5
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-cpp" data-lang="cpp"><span style="display:flex;"><span> <span style="color:#8be9fd;font-style:italic">metaindex_handle</span>: <span style="color:#8be9fd">char</span>[p];     <span style="color:#6272a4">// Block handle for metaindex
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span> <span style="color:#8be9fd;font-style:italic">index_handle</span>:     <span style="color:#8be9fd">char</span>[q];     <span style="color:#6272a4">// Block handle for index
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span> <span style="color:#8be9fd;font-style:italic">padding</span>:          <span style="color:#8be9fd">char</span>[<span style="color:#bd93f9">40</span><span style="color:#ff79c6">-</span>p<span style="color:#ff79c6">-</span>q];<span style="color:#6272a4">// zeroed bytes to make fixed length
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>                                <span style="color:#6272a4">// (40==2*BlockHandle::kMaxEncodedLength)
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span> <span style="color:#8be9fd;font-style:italic">magic</span>:            fixed64;     <span style="color:#6272a4">// == 0xdb4775248b80fb57 (little-endian)
+</span></span></span></code></pre></td></tr></table>
+</div>
+</div><p>
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/04/LeveDB-SSTable%E6%A8%A1%E5%9D%97/1.png">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/04/LeveDB-SSTable%E6%A8%A1%E5%9D%97/1.png" />
+        </a>
+    <br>
+其中最后的magic number是固定的长度的8字节： 0xdb4775248b80fb57ull</p>
+<p>BlockHandle 指向文件的某个位置和偏移量，用于自解释，一个 varint64 最多10个字节，所以 footer 包含了 4个最多40字节，不够级补 0</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">5
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-cpp" data-lang="cpp"><span style="display:flex;"><span><span style="color:#ff79c6">class</span> <span style="color:#50fa7b">BlockHandle</span> {
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">private</span><span style="color:#ff79c6">:</span>
+</span></span><span style="display:flex;"><span>  <span style="color:#8be9fd">uint64_t</span> offset_;
+</span></span><span style="display:flex;"><span>  <span style="color:#8be9fd">uint64_t</span> size_;
+</span></span><span style="display:flex;"><span>};
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>各个文件块的含义</p>
+<ul>
+<li>Data Blocks: 存储一系列有序的key-value</li>
+<li>Meta Block：存储key-value对应的filter(默认为bloom filter)</li>
+<li>metaindex block: 指向Meta Block的索引</li>
+<li>Index BLocks: 指向Data Blocks的索引</li>
+<li>Footer : 指向索引的索引</li>
+</ul>
+<p>文件块的物理格式，这里采用了前缀压缩的方式<br>
+先存储一个完整的key，后面的 key存储时，记录公有部分，只存非公有部分即可<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/04/LeveDB-SSTable%E6%A8%A1%E5%9D%97/2.png">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/04/LeveDB-SSTable%E6%A8%A1%E5%9D%97/2.png" />
+        </a>
+    </p>
+<p>逻辑格式
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/04/LeveDB-SSTable%E6%A8%A1%E5%9D%97/3.png">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/04/LeveDB-SSTable%E6%A8%A1%E5%9D%97/3.png" />
+        </a>
+    </p>
+<h2 id="数据块的构建">数据块的构建</h2>
+<p>构建数据块的实现在 table/block_builder.cc 中<br>
+主要函数</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">5
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-cpp" data-lang="cpp"><span style="display:flex;"><span><span style="color:#6272a4">// 使用前缀 key 的方式组织，16个 key为一个重启点
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span><span style="color:#8be9fd">void</span> BlockBuilder<span style="color:#ff79c6">::</span>Add(<span style="color:#ff79c6">const</span> Slice<span style="color:#ff79c6">&amp;</span> key, <span style="color:#ff79c6">const</span> Slice<span style="color:#ff79c6">&amp;</span> value)
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4">// 超过阈值则flush，把所有 重启点也 flush 到磁盘
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>Slice BlockBuilder<span style="color:#ff79c6">::</span>Finish() 
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>Add过程</p>
+<ul>
+<li>如果小于重启点阈值，默认为16，则求出当前 key 和 last_key 的公共部分长度</li>
+<li>如果大于重启点，则直接将整个 key 的长度记录下来，并清空 重启点 counter</li>
+<li>记录非公共部分，然后记录变长 int32的 shared、non_shared 长度，value长度</li>
+<li>追加到 std::string buffer_ 中</li>
+<li>更新 last_key_ 为当前 key 的公共部分</li>
+</ul>
+<p>Finish</p>
+<ul>
+<li>将所有每个重启点都记录下来，保存为 fixed32</li>
+<li>记录所有充重启点数量</li>
+<li>重启点变量：std::vector&lt;uint32_t&gt; restarts_;  // Restart points</li>
+<li>重启点变量中记录的是长度，对应的就是 key-value 的偏移量</li>
+</ul>
+<p>数据块的组织
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/04/LeveDB-SSTable%E6%A8%A1%E5%9D%97/5.jpeg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/04/LeveDB-SSTable%E6%A8%A1%E5%9D%97/5.jpeg" />
+        </a>
+    </p>
+<p>key_shared、non_shared，value的组织结构<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/04/LeveDB-SSTable%E6%A8%A1%E5%9D%97/4.png">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/04/LeveDB-SSTable%E6%A8%A1%E5%9D%97/4.png" />
+        </a>
+    </p>
+<p>数据的查找</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-cpp" data-lang="cpp"><span style="display:flex;"><span><span style="color:#6272a4">// 生成一个迭代器，用来查找
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>Iterator<span style="color:#ff79c6">*</span> Block<span style="color:#ff79c6">::</span>NewIterator(<span style="color:#ff79c6">const</span> Comparator<span style="color:#ff79c6">*</span> comparator)
+</span></span><span style="display:flex;"><span><span style="color:#6272a4">// 返回的是 Block::Iter
+</span></span></span></code></pre></td></tr></table>
+</div>
+</div><p>查找入口</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-cpp" data-lang="cpp"><span style="display:flex;"><span><span style="color:#8be9fd">void</span> Seek(<span style="color:#ff79c6">const</span> Slice<span style="color:#ff79c6">&amp;</span> target) <span style="color:#ff79c6">override</span> 
+</span></span></code></pre></td></tr></table>
+</div>
+</div><ul>
+<li>这里会在 重启点中，做二分查找</li>
+<li>找到key &lt; target的最后一个重启点</li>
+<li>找到后，跳转到重启点</li>
+<li>自重启点线性向下，直到遇到key&gt;= target的k/v对</li>
+</ul>
+<p>
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/04/LeveDB-SSTable%E6%A8%A1%E5%9D%97/8.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/04/LeveDB-SSTable%E6%A8%A1%E5%9D%97/8.jpg" />
+        </a>
+    </p>
+<h2 id="索引的构建">索引的构建</h2>
+<p>索引的构建实现，在 table/table_builder.cc 中<br>
+这个文件中的 主要函数为</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">5
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-cpp" data-lang="cpp"><span style="display:flex;"><span><span style="color:#8be9fd">void</span> TableBuilder<span style="color:#ff79c6">::</span>Add(<span style="color:#ff79c6">const</span> Slice<span style="color:#ff79c6">&amp;</span> key, <span style="color:#ff79c6">const</span> Slice<span style="color:#ff79c6">&amp;</span> value)
+</span></span><span style="display:flex;"><span><span style="color:#8be9fd">void</span> TableBuilder<span style="color:#ff79c6">::</span>Flush()
+</span></span><span style="display:flex;"><span><span style="color:#8be9fd">void</span> TableBuilder<span style="color:#ff79c6">::</span>WriteBlock(BlockBuilder<span style="color:#ff79c6">*</span> block, BlockHandle<span style="color:#ff79c6">*</span> handle)
+</span></span><span style="display:flex;"><span><span style="color:#8be9fd">void</span> TableBuilder<span style="color:#ff79c6">::</span>WriteRawBlock(<span style="color:#ff79c6">const</span> Slice<span style="color:#ff79c6">&amp;</span> block_contents, CompressionType type, BlockHandle<span style="color:#ff79c6">*</span> handle)
+</span></span><span style="display:flex;"><span>Status TableBuilder<span style="color:#ff79c6">::</span>Finish()
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>Add流程</p>
+<ul>
+<li>上一个块的最后一个 key，和当前要写入的(也就是后面一个块的第一个 key)，计算这两个 key非分割</li>
+<li>假设上一个块的最后一个key是：&ldquo;the quick brown fox&rdquo;，当前的块第一个key是：&ldquo;the who&rdquo;</li>
+<li>分割的key就是 &ldquo;the r&rdquo;，正好比&quot;the qu&hellip;&quot; 的&quot;q&quot; 的 ASCII + 1</li>
+<li>如果上一个key 正好是当前key的前缀，那么直接返回 上一个key</li>
+<li>增加到 索引块中</li>
+<li>根据情况增加 filter块</li>
+<li>将 last_key 设置为 当前key，为后面做准备</li>
+<li>总数量++，写入到 data_block 中</li>
+<li>如果大于阈值，则 flush</li>
+</ul>
+<p>Flush流程</p>
+<ul>
+<li>调用 WriteBlock 写入数据</li>
+<li>如果写成功，则将 pending_index_entry 设置为true，后面再写新的块，Add 流程的时候就会用到这个变量</li>
+<li>刷新到磁盘，处理filter 块</li>
+</ul>
+<p>WriteBlock，写入的格式为：</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-cpp" data-lang="cpp"><span style="display:flex;"><span>  <span style="color:#6272a4">// File format contains a sequence of blocks where each block has:
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>  <span style="color:#6272a4">//    block_data: uint8[n]
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>  <span style="color:#6272a4">//    type: uint8
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>  <span style="color:#6272a4">//    crc: uint32
+</span></span></span></code></pre></td></tr></table>
+</div>
+</div><ul>
+<li>首先将 重启点写入到 buffer中</li>
+<li>是否要压缩，只支持 snappy 压缩类型</li>
+</ul>
+<p>WriteRawBlock</p>
+<ul>
+<li>这个就是将待写入的内容，append到磁盘文件上</li>
+<li>最后补充 5个字节的内容，1个字节是 压缩类型，4个字节是CRC</li>
+</ul>
+<p>索引块的组织
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/04/LeveDB-SSTable%E6%A8%A1%E5%9D%97/6.jpeg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/04/LeveDB-SSTable%E6%A8%A1%E5%9D%97/6.jpeg" />
+        </a>
+    </p>
+<h2 id="读取">读取</h2>
+<p>读取相关的实现在 table/table.cc<br>
+重要函数</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-cpp" data-lang="cpp"><span style="display:flex;"><span>Status Table<span style="color:#ff79c6">::</span>Open(<span style="color:#ff79c6">const</span> Options<span style="color:#ff79c6">&amp;</span> options, RandomAccessFile<span style="color:#ff79c6">*</span> file, <span style="color:#8be9fd">uint64_t</span> size, Table<span style="color:#ff79c6">**</span> table)
+</span></span><span style="display:flex;"><span><span style="color:#8be9fd">void</span> Table<span style="color:#ff79c6">::</span>ReadMeta(<span style="color:#ff79c6">const</span> Footer<span style="color:#ff79c6">&amp;</span> footer)
+</span></span><span style="display:flex;"><span>Iterator<span style="color:#ff79c6">*</span> Table<span style="color:#ff79c6">::</span>BlockReader(<span style="color:#8be9fd">void</span><span style="color:#ff79c6">*</span> arg, <span style="color:#ff79c6">const</span> ReadOptions<span style="color:#ff79c6">&amp;</span> options, <span style="color:#ff79c6">const</span> Slice<span style="color:#ff79c6">&amp;</span> index_value)
+</span></span><span style="display:flex;"><span>Status Table<span style="color:#ff79c6">::</span>InternalGet(<span style="color:#ff79c6">const</span> ReadOptions<span style="color:#ff79c6">&amp;</span> options, <span style="color:#ff79c6">const</span> Slice<span style="color:#ff79c6">&amp;</span> k, <span style="color:#8be9fd">void</span><span style="color:#ff79c6">*</span> arg, <span style="color:#8be9fd">void</span> (<span style="color:#ff79c6">*</span>handle_result)(<span style="color:#8be9fd">void</span><span style="color:#ff79c6">*</span>, <span style="color:#ff79c6">const</span> Slice<span style="color:#ff79c6">&amp;</span>, <span style="color:#ff79c6">const</span> Slice<span style="color:#ff79c6">&amp;</span>))
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>读取返回的是一个 两层的迭代器</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">5
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-cpp" data-lang="cpp"><span style="display:flex;"><span>Iterator<span style="color:#ff79c6">*</span> Table<span style="color:#ff79c6">::</span>NewIterator(<span style="color:#ff79c6">const</span> ReadOptions<span style="color:#ff79c6">&amp;</span> options) <span style="color:#ff79c6">const</span> {
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">return</span> <span style="color:#50fa7b">NewTwoLevelIterator</span>(
+</span></span><span style="display:flex;"><span>      rep_<span style="color:#ff79c6">-&gt;</span>index_block<span style="color:#ff79c6">-&gt;</span>NewIterator(rep_<span style="color:#ff79c6">-&gt;</span>options.comparator),
+</span></span><span style="display:flex;"><span>      <span style="color:#ff79c6">&amp;</span>Table<span style="color:#ff79c6">::</span>BlockReader, <span style="color:#ff79c6">const_cast</span><span style="color:#ff79c6">&lt;</span>Table<span style="color:#ff79c6">*&gt;</span>(<span style="color:#ff79c6">this</span>), options);
+</span></span><span style="display:flex;"><span>}
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>两层迭代器中的两个变量</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-cpp" data-lang="cpp"><span style="display:flex;"><span>  IteratorWrapper index_iter_;
+</span></span><span style="display:flex;"><span>  IteratorWrapper data_iter_;  <span style="color:#6272a4">// May be nullptr
+</span></span></span></code></pre></td></tr></table>
+</div>
+</div><p>Open过程</p>
+<ul>
+<li>调用系统的文件 API，随机读 Footer 部分</li>
+<li>读取 index block，读取 meta block，并设置对应的变量保存</li>
+</ul>
+<p>ReadMeta过程</p>
+<ul>
+<li>读取 meta 部分的 block，封装成一个 Block 对象</li>
+<li>创建一个两层迭代器，读取 meta中的 filter</li>
+<li>读取第一个 filter block块，封装为 BlockContents 对象</li>
+<li>再在第一个 filter block的基础上，创建 FilterBlockReader 对象</li>
+</ul>
+<p>BlockReader过程</p>
+<ul>
+<li>这个就是调用系统的 文件API，随机读数据部分</li>
+<li>先 new 一个固定大小的buffer，然后读进去，再 CRC检查，并确定压缩类型，看是否要解压</li>
+<li>最后封装到 BlockContents 中返回</li>
+<li>BlockContents 中包含了一个 Slice，数据就放在这里了</li>
+</ul>
+<p>InternalGet过程</p>
+<ul>
+<li>先创建一个两层迭代器</li>
+<li>index 迭代器根据 key，返回数据块迭代器</li>
+<li>在数据库迭代器上如果有 filter，则检查 这个key是否匹配 filter，也就是 bloom-filter是否匹配</li>
+<li>匹配的话，则读取这个数据块，跳转到对应的位置，具体处理逻辑是一个回调函数，回调函数内处理 key，value</li>
+<li>检查 status，并返回</li>
+</ul>
+<h2 id="参考">参考</h2>
+<ul>
+<li><a href="https://github.com/google/leveldb/blob/main/doc/index.md">github index</a></li>
+<li><a href="https://llimllib.github.io/bloomfilter-tutorial/zh_CN/">Bloom Filters by Example</a></li>
+<li><a href="https://www.qtmuniao.com/2020/07/03/leveldb-data-structures-skip-list/">漫谈 LevelDB 数据结构（一）：跳表（Skip List）</a></li>
+<li><a href="https://www.qtmuniao.com/2020/11/18/leveldb-data-structures-bloom-filter/">漫谈 LevelDB 数据结构（二）：布隆过滤器（Bloom Filter）</a></li>
+<li><a href="https://www.qtmuniao.com/2021/05/09/levedb-data-structures-lru-cache/">漫谈 LevelDB 数据结构（三）：LRU 缓存（ LRUCache）</a></li>
+<li><a href="https://www.zhihu.com/column/c_1282795241104465920">LevelDB源码剖析</a></li>
+<li><a href="https://sf-zhou.github.io/#/LevelDB">SF-Zhou&rsquo;s Blog</a></li>
+<li><a href="https://leveldb-handbook.readthedocs.io/zh/latest/index.html">leveldb-handbook</a></li>
+<li><a href="http://catkang.github.io/2022/01/27/btree-lock.html">庖丁解LevelDB</a></li>
+<li><a href="https://docs.rs/leveldb/latest/leveldb/">rust使用</a></li>
+<li><a href="https://docs.riak.com/riak/kv/latest/setup/planning/backend/leveldb/index.html">LevelDB使用介绍</a></li>
+<li><a href="https://en.wikipedia.org/wiki/LevelDB">LeveLDB维基百科</a></li>
+<li><a href="https://dbdb.io/db/leveldb">dbdb.io的LevelDB介绍</a></li>
+<li><a href="https://mariadb.com/kb/en/leveldb/">MariaDB的插件</a></li>
+<li><a href="https://item.jd.com/13006589.html">书籍：精通LevelDB</a></li>
+<li><a href="https://yuerblog.cc/wp-content/uploads/leveldb%E5%AE%9E%E7%8E%B0%E8%A7%A3%E6%9E%90.pdf">leveldb 实现解析</a></li>
+<li><a href="https://www.opengroup.org/austin/papers/posix_faq.html">POSIX™ 1003.1 Frequently Asked Questions (FAQ Version 1.18)</a></li>
+<li><a href="https://en.wikipedia.org/wiki/Spurious_wakeup">Spurious wakeup</a></li>
+<li><a href="https://en.wikipedia.org/wiki/Memory_barrier">Memory barrier</a></li>
+<li><a href="http://www.rdrop.com/users/paulmck/scalability/paper/whymb.2010.06.07c.pdf">Memory Barriers: a Hardware View for Software Hackers</a></li>
+<li><a href="https://bean-li.github.io/categories/#leveldb">Bean Li的LevelDB文章汇总</a></li>
+<li><a href="https://zhuanlan.zhihu.com/p/51573929">LevelDB设计与实现 - Compaction</a></li>
+<li><a href="https://zhuanlan.zhihu.com/p/51858206">LevelDB设计与实现 - MVCC等</a></li>
+<li><a href="http://www.pandademo.com/category/tech/leveldb/">leveldb源码剖析 系列</a></li>
+<li><a href="https://devdoc.net/bigdata/hbase-0.98.7-hadoop1/book/hfilev2.html">HBase file format with inline blocks (version 2)</a></li>
+</ul>
+
+			<script type="text/javascript"
+        async
+        src="https://cdn.bootcss.com/mathjax/2.7.3/MathJax.js?config=TeX-AMS-MML_HTMLorMML">
+MathJax.Hub.Config({
+  tex2jax: {
+    inlineMath: [['$','$'], ['\\(','\\)']],
+    displayMath: [['$$','$$'], ['\[\[','\]\]']],
+    processEscapes: true,
+    processEnvironments: true,
+    skipTags: ['script', 'noscript', 'style', 'textarea', 'pre'],
+    TeX: { equationNumbers: { autoNumber: "AMS" },
+         extensions: ["AMSmath.js", "AMSsymbols.js"] }
+  }
+});
+
+MathJax.Hub.Queue(function() {
+    
+    
+    
+    var all = MathJax.Hub.getAllJax(), i;
+    for(i = 0; i < all.length; i += 1) {
+        all[i].SourceElement().parentNode.className += ' has-jax';
+    }
+});
+</script>
+
+<style>
+code.has-jax {
+    font: inherit;
+    font-size: 100%;
+    background: inherit;
+    border: inherit;
+    color: #515151;
+}
+</style>
+        </div>
+
+        
+
+
+        
+
+<div class="post-archive">
+    <h2>相关文章</h2>
+    <ul class="listing">
+        
+        <li><a href="/post/2023/04/levedb-memtable%E6%A8%A1%E5%9D%97/">LevelDB MemTable模块</a></li>
+        
+        <li><a href="/post/2023/04/levedb-log%E6%A8%A1%E5%9D%97/">LevelDB Log模块</a></li>
+        
+        <li><a href="/post/2023/03/levedb-%E5%85%AC%E5%BC%80%E6%8E%A5%E5%8F%A3/">LevelDB 公开的接口</a></li>
+        
+        <li><a href="/post/2023/03/levedb-%E5%9F%BA%E6%9C%AC%E6%A6%82%E5%BF%B5/">LevelDB 基本概念</a></li>
+        
+    </ul>
+</div>
+
+
+        <div class="post-meta meta-tags">
+            
+            <ul class="clearfix">
+                
+                <li><a href='/tags/leveldb'>LevelDB</a></li>
+                
+            </ul>
+            
+        </div>
+    </article>
+    
+    
+
+    
+    
+    <div class="post bg-white">
+      <script src="https://utteranc.es/client.js"
+            repo= "himichael/hugoblogtalks"
+            issue-term="pathname"
+            theme="github-light"
+            crossorigin="anonymous"
+            async>
+      </script>
+    </div>
+    
+</div>
+
+
+                </div>
+
+                <div id="secondary">
+    <section class="widget">
+        <form id="search" action='https://code0xff.org/search/' method="get" accept-charset="utf-8" target="_blank" _lpchecked="1">
+      
+      <input type="text" name="q" maxlength="20" placeholder="Search">
+      <input type="hidden" name="sitesearch" value="https://code0xff.org/">
+      <button type="submit" class="submit icon-search"></button>
+</form>
+    </section>
+    
+    <section class="widget">
+        <h3 class="widget-title">最近文章</h3>
+<ul class="widget-list">
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/04/levedb-%E5%B7%A5%E5%85%B7%E7%B1%BB/" title="LevelDB 辅助工具类">LevelDB 辅助工具类</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/04/levedb-sstable%E6%A8%A1%E5%9D%97/" title="LevelDB SSTable模块">LevelDB SSTable模块</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/04/levedb-memtable%E6%A8%A1%E5%9D%97/" title="LevelDB MemTable模块">LevelDB MemTable模块</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/04/levedb-log%E6%A8%A1%E5%9D%97/" title="LevelDB Log模块">LevelDB Log模块</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/03/levedb-%E5%85%AC%E5%BC%80%E6%8E%A5%E5%8F%A3/" title="LevelDB 公开的接口">LevelDB 公开的接口</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/03/levedb-%E5%9F%BA%E6%9C%AC%E6%A6%82%E5%BF%B5/" title="LevelDB 基本概念">LevelDB 基本概念</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/03/oceanbase%E5%BC%80%E5%8F%91%E8%80%85%E5%A4%A7%E4%BC%9A/" title="OceanBase开发者大会分享">OceanBase开发者大会分享</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/03/bustub%E6%95%B0%E6%8D%AE%E5%BA%93/" title="bustub数据库">bustub数据库</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/02/cpu-and-cache-efficient-management-of-memory-resident-databases/" title="CPU and Cache Efficient Management of Memory-Resident Databases">CPU and Cache Efficient Management of Memory-Resident Databases</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/02/efficiently-compiling-efficient-query-plans-for-modern-hardware/" title="Efficiently Compiling Efficient Query Plans for Modern Hardware">Efficiently Compiling Efficient Query Plans for Modern Hardware</a>
+    </li>
+    
+</ul>
+    </section>
+
+    
+
+    <section class="widget">
+        <h3 class="widget-title"><a href='/categories/'>分类</a></h3>
+<ul class="widget-list">
+    
+    <li><a href="https://code0xff.org/categories/%E5%88%86%E5%B8%83%E5%BC%8F/">分布式 (6)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E5%8E%9F%E7%90%86%E5%88%86%E6%9E%90/">原理分析 (12)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E5%95%86%E4%B8%9A/">商业 (3)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E5%A4%A7%E6%95%B0%E6%8D%AE/">大数据 (22)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%95%B0%E6%8D%AE%E5%BA%93/">数据库 (21)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%96%87%E5%AD%A6%E5%92%8C%E8%89%BA%E6%9C%AF/">文学和艺术 (2)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%97%85%E8%A1%8C/">旅行 (10)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%9E%B6%E6%9E%84/">架构 (2)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E7%AE%97%E6%B3%95/">算法 (8)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E7%B3%BB%E7%BB%9F/">系统 (5)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E7%BC%96%E7%A8%8B%E8%AF%AD%E8%A8%80/">编程语言 (2)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E8%A1%8C%E4%B8%9A%E8%A7%82%E5%AF%9F/">行业观察 (1)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E8%AF%BB%E4%B9%A6%E7%AC%94%E8%AE%B0/">读书笔记 (11)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E9%9A%8F%E4%BE%BF%E5%86%99%E5%86%99/">随便写写 (3)</a></li>
+    
+</ul>
+    </section>
+
+    <section class="widget">
+        <h3 class="widget-title">归档</a></h3>
+<ul class="widget-list">
+    
+    <li><a href="https://code0xff.org/years/2021%E5%B9%B4/">2021年 (31)</a></li>
+    
+    <li><a href="https://code0xff.org/years/2022%E5%B9%B4/">2022年 (55)</a></li>
+    
+    <li><a href="https://code0xff.org/years/2023%E5%B9%B4/">2023年 (22)</a></li>
+    
+</ul>
+    </section>
+
+    <section class="widget">
+        <h3 class="widget-title"><a href='/tags/'>标签</a></h3>
+<div class="tagcloud">
+    
+    <a href="https://code0xff.org/tags/b%E6%A0%91/">B树 </a>
+    
+    <a href="https://code0xff.org/tags/cmu-database/">CMU-Database </a>
+    
+    <a href="https://code0xff.org/tags/flink/">flink </a>
+    
+    <a href="https://code0xff.org/tags/hive/">Hive </a>
+    
+    <a href="https://code0xff.org/tags/k8s/">k8s </a>
+    
+    <a href="https://code0xff.org/tags/kudu/">kudu </a>
+    
+    <a href="https://code0xff.org/tags/kyuubi/">Kyuubi </a>
+    
+    <a href="https://code0xff.org/tags/leveldb/">LevelDB </a>
+    
+    <a href="https://code0xff.org/tags/llvm/">LLVM </a>
+    
+    <a href="https://code0xff.org/tags/manacher/">Manacher </a>
+    
+    <a href="https://code0xff.org/tags/mapreduce/">MapReduce </a>
+    
+    <a href="https://code0xff.org/tags/mysql/">MySQL </a>
+    
+    <a href="https://code0xff.org/tags/newsql/">NewSQL </a>
+    
+    <a href="https://code0xff.org/tags/oceanbase/">OceanBase </a>
+    
+    <a href="https://code0xff.org/tags/paxos/">paxos </a>
+    
+    <a href="https://code0xff.org/tags/raft/">raft </a>
+    
+    <a href="https://code0xff.org/tags/scala/">scala </a>
+    
+    <a href="https://code0xff.org/tags/simd/">SIMD </a>
+    
+    <a href="https://code0xff.org/tags/snowflake/">snowflake </a>
+    
+    <a href="https://code0xff.org/tags/spark/">spark </a>
+    
+    <a href="https://code0xff.org/tags/unix/">unix </a>
+    
+    <a href="https://code0xff.org/tags/%E4%BA%8C%E5%88%86%E6%9F%A5%E6%89%BE/">二分查找 </a>
+    
+    <a href="https://code0xff.org/tags/%E4%BA%8C%E5%8F%89%E6%A0%91%E9%81%8D%E5%8E%86/">二叉树遍历 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%88%86%E5%B8%83%E5%BC%8F/">分布式 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%8A%A8%E6%80%81%E6%B3%A8%E5%85%A5/">动态注入 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%8E%86%E5%8F%B2/">历史 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%90%91%E9%87%8F%E5%8C%96/">向量化 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%9B%9E%E6%BA%AF/">回溯 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%9B%BD%E5%86%85%E6%97%85%E8%A1%8C/">国内旅行 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%9B%BD%E5%A4%96%E6%97%85%E8%A1%8C/">国外旅行 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%A4%9A%E7%A7%9F%E6%88%B7/">多租户 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%A4%A7%E6%95%B0%E6%8D%AE/">大数据 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%AD%98%E5%82%A8/">存储 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%B7%A5%E4%BD%9C%E8%AE%B0%E5%BD%95/">工作记录 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%BE%AE%E6%9C%8D%E5%8A%A1/">微服务 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%95%B0%E6%8D%AE%E5%BA%93/">数据库 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%9F%A5%E8%AF%A2%E4%BC%98%E5%8C%96/">查询优化 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%9F%A5%E8%AF%A2%E7%BC%96%E8%AF%91/">查询编译 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%B1%87%E7%BC%96/">汇编 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%B5%8B%E8%AF%95/">测试 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%B9%96%E4%BB%93%E4%B8%80%E4%BD%93/">湖仓一体 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%94%9F%E6%B4%BB/">生活 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%94%B5%E5%BD%B1/">电影 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%AE%97%E6%B3%95/">算法 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BB%8F%E6%B5%8E/">经济 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BC%93%E5%AD%98/">缓存 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BC%96%E8%AF%91%E5%8E%9F%E7%90%86/">编译原理 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BD%91%E7%BB%9C/">网络 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AE%A1%E7%AE%97%E6%A1%86%E6%9E%B6/">计算框架 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AE%BA%E6%96%87/">论文 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AF%BB%E4%B9%A6/">读书 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AF%BB%E4%B9%A6%E7%AC%94%E8%AE%B0/">读书笔记 </a>
+    
+</div>
+    </section>
+
+    
+
+    <section class="widget">
+        <h3 class="widget-title">RSS</h3>
+        <ul class="widget-list">
+            <li><a href="https://code0xff.org/index.xml">文章 RSS</a></li>
+        </ul>
+    </section>
+</div>
+            </div>
+        </div>
+    </div>
+    <footer id="footer">
+    <div>
+        &copy; 2023 <a href="https://code0xff.org/">记录每个瞬间 By 老王</a>
+        
+    </div>
+    <br />
+    <div>
+        <div class="github-badge">
+            <a href="https://gohugo.io/" target="_black" rel="nofollow"><span class="badge-subject">Powered by</span><span class="badge-value bg-blue">Hugo</span></a>
+        </div>
+        <div class="github-badge">
+            <a href="https://github.com/flysnow-org/maupassant-hugo" target="_black"><span class="badge-subject">Theme</span><span class="badge-value bg-yellowgreen">Maupassant</span></a>
+        </div>
+    </div>
+</footer>
+
+
+    
+    <script type="text/javascript">
+        window.MathJax = {
+            tex2jax: {
+                inlineMath: [['$', '$']],
+                processEscapes: true
+                }
+            };
+    </script>
+    <script src='https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.5/MathJax.js?config=TeX-MML-AM_CHTML' async></script><script src="https://cdn.bootcdn.net/ajax/libs/fancybox/3.5.7/jquery.fancybox.min.js"></script>
+
+<a id="rocket" href="#top"></a>
+<script type="text/javascript" src='/js/totop.js?v=0.0.0' async=""></script>
+
+<script type="application/javascript">
+var doNotTrack = false;
+if (!doNotTrack) {
+	window.ga=window.ga||function(){(ga.q=ga.q||[]).push(arguments)};ga.l=+new Date;
+	ga('create', 'GA ID', 'auto');
+	
+	ga('send', 'pageview');
+}
+</script>
+<script async src='https://www.google-analytics.com/analytics.js'></script>
+
+
+
+    <script type="text/javascript" src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js" async></script>
+
+
+
+
+</body>
+
+</html>

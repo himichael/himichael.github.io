@@ -1,0 +1,1188 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    
+    <meta name="referrer" content="no-referrer-when-downgrade">
+    
+
+    <title>LevelDB 辅助工具类 | 记录每个瞬间</title>
+    <meta property="og:title" content="LevelDB 辅助工具类 - 记录每个瞬间">
+    <meta property="og:type" content="article">
+        
+    <meta property="article:published_time" content='2023-04-11T09:20:01&#43;08:00'>
+        
+        
+    <meta property="article:modified_time" content='2023-04-11T09:20:01&#43;08:00'>
+        
+    <meta name="Keywords" content="">
+    <meta name="description" content="LevelDB 辅助工具类">
+        <meta name="author" content="隔壁老王">
+        
+    <meta property="og:url" content="https://code0xff.org/post/2023/04/levedb-%E5%B7%A5%E5%85%B7%E7%B1%BB/">
+    <link rel="shortcut icon" href='/favicon.ico'  type="image/x-icon">
+
+    <link rel="stylesheet" href='/css/normalize.css'>
+    <link rel="stylesheet" href='/css/style.css'>
+    <script type="text/javascript" src="//cdn.bootcdn.net/ajax/libs/jquery/3.4.1/jquery.min.js"></script>
+
+    
+    
+    
+        <link href="https://cdn.bootcdn.net/ajax/libs/fancybox/3.5.7/jquery.fancybox.min.css" rel="stylesheet">
+    
+    
+    
+    
+</head>
+
+
+<body>
+    <header id="header" class="clearfix">
+    <div class="container">
+        <div class="col-group">
+            <div class="site-name ">
+                
+                    <a id="logo" href="https://code0xff.org/">
+                        记录每个瞬间
+                    </a>
+                
+                
+            </div>
+            <div>
+                <nav id="nav-menu" class="clearfix">
+                    <a class="current" href="https://code0xff.org/">首页</a>
+                    
+                    <a  href="https://code0xff.org/linked/" title="链接">链接</a>
+                    
+                    <a  href="https://code0xff.org/archives/" title="归档">归档</a>
+                    
+                    <a  href="https://code0xff.org/about/" title="关于">关于</a>
+                    
+                </nav>
+            </div>
+        </div>
+    </div>
+</header>
+
+    <div id="body">
+        <div class="container">
+            <div class="col-group">
+
+                <div class="col-8" id="main">
+                    
+<div class="res-cons">
+    
+    <article class="post">
+        <header>
+            <h1 class="post-title">LevelDB 辅助工具类</h1>
+        </header>
+        <date class="post-meta meta-date">
+            2023年4月11日
+        </date>
+<nav id="TableOfContents">
+  <ul>
+    <li>
+      <ul>
+        <li><a href="#bloom-filter">Bloom Filter</a></li>
+        <li><a href="#lru缓存">LRU缓存</a></li>
+        <li><a href="#一些工具类">一些工具类</a></li>
+        <li><a href="#其他">其他</a></li>
+        <li><a href="#参考">参考</a></li>
+      </ul>
+    </li>
+  </ul>
+</nav>
+        
+        <div class="post-meta">
+            
+            <span class="post-meta meta-tags">
+                <ul class="clearfix">
+                    <a href='/categories/%E5%8E%9F%E7%90%86%E5%88%86%E6%9E%90'>原理分析</a>
+                </ul>
+            </span>
+            
+        </div>
+        
+        
+        <div class="post-meta">
+            <span id="busuanzi_container_page_pv">|<span id="busuanzi_value_page_pv"></span><span>
+                    阅读</span></span>
+        </div>
+        
+        
+        <div class="post-content">
+            <h2 id="bloom-filter">Bloom Filter</h2>
+<p>代码位于：util/bloom.cc<br>
+接口位于：include/leveldb/filter_policy.h</p>
+<p>接口中的三个函数：</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-cpp" data-lang="cpp"><span style="display:flex;"><span><span style="color:#ff79c6">virtual</span> <span style="color:#ff79c6">const</span> <span style="color:#8be9fd">char</span><span style="color:#ff79c6">*</span> <span style="color:#50fa7b">Name</span>() <span style="color:#ff79c6">const</span> <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">0</span>;
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">virtual</span> <span style="color:#8be9fd">void</span> <span style="color:#50fa7b">CreateFilter</span>(<span style="color:#ff79c6">const</span> Slice<span style="color:#ff79c6">*</span> keys, <span style="color:#8be9fd">int</span> n, std<span style="color:#ff79c6">::</span>string<span style="color:#ff79c6">*</span> dst) <span style="color:#ff79c6">const</span> <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">0</span>;
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">virtual</span> <span style="color:#8be9fd">bool</span> <span style="color:#50fa7b">KeyMayMatch</span>(<span style="color:#ff79c6">const</span> Slice<span style="color:#ff79c6">&amp;</span> key, <span style="color:#ff79c6">const</span> Slice<span style="color:#ff79c6">&amp;</span> filter) <span style="color:#ff79c6">const</span> <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">0</span>;
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>构造函数</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">6
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-cpp" data-lang="cpp"><span style="display:flex;"><span>  <span style="color:#ff79c6">explicit</span> <span style="color:#50fa7b">BloomFilterPolicy</span>(<span style="color:#8be9fd">int</span> bits_per_key) <span style="color:#ff79c6">:</span> bits_per_key_(bits_per_key) {
+</span></span><span style="display:flex;"><span>    <span style="color:#6272a4">// We intentionally round down to reduce probing cost a little bit
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>    k_ <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">static_cast</span><span style="color:#ff79c6">&lt;</span>size_t<span style="color:#ff79c6">&gt;</span>(bits_per_key <span style="color:#ff79c6">*</span> <span style="color:#bd93f9">0.69</span>);  <span style="color:#6272a4">// 0.69 =~ ln(2)
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>    <span style="color:#ff79c6">if</span> (k_ <span style="color:#ff79c6">&lt;</span> <span style="color:#bd93f9">1</span>) k_ <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">1</span>;
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">if</span> (k_ <span style="color:#ff79c6">&gt;</span> <span style="color:#bd93f9">30</span>) k_ <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">30</span>;
+</span></span><span style="display:flex;"><span>  }
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>这里的<code>k_</code>是哈希函数的个数，固定为 1 - 30<br>
+bits_per_key 表示每个元素使用的 位个数<br>
+布隆过滤器的存储空间大小<code>m</code>，哈希函数个数<code>k</code>和元素总的个数<code>n</code>之间存在如下一个计算公式<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/04/LeveDB-%E5%B7%A5%E5%85%B7%E7%B1%BB/1.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/04/LeveDB-%E5%B7%A5%E5%85%B7%E7%B1%BB/1.jpg" />
+        </a>
+    </p>
+<p>创建 过滤器</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">15
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">16
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">17
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">18
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">19
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">20
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">21
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">22
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">23
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">24
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">25
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">26
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">27
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-cpp" data-lang="cpp"><span style="display:flex;"><span>  <span style="color:#8be9fd">void</span> <span style="color:#50fa7b">CreateFilter</span>(<span style="color:#ff79c6">const</span> Slice<span style="color:#ff79c6">*</span> keys, <span style="color:#8be9fd">int</span> n, std<span style="color:#ff79c6">::</span>string<span style="color:#ff79c6">*</span> dst) <span style="color:#ff79c6">const</span> <span style="color:#ff79c6">override</span> {
+</span></span><span style="display:flex;"><span>    <span style="color:#6272a4">// Compute bloom filter size (in both bits and bytes)
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>    size_t bits <span style="color:#ff79c6">=</span> n <span style="color:#ff79c6">*</span> bits_per_key_;
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#6272a4">// For small n, we can see a very high false positive rate.  Fix it
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>    <span style="color:#6272a4">// by enforcing a minimum bloom filter length.
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>    <span style="color:#ff79c6">if</span> (bits <span style="color:#ff79c6">&lt;</span> <span style="color:#bd93f9">64</span>) bits <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">64</span>;
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    size_t bytes <span style="color:#ff79c6">=</span> (bits <span style="color:#ff79c6">+</span> <span style="color:#bd93f9">7</span>) <span style="color:#ff79c6">/</span> <span style="color:#bd93f9">8</span>;
+</span></span><span style="display:flex;"><span>    bits <span style="color:#ff79c6">=</span> bytes <span style="color:#ff79c6">*</span> <span style="color:#bd93f9">8</span>;
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">const</span> size_t init_size <span style="color:#ff79c6">=</span> dst<span style="color:#ff79c6">-&gt;</span>size();
+</span></span><span style="display:flex;"><span>    dst<span style="color:#ff79c6">-&gt;</span>resize(init_size <span style="color:#ff79c6">+</span> bytes, <span style="color:#bd93f9">0</span>);
+</span></span><span style="display:flex;"><span>    dst<span style="color:#ff79c6">-&gt;</span>push_back(<span style="color:#ff79c6">static_cast</span><span style="color:#ff79c6">&lt;</span><span style="color:#8be9fd">char</span><span style="color:#ff79c6">&gt;</span>(k_));  <span style="color:#6272a4">// Remember # of probes in filter
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>    <span style="color:#8be9fd">char</span><span style="color:#ff79c6">*</span> array <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">&amp;</span>(<span style="color:#ff79c6">*</span>dst)[init_size];
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">for</span> (<span style="color:#8be9fd">int</span> i <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">0</span>; i <span style="color:#ff79c6">&lt;</span> n; i<span style="color:#ff79c6">++</span>) {
+</span></span><span style="display:flex;"><span>      <span style="color:#6272a4">// Use double-hashing to generate a sequence of hash values.
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>      <span style="color:#6272a4">// See analysis in [Kirsch,Mitzenmacher 2006].
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>      <span style="color:#8be9fd">uint32_t</span> h <span style="color:#ff79c6">=</span> BloomHash(keys[i]);
+</span></span><span style="display:flex;"><span>      <span style="color:#ff79c6">const</span> <span style="color:#8be9fd">uint32_t</span> delta <span style="color:#ff79c6">=</span> (h <span style="color:#ff79c6">&gt;&gt;</span> <span style="color:#bd93f9">17</span>) <span style="color:#ff79c6">|</span> (h <span style="color:#ff79c6">&lt;&lt;</span> <span style="color:#bd93f9">15</span>);  <span style="color:#6272a4">// Rotate right 17 bits
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>      <span style="color:#ff79c6">for</span> (size_t j <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">0</span>; j <span style="color:#ff79c6">&lt;</span> k_; j<span style="color:#ff79c6">++</span>) {
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">const</span> <span style="color:#8be9fd">uint32_t</span> bitpos <span style="color:#ff79c6">=</span> h <span style="color:#ff79c6">%</span> bits;
+</span></span><span style="display:flex;"><span>        array[bitpos <span style="color:#ff79c6">/</span> <span style="color:#bd93f9">8</span>] <span style="color:#ff79c6">|=</span> (<span style="color:#bd93f9">1</span> <span style="color:#ff79c6">&lt;&lt;</span> (bitpos <span style="color:#ff79c6">%</span> <span style="color:#bd93f9">8</span>));
+</span></span><span style="display:flex;"><span>        h <span style="color:#ff79c6">+=</span> delta;
+</span></span><span style="display:flex;"><span>      }
+</span></span><span style="display:flex;"><span>    }
+</span></span><span style="display:flex;"><span>  }
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>向上取整，为 8的倍数，然后将 bloom filter 函数个数，push 到 dst 中 <br>
+遍历 n 个元素，对每个元素计算 哈希值<br>
+这里并没有计算<code>k</code>个哈希，而是只计算了一次，获得了一个原始值<code>h</code><br>
+之后遍历<code>k</code>次，然后计算<code>h</code>的增量<br>
+这样的话，效率会高很多，而且准确率也不差</p>
+<p>查找的匹配函数</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">15
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">16
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">17
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">18
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">19
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">20
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">21
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">22
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">23
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">24
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">25
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-cpp" data-lang="cpp"><span style="display:flex;"><span>  <span style="color:#8be9fd">bool</span> <span style="color:#50fa7b">KeyMayMatch</span>(<span style="color:#ff79c6">const</span> Slice<span style="color:#ff79c6">&amp;</span> key, <span style="color:#ff79c6">const</span> Slice<span style="color:#ff79c6">&amp;</span> bloom_filter) <span style="color:#ff79c6">const</span> <span style="color:#ff79c6">override</span> {
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">const</span> size_t len <span style="color:#ff79c6">=</span> bloom_filter.size();
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">if</span> (len <span style="color:#ff79c6">&lt;</span> <span style="color:#bd93f9">2</span>) <span style="color:#ff79c6">return</span> <span style="color:#8be9fd;font-style:italic">false</span>;
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">const</span> <span style="color:#8be9fd">char</span><span style="color:#ff79c6">*</span> array <span style="color:#ff79c6">=</span> bloom_filter.data();
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">const</span> size_t bits <span style="color:#ff79c6">=</span> (len <span style="color:#ff79c6">-</span> <span style="color:#bd93f9">1</span>) <span style="color:#ff79c6">*</span> <span style="color:#bd93f9">8</span>;
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#6272a4">// Use the encoded k so that we can read filters generated by
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>    <span style="color:#6272a4">// bloom filters created using different parameters.
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>    <span style="color:#ff79c6">const</span> size_t k <span style="color:#ff79c6">=</span> array[len <span style="color:#ff79c6">-</span> <span style="color:#bd93f9">1</span>];
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">if</span> (k <span style="color:#ff79c6">&gt;</span> <span style="color:#bd93f9">30</span>) {
+</span></span><span style="display:flex;"><span>      <span style="color:#6272a4">// Reserved for potentially new encodings for short bloom filters.
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>      <span style="color:#6272a4">// Consider it a match.
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>      <span style="color:#ff79c6">return</span> <span style="color:#8be9fd;font-style:italic">true</span>;
+</span></span><span style="display:flex;"><span>    }
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#8be9fd">uint32_t</span> h <span style="color:#ff79c6">=</span> BloomHash(key);
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">const</span> <span style="color:#8be9fd">uint32_t</span> delta <span style="color:#ff79c6">=</span> (h <span style="color:#ff79c6">&gt;&gt;</span> <span style="color:#bd93f9">17</span>) <span style="color:#ff79c6">|</span> (h <span style="color:#ff79c6">&lt;&lt;</span> <span style="color:#bd93f9">15</span>);  <span style="color:#6272a4">// Rotate right 17 bits
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>    <span style="color:#ff79c6">for</span> (size_t j <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">0</span>; j <span style="color:#ff79c6">&lt;</span> k; j<span style="color:#ff79c6">++</span>) {
+</span></span><span style="display:flex;"><span>      <span style="color:#ff79c6">const</span> <span style="color:#8be9fd">uint32_t</span> bitpos <span style="color:#ff79c6">=</span> h <span style="color:#ff79c6">%</span> bits;
+</span></span><span style="display:flex;"><span>      <span style="color:#ff79c6">if</span> ((array[bitpos <span style="color:#ff79c6">/</span> <span style="color:#bd93f9">8</span>] <span style="color:#ff79c6">&amp;</span> (<span style="color:#bd93f9">1</span> <span style="color:#ff79c6">&lt;&lt;</span> (bitpos <span style="color:#ff79c6">%</span> <span style="color:#bd93f9">8</span>))) <span style="color:#ff79c6">==</span> <span style="color:#bd93f9">0</span>) <span style="color:#ff79c6">return</span> <span style="color:#8be9fd;font-style:italic">false</span>;
+</span></span><span style="display:flex;"><span>      h <span style="color:#ff79c6">+=</span> delta;
+</span></span><span style="display:flex;"><span>    }
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">return</span> <span style="color:#8be9fd;font-style:italic">true</span>;
+</span></span><span style="display:flex;"><span>  }
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>也是类似的<br>
+读取出 bloom filter的数据，以及长度，构建出 array 数组<br>
+首先计算出 hash值
+然后遍历<code>k</code>次，也就是<code>k</code>个函数，然后跟创建的时候类似<br>
+通过<code>h % bits</code>，就得到了具体的位下标<br>
+然后看看数组中的这一位 是否设置为<code>1</code>，非<code>1</code>直接返回 false<br>
+否则计算增量，如果<code>k</code>次计算都满足，则返回 true</p>
+<p>布隆过滤器的使用，两个类</p>
+<ul>
+<li>FilterBlockBuilder，创建布隆过滤器，并写入到 SSTable中</li>
+<li>FilterBlockReader，读取元数据块，调用 BloomFilterPolicy 检查是否匹配</li>
+</ul>
+<p>FilterBlockBuilder</p>
+<ul>
+<li>首先调用 Add，将 key进去，将所有的key直接拼在一起，比如 aa、bb、cc、dd，拼在一起就是aabbccdd，中间没有分割</li>
+<li>记录没每个key的起始位置，根据每个key的起始位置，前后相减，就得到了长度</li>
+<li>根据起始位置和长度，就封装出了 Slice，将这些 key都临时保存</li>
+<li>如果数据超过了 2K，则生成 布隆过滤器，也就是调用 policy_-&gt;CreateFilter 创建</li>
+<li>传入的是之前 生成的三个参数</li>
+<li>std::vector<!-- raw HTML omitted --> tmp_keys_、std::string result_、num_keys</li>
+</ul>
+<p>FilterBlockReader</p>
+<ul>
+<li>首先构建出 布隆过滤器</li>
+<li>然后根据 key的偏移量，计算出这个key，封装为 Slice，调用 KeyMayMatch 进行判断</li>
+</ul>
+<h2 id="lru缓存">LRU缓存</h2>
+<p>包含了四个关键类</p>
+<ul>
+<li>LRUHandle</li>
+<li>HandleTable</li>
+<li>LRUCache</li>
+<li>ShardedLRUCache</li>
+</ul>
+<p>ShardedLRUCache 是对 LRUCache 的封装，包含了 16个 LRUCache，目的是减少锁粒度</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-cpp" data-lang="cpp"><span style="display:flex;"><span>Cache<span style="color:#ff79c6">*</span> <span style="color:#50fa7b">NewLRUCache</span>(size_t capacity) { <span style="color:#ff79c6">return</span> <span style="color:#ff79c6">new</span> ShardedLRUCache(capacity); }
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/04/LeveDB-%E5%B7%A5%E5%85%B7%E7%B1%BB/2.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/04/LeveDB-%E5%B7%A5%E5%85%B7%E7%B1%BB/2.jpg" />
+        </a>
+    <br>
+其 查找函数如下：</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">8
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-cpp" data-lang="cpp"><span style="display:flex;"><span><span style="color:#ff79c6">static</span> <span style="color:#ff79c6">const</span> <span style="color:#8be9fd">int</span> kNumShardBits <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">4</span>;
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">static</span> <span style="color:#ff79c6">const</span> <span style="color:#8be9fd">int</span> kNumShards <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">1</span> <span style="color:#ff79c6">&lt;&lt;</span> kNumShardBits;
+</span></span><span style="display:flex;"><span>  Handle<span style="color:#ff79c6">*</span> <span style="color:#50fa7b">Lookup</span>(<span style="color:#ff79c6">const</span> Slice<span style="color:#ff79c6">&amp;</span> key) <span style="color:#ff79c6">override</span> {
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">const</span> <span style="color:#8be9fd">uint32_t</span> hash <span style="color:#ff79c6">=</span> HashSlice(key);
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">return</span> shard_[Shard(hash)].Lookup(key, hash);
+</span></span><span style="display:flex;"><span>  }
+</span></span><span style="display:flex;"><span>  
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">static</span> <span style="color:#8be9fd">uint32_t</span> <span style="color:#50fa7b">Shard</span>(<span style="color:#8be9fd">uint32_t</span> hash) { <span style="color:#ff79c6">return</span> hash <span style="color:#ff79c6">&gt;&gt;</span> (<span style="color:#bd93f9">32</span> <span style="color:#ff79c6">-</span> kNumShardBits); }
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>HashSlice 就是根据 key 返回一个 hash值
+Shard，则取这个 hash 值的 高 4位，这样就可以找到对应的 LRUCache 了</p>
+<p>LRUHandle 是双链表的节点</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-cpp" data-lang="cpp"><span style="display:flex;"><span><span style="color:#ff79c6">struct</span> <span style="color:#50fa7b">LRUHandle</span> {
+</span></span><span style="display:flex;"><span>  <span style="color:#8be9fd">void</span><span style="color:#ff79c6">*</span> value;
+</span></span><span style="display:flex;"><span>  <span style="color:#8be9fd">void</span> (<span style="color:#ff79c6">*</span>deleter)(<span style="color:#ff79c6">const</span> Slice<span style="color:#ff79c6">&amp;</span>, <span style="color:#8be9fd">void</span><span style="color:#ff79c6">*</span> value); <span style="color:#6272a4">// 释放 key,value 空间的用户回调
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>  LRUHandle<span style="color:#ff79c6">*</span> next_hash;  <span style="color:#6272a4">// 用于 hashtable 中链表处理冲突
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>  LRUHandle<span style="color:#ff79c6">*</span> next;       <span style="color:#6272a4">// 用于双向链表中维护 LRU 顺序
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>  LRUHandle<span style="color:#ff79c6">*</span> prev;
+</span></span><span style="display:flex;"><span>  size_t charge;     <span style="color:#6272a4">// TODO(opt): Only allow uint32_t?
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>  size_t key_length;
+</span></span><span style="display:flex;"><span>  <span style="color:#8be9fd">bool</span> in_cache;     <span style="color:#6272a4">// 该 handle 是否在 cache table 中
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>  <span style="color:#8be9fd">uint32_t</span> refs;     <span style="color:#6272a4">// 该 handle 被引用的次数
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>  <span style="color:#8be9fd">uint32_t</span> hash;     <span style="color:#6272a4">// key 的 hash 值，用于确定分片和快速比较
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>  <span style="color:#8be9fd">char</span> key_data[<span style="color:#bd93f9">1</span>];  <span style="color:#6272a4">// key 的起始
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>}
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>HandleTable 则是一个 hash 表，通过 双链表 + 自定义简单的 hash 表，就组成了 LRU  <br>
+主要函数：</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-cpp" data-lang="cpp"><span style="display:flex;"><span>LRUHandle<span style="color:#ff79c6">*</span> Insert(LRUHandle<span style="color:#ff79c6">*</span> h)
+</span></span><span style="display:flex;"><span>LRUHandle<span style="color:#ff79c6">*</span> Remove(<span style="color:#ff79c6">const</span> Slice<span style="color:#ff79c6">&amp;</span> key, <span style="color:#8be9fd">uint32_t</span> hash)
+</span></span><span style="display:flex;"><span>LRUHandle<span style="color:#ff79c6">**</span> FindPointer(<span style="color:#ff79c6">const</span> Slice<span style="color:#ff79c6">&amp;</span> key, <span style="color:#8be9fd">uint32_t</span> hash)
+</span></span><span style="display:flex;"><span><span style="color:#8be9fd">void</span> Resize()
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>有好几处都调用了 FindPointer</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-cpp" data-lang="cpp"><span style="display:flex;"><span>  LRUHandle<span style="color:#ff79c6">**</span> list_;  <span style="color:#6272a4">// hash 表中的 list_ 定义
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>  
+</span></span><span style="display:flex;"><span>  <span style="color:#6272a4">// 返回前驱节点的 next_hash 指针的指针
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>  LRUHandle<span style="color:#ff79c6">**</span> <span style="color:#50fa7b">FindPointer</span>(<span style="color:#ff79c6">const</span> Slice<span style="color:#ff79c6">&amp;</span> key, <span style="color:#8be9fd">uint32_t</span> hash) {
+</span></span><span style="display:flex;"><span>    <span style="color:#6272a4">// 找到 hash表的某个桶的开头
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>    LRUHandle<span style="color:#ff79c6">**</span> ptr <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">&amp;</span>list_[hash <span style="color:#ff79c6">&amp;</span> (length_ <span style="color:#ff79c6">-</span> <span style="color:#bd93f9">1</span>)];
+</span></span><span style="display:flex;"><span>	<span style="color:#6272a4">// 一直往后遍历，直到找到 hash 和 key 匹配为止
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>    <span style="color:#ff79c6">while</span> (<span style="color:#ff79c6">*</span>ptr <span style="color:#ff79c6">!=</span> <span style="color:#ff79c6">nullptr</span> <span style="color:#ff79c6">&amp;&amp;</span> ((<span style="color:#ff79c6">*</span>ptr)<span style="color:#ff79c6">-&gt;</span>hash <span style="color:#ff79c6">!=</span> hash <span style="color:#ff79c6">||</span> key <span style="color:#ff79c6">!=</span> (<span style="color:#ff79c6">*</span>ptr)<span style="color:#ff79c6">-&gt;</span>key())) {
+</span></span><span style="display:flex;"><span>      ptr <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">&amp;</span>(<span style="color:#ff79c6">*</span>ptr)<span style="color:#ff79c6">-&gt;</span>next_hash;
+</span></span><span style="display:flex;"><span>    }
+</span></span><span style="display:flex;"><span>	<span style="color:#6272a4">// 返回的是 next_hash
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>    <span style="color:#ff79c6">return</span> ptr;
+</span></span><span style="display:flex;"><span>  }
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>比如删除的时候，只要改变 next_hash 的地址内容就可以了<br>
+因为 FindPointer 返回的是 next_hash 的指针的指针，通过 *ptr 判断这个值是否为空<br>
+不空，则用下一个节点的 next_hash 值 替换掉即可</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">6
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-cpp" data-lang="cpp"><span style="display:flex;"><span>    LRUHandle<span style="color:#ff79c6">**</span> ptr <span style="color:#ff79c6">=</span> FindPointer(key, hash);
+</span></span><span style="display:flex;"><span>    LRUHandle<span style="color:#ff79c6">*</span> result <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">*</span>ptr;
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">if</span> (result <span style="color:#ff79c6">!=</span> <span style="color:#ff79c6">nullptr</span>) {
+</span></span><span style="display:flex;"><span>      <span style="color:#ff79c6">*</span>ptr <span style="color:#ff79c6">=</span> result<span style="color:#ff79c6">-&gt;</span>next_hash;
+</span></span><span style="display:flex;"><span>      <span style="color:#ff79c6">--</span>elems_;
+</span></span><span style="display:flex;"><span>    }
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>LRUCache 内部的几个重要变量</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">6
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-cpp" data-lang="cpp"><span style="display:flex;"><span>  size_t capacity_;
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">mutable</span> port<span style="color:#ff79c6">::</span>Mutex mutex_;
+</span></span><span style="display:flex;"><span>  size_t usage_ <span style="color:#50fa7b">GUARDED_BY</span>(mutex_);
+</span></span><span style="display:flex;"><span>  LRUHandle lru_ <span style="color:#50fa7b">GUARDED_BY</span>(mutex_);
+</span></span><span style="display:flex;"><span>  LRUHandle in_use_ <span style="color:#50fa7b">GUARDED_BY</span>(mutex_);
+</span></span><span style="display:flex;"><span>  HandleTable table_ <span style="color:#50fa7b">GUARDED_BY</span>(mutex_);
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>内部维护了两个链表，in_use、lru<br>
+in_use 表示正在使用的，是乱序的<br>
+lru 就是正常的 lru 链表，有序的，如果空间不够了，则从这里删除<br>
+table_ 就是 hash 表<br>
+这几个的关系如下： 
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/04/LeveDB-%E5%B7%A5%E5%85%B7%E7%B1%BB/5.jpeg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/04/LeveDB-%E5%B7%A5%E5%85%B7%E7%B1%BB/5.jpeg" />
+        </a>
+    </p>
+<p>in_use 和 lru、hash 表的另一种视图   <br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/04/LeveDB-%E5%B7%A5%E5%85%B7%E7%B1%BB/3.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/04/LeveDB-%E5%B7%A5%E5%85%B7%E7%B1%BB/3.jpg" />
+        </a>
+    </p>
+<p>一开始的插入会放到 lru 链表中，如果 ref++，则会放到 in_use 链表中<br>
+同理，如果 unref，则会判断是否没有引用了，然后从 in_use 中删除，放到 lru 链表中<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/04/LeveDB-%E5%B7%A5%E5%85%B7%E7%B1%BB/4.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/04/LeveDB-%E5%B7%A5%E5%85%B7%E7%B1%BB/4.jpg" />
+        </a>
+    </p>
+<p>LRUCache 的主要变量
+-使用两个双向链表将整个缓存分成两个不相交的集合：被客户端引用的 in-use 链表，和不被任何客户端引用的 lru_ 链表。</p>
+<ul>
+<li>每个双向链表使用了一个空的头指针，以便于处理边界情况。并且表头的 prev 指针指向最新的条目，next 指针指向最老的条目，从而形成了一个双向环形链表。</li>
+<li>使用 usage_ 表示缓存当前已用量，用 capacity_ 表示该缓存总量。</li>
+<li>抽象出了几个基本操作：LRU_Remove、LRU_Append、Ref、Unref 作为辅助函数进行复用。</li>
+<li>每个 LRUCache 由一把锁 mutex_ 守护。</li>
+</ul>
+<p>LRUCache的函数</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">8
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">9
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-cpp" data-lang="cpp"><span style="display:flex;"><span><span style="color:#6272a4">// 插入到 in_use 中，并插入到 hash 表中，如果插入完 超过阈值，从 lru 链表中 while 删除不需要的
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>Cache<span style="color:#ff79c6">::</span>Handle<span style="color:#ff79c6">*</span> Insert(<span style="color:#ff79c6">const</span> Slice<span style="color:#ff79c6">&amp;</span> key, <span style="color:#8be9fd">uint32_t</span> hash, <span style="color:#8be9fd">void</span><span style="color:#ff79c6">*</span> value, size_t charge, <span style="color:#8be9fd">void</span> (<span style="color:#ff79c6">*</span>deleter)(<span style="color:#ff79c6">const</span> Slice<span style="color:#ff79c6">&amp;</span> key, <span style="color:#8be9fd">void</span><span style="color:#ff79c6">*</span> value))
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4">// 从 hash 表中查找，并 更新 ref
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>Cache<span style="color:#ff79c6">::</span>Handle<span style="color:#ff79c6">*</span> Lookup(<span style="color:#ff79c6">const</span> Slice<span style="color:#ff79c6">&amp;</span> key, <span style="color:#8be9fd">uint32_t</span> hash);
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#8be9fd">void</span> <span style="color:#50fa7b">Release</span>(Cache<span style="color:#ff79c6">::</span>Handle<span style="color:#ff79c6">*</span> handle);  <span style="color:#6272a4">// ref--
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span><span style="color:#8be9fd">void</span> <span style="color:#50fa7b">Erase</span>(<span style="color:#ff79c6">const</span> Slice<span style="color:#ff79c6">&amp;</span> key, <span style="color:#8be9fd">uint32_t</span> hash);  <span style="color:#6272a4">// 全部清空
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span><span style="color:#8be9fd">void</span> <span style="color:#50fa7b">Prune</span>();
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>LRUCache 中的私有函数</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">5
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-cpp" data-lang="cpp"><span style="display:flex;"><span>  <span style="color:#8be9fd">void</span> <span style="color:#50fa7b">LRU_Remove</span>(LRUHandle<span style="color:#ff79c6">*</span> e);
+</span></span><span style="display:flex;"><span>  <span style="color:#8be9fd">void</span> <span style="color:#50fa7b">LRU_Append</span>(LRUHandle<span style="color:#ff79c6">*</span> list, LRUHandle<span style="color:#ff79c6">*</span> e);
+</span></span><span style="display:flex;"><span>  <span style="color:#8be9fd">void</span> <span style="color:#50fa7b">Ref</span>(LRUHandle<span style="color:#ff79c6">*</span> e);
+</span></span><span style="display:flex;"><span>  <span style="color:#8be9fd">void</span> <span style="color:#50fa7b">Unref</span>(LRUHandle<span style="color:#ff79c6">*</span> e);
+</span></span><span style="display:flex;"><span>  <span style="color:#8be9fd">bool</span> <span style="color:#50fa7b">FinishErase</span>(LRUHandle<span style="color:#ff79c6">*</span> e) EXCLUSIVE_LOCKS_REQUIRED(mutex_);
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>LRUCache 的使用是在 db/table_cache.cc 中<br>
+这里包含了变量<code>cache_</code>，</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-cpp" data-lang="cpp"><span style="display:flex;"><span><span style="color:#ff79c6">struct</span> <span style="color:#50fa7b">TableAndFile</span> {
+</span></span><span style="display:flex;"><span>  RandomAccessFile<span style="color:#ff79c6">*</span> file;
+</span></span><span style="display:flex;"><span>  Table<span style="color:#ff79c6">*</span> table;
+</span></span><span style="display:flex;"><span>};
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>引用的回调函数</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">8
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-cpp" data-lang="cpp"><span style="display:flex;"><span><span style="color:#ff79c6">static</span> <span style="color:#8be9fd">void</span> <span style="color:#50fa7b">DeleteEntry</span>(<span style="color:#ff79c6">const</span> Slice<span style="color:#ff79c6">&amp;</span> key, <span style="color:#8be9fd">void</span><span style="color:#ff79c6">*</span> value) {
+</span></span><span style="display:flex;"><span>  TableAndFile<span style="color:#ff79c6">*</span> tf <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">reinterpret_cast</span><span style="color:#ff79c6">&lt;</span>TableAndFile<span style="color:#ff79c6">*&gt;</span>(value);
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">delete</span> tf<span style="color:#ff79c6">-&gt;</span>table;
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">delete</span> tf<span style="color:#ff79c6">-&gt;</span>file;
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">delete</span> tf;
+</span></span><span style="display:flex;"><span>}
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>cache_<span style="color:#ff79c6">-&gt;</span>Insert(key, tf, <span style="color:#bd93f9">1</span>, <span style="color:#ff79c6">&amp;</span>DeleteEntry);
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>主要函数：</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">8
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-cpp" data-lang="cpp"><span style="display:flex;"><span>Iterator<span style="color:#ff79c6">*</span> <span style="color:#50fa7b">NewIterator</span>(<span style="color:#ff79c6">const</span> ReadOptions<span style="color:#ff79c6">&amp;</span> options, <span style="color:#8be9fd">uint64_t</span> file_number, <span style="color:#8be9fd">uint64_t</span> file_size, Table<span style="color:#ff79c6">**</span> tableptr <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">nullptr</span>);
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>Status <span style="color:#50fa7b">Get</span>(<span style="color:#ff79c6">const</span> ReadOptions<span style="color:#ff79c6">&amp;</span> options, <span style="color:#8be9fd">uint64_t</span> file_number, <span style="color:#8be9fd">uint64_t</span> file_size, <span style="color:#ff79c6">const</span> Slice<span style="color:#ff79c6">&amp;</span> k, <span style="color:#8be9fd">void</span><span style="color:#ff79c6">*</span> arg, 
+</span></span><span style="display:flex;"><span>	<span style="color:#8be9fd">void</span> (<span style="color:#ff79c6">*</span>handle_result)(<span style="color:#8be9fd">void</span><span style="color:#ff79c6">*</span>, <span style="color:#ff79c6">const</span> Slice<span style="color:#ff79c6">&amp;</span>, <span style="color:#ff79c6">const</span> Slice<span style="color:#ff79c6">&amp;</span>));
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#8be9fd">void</span> <span style="color:#50fa7b">Evict</span>(<span style="color:#8be9fd">uint64_t</span> file_number);
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>Status <span style="color:#50fa7b">FindTable</span>(<span style="color:#8be9fd">uint64_t</span> file_number, <span style="color:#8be9fd">uint64_t</span> file_size, Cache<span style="color:#ff79c6">::</span>Handle<span style="color:#ff79c6">**</span>);
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>FindTable流程：</p>
+<ul>
+<li>首先去 LRU 中查找，如果找不到，则创建一个随机文件的读写对象</li>
+<li>然后 SSTable 打开，之后将其插入到缓存中</li>
+</ul>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-cpp" data-lang="cpp"><span style="display:flex;"><span>TableAndFile<span style="color:#ff79c6">*</span> tf <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">new</span> TableAndFile;
+</span></span><span style="display:flex;"><span>tf<span style="color:#ff79c6">-&gt;</span>file <span style="color:#ff79c6">=</span> file;
+</span></span><span style="display:flex;"><span>tf<span style="color:#ff79c6">-&gt;</span>table <span style="color:#ff79c6">=</span> table;
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">*</span>handle <span style="color:#ff79c6">=</span> cache_<span style="color:#ff79c6">-&gt;</span>Insert(key, tf, <span style="color:#bd93f9">1</span>, <span style="color:#ff79c6">&amp;</span>DeleteEntry);
+</span></span></code></pre></td></tr></table>
+</div>
+</div><h2 id="一些工具类">一些工具类</h2>
+<p>arena.cc，内存分配</p>
+<ul>
+<li>使用一个char *的vector保存每个块；</li>
+<li>当需要分配一块内存时，查看alloc_bytes_remaining_(就是当前块还有多少内存未分配)是否大于等于所需内存；</li>
+<li>如果大于等于，直接分配，这时候只需要移动指针即可；</li>
+<li>如果小于，要分两种情况，看所需要分配的内存是否大于1KB；</li>
+<li>如果大于1KB，直接分配相应大小的块，并且插入到vector中;</li>
+<li>如果小于等于1KB，则分配一个4KB的块，插入到vector中，从4KB的块上分配相应的内存；上一个块里没有分配的内存就浪费了
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/04/LeveDB-%E5%B7%A5%E5%85%B7%E7%B1%BB/6.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/04/LeveDB-%E5%B7%A5%E5%85%B7%E7%B1%BB/6.jpg" />
+        </a>
+    </li>
+</ul>
+<p>coding.cc</p>
+<ul>
+<li>如果编码值 v &lt; 1 &laquo; 7，只需要7位即可编码，可使用0 + v的方式；</li>
+<li>如果编码值 1 &laquo; 7 &lt;= v &lt; 1 &laquo; 14，需要两个字节编码，第一个字节使用1 + v的低7位，表示需要查看下一个字节，下一个字节使用0 + v的高7位，表示不需要查看下一个字节；</li>
+<li>以此类推 
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/04/LeveDB-%E5%B7%A5%E5%85%B7%E7%B1%BB/7.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/04/LeveDB-%E5%B7%A5%E5%85%B7%E7%B1%BB/7.jpg" />
+        </a>
+    </li>
+</ul>
+<p>include/leveldb/slice.h</p>
+<ul>
+<li>Slice有一个字段char* data_保存字符串的指针</li>
+<li>另一个字段size_t size_表示字符串的长度，也就是Slice指向另外一个字符串
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/04/LeveDB-%E5%B7%A5%E5%85%B7%E7%B1%BB/8.webp">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/04/LeveDB-%E5%B7%A5%E5%85%B7%E7%B1%BB/8.webp" />
+        </a>
+    </li>
+</ul>
+<h2 id="其他">其他</h2>
+<p>hash</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">15
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">16
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">17
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">18
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">19
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">20
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">21
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">22
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">23
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">24
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">25
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">26
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">27
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">28
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">29
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">30
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">31
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">32
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-cpp" data-lang="cpp"><span style="display:flex;"><span><span style="color:#8be9fd">uint32_t</span> <span style="color:#50fa7b">Hash</span>(<span style="color:#ff79c6">const</span> <span style="color:#8be9fd">char</span><span style="color:#ff79c6">*</span> data, size_t n, <span style="color:#8be9fd">uint32_t</span> seed) {
+</span></span><span style="display:flex;"><span>  <span style="color:#6272a4">// Similar to murmur hash
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>  <span style="color:#ff79c6">const</span> <span style="color:#8be9fd">uint32_t</span> m <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">0xc6a4a793</span>;
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">const</span> <span style="color:#8be9fd">uint32_t</span> r <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">24</span>;
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">const</span> <span style="color:#8be9fd">char</span><span style="color:#ff79c6">*</span> limit <span style="color:#ff79c6">=</span> data <span style="color:#ff79c6">+</span> n;
+</span></span><span style="display:flex;"><span>  <span style="color:#8be9fd">uint32_t</span> h <span style="color:#ff79c6">=</span> seed <span style="color:#ff79c6">^</span> (n <span style="color:#ff79c6">*</span> m);
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>  <span style="color:#6272a4">// Pick up four bytes at a time
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>  <span style="color:#ff79c6">while</span> (data <span style="color:#ff79c6">+</span> <span style="color:#bd93f9">4</span> <span style="color:#ff79c6">&lt;=</span> limit) {
+</span></span><span style="display:flex;"><span>    <span style="color:#8be9fd">uint32_t</span> w <span style="color:#ff79c6">=</span> DecodeFixed32(data);
+</span></span><span style="display:flex;"><span>    data <span style="color:#ff79c6">+=</span> <span style="color:#bd93f9">4</span>;
+</span></span><span style="display:flex;"><span>    h <span style="color:#ff79c6">+=</span> w;
+</span></span><span style="display:flex;"><span>    h <span style="color:#ff79c6">*=</span> m;
+</span></span><span style="display:flex;"><span>    h <span style="color:#ff79c6">^=</span> (h <span style="color:#ff79c6">&gt;&gt;</span> <span style="color:#bd93f9">16</span>);
+</span></span><span style="display:flex;"><span>  }
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>  <span style="color:#6272a4">// Pick up remaining bytes
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>  <span style="color:#ff79c6">switch</span> (limit <span style="color:#ff79c6">-</span> data) {
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">case</span> <span style="color:#bd93f9">3</span><span style="color:#ff79c6">:</span>
+</span></span><span style="display:flex;"><span>      h <span style="color:#ff79c6">+=</span> <span style="color:#ff79c6">static_cast</span><span style="color:#ff79c6">&lt;</span><span style="color:#8be9fd">uint8_t</span><span style="color:#ff79c6">&gt;</span>(data[<span style="color:#bd93f9">2</span>]) <span style="color:#ff79c6">&lt;&lt;</span> <span style="color:#bd93f9">16</span>;
+</span></span><span style="display:flex;"><span>      FALLTHROUGH_INTENDED;
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">case</span> <span style="color:#bd93f9">2</span><span style="color:#ff79c6">:</span>
+</span></span><span style="display:flex;"><span>      h <span style="color:#ff79c6">+=</span> <span style="color:#ff79c6">static_cast</span><span style="color:#ff79c6">&lt;</span><span style="color:#8be9fd">uint8_t</span><span style="color:#ff79c6">&gt;</span>(data[<span style="color:#bd93f9">1</span>]) <span style="color:#ff79c6">&lt;&lt;</span> <span style="color:#bd93f9">8</span>;
+</span></span><span style="display:flex;"><span>      FALLTHROUGH_INTENDED;
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">case</span> <span style="color:#bd93f9">1</span><span style="color:#ff79c6">:</span>
+</span></span><span style="display:flex;"><span>      h <span style="color:#ff79c6">+=</span> <span style="color:#ff79c6">static_cast</span><span style="color:#ff79c6">&lt;</span><span style="color:#8be9fd">uint8_t</span><span style="color:#ff79c6">&gt;</span>(data[<span style="color:#bd93f9">0</span>]);
+</span></span><span style="display:flex;"><span>      h <span style="color:#ff79c6">*=</span> m;
+</span></span><span style="display:flex;"><span>      h <span style="color:#ff79c6">^=</span> (h <span style="color:#ff79c6">&gt;&gt;</span> r);
+</span></span><span style="display:flex;"><span>      <span style="color:#ff79c6">break</span>;
+</span></span><span style="display:flex;"><span>  }
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">return</span> h;
+</span></span><span style="display:flex;"><span>}
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>logging 主要函数：</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">15
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">16
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">17
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">18
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-cpp" data-lang="cpp"><span style="display:flex;"><span><span style="color:#8be9fd">void</span> <span style="color:#50fa7b">AppendNumberTo</span>(std<span style="color:#ff79c6">::</span>string<span style="color:#ff79c6">*</span> str, <span style="color:#8be9fd">uint64_t</span> num);
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4">// Append a human-readable printout of &#34;value&#34; to *str.
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">// Escapes any non-printable characters found in &#34;value&#34;.
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span><span style="color:#8be9fd">void</span> <span style="color:#50fa7b">AppendEscapedStringTo</span>(std<span style="color:#ff79c6">::</span>string<span style="color:#ff79c6">*</span> str, <span style="color:#ff79c6">const</span> Slice<span style="color:#ff79c6">&amp;</span> value);
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4">// Return a human-readable printout of &#34;num&#34;
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>std<span style="color:#ff79c6">::</span>string NumberToString(<span style="color:#8be9fd">uint64_t</span> num);
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4">// Return a human-readable version of &#34;value&#34;.
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">// Escapes any non-printable characters found in &#34;value&#34;.
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>std<span style="color:#ff79c6">::</span>string EscapeString(<span style="color:#ff79c6">const</span> Slice<span style="color:#ff79c6">&amp;</span> value);
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4">// Parse a human-readable number from &#34;*in&#34; into *value.  On success,
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">// advances &#34;*in&#34; past the consumed number and sets &#34;*val&#34; to the
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">// numeric value.  Otherwise, returns false and leaves *in in an
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">// unspecified state.
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span><span style="color:#8be9fd">bool</span> <span style="color:#50fa7b">ConsumeDecimalNumber</span>(Slice<span style="color:#ff79c6">*</span> in, <span style="color:#8be9fd">uint64_t</span><span style="color:#ff79c6">*</span> val);
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>comparator</p>
+<p>histogram</p>
+<p>crc32c</p>
+<h2 id="参考">参考</h2>
+<ul>
+<li>论文《Less hashing, same performance:Building a better Bloom filter》</li>
+<li><a href="https://github.com/google/leveldb/blob/main/doc/index.md">github index</a></li>
+<li><a href="https://llimllib.github.io/bloomfilter-tutorial/zh_CN/">Bloom Filters by Example</a></li>
+<li><a href="https://www.qtmuniao.com/2020/07/03/leveldb-data-structures-skip-list/">漫谈 LevelDB 数据结构（一）：跳表（Skip List）</a></li>
+<li><a href="https://www.qtmuniao.com/2020/11/18/leveldb-data-structures-bloom-filter/">漫谈 LevelDB 数据结构（二）：布隆过滤器（Bloom Filter）</a></li>
+<li><a href="https://www.qtmuniao.com/2021/05/09/levedb-data-structures-lru-cache/">漫谈 LevelDB 数据结构（三）：LRU 缓存（ LRUCache）</a></li>
+<li><a href="https://www.zhihu.com/column/c_1282795241104465920">LevelDB源码剖析</a></li>
+<li><a href="https://sf-zhou.github.io/#/LevelDB">SF-Zhou&rsquo;s Blog</a></li>
+<li><a href="https://leveldb-handbook.readthedocs.io/zh/latest/index.html">leveldb-handbook</a></li>
+<li><a href="http://catkang.github.io/2022/01/27/btree-lock.html">庖丁解LevelDB</a></li>
+<li><a href="https://docs.rs/leveldb/latest/leveldb/">rust使用</a></li>
+<li><a href="https://docs.riak.com/riak/kv/latest/setup/planning/backend/leveldb/index.html">LevelDB使用介绍</a></li>
+<li><a href="https://en.wikipedia.org/wiki/LevelDB">LeveLDB维基百科</a></li>
+<li><a href="https://dbdb.io/db/leveldb">dbdb.io的LevelDB介绍</a></li>
+<li><a href="https://mariadb.com/kb/en/leveldb/">MariaDB的插件</a></li>
+<li><a href="https://item.jd.com/13006589.html">书籍：精通LevelDB</a></li>
+<li><a href="https://yuerblog.cc/wp-content/uploads/leveldb%E5%AE%9E%E7%8E%B0%E8%A7%A3%E6%9E%90.pdf">leveldb 实现解析</a></li>
+<li><a href="https://www.opengroup.org/austin/papers/posix_faq.html">POSIX™ 1003.1 Frequently Asked Questions (FAQ Version 1.18)</a></li>
+<li><a href="https://en.wikipedia.org/wiki/Spurious_wakeup">Spurious wakeup</a></li>
+<li><a href="https://en.wikipedia.org/wiki/Memory_barrier">Memory barrier</a></li>
+<li><a href="http://www.rdrop.com/users/paulmck/scalability/paper/whymb.2010.06.07c.pdf">Memory Barriers: a Hardware View for Software Hackers</a></li>
+<li><a href="https://bean-li.github.io/categories/#leveldb">Bean Li的LevelDB文章汇总</a></li>
+<li><a href="https://zhuanlan.zhihu.com/p/51573929">LevelDB设计与实现 - Compaction</a></li>
+<li><a href="https://zhuanlan.zhihu.com/p/51858206">LevelDB设计与实现 - MVCC等</a></li>
+<li><a href="http://www.pandademo.com/category/tech/leveldb/">leveldb源码剖析 系列</a></li>
+<li><a href="https://devdoc.net/bigdata/hbase-0.98.7-hadoop1/book/hfilev2.html">HBase file format with inline blocks (version 2)</a></li>
+</ul>
+
+			<script type="text/javascript"
+        async
+        src="https://cdn.bootcss.com/mathjax/2.7.3/MathJax.js?config=TeX-AMS-MML_HTMLorMML">
+MathJax.Hub.Config({
+  tex2jax: {
+    inlineMath: [['$','$'], ['\\(','\\)']],
+    displayMath: [['$$','$$'], ['\[\[','\]\]']],
+    processEscapes: true,
+    processEnvironments: true,
+    skipTags: ['script', 'noscript', 'style', 'textarea', 'pre'],
+    TeX: { equationNumbers: { autoNumber: "AMS" },
+         extensions: ["AMSmath.js", "AMSsymbols.js"] }
+  }
+});
+
+MathJax.Hub.Queue(function() {
+    
+    
+    
+    var all = MathJax.Hub.getAllJax(), i;
+    for(i = 0; i < all.length; i += 1) {
+        all[i].SourceElement().parentNode.className += ' has-jax';
+    }
+});
+</script>
+
+<style>
+code.has-jax {
+    font: inherit;
+    font-size: 100%;
+    background: inherit;
+    border: inherit;
+    color: #515151;
+}
+</style>
+        </div>
+
+        
+
+
+        
+
+<div class="post-archive">
+    <h2>相关文章</h2>
+    <ul class="listing">
+        
+        <li><a href="/post/2023/04/levedb-sstable%E6%A8%A1%E5%9D%97/">LevelDB SSTable模块</a></li>
+        
+        <li><a href="/post/2023/04/levedb-memtable%E6%A8%A1%E5%9D%97/">LevelDB MemTable模块</a></li>
+        
+        <li><a href="/post/2023/04/levedb-log%E6%A8%A1%E5%9D%97/">LevelDB Log模块</a></li>
+        
+        <li><a href="/post/2023/03/levedb-%E5%85%AC%E5%BC%80%E6%8E%A5%E5%8F%A3/">LevelDB 公开的接口</a></li>
+        
+        <li><a href="/post/2023/03/levedb-%E5%9F%BA%E6%9C%AC%E6%A6%82%E5%BF%B5/">LevelDB 基本概念</a></li>
+        
+    </ul>
+</div>
+
+
+        <div class="post-meta meta-tags">
+            
+            <ul class="clearfix">
+                
+                <li><a href='/tags/leveldb'>LevelDB</a></li>
+                
+            </ul>
+            
+        </div>
+    </article>
+    
+    
+
+    
+    
+    <div class="post bg-white">
+      <script src="https://utteranc.es/client.js"
+            repo= "himichael/hugoblogtalks"
+            issue-term="pathname"
+            theme="github-light"
+            crossorigin="anonymous"
+            async>
+      </script>
+    </div>
+    
+</div>
+
+
+                </div>
+
+                <div id="secondary">
+    <section class="widget">
+        <form id="search" action='https://code0xff.org/search/' method="get" accept-charset="utf-8" target="_blank" _lpchecked="1">
+      
+      <input type="text" name="q" maxlength="20" placeholder="Search">
+      <input type="hidden" name="sitesearch" value="https://code0xff.org/">
+      <button type="submit" class="submit icon-search"></button>
+</form>
+    </section>
+    
+    <section class="widget">
+        <h3 class="widget-title">最近文章</h3>
+<ul class="widget-list">
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/04/levedb-%E5%B7%A5%E5%85%B7%E7%B1%BB/" title="LevelDB 辅助工具类">LevelDB 辅助工具类</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/04/levedb-sstable%E6%A8%A1%E5%9D%97/" title="LevelDB SSTable模块">LevelDB SSTable模块</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/04/levedb-memtable%E6%A8%A1%E5%9D%97/" title="LevelDB MemTable模块">LevelDB MemTable模块</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/04/levedb-log%E6%A8%A1%E5%9D%97/" title="LevelDB Log模块">LevelDB Log模块</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/03/levedb-%E5%85%AC%E5%BC%80%E6%8E%A5%E5%8F%A3/" title="LevelDB 公开的接口">LevelDB 公开的接口</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/03/levedb-%E5%9F%BA%E6%9C%AC%E6%A6%82%E5%BF%B5/" title="LevelDB 基本概念">LevelDB 基本概念</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/03/oceanbase%E5%BC%80%E5%8F%91%E8%80%85%E5%A4%A7%E4%BC%9A/" title="OceanBase开发者大会分享">OceanBase开发者大会分享</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/03/bustub%E6%95%B0%E6%8D%AE%E5%BA%93/" title="bustub数据库">bustub数据库</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/02/cpu-and-cache-efficient-management-of-memory-resident-databases/" title="CPU and Cache Efficient Management of Memory-Resident Databases">CPU and Cache Efficient Management of Memory-Resident Databases</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/02/efficiently-compiling-efficient-query-plans-for-modern-hardware/" title="Efficiently Compiling Efficient Query Plans for Modern Hardware">Efficiently Compiling Efficient Query Plans for Modern Hardware</a>
+    </li>
+    
+</ul>
+    </section>
+
+    
+
+    <section class="widget">
+        <h3 class="widget-title"><a href='/categories/'>分类</a></h3>
+<ul class="widget-list">
+    
+    <li><a href="https://code0xff.org/categories/%E5%88%86%E5%B8%83%E5%BC%8F/">分布式 (6)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E5%8E%9F%E7%90%86%E5%88%86%E6%9E%90/">原理分析 (12)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E5%95%86%E4%B8%9A/">商业 (3)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E5%A4%A7%E6%95%B0%E6%8D%AE/">大数据 (22)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%95%B0%E6%8D%AE%E5%BA%93/">数据库 (21)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%96%87%E5%AD%A6%E5%92%8C%E8%89%BA%E6%9C%AF/">文学和艺术 (2)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%97%85%E8%A1%8C/">旅行 (10)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%9E%B6%E6%9E%84/">架构 (2)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E7%AE%97%E6%B3%95/">算法 (8)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E7%B3%BB%E7%BB%9F/">系统 (5)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E7%BC%96%E7%A8%8B%E8%AF%AD%E8%A8%80/">编程语言 (2)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E8%A1%8C%E4%B8%9A%E8%A7%82%E5%AF%9F/">行业观察 (1)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E8%AF%BB%E4%B9%A6%E7%AC%94%E8%AE%B0/">读书笔记 (11)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E9%9A%8F%E4%BE%BF%E5%86%99%E5%86%99/">随便写写 (3)</a></li>
+    
+</ul>
+    </section>
+
+    <section class="widget">
+        <h3 class="widget-title">归档</a></h3>
+<ul class="widget-list">
+    
+    <li><a href="https://code0xff.org/years/2021%E5%B9%B4/">2021年 (31)</a></li>
+    
+    <li><a href="https://code0xff.org/years/2022%E5%B9%B4/">2022年 (55)</a></li>
+    
+    <li><a href="https://code0xff.org/years/2023%E5%B9%B4/">2023年 (22)</a></li>
+    
+</ul>
+    </section>
+
+    <section class="widget">
+        <h3 class="widget-title"><a href='/tags/'>标签</a></h3>
+<div class="tagcloud">
+    
+    <a href="https://code0xff.org/tags/b%E6%A0%91/">B树 </a>
+    
+    <a href="https://code0xff.org/tags/cmu-database/">CMU-Database </a>
+    
+    <a href="https://code0xff.org/tags/flink/">flink </a>
+    
+    <a href="https://code0xff.org/tags/hive/">Hive </a>
+    
+    <a href="https://code0xff.org/tags/k8s/">k8s </a>
+    
+    <a href="https://code0xff.org/tags/kudu/">kudu </a>
+    
+    <a href="https://code0xff.org/tags/kyuubi/">Kyuubi </a>
+    
+    <a href="https://code0xff.org/tags/leveldb/">LevelDB </a>
+    
+    <a href="https://code0xff.org/tags/llvm/">LLVM </a>
+    
+    <a href="https://code0xff.org/tags/manacher/">Manacher </a>
+    
+    <a href="https://code0xff.org/tags/mapreduce/">MapReduce </a>
+    
+    <a href="https://code0xff.org/tags/mysql/">MySQL </a>
+    
+    <a href="https://code0xff.org/tags/newsql/">NewSQL </a>
+    
+    <a href="https://code0xff.org/tags/oceanbase/">OceanBase </a>
+    
+    <a href="https://code0xff.org/tags/paxos/">paxos </a>
+    
+    <a href="https://code0xff.org/tags/raft/">raft </a>
+    
+    <a href="https://code0xff.org/tags/scala/">scala </a>
+    
+    <a href="https://code0xff.org/tags/simd/">SIMD </a>
+    
+    <a href="https://code0xff.org/tags/snowflake/">snowflake </a>
+    
+    <a href="https://code0xff.org/tags/spark/">spark </a>
+    
+    <a href="https://code0xff.org/tags/unix/">unix </a>
+    
+    <a href="https://code0xff.org/tags/%E4%BA%8C%E5%88%86%E6%9F%A5%E6%89%BE/">二分查找 </a>
+    
+    <a href="https://code0xff.org/tags/%E4%BA%8C%E5%8F%89%E6%A0%91%E9%81%8D%E5%8E%86/">二叉树遍历 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%88%86%E5%B8%83%E5%BC%8F/">分布式 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%8A%A8%E6%80%81%E6%B3%A8%E5%85%A5/">动态注入 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%8E%86%E5%8F%B2/">历史 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%90%91%E9%87%8F%E5%8C%96/">向量化 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%9B%9E%E6%BA%AF/">回溯 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%9B%BD%E5%86%85%E6%97%85%E8%A1%8C/">国内旅行 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%9B%BD%E5%A4%96%E6%97%85%E8%A1%8C/">国外旅行 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%A4%9A%E7%A7%9F%E6%88%B7/">多租户 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%A4%A7%E6%95%B0%E6%8D%AE/">大数据 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%AD%98%E5%82%A8/">存储 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%B7%A5%E4%BD%9C%E8%AE%B0%E5%BD%95/">工作记录 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%BE%AE%E6%9C%8D%E5%8A%A1/">微服务 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%95%B0%E6%8D%AE%E5%BA%93/">数据库 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%9F%A5%E8%AF%A2%E4%BC%98%E5%8C%96/">查询优化 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%9F%A5%E8%AF%A2%E7%BC%96%E8%AF%91/">查询编译 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%B1%87%E7%BC%96/">汇编 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%B5%8B%E8%AF%95/">测试 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%B9%96%E4%BB%93%E4%B8%80%E4%BD%93/">湖仓一体 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%94%9F%E6%B4%BB/">生活 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%94%B5%E5%BD%B1/">电影 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%AE%97%E6%B3%95/">算法 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BB%8F%E6%B5%8E/">经济 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BC%93%E5%AD%98/">缓存 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BC%96%E8%AF%91%E5%8E%9F%E7%90%86/">编译原理 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BD%91%E7%BB%9C/">网络 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AE%A1%E7%AE%97%E6%A1%86%E6%9E%B6/">计算框架 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AE%BA%E6%96%87/">论文 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AF%BB%E4%B9%A6/">读书 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AF%BB%E4%B9%A6%E7%AC%94%E8%AE%B0/">读书笔记 </a>
+    
+</div>
+    </section>
+
+    
+
+    <section class="widget">
+        <h3 class="widget-title">RSS</h3>
+        <ul class="widget-list">
+            <li><a href="https://code0xff.org/index.xml">文章 RSS</a></li>
+        </ul>
+    </section>
+</div>
+            </div>
+        </div>
+    </div>
+    <footer id="footer">
+    <div>
+        &copy; 2023 <a href="https://code0xff.org/">记录每个瞬间 By 老王</a>
+        
+    </div>
+    <br />
+    <div>
+        <div class="github-badge">
+            <a href="https://gohugo.io/" target="_black" rel="nofollow"><span class="badge-subject">Powered by</span><span class="badge-value bg-blue">Hugo</span></a>
+        </div>
+        <div class="github-badge">
+            <a href="https://github.com/flysnow-org/maupassant-hugo" target="_black"><span class="badge-subject">Theme</span><span class="badge-value bg-yellowgreen">Maupassant</span></a>
+        </div>
+    </div>
+</footer>
+
+
+    
+    <script type="text/javascript">
+        window.MathJax = {
+            tex2jax: {
+                inlineMath: [['$', '$']],
+                processEscapes: true
+                }
+            };
+    </script>
+    <script src='https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.5/MathJax.js?config=TeX-MML-AM_CHTML' async></script><script src="https://cdn.bootcdn.net/ajax/libs/fancybox/3.5.7/jquery.fancybox.min.js"></script>
+
+<a id="rocket" href="#top"></a>
+<script type="text/javascript" src='/js/totop.js?v=0.0.0' async=""></script>
+
+<script type="application/javascript">
+var doNotTrack = false;
+if (!doNotTrack) {
+	window.ga=window.ga||function(){(ga.q=ga.q||[]).push(arguments)};ga.l=+new Date;
+	ga('create', 'GA ID', 'auto');
+	
+	ga('send', 'pageview');
+}
+</script>
+<script async src='https://www.google-analytics.com/analytics.js'></script>
+
+
+
+    <script type="text/javascript" src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js" async></script>
+
+
+
+
+</body>
+
+</html>
