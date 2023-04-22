@@ -1,0 +1,1071 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    
+    <meta name="referrer" content="no-referrer-when-downgrade">
+    
+
+    <title>LevelDB 多版本和压缩 | 记录每个瞬间</title>
+    <meta property="og:title" content="LevelDB 多版本和压缩 - 记录每个瞬间">
+    <meta property="og:type" content="article">
+        
+    <meta property="article:published_time" content='2023-04-14T19:20:03&#43;08:00'>
+        
+        
+    <meta property="article:modified_time" content='2023-04-14T19:20:03&#43;08:00'>
+        
+    <meta name="Keywords" content="">
+    <meta name="description" content="LevelDB 多版本和压缩">
+        <meta name="author" content="隔壁老王">
+        
+    <meta property="og:url" content="https://code0xff.org/post/2023/04/levedb-%E5%A4%9A%E7%89%88%E6%9C%AC%E5%92%8C%E5%8E%8B%E7%BC%A9/">
+    <link rel="shortcut icon" href='/favicon.ico'  type="image/x-icon">
+
+    <link rel="stylesheet" href='/css/normalize.css'>
+    <link rel="stylesheet" href='/css/style.css'>
+    <script type="text/javascript" src="//cdn.bootcdn.net/ajax/libs/jquery/3.4.1/jquery.min.js"></script>
+
+    
+    
+    
+        <link href="https://cdn.bootcdn.net/ajax/libs/fancybox/3.5.7/jquery.fancybox.min.css" rel="stylesheet">
+    
+    
+    
+    
+</head>
+
+
+<body>
+    <header id="header" class="clearfix">
+    <div class="container">
+        <div class="col-group">
+            <div class="site-name ">
+                
+                    <a id="logo" href="https://code0xff.org/">
+                        记录每个瞬间
+                    </a>
+                
+                
+            </div>
+            <div>
+                <nav id="nav-menu" class="clearfix">
+                    <a class="current" href="https://code0xff.org/">首页</a>
+                    
+                    <a  href="https://code0xff.org/linked/" title="链接">链接</a>
+                    
+                    <a  href="https://code0xff.org/archives/" title="归档">归档</a>
+                    
+                    <a  href="https://code0xff.org/about/" title="关于">关于</a>
+                    
+                </nav>
+            </div>
+        </div>
+    </div>
+</header>
+
+    <div id="body">
+        <div class="container">
+            <div class="col-group">
+
+                <div class="col-8" id="main">
+                    
+<div class="res-cons">
+    
+    <article class="post">
+        <header>
+            <h1 class="post-title">LevelDB 多版本和压缩</h1>
+        </header>
+        <date class="post-meta meta-date">
+            2023年4月14日
+        </date>
+<nav id="TableOfContents">
+  <ul>
+    <li>
+      <ul>
+        <li><a href="#多版本">多版本</a></li>
+        <li><a href="#压缩">压缩</a></li>
+        <li><a href="#参考">参考</a></li>
+      </ul>
+    </li>
+  </ul>
+</nav>
+        
+        <div class="post-meta">
+            
+            <span class="post-meta meta-tags">
+                <ul class="clearfix">
+                    <a href='/categories/%E5%8E%9F%E7%90%86%E5%88%86%E6%9E%90'>原理分析</a>
+                </ul>
+            </span>
+            
+        </div>
+        
+        
+        <div class="post-meta">
+            <span id="busuanzi_container_page_pv">|<span id="busuanzi_value_page_pv"></span><span>
+                    阅读</span></span>
+        </div>
+        
+        
+        <div class="post-content">
+            <h2 id="多版本">多版本</h2>
+<p>版本管理中相关的类</p>
+<ul>
+<li>Version标识了一个版本，主要信息是这个版本包含的SSTable信息；</li>
+<li>VersionSet是一个版本集，里面保存了Version的一个双链表，其中有一个Version是当前版本，因为只有一个实例，还保存了其它的一些全局的元数据，Dummy Version是链表头；</li>
+<li>VersionEdit保存了要对Version做的修改，在一个Version上应用一个VersionEdit，可以生成一个新的Version；</li>
+<li>Builder是一个帮助类，帮助Version上应用VersionEdit，生成新版本</li>
+</ul>
+<p>VersionSet 是一个双链表结构，每个 Version 代表了一个版本<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/04/LeveDB-%E5%A4%9A%E7%89%88%E6%9C%AC%E5%92%8C%E5%8E%8B%E7%BC%A9/1.png">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/04/LeveDB-%E5%A4%9A%E7%89%88%E6%9C%AC%E5%92%8C%E5%8E%8B%E7%BC%A9/1.png" />
+        </a>
+    </p>
+<p>将当前的 版本 和 VersionEdit 合并之后，就得到了一个新的版本
+VersionEdit就是一次 Minor Compaction、或者是 Major Compaction的结果
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/04/LeveDB-%E5%A4%9A%E7%89%88%E6%9C%AC%E5%92%8C%E5%8E%8B%E7%BC%A9/2.png">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/04/LeveDB-%E5%A4%9A%E7%89%88%E6%9C%AC%E5%92%8C%E5%8E%8B%E7%BC%A9/2.png" />
+        </a>
+    </p>
+<p>版本管理的工作流程：</p>
+<ul>
+<li>VersionSet里保存着当前版本，以及被引用的历史版本；</li>
+<li>当有Compaction发生时，会将更改的内容写入到一个VersionEdit中；</li>
+<li>利用Builder将VersionEdit应用到当前版本上面生成一个新的版本；</li>
+<li>将新版本链接到VersionSet的双链表上面；</li>
+<li>将新的版本设置为当前版本；</li>
+<li>将旧的当前版本Unref，就是引用计数减1。
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/04/LeveDB-%E5%A4%9A%E7%89%88%E6%9C%AC%E5%92%8C%E5%8E%8B%E7%BC%A9/3.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/04/LeveDB-%E5%A4%9A%E7%89%88%E6%9C%AC%E5%92%8C%E5%8E%8B%E7%BC%A9/3.jpg" />
+        </a>
+    </li>
+</ul>
+<p>版本控制中的引用计数：</p>
+<ul>
+<li>每个Version包含了一个引用，当前版本的 ref 为 1</li>
+<li>当有迭代器需要遍历数据库时，这个版本的 ref ++ 等于 2</li>
+<li>其他线程不断写入，触发 compaction，生成新版本</li>
+<li>新版本 + 1，老版本 - 1</li>
+<li>因为 老版本为 1，所以不会被删除，直到迭代接受，ref = 0</li>
+<li>如果 Version 的ref 为0，则可以删除了</li>
+</ul>
+<hr>
+<p><strong>FileMetaData</strong><br>
+sstable的元信息</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-cpp" data-lang="cpp"><span style="display:flex;"><span><span style="color:#ff79c6">struct</span> <span style="color:#50fa7b">FileMetaData</span> {
+</span></span><span style="display:flex;"><span>  FileMetaData() <span style="color:#ff79c6">:</span> refs(<span style="color:#bd93f9">0</span>), allowed_seeks(<span style="color:#bd93f9">1</span> <span style="color:#ff79c6">&lt;&lt;</span> <span style="color:#bd93f9">30</span>), file_size(<span style="color:#bd93f9">0</span>) {}
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>  <span style="color:#8be9fd">int</span> refs;
+</span></span><span style="display:flex;"><span>  <span style="color:#8be9fd">int</span> allowed_seeks;     <span style="color:#6272a4">// Compaction时会介绍这个字段
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>  <span style="color:#8be9fd">uint64_t</span> number;
+</span></span><span style="display:flex;"><span>  <span style="color:#8be9fd">uint64_t</span> file_size;    <span style="color:#6272a4">// 文件大小
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>  InternalKey smallest;  <span style="color:#6272a4">// 文件里最小的internal key
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>  InternalKey largest;   <span style="color:#6272a4">// 文件里最大的internal key
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>};
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p><strong>Version</strong><br>
+位置：db/version_set.h<br>
+读取数据库时，就需要 Version 里面的信息</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-cpp" data-lang="cpp"><span style="display:flex;"><span><span style="color:#ff79c6">class</span> <span style="color:#50fa7b">Version</span> {
+</span></span><span style="display:flex;"><span>  VersionSet<span style="color:#ff79c6">*</span> vset_;  <span style="color:#6272a4">// 版本集的引用
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>  Version<span style="color:#ff79c6">*</span> next_;     <span style="color:#6272a4">// 版本在版本集里的next_指针
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>  Version<span style="color:#ff79c6">*</span> prev_;     <span style="color:#6272a4">// 版本在版本集里的prev_指针
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>  <span style="color:#8be9fd">int</span> refs_;          <span style="color:#6272a4">// 引用计数
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>
+</span></span><span style="display:flex;"><span>  <span style="color:#6272a4">// SSTable的信息，每一项代表相应Level的SSTable信息
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>  <span style="color:#6272a4">// 除了Level 0外，每个Level里的文件都是按照最小键的顺序排列的，并且没有重叠
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>  <span style="color:#6272a4">// 通过这个数据项，搜索SSTable时，就可以从Level 0开始搜索
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>  std<span style="color:#ff79c6">::</span>vector<span style="color:#ff79c6">&lt;</span>FileMetaData<span style="color:#ff79c6">*&gt;</span> files_[config<span style="color:#ff79c6">::</span>kNumLevels];
+</span></span><span style="display:flex;"><span>}
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p><strong>VersionEdit</strong></p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">15
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">16
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">17
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">18
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">19
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-cpp" data-lang="cpp"><span style="display:flex;"><span><span style="color:#ff79c6">class</span> <span style="color:#50fa7b">VersionEdit</span> {
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">typedef</span> std<span style="color:#ff79c6">::</span>set<span style="color:#ff79c6">&lt;</span>std<span style="color:#ff79c6">::</span>pair<span style="color:#ff79c6">&lt;</span><span style="color:#8be9fd">int</span>, <span style="color:#8be9fd">uint64_t</span><span style="color:#ff79c6">&gt;&gt;</span> DeletedFileSet;
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    std<span style="color:#ff79c6">::</span>string comparator_;             <span style="color:#6272a4">// 比较器的名称，持久化后，下次打开时需要对比一致
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>    <span style="color:#8be9fd">uint64_t</span> log_number_;                <span style="color:#6272a4">// 日志文件的编号
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>    <span style="color:#8be9fd">uint64_t</span> next_file_number_;          <span style="color:#6272a4">// ldb、log和MANIFEST下一个文件的编号
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>    SequenceNumber last_sequence_;       <span style="color:#6272a4">// 上一个使用的SequenceNumber
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>    <span style="color:#8be9fd">bool</span> has_comparator_;                <span style="color:#6272a4">// 记录上面4个字段是否存在，存在才会持久化的MANIFEST中
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>    <span style="color:#8be9fd">bool</span> has_log_number_;
+</span></span><span style="display:flex;"><span>    <span style="color:#8be9fd">bool</span> has_next_file_number_;
+</span></span><span style="display:flex;"><span>    <span style="color:#8be9fd">bool</span> has_last_sequence_
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#6272a4">// 和VersionSet里面的compact_pointers_相同
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>    std<span style="color:#ff79c6">::</span>vector<span style="color:#ff79c6">&lt;</span>std<span style="color:#ff79c6">::</span>pair<span style="color:#ff79c6">&lt;</span><span style="color:#8be9fd">int</span>, InternalKey<span style="color:#ff79c6">&gt;&gt;</span> compact_pointers_;
+</span></span><span style="display:flex;"><span>    <span style="color:#6272a4">// 有哪些文件被删除，就是Version里哪些SSTable被删除
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>    DeletedFileSet deleted_files_;
+</span></span><span style="display:flex;"><span>    <span style="color:#6272a4">// 有哪些文件被增加，pair的第一个参数是Level，第二个参数是文件的元信息
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>    std<span style="color:#ff79c6">::</span>vector<span style="color:#ff79c6">&lt;</span>std<span style="color:#ff79c6">::</span>pair<span style="color:#ff79c6">&lt;</span><span style="color:#8be9fd">int</span>, FileMetaData<span style="color:#ff79c6">&gt;&gt;</span> new_files_;
+</span></span><span style="display:flex;"><span>};
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>VersionEdit 中包含了两个函数</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-cpp" data-lang="cpp"><span style="display:flex;"><span>Status VersionEdit<span style="color:#ff79c6">::</span>DecodeFrom(<span style="color:#ff79c6">const</span> Slice<span style="color:#ff79c6">&amp;</span> src)
+</span></span><span style="display:flex;"><span><span style="color:#8be9fd">void</span> VersionEdit<span style="color:#ff79c6">::</span>EncodeTo(std<span style="color:#ff79c6">::</span>string<span style="color:#ff79c6">*</span> dst) <span style="color:#ff79c6">const</span>
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>这个就是一个 编码，一个解码<br>
+将 dst 中的信息，写入到所有变量中，以及从 变量中解码信息到 Slice 中</p>
+<p><strong>VersionSet</strong></p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">15
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">16
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">17
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">18
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-cpp" data-lang="cpp"><span style="display:flex;"><span>    Env<span style="color:#ff79c6">*</span> <span style="color:#ff79c6">const</span> env_;                      <span style="color:#6272a4">// 封装部分操作系统调用，包括文件、线程操作等
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>    <span style="color:#ff79c6">const</span> std<span style="color:#ff79c6">::</span>string dbname_;            <span style="color:#6272a4">// 数据库名称，Open时传入
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>    <span style="color:#ff79c6">const</span> Options<span style="color:#ff79c6">*</span> <span style="color:#ff79c6">const</span> options_;        <span style="color:#6272a4">// 数据库选项，Open时传入
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>    TableCache<span style="color:#ff79c6">*</span> <span style="color:#ff79c6">const</span> table_cache_;       <span style="color:#6272a4">// 打开的SSTable的缓存，Open时创建
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>    <span style="color:#ff79c6">const</span> InternalKeyComparator icmp_;    <span style="color:#6272a4">// 根据User Key生成的Internal Key的Comparator
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>    <span style="color:#8be9fd">uint64_t</span> next_file_number_;           <span style="color:#6272a4">// ldb、log和MANIFEST生成新文件时都有一个序号单调递增
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>    <span style="color:#8be9fd">uint64_t</span> manifest_file_number_;       <span style="color:#6272a4">// 当前的MANIFEST的编号
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>    <span style="color:#8be9fd">uint64_t</span> last_sequence_;              <span style="color:#6272a4">// 上一个使用的SequenceNumber
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>    <span style="color:#8be9fd">uint64_t</span> log_number_;                 <span style="color:#6272a4">// 当前的日志的编号
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>
+</span></span><span style="display:flex;"><span>    WritableFile<span style="color:#ff79c6">*</span> descriptor_file_;       <span style="color:#6272a4">// MANIFEST打开的文件描述符
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>    log<span style="color:#ff79c6">::</span>Writer<span style="color:#ff79c6">*</span> descriptor_log_;         <span style="color:#6272a4">// MANIFEST实际存储的格式是WAL日志的格式，所以这里用来写入数据
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>    Version dummy_versions_;              <span style="color:#6272a4">// Version链表的头结点
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>    Version<span style="color:#ff79c6">*</span> current_;                    <span style="color:#6272a4">// 当前的Version
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>
+</span></span><span style="display:flex;"><span>    <span style="color:#6272a4">// 这是用来记录Compact的进度，Compact总是从某一Level的最小的键开始到某个键结束，
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>    <span style="color:#6272a4">// 下次再从下一个键开始，所以这个就是下一次这个Level从哪个键开始Compact
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>    std<span style="color:#ff79c6">::</span>string compact_pointer_[config<span style="color:#ff79c6">::</span>kNumLevels];
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p><strong>VersionSet::Builder</strong>辅助类<br>
+主要变量：</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">15
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">16
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">17
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">18
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">19
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">20
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">21
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">22
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">23
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-cpp" data-lang="cpp"><span style="display:flex;"><span>  <span style="color:#ff79c6">struct</span> <span style="color:#50fa7b">BySmallestKey</span> {
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">const</span> InternalKeyComparator<span style="color:#ff79c6">*</span> internal_comparator;
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#8be9fd">bool</span> <span style="color:#50fa7b">operator</span>()(FileMetaData<span style="color:#ff79c6">*</span> f1, FileMetaData<span style="color:#ff79c6">*</span> f2) <span style="color:#ff79c6">const</span> {
+</span></span><span style="display:flex;"><span>      <span style="color:#8be9fd">int</span> r <span style="color:#ff79c6">=</span> internal_comparator<span style="color:#ff79c6">-&gt;</span>Compare(f1<span style="color:#ff79c6">-&gt;</span>smallest, f2<span style="color:#ff79c6">-&gt;</span>smallest);
+</span></span><span style="display:flex;"><span>      <span style="color:#ff79c6">if</span> (r <span style="color:#ff79c6">!=</span> <span style="color:#bd93f9">0</span>) {
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">return</span> (r <span style="color:#ff79c6">&lt;</span> <span style="color:#bd93f9">0</span>);
+</span></span><span style="display:flex;"><span>      } <span style="color:#ff79c6">else</span> {
+</span></span><span style="display:flex;"><span>        <span style="color:#6272a4">// Break ties by file number
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>        <span style="color:#ff79c6">return</span> (f1<span style="color:#ff79c6">-&gt;</span>number <span style="color:#ff79c6">&lt;</span> f2<span style="color:#ff79c6">-&gt;</span>number);
+</span></span><span style="display:flex;"><span>      }
+</span></span><span style="display:flex;"><span>    }
+</span></span><span style="display:flex;"><span>  };
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">typedef</span> std<span style="color:#ff79c6">::</span>set<span style="color:#ff79c6">&lt;</span>FileMetaData<span style="color:#ff79c6">*</span>, BySmallestKey<span style="color:#ff79c6">&gt;</span> FileSet;
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">struct</span> <span style="color:#50fa7b">LevelState</span> {
+</span></span><span style="display:flex;"><span>    std<span style="color:#ff79c6">::</span>set<span style="color:#ff79c6">&lt;</span><span style="color:#8be9fd">uint64_t</span><span style="color:#ff79c6">&gt;</span> deleted_files;
+</span></span><span style="display:flex;"><span>    FileSet<span style="color:#ff79c6">*</span> added_files;
+</span></span><span style="display:flex;"><span>  };
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>  VersionSet<span style="color:#ff79c6">*</span> vset_;
+</span></span><span style="display:flex;"><span>  Version<span style="color:#ff79c6">*</span> base_;
+</span></span><span style="display:flex;"><span>  LevelState levels_[config<span style="color:#ff79c6">::</span>kNumLevels];
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p><strong>LevelFileNumIterator</strong><br>
+主要变量</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">6
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-cpp" data-lang="cpp"><span style="display:flex;"><span>  <span style="color:#ff79c6">const</span> InternalKeyComparator icmp_;
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">const</span> std<span style="color:#ff79c6">::</span>vector<span style="color:#ff79c6">&lt;</span>FileMetaData<span style="color:#ff79c6">*&gt;*</span> <span style="color:#ff79c6">const</span> flist_;
+</span></span><span style="display:flex;"><span>  <span style="color:#8be9fd">uint32_t</span> index_;
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>  <span style="color:#6272a4">// Backing store for value().  Holds the file number and size.
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>  <span style="color:#ff79c6">mutable</span> <span style="color:#8be9fd">char</span> value_buf_[<span style="color:#bd93f9">16</span>];
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>其中 new 出来的 两次迭代器，就使用到了 LevelFileNumIterator</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-cpp" data-lang="cpp"><span style="display:flex;"><span>Iterator<span style="color:#ff79c6">*</span> Version<span style="color:#ff79c6">::</span>NewConcatenatingIterator(<span style="color:#ff79c6">const</span> ReadOptions<span style="color:#ff79c6">&amp;</span> options, <span style="color:#8be9fd">int</span> level) <span style="color:#ff79c6">const</span> {
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">return</span> <span style="color:#50fa7b">NewTwoLevelIterator</span>(<span style="color:#ff79c6">new</span> LevelFileNumIterator(vset_<span style="color:#ff79c6">-&gt;</span>icmp_, <span style="color:#ff79c6">&amp;</span>files_[level]),
+</span></span><span style="display:flex;"><span>	<span style="color:#ff79c6">&amp;</span>GetFileIterator, vset_<span style="color:#ff79c6">-&gt;</span>table_cache_, options);
+</span></span><span style="display:flex;"><span>}
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">static</span> Iterator<span style="color:#ff79c6">*</span> <span style="color:#50fa7b">GetFileIterator</span>(<span style="color:#8be9fd">void</span><span style="color:#ff79c6">*</span> arg, <span style="color:#ff79c6">const</span> ReadOptions<span style="color:#ff79c6">&amp;</span> options,
+</span></span><span style="display:flex;"><span>                                 <span style="color:#ff79c6">const</span> Slice<span style="color:#ff79c6">&amp;</span> file_value) {
+</span></span><span style="display:flex;"><span>	TableCache<span style="color:#ff79c6">*</span> cache <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">reinterpret_cast</span><span style="color:#ff79c6">&lt;</span>TableCache<span style="color:#ff79c6">*&gt;</span>(arg);
+</span></span><span style="display:flex;"><span>	<span style="color:#ff79c6">return</span> cache<span style="color:#ff79c6">-&gt;</span>NewIterator(options, DecodeFixed64(file_value.data()),
+</span></span><span style="display:flex;"><span>                              DecodeFixed64(file_value.data() <span style="color:#ff79c6">+</span> <span style="color:#bd93f9">8</span>));
+</span></span><span style="display:flex;"><span>}
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>builder 版本变迁过程<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/04/LeveDB-%E5%A4%9A%E7%89%88%E6%9C%AC%E5%92%8C%E5%8E%8B%E7%BC%A9/4.png">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/04/LeveDB-%E5%A4%9A%E7%89%88%E6%9C%AC%E5%92%8C%E5%8E%8B%E7%BC%A9/4.png" />
+        </a>
+    </p>
+<p>总结一下</p>
+<ul>
+<li>整体是 VersionSet 的双链表结构，一个版本由 Version 表示</li>
+<li>VersionEdit 是一次变更，比如 sstable新增，删除(通过压缩产生)，通过 应用 VersionEdit 就可以得到一个新版本</li>
+<li>builder 会加速变更，可以将多个 VersionEdit 一次性应用</li>
+<li>每个 Version 内部关联了一个 FileMetaData，表示一个 sstable的元数据，内部包含了 min、max key方便定位</li>
+<li>MANIFEST 实际关联了一个 log 文件，还会将变更的内容当做 log 记录下来，等启动恢复的时候，就会读取这些log文件</li>
+</ul>
+<h2 id="压缩">压缩</h2>
+<p>压缩，包含两种</p>
+<ul>
+<li>Minor Compaction，mem-table写满会后刷盘，写入到 level-0 中</li>
+<li>Major Compaction，某个层的文件太多，需要将部分文件推入更高层</li>
+</ul>
+<p>
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/04/LeveDB-%E5%A4%9A%E7%89%88%E6%9C%AC%E5%92%8C%E5%8E%8B%E7%BC%A9/5.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/04/LeveDB-%E5%A4%9A%E7%89%88%E6%9C%AC%E5%92%8C%E5%8E%8B%E7%BC%A9/5.jpg" />
+        </a>
+    </p>
+<p>Minor Compaction过程<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/04/LeveDB-%E5%A4%9A%E7%89%88%E6%9C%AC%E5%92%8C%E5%8E%8B%E7%BC%A9/6.jpeg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/04/LeveDB-%E5%A4%9A%E7%89%88%E6%9C%AC%E5%92%8C%E5%8E%8B%E7%BC%A9/6.jpeg" />
+        </a>
+    </p>
+<p>Minor Compaction 时序图<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/04/LeveDB-%E5%A4%9A%E7%89%88%E6%9C%AC%E5%92%8C%E5%8E%8B%E7%BC%A9/seq_diagram.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/04/LeveDB-%E5%A4%9A%E7%89%88%E6%9C%AC%E5%92%8C%E5%8E%8B%E7%BC%A9/seq_diagram.jpg" />
+        </a>
+    </p>
+<p>WriteLevel0Table过程</p>
+<ul>
+<li>得到一个新的 FileMetaData 编号，就是 VersionSet-&gt;next_file_number_++</li>
+<li>调用 BuildTable，其生成的 TableFileName 是根据 FileMetaData的编号得到的</li>
+<li>获取 min、max key，然后确定将 ss-table 推入哪个层级，调用 PickLevelForMemTableOutput</li>
+<li>将 压缩状态存入 CompactionStats[level] 中，这里的 level 固定为 PickLevelForMemTableOutput 返回的层级</li>
+</ul>
+<p>BuildTable 过程：</p>
+<ul>
+<li>从 skip-list 的第一个元素开始遍历，一直到结束，将这些 key-value 加入到 TableBuilder</li>
+<li>同时记录 FileMetaData 的最大、最小、key数量、文件size</li>
+<li>将数据写入到磁盘</li>
+</ul>
+<p>PickLevelForMemTableOutput</p>
+<ul>
+<li>如果跟 0层的有重叠，则推入 0层</li>
+<li>检查方式是，对于 level0，需要遍历所有文件，检查每个文件跟min、max key 是否有重叠</li>
+<li>非 level 0的，则使用 二分查找 当前层的所有文件</li>
+<li>还会检查 level 0、level 1 在其祖父层级(对应的就是 level 2、level 3中，是否重叠太多</li>
+<li>默认的最大单个文件大小为 2M，如果一次重叠的数量 &gt; 20M，PickLevelForMemTableOutput 会继续往更深层级查找</li>
+<li>不过限制了最大查找层级为 2，这也是做了一个权衡</li>
+</ul>
+<p>Major Compaction 的过程<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/04/LeveDB-%E5%A4%9A%E7%89%88%E6%9C%AC%E5%92%8C%E5%8E%8B%E7%BC%A9/7.jpeg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/04/LeveDB-%E5%A4%9A%E7%89%88%E6%9C%AC%E5%92%8C%E5%8E%8B%E7%BC%A9/7.jpeg" />
+        </a>
+    </p>
+<p>Compaction类</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">15
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">16
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">17
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">18
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">19
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">20
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">21
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">22
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">23
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">24
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">25
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">26
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">27
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-cpp" data-lang="cpp"><span style="display:flex;"><span><span style="color:#6272a4">// db/version_set.h
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">class</span> <span style="color:#50fa7b">Compaction</span> {
+</span></span><span style="display:flex;"><span>    <span style="color:#8be9fd">int</span> level_;                      <span style="color:#6272a4">// Compaction文件所在的Level
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>    <span style="color:#8be9fd">uint64_t</span> max_output_file_size_;  <span style="color:#6272a4">// 生成的文件的最大值
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>    Version<span style="color:#ff79c6">*</span> input_version_;         <span style="color:#6272a4">// Compaction发生时的Version
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>    VersionEdit edit_;               <span style="color:#6272a4">// Compaction结果保存的VersionEdit
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>
+</span></span><span style="display:flex;"><span>  <span style="color:#6272a4">// Each compaction reads inputs from &#34;level_&#34; and &#34;level_+1&#34;
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>  std<span style="color:#ff79c6">::</span>vector<span style="color:#ff79c6">&lt;</span>FileMetaData<span style="color:#ff79c6">*&gt;</span> inputs_[<span style="color:#bd93f9">2</span>];  <span style="color:#6272a4">// The two sets of inputs
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>
+</span></span><span style="display:flex;"><span>  <span style="color:#6272a4">// State used to check for number of overlapping grandparent files
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>  <span style="color:#6272a4">// (parent == level_ + 1, grandparent == level_ + 2)
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>  std<span style="color:#ff79c6">::</span>vector<span style="color:#ff79c6">&lt;</span>FileMetaData<span style="color:#ff79c6">*&gt;</span> grandparents_;
+</span></span><span style="display:flex;"><span>  size_t grandparent_index_;  <span style="color:#6272a4">// Index in grandparent_starts_
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>  <span style="color:#8be9fd">bool</span> seen_key_;             <span style="color:#6272a4">// Some output key has been seen
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>  <span style="color:#8be9fd">int64_t</span> overlapped_bytes_;  <span style="color:#6272a4">// Bytes of overlap between current output
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>                              <span style="color:#6272a4">// and grandparent files
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>
+</span></span><span style="display:flex;"><span>  <span style="color:#6272a4">// State for implementing IsBaseLevelForKey
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>
+</span></span><span style="display:flex;"><span>  <span style="color:#6272a4">// level_ptrs_ holds indices into input_version_-&gt;levels_: our state
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>  <span style="color:#6272a4">// is that we are positioned at one of the file ranges for each
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>  <span style="color:#6272a4">// higher level than the ones involved in this compaction (i.e. for
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>  <span style="color:#6272a4">// all L &gt;= level_ + 2).
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>  size_t level_ptrs_[config<span style="color:#ff79c6">::</span>kNumLevels];
+</span></span><span style="display:flex;"><span>}
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>ManualCompaction 类</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">8
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-cpp" data-lang="cpp"><span style="display:flex;"><span>  <span style="color:#6272a4">// Information for a manual compaction
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>  <span style="color:#ff79c6">struct</span> <span style="color:#50fa7b">ManualCompaction</span> {
+</span></span><span style="display:flex;"><span>    <span style="color:#8be9fd">int</span> level;
+</span></span><span style="display:flex;"><span>    <span style="color:#8be9fd">bool</span> done;
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">const</span> InternalKey<span style="color:#ff79c6">*</span> begin;  <span style="color:#6272a4">// null means beginning of key range
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>    <span style="color:#ff79c6">const</span> InternalKey<span style="color:#ff79c6">*</span> end;    <span style="color:#6272a4">// null means end of key range
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>    InternalKey tmp_storage;   <span style="color:#6272a4">// Used to keep track of compaction progress
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>  };
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>Compaction 的触发方式</p>
+<ul>
+<li>Manual Compaction</li>
+<li>Size Compaction</li>
+<li>Seek Compaction</li>
+</ul>
+<p>手动压缩的触发函数：</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-cpp" data-lang="cpp"><span style="display:flex;"><span><span style="color:#8be9fd">void</span> DBImpl<span style="color:#ff79c6">::</span>TEST_CompactRange(<span style="color:#8be9fd">int</span> level, <span style="color:#ff79c6">const</span> Slice<span style="color:#ff79c6">*</span> begin, <span style="color:#ff79c6">const</span> Slice<span style="color:#ff79c6">*</span> end)
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>Size compation</p>
+<ul>
+<li>实现函数为： <code>void VersionSet::Finalize(Version* v)</code></li>
+<li>对于 leve 0，如果 &gt; 4 就会触发</li>
+<li>超过 0 的，如果超过了 10^n MB 就会触发</li>
+<li>由于 ss-table 的不变性，只有版本变更的时候才会变化</li>
+<li>再每次版本变更之后，调用 Finalize，计算出比例最大的 level，下次就从这里开始</li>
+<li>由于一次压缩要很久，这里会记录一个 level 的key，std::string compact_pointer_[config::kNumLevels];</li>
+<li>下次再压缩这一层的时候，就从这个 key 开始继续压缩</li>
+</ul>
+<p>Seek Compaction</p>
+<ul>
+<li>为读做的优化，DB::GET、DBIter 时候，如果读取了超过一个 ss-table 则需要优化</li>
+<li>对于读取 超过一个 的ss-table，对于第一个 ss-table做一个 减操作，如果等于 0了，就需要做压缩</li>
+<li>所以 seek 是精确到某个 ss-table 的</li>
+<li>迭代的时候，是每读取 2M数据，就模拟一个key，做对应的 ss-table&ndash;</li>
+<li>初始值，static_cast<!-- raw HTML omitted -->((f-&gt;file_size / 16384U))</li>
+<li>一次Seek花费10ms；</li>
+<li>读写1MB的花费10ms （100MB/s）；</li>
+<li>而Compaction 1MB的数据花费25MB左右的IO</li>
+</ul>
+<p>执行过程</p>
+<ul>
+<li>执行优先级是 Manual、Size、Seek</li>
+<li>前两者是根据 start、end key 选择某一个level的多个文件</li>
+<li>后者只有确定的一个文件</li>
+<li>根据 level 层的文件，再确定 level + 1层的文件，之后再反向 level 层扩大 level 的输入范围</li>
+<li>最后调用多路合并，进行压缩
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/04/LeveDB-%E5%A4%9A%E7%89%88%E6%9C%AC%E5%92%8C%E5%8E%8B%E7%BC%A9/compaction.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/04/LeveDB-%E5%A4%9A%E7%89%88%E6%9C%AC%E5%92%8C%E5%8E%8B%E7%BC%A9/compaction.jpg" />
+        </a>
+    </li>
+</ul>
+<p>扩大输入文件集合</p>
+<ul>
+<li>确定起始key、结束key</li>
+<li>在level i层中，查找与起始输入文件有key重叠的文件，如图中红线所标注，最终构成level i层的输入文件；</li>
+<li>利用level i层的输入文件，在level i+1层找寻有key重叠的文件，结果为绿线标注的文件，构成level i，i+1层的输入文件；</li>
+<li>最后利用两层的输入文件，在不扩大level i+1输入文件的前提下，查找level i层的有key重叠的文件，结果为蓝线标准的文件，构成最终的输入文件；
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/04/LeveDB-%E5%A4%9A%E7%89%88%E6%9C%AC%E5%92%8C%E5%8E%8B%E7%BC%A9/10.jpeg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/04/LeveDB-%E5%A4%9A%E7%89%88%E6%9C%AC%E5%92%8C%E5%8E%8B%E7%BC%A9/10.jpeg" />
+        </a>
+    </li>
+</ul>
+<p>归并的过程：</p>
+<ul>
+<li>迭代按照Internal Key的顺序进行，多个key则按seq number 降序排列</li>
+<li>相同的 key只有第一个有效，因为它的 seq 是最大的</li>
+<li>碰到一个删除时，并且它的 seq_number &lt;= 最新快照，会判断更高层是否有这个key</li>
+<li>如果有则无法丢弃这个删除操作，因为一旦丢弃，更高层又可见了，不存在可则可以删除</li>
+<li>如果ss-table达到 2M，或者和上层文件重叠超过 10个，这两个条件任意一个触发就会 生成一个 ss-table写磁盘
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/04/LeveDB-%E5%A4%9A%E7%89%88%E6%9C%AC%E5%92%8C%E5%8E%8B%E7%BC%A9/do-compaction.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/04/LeveDB-%E5%A4%9A%E7%89%88%E6%9C%AC%E5%92%8C%E5%8E%8B%E7%BC%A9/do-compaction.jpg" />
+        </a>
+    </li>
+</ul>
+<p>level 0 的压缩过程</p>
+<ul>
+<li>选择 key 800 - 2500</li>
+<li>因为 level 0有重叠，遍历所有文件，找到 key 重叠的文件，确定 start、end key</li>
+<li>选择 level 1 层，根据 start key、end key确定 level 1 层的文件</li>
+<li>将 level 0 和 level 1的文件做多路归并
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/04/LeveDB-%E5%A4%9A%E7%89%88%E6%9C%AC%E5%92%8C%E5%8E%8B%E7%BC%A9/8.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/04/LeveDB-%E5%A4%9A%E7%89%88%E6%9C%AC%E5%92%8C%E5%8E%8B%E7%BC%A9/8.jpg" />
+        </a>
+    </li>
+</ul>
+<p>level &gt; 0 的压缩过程</p>
+<ul>
+<li>选择 key 800 - 2500</li>
+<li>因为是完全有序的，可以根据二分搜索到确定的范围，确定出 level 层的文件</li>
+<li>再确定出 level + 1 层的文件
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/04/LeveDB-%E5%A4%9A%E7%89%88%E6%9C%AC%E5%92%8C%E5%8E%8B%E7%BC%A9/9.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/04/LeveDB-%E5%A4%9A%E7%89%88%E6%9C%AC%E5%92%8C%E5%8E%8B%E7%BC%A9/9.jpg" />
+        </a>
+    </li>
+</ul>
+<h2 id="参考">参考</h2>
+<ul>
+<li>论文《Less hashing, same performance:Building a better Bloom filter》</li>
+<li><a href="https://github.com/google/leveldb/blob/main/doc/index.md">github index</a></li>
+<li><a href="https://llimllib.github.io/bloomfilter-tutorial/zh_CN/">Bloom Filters by Example</a></li>
+<li><a href="https://www.qtmuniao.com/2020/07/03/leveldb-data-structures-skip-list/">漫谈 LevelDB 数据结构（一）：跳表（Skip List）</a></li>
+<li><a href="https://www.qtmuniao.com/2020/11/18/leveldb-data-structures-bloom-filter/">漫谈 LevelDB 数据结构（二）：布隆过滤器（Bloom Filter）</a></li>
+<li><a href="https://www.qtmuniao.com/2021/05/09/levedb-data-structures-lru-cache/">漫谈 LevelDB 数据结构（三）：LRU 缓存（ LRUCache）</a></li>
+<li><a href="https://www.zhihu.com/column/c_1282795241104465920">LevelDB源码剖析</a></li>
+<li><a href="https://sf-zhou.github.io/#/LevelDB">SF-Zhou&rsquo;s Blog</a></li>
+<li><a href="https://leveldb-handbook.readthedocs.io/zh/latest/index.html">leveldb-handbook</a></li>
+<li><a href="http://catkang.github.io/2022/01/27/btree-lock.html">庖丁解LevelDB</a></li>
+<li><a href="https://docs.rs/leveldb/latest/leveldb/">rust使用</a></li>
+<li><a href="https://docs.riak.com/riak/kv/latest/setup/planning/backend/leveldb/index.html">LevelDB使用介绍</a></li>
+<li><a href="https://en.wikipedia.org/wiki/LevelDB">LeveLDB维基百科</a></li>
+<li><a href="https://dbdb.io/db/leveldb">dbdb.io的LevelDB介绍</a></li>
+<li><a href="https://mariadb.com/kb/en/leveldb/">MariaDB的插件</a></li>
+<li><a href="https://item.jd.com/13006589.html">书籍：精通LevelDB</a></li>
+<li><a href="https://yuerblog.cc/wp-content/uploads/leveldb%E5%AE%9E%E7%8E%B0%E8%A7%A3%E6%9E%90.pdf">leveldb 实现解析</a></li>
+<li><a href="https://www.opengroup.org/austin/papers/posix_faq.html">POSIX™ 1003.1 Frequently Asked Questions (FAQ Version 1.18)</a></li>
+<li><a href="https://en.wikipedia.org/wiki/Spurious_wakeup">Spurious wakeup</a></li>
+<li><a href="https://en.wikipedia.org/wiki/Memory_barrier">Memory barrier</a></li>
+<li><a href="http://www.rdrop.com/users/paulmck/scalability/paper/whymb.2010.06.07c.pdf">Memory Barriers: a Hardware View for Software Hackers</a></li>
+<li><a href="https://bean-li.github.io/categories/#leveldb">Bean Li的LevelDB文章汇总</a></li>
+<li><a href="https://zhuanlan.zhihu.com/p/51573929">LevelDB设计与实现 - Compaction</a></li>
+<li><a href="https://zhuanlan.zhihu.com/p/51858206">LevelDB设计与实现 - MVCC等</a></li>
+<li><a href="http://www.pandademo.com/category/tech/leveldb/">leveldb源码剖析 系列</a></li>
+<li><a href="https://devdoc.net/bigdata/hbase-0.98.7-hadoop1/book/hfilev2.html">HBase file format with inline blocks (version 2)</a></li>
+</ul>
+
+			<script type="text/javascript"
+        async
+        src="https://cdn.bootcss.com/mathjax/2.7.3/MathJax.js?config=TeX-AMS-MML_HTMLorMML">
+MathJax.Hub.Config({
+  tex2jax: {
+    inlineMath: [['$','$'], ['\\(','\\)']],
+    displayMath: [['$$','$$'], ['\[\[','\]\]']],
+    processEscapes: true,
+    processEnvironments: true,
+    skipTags: ['script', 'noscript', 'style', 'textarea', 'pre'],
+    TeX: { equationNumbers: { autoNumber: "AMS" },
+         extensions: ["AMSmath.js", "AMSsymbols.js"] }
+  }
+});
+
+MathJax.Hub.Queue(function() {
+    
+    
+    
+    var all = MathJax.Hub.getAllJax(), i;
+    for(i = 0; i < all.length; i += 1) {
+        all[i].SourceElement().parentNode.className += ' has-jax';
+    }
+});
+</script>
+
+<style>
+code.has-jax {
+    font: inherit;
+    font-size: 100%;
+    background: inherit;
+    border: inherit;
+    color: #515151;
+}
+</style>
+        </div>
+
+        
+
+
+        
+
+<div class="post-archive">
+    <h2>相关文章</h2>
+    <ul class="listing">
+        
+        <li><a href="/post/2023/04/levedb-%E5%B7%A5%E5%85%B7%E7%B1%BB/">LevelDB 辅助工具类</a></li>
+        
+        <li><a href="/post/2023/04/levedb-sstable%E6%A8%A1%E5%9D%97/">LevelDB SSTable模块</a></li>
+        
+        <li><a href="/post/2023/04/levedb-memtable%E6%A8%A1%E5%9D%97/">LevelDB MemTable模块</a></li>
+        
+        <li><a href="/post/2023/04/levedb-log%E6%A8%A1%E5%9D%97/">LevelDB Log模块</a></li>
+        
+        <li><a href="/post/2023/03/levedb-%E5%85%AC%E5%BC%80%E6%8E%A5%E5%8F%A3/">LevelDB 公开的接口</a></li>
+        
+    </ul>
+</div>
+
+
+        <div class="post-meta meta-tags">
+            
+            <ul class="clearfix">
+                
+                <li><a href='/tags/leveldb'>LevelDB</a></li>
+                
+            </ul>
+            
+        </div>
+    </article>
+    
+    
+
+    
+    
+    <div class="post bg-white">
+      <script src="https://utteranc.es/client.js"
+            repo= "himichael/hugoblogtalks"
+            issue-term="pathname"
+            theme="github-light"
+            crossorigin="anonymous"
+            async>
+      </script>
+    </div>
+    
+</div>
+
+
+                </div>
+
+                <div id="secondary">
+    <section class="widget">
+        <form id="search" action='https://code0xff.org/search/' method="get" accept-charset="utf-8" target="_blank" _lpchecked="1">
+      
+      <input type="text" name="q" maxlength="20" placeholder="Search">
+      <input type="hidden" name="sitesearch" value="https://code0xff.org/">
+      <button type="submit" class="submit icon-search"></button>
+</form>
+    </section>
+    
+    <section class="widget">
+        <h3 class="widget-title">最近文章</h3>
+<ul class="widget-list">
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/04/levedb-%E5%A4%9A%E7%89%88%E6%9C%AC%E5%92%8C%E5%8E%8B%E7%BC%A9/" title="LevelDB 多版本和压缩">LevelDB 多版本和压缩</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/04/levedb-%E5%B7%A5%E5%85%B7%E7%B1%BB/" title="LevelDB 辅助工具类">LevelDB 辅助工具类</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/04/levedb-sstable%E6%A8%A1%E5%9D%97/" title="LevelDB SSTable模块">LevelDB SSTable模块</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/04/levedb-memtable%E6%A8%A1%E5%9D%97/" title="LevelDB MemTable模块">LevelDB MemTable模块</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/04/levedb-log%E6%A8%A1%E5%9D%97/" title="LevelDB Log模块">LevelDB Log模块</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/03/levedb-%E5%85%AC%E5%BC%80%E6%8E%A5%E5%8F%A3/" title="LevelDB 公开的接口">LevelDB 公开的接口</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/03/levedb-%E5%9F%BA%E6%9C%AC%E6%A6%82%E5%BF%B5/" title="LevelDB 基本概念">LevelDB 基本概念</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/03/oceanbase%E5%BC%80%E5%8F%91%E8%80%85%E5%A4%A7%E4%BC%9A/" title="OceanBase开发者大会分享">OceanBase开发者大会分享</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/03/bustub%E6%95%B0%E6%8D%AE%E5%BA%93/" title="bustub数据库">bustub数据库</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/02/cpu-and-cache-efficient-management-of-memory-resident-databases/" title="CPU and Cache Efficient Management of Memory-Resident Databases">CPU and Cache Efficient Management of Memory-Resident Databases</a>
+    </li>
+    
+</ul>
+    </section>
+
+    
+
+    <section class="widget">
+        <h3 class="widget-title"><a href='/categories/'>分类</a></h3>
+<ul class="widget-list">
+    
+    <li><a href="https://code0xff.org/categories/%E5%88%86%E5%B8%83%E5%BC%8F/">分布式 (6)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E5%8E%9F%E7%90%86%E5%88%86%E6%9E%90/">原理分析 (13)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E5%95%86%E4%B8%9A/">商业 (3)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E5%A4%A7%E6%95%B0%E6%8D%AE/">大数据 (22)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%95%B0%E6%8D%AE%E5%BA%93/">数据库 (21)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%96%87%E5%AD%A6%E5%92%8C%E8%89%BA%E6%9C%AF/">文学和艺术 (2)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%97%85%E8%A1%8C/">旅行 (10)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%9E%B6%E6%9E%84/">架构 (2)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E7%AE%97%E6%B3%95/">算法 (8)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E7%B3%BB%E7%BB%9F/">系统 (5)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E7%BC%96%E7%A8%8B%E8%AF%AD%E8%A8%80/">编程语言 (2)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E8%A1%8C%E4%B8%9A%E8%A7%82%E5%AF%9F/">行业观察 (1)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E8%AF%BB%E4%B9%A6%E7%AC%94%E8%AE%B0/">读书笔记 (11)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E9%9A%8F%E4%BE%BF%E5%86%99%E5%86%99/">随便写写 (3)</a></li>
+    
+</ul>
+    </section>
+
+    <section class="widget">
+        <h3 class="widget-title">归档</a></h3>
+<ul class="widget-list">
+    
+    <li><a href="https://code0xff.org/years/2021%E5%B9%B4/">2021年 (31)</a></li>
+    
+    <li><a href="https://code0xff.org/years/2022%E5%B9%B4/">2022年 (55)</a></li>
+    
+    <li><a href="https://code0xff.org/years/2023%E5%B9%B4/">2023年 (23)</a></li>
+    
+</ul>
+    </section>
+
+    <section class="widget">
+        <h3 class="widget-title"><a href='/tags/'>标签</a></h3>
+<div class="tagcloud">
+    
+    <a href="https://code0xff.org/tags/b%E6%A0%91/">B树 </a>
+    
+    <a href="https://code0xff.org/tags/cmu-database/">CMU-Database </a>
+    
+    <a href="https://code0xff.org/tags/flink/">flink </a>
+    
+    <a href="https://code0xff.org/tags/hive/">Hive </a>
+    
+    <a href="https://code0xff.org/tags/k8s/">k8s </a>
+    
+    <a href="https://code0xff.org/tags/kudu/">kudu </a>
+    
+    <a href="https://code0xff.org/tags/kyuubi/">Kyuubi </a>
+    
+    <a href="https://code0xff.org/tags/leveldb/">LevelDB </a>
+    
+    <a href="https://code0xff.org/tags/llvm/">LLVM </a>
+    
+    <a href="https://code0xff.org/tags/manacher/">Manacher </a>
+    
+    <a href="https://code0xff.org/tags/mapreduce/">MapReduce </a>
+    
+    <a href="https://code0xff.org/tags/mysql/">MySQL </a>
+    
+    <a href="https://code0xff.org/tags/newsql/">NewSQL </a>
+    
+    <a href="https://code0xff.org/tags/oceanbase/">OceanBase </a>
+    
+    <a href="https://code0xff.org/tags/paxos/">paxos </a>
+    
+    <a href="https://code0xff.org/tags/raft/">raft </a>
+    
+    <a href="https://code0xff.org/tags/scala/">scala </a>
+    
+    <a href="https://code0xff.org/tags/simd/">SIMD </a>
+    
+    <a href="https://code0xff.org/tags/snowflake/">snowflake </a>
+    
+    <a href="https://code0xff.org/tags/spark/">spark </a>
+    
+    <a href="https://code0xff.org/tags/unix/">unix </a>
+    
+    <a href="https://code0xff.org/tags/%E4%BA%8C%E5%88%86%E6%9F%A5%E6%89%BE/">二分查找 </a>
+    
+    <a href="https://code0xff.org/tags/%E4%BA%8C%E5%8F%89%E6%A0%91%E9%81%8D%E5%8E%86/">二叉树遍历 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%88%86%E5%B8%83%E5%BC%8F/">分布式 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%8A%A8%E6%80%81%E6%B3%A8%E5%85%A5/">动态注入 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%8E%86%E5%8F%B2/">历史 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%90%91%E9%87%8F%E5%8C%96/">向量化 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%9B%9E%E6%BA%AF/">回溯 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%9B%BD%E5%86%85%E6%97%85%E8%A1%8C/">国内旅行 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%9B%BD%E5%A4%96%E6%97%85%E8%A1%8C/">国外旅行 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%A4%9A%E7%A7%9F%E6%88%B7/">多租户 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%A4%A7%E6%95%B0%E6%8D%AE/">大数据 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%AD%98%E5%82%A8/">存储 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%B7%A5%E4%BD%9C%E8%AE%B0%E5%BD%95/">工作记录 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%BE%AE%E6%9C%8D%E5%8A%A1/">微服务 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%95%B0%E6%8D%AE%E5%BA%93/">数据库 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%9F%A5%E8%AF%A2%E4%BC%98%E5%8C%96/">查询优化 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%9F%A5%E8%AF%A2%E7%BC%96%E8%AF%91/">查询编译 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%B1%87%E7%BC%96/">汇编 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%B5%8B%E8%AF%95/">测试 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%B9%96%E4%BB%93%E4%B8%80%E4%BD%93/">湖仓一体 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%94%9F%E6%B4%BB/">生活 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%94%B5%E5%BD%B1/">电影 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%AE%97%E6%B3%95/">算法 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BB%8F%E6%B5%8E/">经济 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BC%93%E5%AD%98/">缓存 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BC%96%E8%AF%91%E5%8E%9F%E7%90%86/">编译原理 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BD%91%E7%BB%9C/">网络 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AE%A1%E7%AE%97%E6%A1%86%E6%9E%B6/">计算框架 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AE%BA%E6%96%87/">论文 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AF%BB%E4%B9%A6/">读书 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AF%BB%E4%B9%A6%E7%AC%94%E8%AE%B0/">读书笔记 </a>
+    
+</div>
+    </section>
+
+    
+
+    <section class="widget">
+        <h3 class="widget-title">RSS</h3>
+        <ul class="widget-list">
+            <li><a href="https://code0xff.org/index.xml">文章 RSS</a></li>
+        </ul>
+    </section>
+</div>
+            </div>
+        </div>
+    </div>
+    <footer id="footer">
+    <div>
+        &copy; 2023 <a href="https://code0xff.org/">记录每个瞬间 By 老王</a>
+        
+    </div>
+    <br />
+    <div>
+        <div class="github-badge">
+            <a href="https://gohugo.io/" target="_black" rel="nofollow"><span class="badge-subject">Powered by</span><span class="badge-value bg-blue">Hugo</span></a>
+        </div>
+        <div class="github-badge">
+            <a href="https://github.com/flysnow-org/maupassant-hugo" target="_black"><span class="badge-subject">Theme</span><span class="badge-value bg-yellowgreen">Maupassant</span></a>
+        </div>
+    </div>
+</footer>
+
+
+    
+    <script type="text/javascript">
+        window.MathJax = {
+            tex2jax: {
+                inlineMath: [['$', '$']],
+                processEscapes: true
+                }
+            };
+    </script>
+    <script src='https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.5/MathJax.js?config=TeX-MML-AM_CHTML' async></script><script src="https://cdn.bootcdn.net/ajax/libs/fancybox/3.5.7/jquery.fancybox.min.js"></script>
+
+<a id="rocket" href="#top"></a>
+<script type="text/javascript" src='/js/totop.js?v=0.0.0' async=""></script>
+
+<script type="application/javascript">
+var doNotTrack = false;
+if (!doNotTrack) {
+	window.ga=window.ga||function(){(ga.q=ga.q||[]).push(arguments)};ga.l=+new Date;
+	ga('create', 'GA ID', 'auto');
+	
+	ga('send', 'pageview');
+}
+</script>
+<script async src='https://www.google-analytics.com/analytics.js'></script>
+
+
+
+    <script type="text/javascript" src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js" async></script>
+
+
+
+
+</body>
+
+</html>
