@@ -1,0 +1,745 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    
+    <meta name="referrer" content="no-referrer-when-downgrade">
+    
+
+    <title>Building An Elastic Query Engine on Disaggregated Storage | 记录每个瞬间</title>
+    <meta property="og:title" content="Building An Elastic Query Engine on Disaggregated Storage - 记录每个瞬间">
+    <meta property="og:type" content="article">
+        
+    <meta property="article:published_time" content='2023-05-04T09:23:04&#43;08:00'>
+        
+        
+    <meta property="article:modified_time" content='2023-05-04T09:23:04&#43;08:00'>
+        
+    <meta name="Keywords" content="">
+    <meta name="description" content="Building An Elastic Query Engine on Disaggregated Storage">
+        <meta name="author" content="隔壁老王">
+        
+    <meta property="og:url" content="https://code0xff.org/post/2023/05/building-an-elastic-query-engine-on-disaggregated-storage/">
+    <link rel="shortcut icon" href='/favicon.ico'  type="image/x-icon">
+
+    <link rel="stylesheet" href='/css/normalize.css'>
+    <link rel="stylesheet" href='/css/style.css'>
+    <script type="text/javascript" src="//cdn.bootcdn.net/ajax/libs/jquery/3.4.1/jquery.min.js"></script>
+
+    
+    
+    
+        <link href="https://cdn.bootcdn.net/ajax/libs/fancybox/3.5.7/jquery.fancybox.min.css" rel="stylesheet">
+    
+    
+    
+    
+</head>
+
+
+<body>
+    <header id="header" class="clearfix">
+    <div class="container">
+        <div class="col-group">
+            <div class="site-name ">
+                
+                    <a id="logo" href="https://code0xff.org/">
+                        记录每个瞬间
+                    </a>
+                
+                
+            </div>
+            <div>
+                <nav id="nav-menu" class="clearfix">
+                    <a class="current" href="https://code0xff.org/">首页</a>
+                    
+                    <a  href="https://code0xff.org/linked/" title="链接">链接</a>
+                    
+                    <a  href="https://code0xff.org/archives/" title="归档">归档</a>
+                    
+                    <a  href="https://code0xff.org/about/" title="关于">关于</a>
+                    
+                </nav>
+            </div>
+        </div>
+    </div>
+</header>
+
+    <div id="body">
+        <div class="container">
+            <div class="col-group">
+
+                <div class="col-8" id="main">
+                    
+<div class="res-cons">
+    
+    <article class="post">
+        <header>
+            <h1 class="post-title">Building An Elastic Query Engine on Disaggregated Storage</h1>
+        </header>
+        <date class="post-meta meta-date">
+            2023年5月4日
+        </date>
+<nav id="TableOfContents">
+  <ul>
+    <li>
+      <ul>
+        <li><a href="#背景">背景</a></li>
+        <li><a href="#架构">架构</a></li>
+        <li><a href="#dataset">Dataset</a></li>
+        <li><a href="#临时存储系统">临时存储系统</a></li>
+        <li><a href="#查询调度">查询调度</a></li>
+        <li><a href="#资源弹性">资源弹性</a></li>
+        <li><a href="#多租户">多租户</a></li>
+      </ul>
+    </li>
+  </ul>
+</nav>
+        
+        <div class="post-meta">
+            
+            <span class="post-meta meta-tags">
+                <ul class="clearfix">
+                    <a href='/categories/%E6%95%B0%E6%8D%AE%E5%BA%93'>数据库</a>
+                </ul>
+            </span>
+            
+        </div>
+        
+        
+        <div class="post-meta">
+            <span id="busuanzi_container_page_pv">|<span id="busuanzi_value_page_pv"></span><span>
+                    阅读</span></span>
+        </div>
+        
+        
+        <div class="post-content">
+            <blockquote>
+<p>原文
+<a href="https://15721.courses.cs.cmu.edu/spring2023/papers/02-modern/vuppalapati-nsdi22.pdf">https://15721.courses.cs.cmu.edu/spring2023/papers/02-modern/vuppalapati-nsdi22.pdf</a></p>
+</blockquote>
+<h2 id="背景">背景</h2>
+<p>snowflake 基于云环境，创建的 OLAP 数据仓库，设计的动机包括</p>
+<ul>
+<li>计算存储分离</li>
+<li>多租户</li>
+<li>高性能</li>
+</ul>
+<p>传统的数据仓库使用的是 shared-nothing 架构，这种架构的问题是</p>
+<ul>
+<li>Hardware-workload mismatch：每个节点都是独立的配置，某些节点可能是高带宽低CPU，有些又是相反的，这样导致利用率就有问题，如果想配置起来不那么麻烦，则需要增加每个节点的配置，这样集群总资源需要更多，而且平均使用率则不高，花费也不小</li>
+<li>Lack of Elasticity，即使某个节点能匹配需求，他们的配置也是静态的，对于一段时间内大量的数据倾斜，CPU不断变化的场景也很难应对，这种架构一般是增加/删除一批机器，然后重新做数据shuffle，比如TeraData，这样不仅需要大量带宽也影响性能</li>
+</ul>
+<p>shared-nothing这种架构适合比较明确的场景，比如在企业内部、政府机关，这种场景是可预测，使用多少资源，提前大概能知道<br>
+但现在很多场景都是很难预测的，而且场景越来越多，比如 应用日志、社交媒体、web应用，移动系统等等<br>
+这就好比是原来 B端 的场景，迁移到了 C端，场景丰富了很多就不适用了<br>
+snowflake 为了克服这些问题，提出了 存储计算分离的架构<br>
+其存储层使用的是</p>
+<ul>
+<li>Amazon S3</li>
+<li>Azure Blob Storage</li>
+<li>谷歌云等</li>
+</ul>
+<p>除此之外，还有两个系统设计关键</p>
+<ul>
+<li>自定义的存储系统，用来管理查询期间计算节点之间的 临时/中间数据</li>
+<li>因为直接使用对象存储来作为中间数据，性能和延迟可能跟不上</li>
+<li>临时存储系统也作为缓存使用，用来弥补 存储结算分离后的性能问题</li>
+</ul>
+<p>为了可能要做的</p>
+<ul>
+<li>Decoupling of compute and ephemeral storage，现在计算和临时存储是紧耦合的</li>
+<li>Deep storage hierarchy，包含内存、SSD两层临时存储，更多的层次如何利用和管理类</li>
+<li>Pricing at sub-second timescales，云厂商提供了亚秒级计费，未来snowflake也会跟进，设计上是一个挑战</li>
+</ul>
+<p>公开的测量报告<br>
+<a href="https://github.com/resource-disaggregation/snowset">https://github.com/resource-disaggregation/snowset</a></p>
+<h2 id="架构">架构</h2>
+<p>snowflake 的数据包括三种</p>
+<ul>
+<li>持久数据，用户的数据就存在这里，需要有持久性，可靠性保证</li>
+<li>中间数据，由查询操作产生的，一般是短生命周期的数据，需要有高吞吐和低延迟保证，这个是自研的一套分布式临时存储系统</li>
+<li>元数据</li>
+</ul>
+<p>整体架构如下，分为四层</p>
+<ul>
+<li>一个中心化的服务，用来处理端到端的查询执行
+<ul>
+<li>集中控制层用来处理：访问控制、查询优化、查询计划、调度、事务管理、并发控制等</li>
+<li>这一层设计用来支持多租户的，并且有容错保障</li>
+</ul>
+</li>
+<li>计算层
+<ul>
+<li>每个节点都是一个 AWS-EC2，按需计费</li>
+<li>维护了一个预热池避免了启动时间，每个节点VM之上都可以运行多个查询</li>
+</ul>
+</li>
+<li>分布式临时存储层
+<ul>
+<li>S3 不提供低延迟、高吞吐的特性，这个组件是snowflake自研的</li>
+<li>临时存储跟VM 在一起，并随VM的 增加/销毁自动扩展</li>
+<li>这里不需要考虑数据分区，shuffle等，每个VM的临时存储都是独有的</li>
+</ul>
+</li>
+<li>持久数据存储层
+<ul>
+<li>数据存储在 S3，文件是不可变的，甚至不能append</li>
+<li>表数据文件被水平分区，到大的、不可变的文件中</li>
+<li>每个文件内，独立的值和列被分组到一起，按照 PAX存储</li>
+<li>每个文件的头包含了每个列的起始offset，方便S3 的部分读取
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/05/Building_An_Elastic_Query_Engine_on_Disaggregated_Storage/1.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/05/Building_An_Elastic_Query_Engine_on_Disaggregated_Storage/1.jpg" />
+        </a>
+    </li>
+</ul>
+</li>
+</ul>
+<p>查询执行对用户的 SQL 做解析，优化<br>
+会产生一些执行任务，并将他们调度到 VM 上<br>
+每个执行任务都会 读写临时存储、也会读写远端持久存储<br>
+CS 控制节点会监控 VM 的状态，收集他们的数据，一旦执行完就会拿到 VM 的返回数据，并响应给客户端</p>
+<h2 id="dataset">Dataset</h2>
+<p>控制节点会收集 所有层的统计信息，以便进一步的做优化<br>
+统计信息包含 7KW 个查询(14天内的)，去掉敏感信息，都已经开源了<br>
+<a href="https://github.com/resource-disaggregation/snowset">https://github.com/resource-disaggregation/snowset</a></p>
+<p>从下图可以看到，左边是 读、写 持久数据的情况<br>
+右边是读写趋势，读明显是工作日的白天很高，晚上就降低了 <br>
+28%是只读的，13%是只写的，59%是读写的<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/05/Building_An_Elastic_Query_Engine_on_Disaggregated_Storage/2.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/05/Building_An_Elastic_Query_Engine_on_Disaggregated_Storage/2.jpg" />
+        </a>
+    </p>
+<h2 id="临时存储系统">临时存储系统</h2>
+<p>自研临时存储的原因</p>
+<ul>
+<li>S3 无法做到 低延迟、高吞吐</li>
+<li>S3的文件存储语义太强了，保证了持久和高可用，但临时存储不需要这么强的保证</li>
+</ul>
+<p>临时存储分为两层</p>
+<ul>
+<li>优先选择本地内存，尽可能全部放到内存中</li>
+<li>如果内存放不下，则溢出到本地 SSD</li>
+<li>如果本地 SSD也放不下，则溢出到远端存储，S3 中</li>
+</ul>
+<p>从下图中可以看到 临时存储的读写变化</p>
+<ul>
+<li>不同请求之间的临时存储的需求变化非常大，有的需要很大，有的则没有</li>
+<li>具有相同总CPU时间的查询交换的中间数据量相差很大</li>
+<li>读取相同持久化数据量的查询交换的中间数据量相差很大<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/05/Building_An_Elastic_Query_Engine_on_Disaggregated_Storage/3.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/05/Building_An_Elastic_Query_Engine_on_Disaggregated_Storage/3.jpg" />
+        </a>
+    </li>
+</ul>
+<p>因为计算资源和临时存储之间需求变化很大，很难找到完全匹配的<br>
+所以要实现更细粒度的控制，同时实现 高利用率、高性能<br>
+就需要 计算节点、临时存储之间的解耦合，不过目前还没做到</p>
+<p>持久文件也有缓存机制，这里使用的是一致性hash实现的，所以并不是每个节点上都有 持久数据缓存的<br>
+由于 VM扩容会导致 缓存数据需要重新分布，所以做了延迟的 一致性hash优化，避免重分布问题<br>
+另一个设计要点是，要保持临时存储的数据，持久缓存的数据一致，这是通过缓存透写实现的    write-through cache<br>
+下图是 临时存储和持久存储的 I/O 流量分布<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/05/Building_An_Elastic_Query_Engine_on_Disaggregated_Storage/4.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/05/Building_An_Elastic_Query_Engine_on_Disaggregated_Storage/4.jpg" />
+        </a>
+    </p>
+<p>从下图可以看到，大约75%的 只读查询有 超过80% 的命中率  <br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/05/Building_An_Elastic_Query_Engine_on_Disaggregated_Storage/5.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/05/Building_An_Elastic_Query_Engine_on_Disaggregated_Storage/5.jpg" />
+        </a>
+    </p>
+<p>另一些未来要做的优化策略</p>
+<ul>
+<li>需要在缓存命中率，以及I/O吞吐量之间权衡</li>
+<li>尤其是多个请求公用的文件，应该被优先缓存</li>
+<li>目前是三级存储，本地内存 LRU溢出到 SSD，本地 SSD LRU溢出到远程持久存储</li>
+<li>为了更好的利用这三层存储，缓存机制需要重新设计</li>
+</ul>
+<h2 id="查询调度">查询调度</h2>
+<p>位置感知的任务调度</p>
+<ul>
+<li>将持久文件分配给计算节点，用的是 一致性hash</li>
+<li>为了最大化本地性，这里也是用一致性hash，将任务分配给 持久文件所在的节点上</li>
+<li>下图解释了持久文件读、写，中间文件交互的查询特点
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/05/Building_An_Elastic_Query_Engine_on_Disaggregated_Storage/6.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/05/Building_An_Elastic_Query_Engine_on_Disaggregated_Storage/6.jpg" />
+        </a>
+    </li>
+</ul>
+<p>工作窃取</p>
+<ul>
+<li>为避免计算节点出现倾斜，允许 对task 做窃取</li>
+<li>已经完成的节点，可以直接获取未完成节点的工作</li>
+<li>对于持久爱文件，从远程持久文件中直接拉取</li>
+</ul>
+<p>进一步的工作</p>
+<ul>
+<li>一种极端是将所有的查询调度到所有节点上，不过这样会加剧网络交互的开销</li>
+<li>另一种极端是将所有task 调度到一个节点上，这增加了读取持久文件的开销</li>
+<li>所有任务调度都是在这两者之间做一个平衡</li>
+</ul>
+<h2 id="资源弹性">资源弹性</h2>
+<p>惰性一致性hash</p>
+<ul>
+<li>缓存的持久文件是基于一致性hash的，如果 VM 节点扩容或者缩容，就会碰到 shared-nothing 一样的问题，缓存文件需要重新 shuffle</li>
+<li>为了避免这种情况，使用了 延迟的一致性hash策略</li>
+<li>下图中，5个任务在 5个节点上，同时有 6个 缓存文件</li>
+<li>当节点扩容时，缓存文件并不是立即加载到 VM 上，而是等需要的时候，再从远程持久存储上读取</li>
+<li>此时节点 1上的缓存仍然还在，但不会被读取了，之后就自动失效了</li>
+<li>节点6 在使用的时候，获取了远端的 缓存文件
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/05/Building_An_Elastic_Query_Engine_on_Disaggregated_Storage/7.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/05/Building_An_Elastic_Query_Engine_on_Disaggregated_Storage/7.jpg" />
+        </a>
+    </li>
+</ul>
+<p>下图是 20% 的用户使用了 VM弹性伸缩机制<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/05/Building_An_Elastic_Query_Engine_on_Disaggregated_Storage/8.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/05/Building_An_Elastic_Query_Engine_on_Disaggregated_Storage/8.jpg" />
+        </a>
+    </p>
+<p>对比 VM resize 和请求到达内部的时间<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/05/Building_An_Elastic_Query_Engine_on_Disaggregated_Storage/9.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/05/Building_An_Elastic_Query_Engine_on_Disaggregated_Storage/9.jpg" />
+        </a>
+    </p>
+<p>未来工作</p>
+<ul>
+<li>让更多的客户使用 VM 弹性伸缩机制</li>
+<li>查询达到时间的变化粒度，远大于 VM resize 的粒度，需要进一步优化调整</li>
+<li>再进一步就是 serverless，但是 snowflake 的很多数据是安全敏感的，目前看是缺乏隔离机制保证</li>
+<li>甚至考虑要自己实现一套 无服务机制，这方面还在探索中</li>
+</ul>
+<h2 id="多租户">多租户</h2>
+<p>原先是采用了隔离机制，每个 虚拟仓库 独占一堆节点<br>
+然后采用预热机器的方式免去启动加载的时间，但是这样的话利用率就上不去了<br>
+下图中前面两排能发现，CPU的利用率还可以，但其他的不行，另外不同 VM 在不同时间段的资源使用率也不同<br>
+现在云厂商推出了耕细粒度的按秒计费，这种方式就不行了<br>
+预先预热的话，只要一小时内有人使用就可以扣费，现在按秒计费，这段周期内可能没人用就没法收费了<br>
+这就要调整架构策略，使用完全共享的资源架构<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/05/Building_An_Elastic_Query_Engine_on_Disaggregated_Storage/10.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/05/Building_An_Elastic_Query_Engine_on_Disaggregated_Storage/10.jpg" />
+        </a>
+    </p>
+<p>从这个图看，客户端使用的资源是突发的，也不好预测<br>
+如何在 细粒度的控制之上，实现更好的资源利用率<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/05/Building_An_Elastic_Query_Engine_on_Disaggregated_Storage/11.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/05/Building_An_Elastic_Query_Engine_on_Disaggregated_Storage/11.jpg" />
+        </a>
+    </p>
+<p>两个挑战
+第一个问题</p>
+<ul>
+<li>因为临时存储包含 缓存持久数据，中间数据</li>
+<li>需要一种机制来同时管理这两种类型数据，如何在多租户之间保持这些数据的隔离</li>
+<li>snowflake参考了这两个文献</li>
+<li>a dynamic multi-tenant key-value cache. In ATC, 2017</li>
+<li>Near-optimal, fair cache sharing. In NSDI, 2016</li>
+<li>此外如何预测缓存有效性也是一个挑战，将空闲的缓存给其他租户使用</li>
+<li>需要确保移除这个缓存条目后，对当前租户不受影响，目前仍然是一个开放问题</li>
+</ul>
+<p>第二个问题</p>
+<ul>
+<li>因为缓存文件是通过一致性hash落到 一个全局地址空间</li>
+<li>如果单纯的增加临时存储空间，则会影响其他租户</li>
+<li>结果就是导致缓存未命中，性能下降</li>
+<li>为解决这个问题，需要使用私有的地址空间</li>
+</ul>
+<p>从图11 来看，CPU 和 内存的资源使用情况是不同更多，这是两个维度的指标<br>
+所以需要把 CPU 和内存也独立开来，相关的研究资料</p>
+<ul>
+<li>Remote memory in the age of fast networks. In SOCC, 2017.</li>
+<li>Network requirements for resource disaggregation. In OSDI, 2016.</li>
+<li>Efficient memory disaggregation with infiniswap. In NSDI, 2017.</li>
+<li>相关产品：ESX server、Memshare、FairRide</li>
+</ul>
+
+			<script type="text/javascript"
+        async
+        src="https://cdn.bootcss.com/mathjax/2.7.3/MathJax.js?config=TeX-AMS-MML_HTMLorMML">
+MathJax.Hub.Config({
+  tex2jax: {
+    inlineMath: [['$','$'], ['\\(','\\)']],
+    displayMath: [['$$','$$'], ['\[\[','\]\]']],
+    processEscapes: true,
+    processEnvironments: true,
+    skipTags: ['script', 'noscript', 'style', 'textarea', 'pre'],
+    TeX: { equationNumbers: { autoNumber: "AMS" },
+         extensions: ["AMSmath.js", "AMSsymbols.js"] }
+  }
+});
+
+MathJax.Hub.Queue(function() {
+    
+    
+    
+    var all = MathJax.Hub.getAllJax(), i;
+    for(i = 0; i < all.length; i += 1) {
+        all[i].SourceElement().parentNode.className += ' has-jax';
+    }
+});
+</script>
+
+<style>
+code.has-jax {
+    font: inherit;
+    font-size: 100%;
+    background: inherit;
+    border: inherit;
+    color: #515151;
+}
+</style>
+        </div>
+
+        
+
+
+        
+
+<div class="post-archive">
+    <h2>相关文章</h2>
+    <ul class="listing">
+        
+        <li><a href="/post/2023/03/snowflake%E8%AE%BA%E6%96%87/">Snowflake论文</a></li>
+        
+        <li><a href="/post/2023/05/what-goes-around-comes-around/">What Goes Around Comes Around</a></li>
+        
+        <li><a href="/post/2023/02/cpu-and-cache-efficient-management-of-memory-resident-databases/">CPU and Cache Efficient Management of Memory-Resident Databases</a></li>
+        
+        <li><a href="/post/2023/02/efficiently-compiling-efficient-query-plans-for-modern-hardware/">Efficiently Compiling Efficient Query Plans for Modern Hardware</a></li>
+        
+        <li><a href="/post/2023/02/generating-code-for-holistic-query-evaluation/">Generating code for holistic query evaluation</a></li>
+        
+    </ul>
+</div>
+
+
+        <div class="post-meta meta-tags">
+            
+            <ul class="clearfix">
+                
+                <li><a href='/tags/%E8%AE%BA%E6%96%87'>论文</a></li>
+                
+                <li><a href='/tags/snowflake'>snowflake</a></li>
+                
+            </ul>
+            
+        </div>
+    </article>
+    
+    
+
+    
+    
+    <div class="post bg-white">
+      <script src="https://utteranc.es/client.js"
+            repo= "himichael/hugoblogtalks"
+            issue-term="pathname"
+            theme="github-light"
+            crossorigin="anonymous"
+            async>
+      </script>
+    </div>
+    
+</div>
+
+
+                </div>
+
+                <div id="secondary">
+    <section class="widget">
+        <form id="search" action='https://code0xff.org/search/' method="get" accept-charset="utf-8" target="_blank" _lpchecked="1">
+      
+      <input type="text" name="q" maxlength="20" placeholder="Search">
+      <input type="hidden" name="sitesearch" value="https://code0xff.org/">
+      <button type="submit" class="submit icon-search"></button>
+</form>
+    </section>
+    
+    <section class="widget">
+        <h3 class="widget-title">最近文章</h3>
+<ul class="widget-list">
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/05/building-an-elastic-query-engine-on-disaggregated-storage/" title="Building An Elastic Query Engine on Disaggregated Storage">Building An Elastic Query Engine on Disaggregated Storage</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/05/what-goes-around-comes-around/" title="What Goes Around Comes Around">What Goes Around Comes Around</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/04/levedb-%E5%A4%9A%E7%89%88%E6%9C%AC%E5%92%8C%E5%8E%8B%E7%BC%A9/" title="LevelDB 多版本和压缩">LevelDB 多版本和压缩</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/04/levedb-%E5%B7%A5%E5%85%B7%E7%B1%BB/" title="LevelDB 辅助工具类">LevelDB 辅助工具类</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/04/levedb-sstable%E6%A8%A1%E5%9D%97/" title="LevelDB SSTable模块">LevelDB SSTable模块</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/04/levedb-memtable%E6%A8%A1%E5%9D%97/" title="LevelDB MemTable模块">LevelDB MemTable模块</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/04/levedb-log%E6%A8%A1%E5%9D%97/" title="LevelDB Log模块">LevelDB Log模块</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/03/levedb-%E5%85%AC%E5%BC%80%E6%8E%A5%E5%8F%A3/" title="LevelDB 公开的接口">LevelDB 公开的接口</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/03/levedb-%E5%9F%BA%E6%9C%AC%E6%A6%82%E5%BF%B5/" title="LevelDB 基本概念">LevelDB 基本概念</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/03/oceanbase%E5%BC%80%E5%8F%91%E8%80%85%E5%A4%A7%E4%BC%9A/" title="OceanBase开发者大会分享">OceanBase开发者大会分享</a>
+    </li>
+    
+</ul>
+    </section>
+
+    
+
+    <section class="widget">
+        <h3 class="widget-title"><a href='/categories/'>分类</a></h3>
+<ul class="widget-list">
+    
+    <li><a href="https://code0xff.org/categories/%E5%88%86%E5%B8%83%E5%BC%8F/">分布式 (6)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E5%8E%9F%E7%90%86%E5%88%86%E6%9E%90/">原理分析 (13)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E5%95%86%E4%B8%9A/">商业 (3)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E5%A4%A7%E6%95%B0%E6%8D%AE/">大数据 (22)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%95%B0%E6%8D%AE%E5%BA%93/">数据库 (23)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%96%87%E5%AD%A6%E5%92%8C%E8%89%BA%E6%9C%AF/">文学和艺术 (2)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%97%85%E8%A1%8C/">旅行 (10)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%9E%B6%E6%9E%84/">架构 (2)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E7%AE%97%E6%B3%95/">算法 (8)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E7%B3%BB%E7%BB%9F/">系统 (5)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E7%BC%96%E7%A8%8B%E8%AF%AD%E8%A8%80/">编程语言 (2)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E8%A1%8C%E4%B8%9A%E8%A7%82%E5%AF%9F/">行业观察 (1)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E8%AF%BB%E4%B9%A6%E7%AC%94%E8%AE%B0/">读书笔记 (11)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E9%9A%8F%E4%BE%BF%E5%86%99%E5%86%99/">随便写写 (3)</a></li>
+    
+</ul>
+    </section>
+
+    <section class="widget">
+        <h3 class="widget-title">归档</a></h3>
+<ul class="widget-list">
+    
+    <li><a href="https://code0xff.org/years/2021%E5%B9%B4/">2021年 (31)</a></li>
+    
+    <li><a href="https://code0xff.org/years/2022%E5%B9%B4/">2022年 (55)</a></li>
+    
+    <li><a href="https://code0xff.org/years/2023%E5%B9%B4/">2023年 (25)</a></li>
+    
+</ul>
+    </section>
+
+    <section class="widget">
+        <h3 class="widget-title"><a href='/tags/'>标签</a></h3>
+<div class="tagcloud">
+    
+    <a href="https://code0xff.org/tags/b%E6%A0%91/">B树 </a>
+    
+    <a href="https://code0xff.org/tags/cmu-database/">CMU-Database </a>
+    
+    <a href="https://code0xff.org/tags/flink/">flink </a>
+    
+    <a href="https://code0xff.org/tags/hive/">Hive </a>
+    
+    <a href="https://code0xff.org/tags/k8s/">k8s </a>
+    
+    <a href="https://code0xff.org/tags/kudu/">kudu </a>
+    
+    <a href="https://code0xff.org/tags/kyuubi/">Kyuubi </a>
+    
+    <a href="https://code0xff.org/tags/leveldb/">LevelDB </a>
+    
+    <a href="https://code0xff.org/tags/llvm/">LLVM </a>
+    
+    <a href="https://code0xff.org/tags/manacher/">Manacher </a>
+    
+    <a href="https://code0xff.org/tags/mapreduce/">MapReduce </a>
+    
+    <a href="https://code0xff.org/tags/mysql/">MySQL </a>
+    
+    <a href="https://code0xff.org/tags/newsql/">NewSQL </a>
+    
+    <a href="https://code0xff.org/tags/oceanbase/">OceanBase </a>
+    
+    <a href="https://code0xff.org/tags/paxos/">paxos </a>
+    
+    <a href="https://code0xff.org/tags/raft/">raft </a>
+    
+    <a href="https://code0xff.org/tags/scala/">scala </a>
+    
+    <a href="https://code0xff.org/tags/simd/">SIMD </a>
+    
+    <a href="https://code0xff.org/tags/snowflake/">snowflake </a>
+    
+    <a href="https://code0xff.org/tags/spark/">spark </a>
+    
+    <a href="https://code0xff.org/tags/unix/">unix </a>
+    
+    <a href="https://code0xff.org/tags/%E4%BA%8C%E5%88%86%E6%9F%A5%E6%89%BE/">二分查找 </a>
+    
+    <a href="https://code0xff.org/tags/%E4%BA%8C%E5%8F%89%E6%A0%91%E9%81%8D%E5%8E%86/">二叉树遍历 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%88%86%E5%B8%83%E5%BC%8F/">分布式 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%8A%A8%E6%80%81%E6%B3%A8%E5%85%A5/">动态注入 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%8E%86%E5%8F%B2/">历史 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%90%91%E9%87%8F%E5%8C%96/">向量化 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%9B%9E%E6%BA%AF/">回溯 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%9B%BD%E5%86%85%E6%97%85%E8%A1%8C/">国内旅行 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%9B%BD%E5%A4%96%E6%97%85%E8%A1%8C/">国外旅行 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%A4%9A%E7%A7%9F%E6%88%B7/">多租户 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%A4%A7%E6%95%B0%E6%8D%AE/">大数据 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%AD%98%E5%82%A8/">存储 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%B7%A5%E4%BD%9C%E8%AE%B0%E5%BD%95/">工作记录 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%BE%AE%E6%9C%8D%E5%8A%A1/">微服务 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%95%B0%E6%8D%AE%E5%BA%93/">数据库 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%95%B0%E6%8D%AE%E6%A8%A1%E5%9E%8B/">数据模型 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%9F%A5%E8%AF%A2%E4%BC%98%E5%8C%96/">查询优化 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%9F%A5%E8%AF%A2%E7%BC%96%E8%AF%91/">查询编译 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%B1%87%E7%BC%96/">汇编 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%B5%8B%E8%AF%95/">测试 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%B9%96%E4%BB%93%E4%B8%80%E4%BD%93/">湖仓一体 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%94%9F%E6%B4%BB/">生活 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%94%B5%E5%BD%B1/">电影 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%AE%97%E6%B3%95/">算法 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BB%8F%E6%B5%8E/">经济 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BC%93%E5%AD%98/">缓存 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BC%96%E8%AF%91%E5%8E%9F%E7%90%86/">编译原理 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BD%91%E7%BB%9C/">网络 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AE%A1%E7%AE%97%E6%A1%86%E6%9E%B6/">计算框架 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AE%BA%E6%96%87/">论文 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AF%BB%E4%B9%A6/">读书 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AF%BB%E4%B9%A6%E7%AC%94%E8%AE%B0/">读书笔记 </a>
+    
+</div>
+    </section>
+
+    
+
+    <section class="widget">
+        <h3 class="widget-title">RSS</h3>
+        <ul class="widget-list">
+            <li><a href="https://code0xff.org/index.xml">文章 RSS</a></li>
+        </ul>
+    </section>
+</div>
+            </div>
+        </div>
+    </div>
+    <footer id="footer">
+    <div>
+        &copy; 2023 <a href="https://code0xff.org/">记录每个瞬间 By 老王</a>
+        
+    </div>
+    <br />
+    <div>
+        <div class="github-badge">
+            <a href="https://gohugo.io/" target="_black" rel="nofollow"><span class="badge-subject">Powered by</span><span class="badge-value bg-blue">Hugo</span></a>
+        </div>
+        <div class="github-badge">
+            <a href="https://github.com/flysnow-org/maupassant-hugo" target="_black"><span class="badge-subject">Theme</span><span class="badge-value bg-yellowgreen">Maupassant</span></a>
+        </div>
+    </div>
+</footer>
+
+
+    
+    <script type="text/javascript">
+        window.MathJax = {
+            tex2jax: {
+                inlineMath: [['$', '$']],
+                processEscapes: true
+                }
+            };
+    </script>
+    <script src='https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.5/MathJax.js?config=TeX-MML-AM_CHTML' async></script><script src="https://cdn.bootcdn.net/ajax/libs/fancybox/3.5.7/jquery.fancybox.min.js"></script>
+
+<a id="rocket" href="#top"></a>
+<script type="text/javascript" src='/js/totop.js?v=0.0.0' async=""></script>
+
+<script type="application/javascript">
+var doNotTrack = false;
+if (!doNotTrack) {
+	window.ga=window.ga||function(){(ga.q=ga.q||[]).push(arguments)};ga.l=+new Date;
+	ga('create', 'GA ID', 'auto');
+	
+	ga('send', 'pageview');
+}
+</script>
+<script async src='https://www.google-analytics.com/analytics.js'></script>
+
+
+
+    <script type="text/javascript" src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js" async></script>
+
+
+
+
+</body>
+
+</html>
