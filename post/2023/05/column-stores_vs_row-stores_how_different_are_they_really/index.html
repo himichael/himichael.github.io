@@ -1,0 +1,992 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    
+    <meta name="referrer" content="no-referrer-when-downgrade">
+    
+
+    <title>Column-Stores vs. Row-Stores: How Different Are They Really? | 记录每个瞬间</title>
+    <meta property="og:title" content="Column-Stores vs. Row-Stores: How Different Are They Really? - 记录每个瞬间">
+    <meta property="og:type" content="article">
+        
+    <meta property="article:published_time" content='2023-05-07T13:23:04&#43;08:00'>
+        
+        
+    <meta property="article:modified_time" content='2023-05-07T13:23:04&#43;08:00'>
+        
+    <meta name="Keywords" content="">
+    <meta name="description" content="Column-Stores vs. Row-Stores: How Different Are They Really?">
+        <meta name="author" content="隔壁老王">
+        
+    <meta property="og:url" content="https://code0xff.org/post/2023/05/column-stores_vs_row-stores_how_different_are_they_really/">
+    <link rel="shortcut icon" href='/favicon.ico'  type="image/x-icon">
+
+    <link rel="stylesheet" href='/css/normalize.css'>
+    <link rel="stylesheet" href='/css/style.css'>
+    <script type="text/javascript" src="//cdn.bootcdn.net/ajax/libs/jquery/3.4.1/jquery.min.js"></script>
+
+    
+    
+    
+        <link href="https://cdn.bootcdn.net/ajax/libs/fancybox/3.5.7/jquery.fancybox.min.css" rel="stylesheet">
+    
+    
+    
+    
+</head>
+
+
+<body>
+    <header id="header" class="clearfix">
+    <div class="container">
+        <div class="col-group">
+            <div class="site-name ">
+                
+                    <a id="logo" href="https://code0xff.org/">
+                        记录每个瞬间
+                    </a>
+                
+                
+            </div>
+            <div>
+                <nav id="nav-menu" class="clearfix">
+                    <a class="current" href="https://code0xff.org/">首页</a>
+                    
+                    <a  href="https://code0xff.org/linked/" title="链接">链接</a>
+                    
+                    <a  href="https://code0xff.org/archives/" title="归档">归档</a>
+                    
+                    <a  href="https://code0xff.org/about/" title="关于">关于</a>
+                    
+                </nav>
+            </div>
+        </div>
+    </div>
+</header>
+
+    <div id="body">
+        <div class="container">
+            <div class="col-group">
+
+                <div class="col-8" id="main">
+                    
+<div class="res-cons">
+    
+    <article class="post">
+        <header>
+            <h1 class="post-title">Column-Stores vs. Row-Stores: How Different Are They Really?</h1>
+        </header>
+        <date class="post-meta meta-date">
+            2023年5月7日
+        </date>
+<nav id="TableOfContents">
+  <ul>
+    <li>
+      <ul>
+        <li><a href="#背景">背景</a></li>
+        <li><a href="#使用的基准测试数据">使用的基准测试数据</a></li>
+        <li><a href="#行列对比">行列对比</a>
+          <ul>
+            <li><a href="#行存">行存</a></li>
+            <li><a href="#列存">列存</a></li>
+          </ul>
+        </li>
+        <li><a href="#实验">实验</a>
+          <ul>
+            <li><a href="#行存模拟">行存模拟</a></li>
+            <li><a href="#列存模拟">列存模拟</a></li>
+          </ul>
+        </li>
+        <li><a href="#参考">参考</a></li>
+      </ul>
+    </li>
+  </ul>
+</nav>
+        
+        <div class="post-meta">
+            
+            <span class="post-meta meta-tags">
+                <ul class="clearfix">
+                    <a href='/categories/%E6%95%B0%E6%8D%AE%E5%BA%93'>数据库</a>
+                </ul>
+            </span>
+            
+        </div>
+        
+        
+        <div class="post-meta">
+            <span id="busuanzi_container_page_pv">|<span id="busuanzi_value_page_pv"></span><span>
+                    阅读</span></span>
+        </div>
+        
+        
+        <div class="post-content">
+            <blockquote>
+<p>原文
+<a href="https://15721.courses.cs.cmu.edu/spring2023/papers/03-storage/p967-abadi.pdf">https://15721.courses.cs.cmu.edu/spring2023/papers/03-storage/p967-abadi.pdf</a></p>
+</blockquote>
+<h2 id="背景">背景</h2>
+<p>列存对于 OLAP 来说更好，其性能比 行存有数量级提升，因为列存能更有效的利用I/O，对于只读查询非常好<br>
+所以给人们一种假设，如果是行存系统</p>
+<ul>
+<li>将schema垂直分区，如将所有的列分区为 (表key，属性)，于是行存也有了列存的特性</li>
+<li>或者对于所有列加上索引，这样每个列访问就是独立的了</li>
+<li>对于特定的查询，增加物化视图</li>
+</ul>
+<p>但这种假设是不对的
+本文演示了各种列查询对性能有提升的技术</p>
+<ul>
+<li>向量化查询技术</li>
+<li>压缩</li>
+<li>新的join 算法</li>
+</ul>
+<p>想要让 行存实现列存的一些性能，需要在存储层、查询执行器都做修改才行
+讨论的行存系统</p>
+<ul>
+<li>MonetDB</li>
+<li>C-Store</li>
+</ul>
+<p>列存中使用以下技术可以大幅度提升性能</p>
+<ul>
+<li>Late materialization，三倍提升</li>
+<li>Block iteration，约 1.5倍</li>
+<li>Column-specific compression techniques，数量级提升</li>
+<li>新的优化算法：invisible joins，约 1.5倍</li>
+</ul>
+<p>论文的贡献</p>
+<ul>
+<li>在行存中模拟列存行为，并使用各种优化技术：索引、位图等来改善</li>
+<li>一个新的join 优化算法 invisible joins</li>
+<li>将延迟物化、压缩、invisible joins、向量化做拆解，看看他们对列存树仓的影响</li>
+</ul>
+<h2 id="使用的基准测试数据">使用的基准测试数据</h2>
+<p>使用的是 TPC-H 测试集，比例因子为 10，LINEORDER 表有 6KW 个记录<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/05/Column-Stores_vs_Row-Stores_How_Different_Are_They_Really/1.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/05/Column-Stores_vs_Row-Stores_How_Different_Are_They_Really/1.jpg" />
+        </a>
+    <br>
+Figure 1: Schema of the SSBM Benchmark</p>
+<p>分为四类查询，或者 四个航班</p>
+<ul>
+<li>包含 1维的查询，3个</li>
+<li>包含 2维的查询，3个</li>
+<li>包含 3维的查询，4个</li>
+<li>3个 3个列维度的查询</li>
+</ul>
+<h2 id="行列对比">行列对比</h2>
+<h3 id="行存">行存</h3>
+<p>首先将一个表 按照每个列做分区，逻辑上一个表有 3 列，
+例如，我们有如下的表：</p>
+<table>
+<thead>
+<tr>
+<th>A</th>
+<th>B</th>
+<th>C</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1</td>
+<td>2</td>
+<td>3</td>
+</tr>
+<tr>
+<td>4</td>
+<td>5</td>
+<td>6</td>
+</tr>
+<tr>
+<td>7</td>
+<td>8</td>
+<td>9</td>
+</tr>
+</tbody>
+</table>
+<p>我们可以按照以下方式进行垂直划分：<br>
+A 表： </p>
+<table>
+<thead>
+<tr>
+<th>A</th>
+<th>position</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1</td>
+<td>1</td>
+</tr>
+<tr>
+<td>4</td>
+<td>2</td>
+</tr>
+<tr>
+<td>7</td>
+<td>3</td>
+</tr>
+</tbody>
+</table>
+<p>B 表： </p>
+<table>
+<thead>
+<tr>
+<th>B</th>
+<th>position</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>2</td>
+<td>1</td>
+</tr>
+<tr>
+<td>5</td>
+<td>2</td>
+</tr>
+<tr>
+<td>8</td>
+<td>3</td>
+</tr>
+</tbody>
+</table>
+<p>C 表：</p>
+<table>
+<thead>
+<tr>
+<th>C</th>
+<th>position</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>3</td>
+<td>1</td>
+</tr>
+<tr>
+<td>6</td>
+<td>2</td>
+</tr>
+<tr>
+<td>9</td>
+<td>3</td>
+</tr>
+</tbody>
+</table>
+<p>行存中的每个列就完全独立了<br>
+在查询时，系统将使用这个 position 列来将来自不同列 但相同行号的值连接在一起<br>
+默认的 hash-join代价很高，作者尝试在每个表的 position列上添加聚集索引，强制使用索引连接，由于索引访问产生的额外 I/O，这导致比hash-join更慢</p>
+<p>比如这样查询：</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-sql" data-lang="sql"><span style="display:flex;"><span><span style="color:#ff79c6">SELECT</span> a.value, <span style="color:#ff79c6">c</span>.status
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">FROM</span> A a <span style="color:#ff79c6">JOIN</span> <span style="color:#ff79c6">C</span> <span style="color:#ff79c6">c</span> <span style="color:#ff79c6">ON</span> a.<span style="color:#ff79c6">position</span> <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">c</span>.<span style="color:#ff79c6">position</span>
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>可以把 A 和 C 关联的同一行的列取出来</p>
+<p>还有索引方式，比如将每个列都加一个索引<br>
+对于这种查询</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-sql" data-lang="sql"><span style="display:flex;"><span><span style="color:#ff79c6">SELECT</span> <span style="color:#ff79c6">AVG</span>(salary) <span style="color:#ff79c6">FROM</span> emp <span style="color:#ff79c6">WHERE</span> age<span style="color:#ff79c6">&gt;</span><span style="color:#bd93f9">40</span> –
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>如果只是在 age、salary 上加索引则不行<br>
+首先 age 这个是非聚集索引，然后找到主键，根据主键去 salary索引上提取值<br>
+所以这里要加一个联合索引 (age, salary)，相当于是利用了覆盖索引<br>
+另外是根据每个场景的查询，预先创建一个物化视图，这样看会比前两种效果更好</p>
+<h3 id="列存">列存</h3>
+<p>包括</p>
+<ul>
+<li>压缩算法</li>
+<li>延迟物化</li>
+<li>块迭代</li>
+<li>Invisible Join</li>
+</ul>
+<p>对于压缩算法，由于列存都是相同的列放在一起，比如name、电话等，本身就有很多相似性<br>
+列存更容易压缩，压缩比更高，而行存因为 name周围的值存在，影响了压缩效果<br>
+run-length 这样的压缩算法，可以直接基于压缩数据查询，可以进一步减少 I/O<br>
+比如这样的原始值</p>
+<pre tabindex="0"><code>WWWWWWWWWWWWBWWWWWWWWWWWWBBBWWWWWWWWWWWWWWWWWWWWWWWWBWWWWWWWWWWWWWW
+</code></pre><p>可以被压缩为</p>
+<pre tabindex="0"><code>12W1B12W3B24W1B14W
+</code></pre><p>延迟物化有这么一些好处</p>
+<ul>
+<li>因为选择、聚合可以过滤掉一些数据，越往后可能提取的数据就更少，减少了 I/O读取</li>
+<li>不同的列可能使用不同压缩算法，将他们合并在一起需要先解压，这样就需要更多的CPU</li>
+<li>对于缓存行更友好，因为不会受到不相关元素的干扰</li>
+<li>对于块迭代更好</li>
+</ul>
+<p>早期物化
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/05/Column-Stores_vs_Row-Stores_How_Different_Are_They_Really/x1.png">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/05/Column-Stores_vs_Row-Stores_How_Different_Are_They_Really/x1.png" />
+        </a>
+    </p>
+<p>延迟物化<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/05/Column-Stores_vs_Row-Stores_How_Different_Are_They_Really/x2.png">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/05/Column-Stores_vs_Row-Stores_How_Different_Are_They_Really/x2.png" />
+        </a>
+    </p>
+<p>比如对学生姓名、年龄、性别，其中后两个值长度是固定的，用块迭代更容易处理<br>
+如果是行存则长度不固定，则整个tuple 长度也不固定，耗费更多</p>
+<p>对于块迭代操作</p>
+<ul>
+<li>行存需要读取一行然后再提取其中的某几列</li>
+<li>列存直接基于同一列的值读取，然后发送给调用方</li>
+<li>对于不需要的列则不提取</li>
+<li>另外可以最大化并行处理</li>
+</ul>
+<p>看不见的 join
+一个事实表 关联多个维度表，通过查询维度表上的谓词，来限制事实表的元素，之后再次查询维度表，再次过滤事实表数据<br>
+或者做一些聚合、计算、求平均值等 <br>
+星型模型如下<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/05/Column-Stores_vs_Row-Stores_How_Different_Are_They_Really/x3.png">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/05/Column-Stores_vs_Row-Stores_How_Different_Are_They_Really/x3.png" />
+        </a>
+    </p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-sql" data-lang="sql"><span style="display:flex;"><span><span style="color:#ff79c6">SELECT</span> <span style="color:#ff79c6">c</span>.nation, s.nation, d.<span style="color:#ff79c6">year</span>,
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">sum</span>(lo.revenue) <span style="color:#ff79c6">as</span> revenue
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">FROM</span> customer <span style="color:#ff79c6">AS</span> <span style="color:#ff79c6">c</span>, lineorder <span style="color:#ff79c6">AS</span> lo,
+</span></span><span style="display:flex;"><span>supplier <span style="color:#ff79c6">AS</span> s, dwdate <span style="color:#ff79c6">AS</span> d
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">WHERE</span> lo.custkey <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">c</span>.custkey
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">AND</span> lo.suppkey <span style="color:#ff79c6">=</span> s.suppkey
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">AND</span> lo.orderdate <span style="color:#ff79c6">=</span> d.datekey
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">AND</span> <span style="color:#ff79c6">c</span>.region <span style="color:#ff79c6">=</span> <span style="color:#f1fa8c">&#39;ASIA&#39;</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">AND</span> s.region <span style="color:#ff79c6">=</span> <span style="color:#f1fa8c">&#39;ASIA&#39;</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">AND</span> d.<span style="color:#ff79c6">year</span> <span style="color:#ff79c6">&gt;=</span> <span style="color:#bd93f9">1992</span> <span style="color:#ff79c6">and</span> d.<span style="color:#ff79c6">year</span> <span style="color:#ff79c6">&lt;=</span> <span style="color:#bd93f9">1997</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">GROUP</span> <span style="color:#ff79c6">BY</span> <span style="color:#ff79c6">c</span>.nation, s.nation, d.<span style="color:#ff79c6">year</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">ORDER</span> <span style="color:#ff79c6">BY</span> d.<span style="color:#ff79c6">year</span> <span style="color:#ff79c6">asc</span>, revenue <span style="color:#ff79c6">desc</span>;
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>两种 传统方式的缺点</p>
+<ul>
+<li>按Selectivity依次JOIN：按照选择性从高到低的顺序进行join操作，需要在join前将表的行映射到内存中的元组，导致无法进行后期的延迟物化处理。</li>
+<li>延迟物化：通过将join操作转化为在事实表的外键列上的谓词来实现后期物化，但需要从维度表中以乱序的方式提取分组列的值，因此效率不高</li>
+</ul>
+<p>通过重写 事实表上的谓词，并通过管道的方式并行处理这些谓词，可以提升性能<br>
+这些使用了前面介绍的技术</p>
+<p>invisible join的执行过程
+第一步</p>
+<ul>
+<li>每一个谓词都被应用在对应维度表，提取维度表中满足谓词条件的主键 key 的一个列表</li>
+<li>根据这些 key 构建一个 hash table 能够用于测试一个给定的 key 是否满足谓词条件</li>
+<li>(该 hash table 足够小，以便于能加载进内存中，因为只包含了 key，并且一般维表比较小)
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/05/Column-Stores_vs_Row-Stores_How_Different_Are_They_Really/2.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/05/Column-Stores_vs_Row-Stores_How_Different_Are_They_Really/2.jpg" />
+        </a>
+    <br>
+Figure 2: The rst phase of the joins needed to execute Query    3.1 from the Star Schema benchmark on some sample data</li>
+</ul>
+<p>第二步</p>
+<ul>
+<li>一个 hash table 都被用于提取事实表中满足相应谓词的 record 的位置</li>
+<li>通过用事实表每个外键的值去探测 hash table，得到一个事实表中外键列满足谓词的列的 position 信息</li>
+<li>然后将所有谓词的 position 列表联合起来求交集</li>
+<li>得到了事实表的满足所有谓词的 position list</li>
+<li>这个 list 可以标明具体的位置信息，也可以使用 bitmap 来进行展示
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/05/Column-Stores_vs_Row-Stores_How_Different_Are_They_Really/3.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/05/Column-Stores_vs_Row-Stores_How_Different_Are_They_Really/3.jpg" />
+        </a>
+       <br>
+Figure 3: The second phase of the joins needed to execute Query 3.1 from the Star Schema benchmark on some sample data</li>
+</ul>
+<p>第三步</p>
+<ul>
+<li>在事实表上应用阶段二生成的 Position list</li>
+<li>如果事实表中的某个列C包含对维度表的外键引用，并且需要使用该列来回答查询，如select、分组、聚合等</li>
+<li>会使用位置列表P来提取外键值，并将这些值用作维度表主键进行查找</li>
+<li>如果维度表主键是一个排序连续的标识符列表会从 1 开始（这是常见情况），则外键实际上表示所需元组在维度表中的位置</li>
+<li>查询引擎可以通过提取 position list 来快速提取所需的列，并且不需要对整个表进行扫描</li>
+<li>还有一种是直接内存数组访问，由于维度表足够的小，可以将整个维度表的列都放置到 CPU 的 L2 缓存中
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/05/Column-Stores_vs_Row-Stores_How_Different_Are_They_Really/4.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/05/Column-Stores_vs_Row-Stores_How_Different_Are_They_Really/4.jpg" />
+        </a>
+    <br>
+Figure 4: The third phase of the joins needed to execute Query 3.1 from the Star Schema benchmark on some sample data</li>
+</ul>
+<p>如果只是这样的话Invisible JOIN可能比上面的第二种方案好不了多少<br>
+论文认为在很多时间维度表里面符合过滤条件的数据往往是连续的<br>
+连续的好处在于，它能把lookup join变成一个值的范围检查，范围检查比lookup    join要快，原因很简单，范围检查只需要所算数运算就好了，不需要做lookup，因此可能大幅度的提高性能</p>
+<p>Between-Predicate Rewriting</p>
+<ul>
+<li>比如检查外键是否在 1000 - 2000 之间，可以将 hash 替换为 between 谓词</li>
+<li>将谓词从事实表上的哈希查找谓词重写为“between”谓词，其中外键落在键范围的两端之间</li>
+<li>对于不连续的情况，可以做字典编码，进一步优化</li>
+<li>优化仅适用于维度表排序列上的谓词这一说法并不完全正确</li>
+<li>在星型模型中，日期表具有年份列、年月列和完整日期列。如果按年份排序，其次按年月排序，再按完成日期排序</li>
+<li>则在任何这三个列上的等值谓词都将导致连续的结果集</li>
+</ul>
+<h2 id="实验">实验</h2>
+<p>主要回答这几个问题</p>
+<ul>
+<li>在行存中模拟列存，然后跟 C-Store 的基准测试对比</li>
+<li>不修改行存的设计，是否能达到列存的效果</li>
+<li>压缩、延迟物化、块迭代，那种优化效果更好</li>
+<li>星型模型中使用 invisible join 对比 非规范化预执行的事实表，结果如何</li>
+</ul>
+<h3 id="行存模拟">行存模拟</h3>
+<p>对比下面的 System X 和 C-Store</p>
+<ul>
+<li>System X 经过了更多的优化，如多线程并行执行、分区</li>
+<li>这两个点来说，System X 比仅仅是原型的 C-Store更好</li>
+<li>System X 经过 物化的帮助，性能得到了提升</li>
+<li>C-Store 中我们用其模拟了行存，将一行用 string表示，然后拆分模拟</li>
+<li>这样就实现了 C-Store 的行存物化</li>
+<li>对比发现，CS 是 CS(Row MV) 的6倍性能，这两者读取的都是同样的数据</li>
+<li>然列式存储的性能优势不仅仅是减少了从磁盘读取数据的 IO
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/05/Column-Stores_vs_Row-Stores_How_Different_Are_They_Really/5.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/05/Column-Stores_vs_Row-Stores_How_Different_Are_They_Really/5.jpg" />
+        </a>
+    <br>
+Figure 5: Baseline performance of C-Store “CS” and System X “RS”, compared with materialized view cases on the same systems.</li>
+</ul>
+<p>四种查询，的几种不同优化方式<br>
+在行的基础上增加 bitmap 索引、物化视图、垂直分区、所有列加索引<br>
+对比发现，物化视图是最好的、然后是传统方式<br>
+bitmap就开始下降了<br>
+而 垂直分区就比较差了，最差的是 全索引<br>
+这可能是两个原因</p>
+<ul>
+<li>tuple 开销
+<ul>
+<li>因为一个表10个列，拆成10个物理分区，每个分区需要两个字段</li>
+<li>一个主键、一个列，如果数据量很大，那么每个分区列都需要冗余的存储主键</li>
+</ul>
+</li>
+<li>低效率的tuple 重建
+<ul>
+<li>另外将这些列合并的时候，需要join，甚至可能需要在上面建索引，这就导致更多开销</li>
+<li>System X 倾向于使用 hash-join，如果加上索引强制走索引，效率也不高</li>
+<li>因为走索引本身也有开销，另外合并之前需要有排序也无法跳过，导致开销无法降低
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/05/Column-Stores_vs_Row-Stores_How_Different_Are_They_Really/6.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/05/Column-Stores_vs_Row-Stores_How_Different_Are_They_Really/6.jpg" />
+        </a>
+    <br>
+Figure 6:</li>
+</ul>
+</li>
+<li>(a) Performance numbers for different variants of the row-store by query ight. Here, T is traditional, T(B) is traditional (bitmap), MV is materialized views, VP is vertical partitioning, and AI is all indexes.</li>
+<li>(b) Average performance across all queries.</li>
+</ul>
+<hr>
+<p>对于行存的解剖</p>
+<ul>
+<li>传统方式
+<ul>
+<li>scan占了大部分时间</li>
+<li>然后是基于排序的聚合</li>
+</ul>
+</li>
+<li>垂直分区
+<ul>
+<li>首先是将partkey列与部件表（part table）中的对应过滤表进行哈希连接</li>
+<li>接着是将suppkey列与供应商表（supplier table）中的对应过滤表进行哈希连接</li>
+<li>再把这两个结果集通过一次哈希连接得到符合查询条件的记录ID元组以及部件属性 p.brand1</li>
+<li>最后再把这些记录ID元组与事实表（lineorder table）进行哈希连接来获取最终结果</li>
+<li>需要读取四列，跟传统方式读取的数据差不多，但是hash-join使性能下降 25%</li>
+<li>因为需要将大量的数据加载到内存，耗费很多CPU和内存，即使用了索引，也有很大开销</li>
+</ul>
+</li>
+<li>索引
+<ul>
+<li>需要在事实表中的 4个列 都建立索引</li>
+<li>先是索引找到对应的值，然后再做hash-join</li>
+<li>这种方式对于列少、列多的情况下都有可能比传统方式块</li>
+<li>比如列多但是基于索引，查询的数据少，所以更快</li>
+<li>而列少但返回的数据多，hash-join的压力就很大，可能会更慢</li>
+<li>这种方式的变化很大，取决于数据量、查询模式、数据分布</li>
+<li>查询模式是指：如聚合(大量scan返回少量数据)可能更好，而多表多字段join可能会更差</li>
+</ul>
+</li>
+</ul>
+<h3 id="列存模拟">列存模拟</h3>
+<p>列存比行存快的原因</p>
+<ul>
+<li>列存的一列真的只是存一列数据而已，但是行存需要存储主键 + 列数据，有冗余</li>
+<li>列存的堆文件，i - 1 一定是在 i 前面，但是 行存的顺序没有保证，行存的顺序是通过索引保证的</li>
+<li>所以在行存中，重建列的时候就必须通过索引，导致额外开销</li>
+</ul>
+<p>行存问题讨论</p>
+<ul>
+<li>垂直分区一开始还不错，但是选择的列超过 总列数的 1/4 后，性能就不行了</li>
+<li>索引方式，在使用维度列过滤事实表之前，系统被迫使用昂贵的散列连接将事实表的列连接在一起</li>
+<li>也就是说虽然只是单个列数据找到了，但是两个、多个列连接的开销又很大</li>
+<li>物化视图，这是最好的，只需要读取部分数据即可</li>
+<li>bitmap，在选择率低的时候比较好，选择率高时候，需要扫描更多page，而位图扫描开销比纯顺序扫描大</li>
+</ul>
+<p>如下我们将 C-Store做了分解</p>
+<ul>
+<li>快迭代：T表示一次一个tuple，t 使用快迭代</li>
+<li>I 开启 invisilbe join，i 为关闭</li>
+<li>C 开启压缩，c 关闭压缩</li>
+<li>L 开启延迟物化，l 关闭物化</li>
+</ul>
+<p>对比结果</p>
+<ul>
+<li>块迭代可以提升 5% - 50%，如果关闭压缩，则 I/O 成为瓶颈，提升效果不明显</li>
+<li>invisible join，大约可以提升 50% - 75%</li>
+<li>压缩能提高 2倍性能，尤其是 RLE 编码，效率很明显，如果是排序的数据，能提高一个数量级</li>
+<li>延迟物化效果也很好，如果去掉延迟物化需要有大量的 tuple 重组，因此延迟物化可以提升 3倍性能</li>
+<li>谓词的选择性越高，前期就有更多的tuple需要构建，这样就更浪费</li>
+<li>如果将这四个优化全部去掉，列存的性能就跟 行存差不多了
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/05/Column-Stores_vs_Row-Stores_How_Different_Are_They_Really/7.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/05/Column-Stores_vs_Row-Stores_How_Different_Are_They_Really/7.jpg" />
+        </a>
+    <br>
+Figure 7:</li>
+<li>(a) Performance numbers for C-Store by query ight with various optimizations removed. The four letter code indicates the C-Store conguration: T=tuple-at-a-time processing, t=block processing; I=invisible join enabled, i=disabled; C=compression enabled, c=disabled; L=late materialization enabled, l=disabled.</li>
+<li>(b) Average performance numbers for C-Store across all queries.</li>
+</ul>
+<p>四种优化策略效果对比<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/05/Column-Stores_vs_Row-Stores_How_Different_Are_They_Really/x4.png">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/05/Column-Stores_vs_Row-Stores_How_Different_Are_They_Really/x4.png" />
+        </a>
+    </p>
+<p>invisible 和 反规范化对比(反规划化表应用到 列存系统上)</p>
+<ul>
+<li>反规划化，将所有维度表的信息都放到实事表中，这样就变成大宽表，数据量增加了，但减少了join</li>
+<li>结果发现这样性能并不好</li>
+<li>实事表变宽，数据量变多了，而且增加的属性是 string，而在维度表中是整数，所以查询的效果不好</li>
+<li>应用的外键对应的可能有好几个维度表，可以并行分别做hash，但对于大宽 实事表，需要真实的多次遍历(维度表远小于实事表)，导致I/O读取更多</li>
+<li>实事表 join 维度表之后，还需要在另一个属性上做聚合</li>
+<li>C-Store 可以用块迭代加速，这样两次遍历都是在内存中</li>
+<li>而 大宽表的列都是隔离的，需要两次真实遍历，I/O 开销高</li>
+<li>只有当事实表中包含的维度表属性被排序(或二级排序)或具有高度可压缩性时，反规范化才显得有用
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/05/Column-Stores_vs_Row-Stores_How_Different_Are_They_Really/8.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/05/Column-Stores_vs_Row-Stores_How_Different_Are_They_Really/8.jpg" />
+        </a>
+    <br>
+Figure 8: Comparison of performance of baseline C-Store on the original SSBM schema with a denormalized version of the schema. Denormalized columns are either not compressed (“PJ, No C”), dictionary compressed into integers (“PJ, Int C”), or compressed as much as possible (“PJ, Max C”).</li>
+</ul>
+<h2 id="参考">参考</h2>
+<ul>
+<li><a href="https://zhuanlan.zhihu.com/p/617231625">Storage Models &amp; Data Layout</a></li>
+<li><a href="https://zhuanlan.zhihu.com/p/54433448">《Column-Stores vs. Row-Stores》读后感</a></li>
+<li><a href="https://www.the-paper-trail.org/post/2013-01-30-columnar-storage/">Columnar Storage</a></li>
+<li><a href="https://blog.csdn.net/weixin_39851914/article/details/110569713">alter table add column多个字段_读后感之《Column-Stores vs. Row-Stores》</a></li>
+<li><a href="https://www.jianshu.com/p/85c8a9256e91">列存储</a></li>
+<li><a href="https://db.in.tum.de/teaching/ws1718/seminarHauptspeicherdbs/paper/sterjo.pdf?lang=de">Row-Store / Column-Store / Hybrid-Store</a></li>
+<li><a href="https://web.stanford.edu/class/cs345d-01/rl/cstore.pdf">C-Store: A Column-oriented DBMS</a></li>
+<li><a href="https://juejin.cn/post/7158050464817217543">稀土掘金 论文解读 Column-Stores vs. Row-Stores</a></li>
+<li><a href="https://paper-notes.zhjwpku.com/databases/column-stores-vs-row-stores.html">git book: ColumnStores vs. RowStores: How Different Are They Really?</a></li>
+</ul>
+
+			<script type="text/javascript"
+        async
+        src="https://cdn.bootcss.com/mathjax/2.7.3/MathJax.js?config=TeX-AMS-MML_HTMLorMML">
+MathJax.Hub.Config({
+  tex2jax: {
+    inlineMath: [['$','$'], ['\\(','\\)']],
+    displayMath: [['$$','$$'], ['\[\[','\]\]']],
+    processEscapes: true,
+    processEnvironments: true,
+    skipTags: ['script', 'noscript', 'style', 'textarea', 'pre'],
+    TeX: { equationNumbers: { autoNumber: "AMS" },
+         extensions: ["AMSmath.js", "AMSsymbols.js"] }
+  }
+});
+
+MathJax.Hub.Queue(function() {
+    
+    
+    
+    var all = MathJax.Hub.getAllJax(), i;
+    for(i = 0; i < all.length; i += 1) {
+        all[i].SourceElement().parentNode.className += ' has-jax';
+    }
+});
+</script>
+
+<style>
+code.has-jax {
+    font: inherit;
+    font-size: 100%;
+    background: inherit;
+    border: inherit;
+    color: #515151;
+}
+</style>
+        </div>
+
+        
+
+
+        
+
+<div class="post-archive">
+    <h2>相关文章</h2>
+    <ul class="listing">
+        
+        <li><a href="/post/2023/05/lakehouse-a-new-generation-of-open-platforms-that-unify/">Lakehouse A New Generation of Open Platforms that Unify Data Warehousing and Advanced Analytics</a></li>
+        
+        <li><a href="/post/2023/05/building-an-elastic-query-engine-on-disaggregated-storage/">Building An Elastic Query Engine on Disaggregated Storage</a></li>
+        
+        <li><a href="/post/2023/05/what-goes-around-comes-around/">What Goes Around Comes Around</a></li>
+        
+        <li><a href="/post/2023/02/cpu-and-cache-efficient-management-of-memory-resident-databases/">CPU and Cache Efficient Management of Memory-Resident Databases</a></li>
+        
+        <li><a href="/post/2023/02/efficiently-compiling-efficient-query-plans-for-modern-hardware/">Efficiently Compiling Efficient Query Plans for Modern Hardware</a></li>
+        
+    </ul>
+</div>
+
+
+        <div class="post-meta meta-tags">
+            
+            <ul class="clearfix">
+                
+                <li><a href='/tags/%E8%AE%BA%E6%96%87'>论文</a></li>
+                
+                <li><a href='/tags/%E5%88%97%E5%AD%98'>列存</a></li>
+                
+            </ul>
+            
+        </div>
+    </article>
+    
+    
+
+    
+    
+    <div class="post bg-white">
+      <script src="https://utteranc.es/client.js"
+            repo= "himichael/hugoblogtalks"
+            issue-term="pathname"
+            theme="github-light"
+            crossorigin="anonymous"
+            async>
+      </script>
+    </div>
+    
+</div>
+
+
+                </div>
+
+                <div id="secondary">
+    <section class="widget">
+        <form id="search" action='https://code0xff.org/search/' method="get" accept-charset="utf-8" target="_blank" _lpchecked="1">
+      
+      <input type="text" name="q" maxlength="20" placeholder="Search">
+      <input type="hidden" name="sitesearch" value="https://code0xff.org/">
+      <button type="submit" class="submit icon-search"></button>
+</form>
+    </section>
+    
+    <section class="widget">
+        <h3 class="widget-title">最近文章</h3>
+<ul class="widget-list">
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/05/column-stores_vs_row-stores_how_different_are_they_really/" title="Column-Stores vs. Row-Stores: How Different Are They Really?">Column-Stores vs. Row-Stores: How Different Are They Really?</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/05/lakehouse-a-new-generation-of-open-platforms-that-unify/" title="Lakehouse A New Generation of Open Platforms that Unify Data Warehousing and Advanced Analytics">Lakehouse A New Generation of Open Platforms that Unify Data Warehousing and Advanced Analytics</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/05/building-an-elastic-query-engine-on-disaggregated-storage/" title="Building An Elastic Query Engine on Disaggregated Storage">Building An Elastic Query Engine on Disaggregated Storage</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/05/what-goes-around-comes-around/" title="What Goes Around Comes Around">What Goes Around Comes Around</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/04/levedb-%E5%A4%9A%E7%89%88%E6%9C%AC%E5%92%8C%E5%8E%8B%E7%BC%A9/" title="LevelDB 多版本和压缩">LevelDB 多版本和压缩</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/04/levedb-%E5%B7%A5%E5%85%B7%E7%B1%BB/" title="LevelDB 辅助工具类">LevelDB 辅助工具类</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/04/levedb-sstable%E6%A8%A1%E5%9D%97/" title="LevelDB SSTable模块">LevelDB SSTable模块</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/04/levedb-memtable%E6%A8%A1%E5%9D%97/" title="LevelDB MemTable模块">LevelDB MemTable模块</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/04/levedb-log%E6%A8%A1%E5%9D%97/" title="LevelDB Log模块">LevelDB Log模块</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/03/levedb-%E5%85%AC%E5%BC%80%E6%8E%A5%E5%8F%A3/" title="LevelDB 公开的接口">LevelDB 公开的接口</a>
+    </li>
+    
+</ul>
+    </section>
+
+    
+
+    <section class="widget">
+        <h3 class="widget-title"><a href='/categories/'>分类</a></h3>
+<ul class="widget-list">
+    
+    <li><a href="https://code0xff.org/categories/%E5%88%86%E5%B8%83%E5%BC%8F/">分布式 (6)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E5%8E%9F%E7%90%86%E5%88%86%E6%9E%90/">原理分析 (13)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E5%95%86%E4%B8%9A/">商业 (3)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E5%A4%A7%E6%95%B0%E6%8D%AE/">大数据 (22)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%95%B0%E6%8D%AE%E5%BA%93/">数据库 (25)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%96%87%E5%AD%A6%E5%92%8C%E8%89%BA%E6%9C%AF/">文学和艺术 (2)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%97%85%E8%A1%8C/">旅行 (10)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%9E%B6%E6%9E%84/">架构 (2)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E7%AE%97%E6%B3%95/">算法 (8)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E7%B3%BB%E7%BB%9F/">系统 (5)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E7%BC%96%E7%A8%8B%E8%AF%AD%E8%A8%80/">编程语言 (2)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E8%A1%8C%E4%B8%9A%E8%A7%82%E5%AF%9F/">行业观察 (1)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E8%AF%BB%E4%B9%A6%E7%AC%94%E8%AE%B0/">读书笔记 (11)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E9%9A%8F%E4%BE%BF%E5%86%99%E5%86%99/">随便写写 (3)</a></li>
+    
+</ul>
+    </section>
+
+    <section class="widget">
+        <h3 class="widget-title">归档</a></h3>
+<ul class="widget-list">
+    
+    <li><a href="https://code0xff.org/years/2021%E5%B9%B4/">2021年 (31)</a></li>
+    
+    <li><a href="https://code0xff.org/years/2022%E5%B9%B4/">2022年 (55)</a></li>
+    
+    <li><a href="https://code0xff.org/years/2023%E5%B9%B4/">2023年 (27)</a></li>
+    
+</ul>
+    </section>
+
+    <section class="widget">
+        <h3 class="widget-title"><a href='/tags/'>标签</a></h3>
+<div class="tagcloud">
+    
+    <a href="https://code0xff.org/tags/b%E6%A0%91/">B树 </a>
+    
+    <a href="https://code0xff.org/tags/cmu-database/">CMU-Database </a>
+    
+    <a href="https://code0xff.org/tags/flink/">flink </a>
+    
+    <a href="https://code0xff.org/tags/hive/">Hive </a>
+    
+    <a href="https://code0xff.org/tags/k8s/">k8s </a>
+    
+    <a href="https://code0xff.org/tags/kudu/">kudu </a>
+    
+    <a href="https://code0xff.org/tags/kyuubi/">Kyuubi </a>
+    
+    <a href="https://code0xff.org/tags/lakehouse/">Lakehouse </a>
+    
+    <a href="https://code0xff.org/tags/leveldb/">LevelDB </a>
+    
+    <a href="https://code0xff.org/tags/llvm/">LLVM </a>
+    
+    <a href="https://code0xff.org/tags/manacher/">Manacher </a>
+    
+    <a href="https://code0xff.org/tags/mapreduce/">MapReduce </a>
+    
+    <a href="https://code0xff.org/tags/mysql/">MySQL </a>
+    
+    <a href="https://code0xff.org/tags/newsql/">NewSQL </a>
+    
+    <a href="https://code0xff.org/tags/oceanbase/">OceanBase </a>
+    
+    <a href="https://code0xff.org/tags/paxos/">paxos </a>
+    
+    <a href="https://code0xff.org/tags/raft/">raft </a>
+    
+    <a href="https://code0xff.org/tags/scala/">scala </a>
+    
+    <a href="https://code0xff.org/tags/simd/">SIMD </a>
+    
+    <a href="https://code0xff.org/tags/snowflake/">snowflake </a>
+    
+    <a href="https://code0xff.org/tags/spark/">spark </a>
+    
+    <a href="https://code0xff.org/tags/unix/">unix </a>
+    
+    <a href="https://code0xff.org/tags/%E4%BA%8C%E5%88%86%E6%9F%A5%E6%89%BE/">二分查找 </a>
+    
+    <a href="https://code0xff.org/tags/%E4%BA%8C%E5%8F%89%E6%A0%91%E9%81%8D%E5%8E%86/">二叉树遍历 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%88%86%E5%B8%83%E5%BC%8F/">分布式 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%88%97%E5%AD%98/">列存 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%8A%A8%E6%80%81%E6%B3%A8%E5%85%A5/">动态注入 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%8E%86%E5%8F%B2/">历史 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%90%91%E9%87%8F%E5%8C%96/">向量化 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%9B%9E%E6%BA%AF/">回溯 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%9B%BD%E5%86%85%E6%97%85%E8%A1%8C/">国内旅行 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%9B%BD%E5%A4%96%E6%97%85%E8%A1%8C/">国外旅行 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%A4%9A%E7%A7%9F%E6%88%B7/">多租户 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%A4%A7%E6%95%B0%E6%8D%AE/">大数据 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%AD%98%E5%82%A8/">存储 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%B7%A5%E4%BD%9C%E8%AE%B0%E5%BD%95/">工作记录 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%BE%AE%E6%9C%8D%E5%8A%A1/">微服务 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%95%B0%E6%8D%AE%E5%BA%93/">数据库 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%95%B0%E6%8D%AE%E6%A8%A1%E5%9E%8B/">数据模型 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%9F%A5%E8%AF%A2%E4%BC%98%E5%8C%96/">查询优化 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%9F%A5%E8%AF%A2%E7%BC%96%E8%AF%91/">查询编译 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%B1%87%E7%BC%96/">汇编 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%B5%8B%E8%AF%95/">测试 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%B9%96%E4%BB%93%E4%B8%80%E4%BD%93/">湖仓一体 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%94%9F%E6%B4%BB/">生活 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%94%B5%E5%BD%B1/">电影 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%AE%97%E6%B3%95/">算法 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BB%8F%E6%B5%8E/">经济 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BC%93%E5%AD%98/">缓存 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BC%96%E8%AF%91%E5%8E%9F%E7%90%86/">编译原理 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BD%91%E7%BB%9C/">网络 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AE%A1%E7%AE%97%E6%A1%86%E6%9E%B6/">计算框架 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AE%BA%E6%96%87/">论文 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AF%BB%E4%B9%A6/">读书 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AF%BB%E4%B9%A6%E7%AC%94%E8%AE%B0/">读书笔记 </a>
+    
+</div>
+    </section>
+
+    
+
+    <section class="widget">
+        <h3 class="widget-title">RSS</h3>
+        <ul class="widget-list">
+            <li><a href="https://code0xff.org/index.xml">文章 RSS</a></li>
+        </ul>
+    </section>
+</div>
+            </div>
+        </div>
+    </div>
+    <footer id="footer">
+    <div>
+        &copy; 2023 <a href="https://code0xff.org/">记录每个瞬间 By 老王</a>
+        
+    </div>
+    <br />
+    <div>
+        <div class="github-badge">
+            <a href="https://gohugo.io/" target="_black" rel="nofollow"><span class="badge-subject">Powered by</span><span class="badge-value bg-blue">Hugo</span></a>
+        </div>
+        <div class="github-badge">
+            <a href="https://github.com/flysnow-org/maupassant-hugo" target="_black"><span class="badge-subject">Theme</span><span class="badge-value bg-yellowgreen">Maupassant</span></a>
+        </div>
+    </div>
+</footer>
+
+
+    
+    <script type="text/javascript">
+        window.MathJax = {
+            tex2jax: {
+                inlineMath: [['$', '$']],
+                processEscapes: true
+                }
+            };
+    </script>
+    <script src='https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.5/MathJax.js?config=TeX-MML-AM_CHTML' async></script><script src="https://cdn.bootcdn.net/ajax/libs/fancybox/3.5.7/jquery.fancybox.min.js"></script>
+
+<a id="rocket" href="#top"></a>
+<script type="text/javascript" src='/js/totop.js?v=0.0.0' async=""></script>
+
+<script type="application/javascript">
+var doNotTrack = false;
+if (!doNotTrack) {
+	window.ga=window.ga||function(){(ga.q=ga.q||[]).push(arguments)};ga.l=+new Date;
+	ga('create', 'GA ID', 'auto');
+	
+	ga('send', 'pageview');
+}
+</script>
+<script async src='https://www.google-analytics.com/analytics.js'></script>
+
+
+
+    <script type="text/javascript" src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js" async></script>
+
+
+
+
+</body>
+
+</html>
