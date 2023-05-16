@@ -1,0 +1,761 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    
+    <meta name="referrer" content="no-referrer-when-downgrade">
+    
+
+    <title>Optimal Column Layout for Hybrid Workloads | 记录每个瞬间</title>
+    <meta property="og:title" content="Optimal Column Layout for Hybrid Workloads - 记录每个瞬间">
+    <meta property="og:type" content="article">
+        
+    <meta property="article:published_time" content='2023-05-13T09:23:04&#43;08:00'>
+        
+        
+    <meta property="article:modified_time" content='2023-05-13T09:23:04&#43;08:00'>
+        
+    <meta name="Keywords" content="">
+    <meta name="description" content="Optimal Column Layout for Hybrid Workloads">
+        <meta name="author" content="隔壁老王">
+        
+    <meta property="og:url" content="https://code0xff.org/post/2023/05/optimal_column_layout_for_hybrid_workloads/">
+    <link rel="shortcut icon" href='/favicon.ico'  type="image/x-icon">
+
+    <link rel="stylesheet" href='/css/normalize.css'>
+    <link rel="stylesheet" href='/css/style.css'>
+    <script type="text/javascript" src="//cdn.bootcdn.net/ajax/libs/jquery/3.4.1/jquery.min.js"></script>
+
+    
+    
+    
+        <link href="https://cdn.bootcdn.net/ajax/libs/fancybox/3.5.7/jquery.fancybox.min.css" rel="stylesheet">
+    
+    
+    
+    
+</head>
+
+
+<body>
+    <header id="header" class="clearfix">
+    <div class="container">
+        <div class="col-group">
+            <div class="site-name ">
+                
+                    <a id="logo" href="https://code0xff.org/">
+                        记录每个瞬间
+                    </a>
+                
+                
+            </div>
+            <div>
+                <nav id="nav-menu" class="clearfix">
+                    <a class="current" href="https://code0xff.org/">首页</a>
+                    
+                    <a  href="https://code0xff.org/linked/" title="链接">链接</a>
+                    
+                    <a  href="https://code0xff.org/archives/" title="归档">归档</a>
+                    
+                    <a  href="https://code0xff.org/about/" title="关于">关于</a>
+                    
+                </nav>
+            </div>
+        </div>
+    </div>
+</header>
+
+    <div id="body">
+        <div class="container">
+            <div class="col-group">
+
+                <div class="col-8" id="main">
+                    
+<div class="res-cons">
+    
+    <article class="post">
+        <header>
+            <h1 class="post-title">Optimal Column Layout for Hybrid Workloads</h1>
+        </header>
+        <date class="post-meta meta-date">
+            2023年5月13日
+        </date>
+<nav id="TableOfContents">
+  <ul>
+    <li>
+      <ul>
+        <li><a href="#整体分析">整体分析</a></li>
+        <li><a href="#检测模型">检测模型</a></li>
+        <li><a href="#性能评估">性能评估</a></li>
+        <li><a href="#参考引用">参考引用</a></li>
+      </ul>
+    </li>
+  </ul>
+</nav>
+        
+        <div class="post-meta">
+            
+            <span class="post-meta meta-tags">
+                <ul class="clearfix">
+                    <a href='/categories/%E6%95%B0%E6%8D%AE%E5%BA%93'>数据库</a>
+                </ul>
+            </span>
+            
+        </div>
+        
+        
+        <div class="post-meta">
+            <span id="busuanzi_container_page_pv">|<span id="busuanzi_value_page_pv"></span><span>
+                    阅读</span></span>
+        </div>
+        
+        
+        <div class="post-content">
+            <blockquote>
+<p>原文
+<a href="https://15721.courses.cs.cmu.edu/spring2023/papers/03-storage/p2393-athanassoulis.pdf">https://15721.courses.cs.cmu.edu/spring2023/papers/03-storage/p2393-athanassoulis.pdf</a></p>
+</blockquote>
+<h2 id="整体分析">整体分析</h2>
+<p>对于分析场景，列存是最合适的，但是列存对应更新场景并不好<br>
+而对于 HTAP 来说，是各种模式混合的场景，有读也有写<br>
+这种情况下，如果预先固定存储模式就无法针对特定场景做调优了，
+而底层的数据布局一般都是实现固定好的，这样的话，面向不同的负载情况(读密集、写密集)，就无法做到最适应了，效果也不好<br>
+而且固定的布局也无法调整</p>
+<p>这篇论文讲的是通过学习之前的数据，做出调优决策，然后优化数据布局<br>
+有点像 数据库 &amp; ML 的结合场景，主要是针对 HTAP 的<br>
+挑战</p>
+<ul>
+<li>为合适的场景找到合适的布局最坏情况可能是指数级的，因为要在：分区数量、相应大小和范围、缓存空间数量来分配</li>
+<li>通过将问题场景拆分为多个子问题来求解</li>
+<li>场景定制化，通过分析采样统计来对读、写场景做布局优化</li>
+<li>列的场景可能很多，如未排序的、完全有序的，列的分区方式也是多种多样的，更新策略、平衡读写问题，ghost-value</li>
+<li>创建可变成的分区来适配不同的场景，鲁棒性，避免过度优化拟合</li>
+<li>如果分区粒度越细，则整体有序性越高、数据组织的结构性越强，对读越有利（快速定位数据、读更少的数据）；</li>
+<li>如果分区粒度越粗，则意味着更新时需要调整的数据快越少（简单标记、追加都可以），因而更简单的变更维护，对于更新越有利</li>
+</ul>
+<p>
+        <a data-fancybox="gallery" href="http://localhost:8888/1.jpg">
+            <img class="mx-auto" alt="" src="http://localhost:8888/1.jpg" />
+        </a>
+    <br>
+Figure 1: Existing analytical systems have 2× higher performance than vanilla column-stores on hybrid workloads by utilizing a delta-store. Using a workload-tailored optimal column layout, Casper brings an additional 4× performance benefit.</p>
+<p>论文的贡献</p>
+<ul>
+<li>描述了列布局的设计空间，包括：区分、更新策略、buffer空间，可以支持各种场景</li>
+<li>引入频率模型 覆盖数据分布上的访问模式，分区操作上的详细成本模型，ghost值分配机制</li>
+<li>将列布局问题当做工作负载驱动的二进制整数优化问题，可以平衡读、更新性能</li>
+<li>将列布局策略整合到我们从存储引擎 Casper 中，比最先进的布局提升 2倍以上性能</li>
+</ul>
+<p>将一个列的值划分为多个分区</p>
+<ul>
+<li>如果分区数量多了，则读花费增加，但写花费降低</li>
+<li>如果允许空槽，则写花费降低，读基本不变
+
+        <a data-fancybox="gallery" href="http://localhost:8888/2.jpg">
+            <img class="mx-auto" alt="" src="http://localhost:8888/2.jpg" />
+        </a>
+    <br>
+Figure 2: Accessing a column is heavily affected by the structure of the column (e.g., sorted, partitioned). Read cost</li>
+<li>(a) logarithmically decreases by adding structure (partitions), while using ghost values to expand the column layout design space</li>
+<li>(b) reduces write cost linearly w.r.t. memory amplification.</li>
+</ul>
+<p>根据上述描述，这里使用 range + partition 的基本布局方式</p>
+<ul>
+<li>这种方式可以覆盖到读、写各种场景</li>
+<li>列数据划分为多个分区，分区建不想交有序，分区内是无序的</li>
+<li>分区的数量可以调整，分区内以 block + chunk 组织，利用CPU cache</li>
+<li>分区内是无序的，所以分区很大(粒度粗)则写有利、但对读不利；相反对读有利但不利于写</li>
+</ul>
+<p>对于 5 种基本的场景，来分析一下</p>
+<ul>
+<li>点查</li>
+<li>范围查询</li>
+<li>插入</li>
+<li>删除</li>
+<li>更新</li>
+</ul>
+<p>下面两个是 点查、范围查找</p>
+<ul>
+<li>点查的时候，根据索引找到需要查找的分区，然后分区内全部遍历就能找到对应的值</li>
+<li>范围查找，根据起始-结束 key，找到 第一个和最后一个分区，因为分区之间都是相对有序，落在中间的分区全部读取即可
+
+        <a data-fancybox="gallery" href="http://localhost:8888/3.jpg">
+            <img class="mx-auto" alt="" src="http://localhost:8888/3.jpg" />
+        </a>
+    <br>
+Figure 3: Maintaining range partitions in a column chunk allows for fast execution of read queries. For point queries</li>
+<li>(b), the partition that may contain the value in question is fully scanned. For range queries</li>
+<li>(c) the partitions that (may) contain the first and the last element belonging to the range are scanned, while any intermediate partitions are blindly consumed.</li>
+</ul>
+<p>插入、删除、更新 场景</p>
+<ul>
+<li>插入要用到 ripple-insert 算法，首先定位到分区，然后相邻的分区 第一个元素，挪动后后面一个分区</li>
+<li>同理后面分区也这样操作，这就是一个递归操作，一直找到最后一个分区，如果空间不够则扩展</li>
+<li>腾出位置后，就可以将值插入了；之后每个分区的边界都需要扩展一下</li>
+<li>删除也是定位到某个具体分区，然后最后一个分区的最后一个元素，移动到前一个分区的最后一个；这里分区边界要缩小</li>
+<li>一直重复这个操作，到当前分区，用最后一个覆盖要删除的值</li>
+<li>对于更新，等于 删除 + 插入</li>
+<li>先定位老的值所在的分区和位置，再定位新的值应该在的分区和位置，在这两个分区以及中间分区之间通过 Ripple 的方式正向或者负向的移动数据即可
+
+        <a data-fancybox="gallery" href="http://localhost:8888/4.jpg">
+            <img class="mx-auto" alt="" src="http://localhost:8888/4.jpg" />
+        </a>
+    <br>
+Figure 4: Inserting and deleting data in a partitioned column chunk uses rippling and restricts data movement.</li>
+</ul>
+<p>每个分区中增加一个空值，可以减少移动<br>
+
+        <a data-fancybox="gallery" href="http://localhost:8888/5.jpg">
+            <img class="mx-auto" alt="" src="http://localhost:8888/5.jpg" />
+        </a>
+    <br>
+Figure 5: Adding ghost values allows for less data movement; inserts use empty slots and deletes create new ones.</p>
+<h2 id="检测模型">检测模型</h2>
+<p>最小代价模型</p>
+<pre tabindex="0"><code>avg min cost(W, D, P)   
+</code></pre><p>这里的 W 是工作负载、D 是数据集、P 是 分区模式</p>
+<p>可以设置 block 的大小，它可以是缓存行的数倍，比如这里设置为 2<br>
+一个 block 就对应一个 bit 位，如果这个 bit 为0，表示不是分区边界，如果是 1 表示分区边界<br>
+下图 b，一个分区跨了三个block，第二分区是 2个block，第三个是 1个，第四个是 2个，每个分区结尾的 bit 都是设置为 1<br>
+下图 c，都是按照 2个 block 一个分区来设置<br>
+分区大粒度是可以调整的，可大可小<br>
+
+        <a data-fancybox="gallery" href="http://localhost:8888/6.jpg">
+            <img class="mx-auto" alt="" src="http://localhost:8888/6.jpg" />
+        </a>
+    <br>
+Figure 6: Representing different partitioning schemes (b) and (c) with block size B = 2.</p>
+<p>在 五种基本模型(点查、范围、插入、更新、删除)，基础上，定义了<code>10</code>种直方图<br>
+用来统计访问频率</p>
+<ul>
+<li>pq，计算每个点查的 block访问</li>
+<li>rs，用来统计 range查询的开始块</li>
+<li>re，统计 range 查询的结束块</li>
+<li>sc，统计 range查询时，block的全扫描</li>
+<li>de，统计每个block 的删除</li>
+<li>in，统计每个block 的插入</li>
+<li>udf 和 udb 用来统计 update 删除的 向前/向后 ripple</li>
+<li>utf、utb 跟上面类似</li>
+</ul>
+<p>下图中使用了直方图，来统计每个 block 对于不同情况的访问频率<br>
+
+        <a data-fancybox="gallery" href="http://localhost:8888/7.jpg">
+            <img class="mx-auto" alt="" src="http://localhost:8888/7.jpg" />
+        </a>
+     
+Figure 7: Frequency model in action. Here we show for each operation which partitions are accessed, and consequently, which histogram buckets are updated.</p>
+<p>可以从工作负载模型中抽取样本，然后建立直方图<br>
+也可以根据数据部分建立模型<br>
+
+        <a data-fancybox="gallery" href="http://localhost:8888/8.jpg">
+            <img class="mx-auto" alt="" src="http://localhost:8888/8.jpg" />
+        </a>
+     
+Figure 8: Learning FM from (a) samples or (b) distributions.</p>
+<p>5种 基本操作对应了底层磁盘 I/O 操作，随机读、随机写、顺序读、顺序写<br>
+总工作负载代价 = 不同的基本操作的代价之和 = 不同数量的磁盘block/chunk的读写代价之和 =<br>
+不同数量的磁盘block/chunk的不同读写方式 * 总次数代价之和</p>
+<p>图9a显示了使用10M个元素的块(每个元素有100个分区)时测量的和基于模型的插入成本<br>
+图9b显示了测量的和基于模型的点查询成本<br>
+
+        <a data-fancybox="gallery" href="http://localhost:8888/9.jpg">
+            <img class="mx-auto" alt="" src="http://localhost:8888/9.jpg" />
+        </a>
+     
+Figure 9: Cost model verification for (a) inserts and (b) point queries (10M chunk, exponentially increasing partition size).</p>
+<p>通过定义block 划分，也就是一堆 1 和 0，用来标识分区的边界，连续的或者是边界<br>
+这是以 bit 位的方式输出的，有了每个 block 级别的访问频率统计信息。有对应的代价预估模型，以及分区表达输出方式<br>
+这样就可以找到最优方案了<br>
+这是一个 binary optimization problem，NP hard问题</p>
+<p>采集读写数据 &ndash;&gt; 训练基本负载模型 &ndash;&gt; 二进制优化分区 &ndash;&gt; 实际分区挑战平衡读写 &ndash;&gt; 被实际读写应用 &ndash;&gt; 采集读写数据。。。
+
+        <a data-fancybox="gallery" href="http://localhost:8888/10.jpg">
+            <img class="mx-auto" alt="" src="http://localhost:8888/10.jpg" />
+        </a>
+     
+Figure 10: System architecture. (A) Casper uses offline workload information, (B) solves the BIP and (C) applies the partitioning. (A0) During execution monitoring, if the access patterns change, a re-partitioning cycle is triggered.</p>
+<p>由于是 HTAP 场景，还有一些问题需要关注</p>
+<ul>
+<li>事务，使用MVCC 实现快照隔离，乐观并发策略；对于ghost-value，事务回滚时可以忽略</li>
+<li>压缩，使用dictionary 编码(很多数据相似)、delta编码(整数情况)，而 RLE 需要数据集有序，并且又编码解码开销，所以不如前两者</li>
+<li>分区定位，5种基本操作，都需要快速定位某个分区，因此构建一个多路搜索树、min-max等zonemap技术、面向cache line对齐等技术，都可以加速计算</li>
+</ul>
+<h2 id="性能评估">性能评估</h2>
+<p>
+        <a data-fancybox="gallery" href="http://localhost:8888/11.jpg">
+            <img class="mx-auto" alt="" src="http://localhost:8888/11.jpg" />
+        </a>
+     
+Figure 11: Casper partitioning scales with data size.</p>
+<p>测量的数据布局包括</p>
+<ul>
+<li>原生的没有组织的列，也没有排序</li>
+<li>带排序的列</li>
+<li>最新技术的更新感知技术，使用 delta 存储新的更新</li>
+<li>列存储等宽分区数据</li>
+<li>列存储等宽的分区数据，并带有 ghost-value</li>
+<li>Casper 将所有优化整合</li>
+</ul>
+<p>使用了包含混合、读、写、更新的测试用例<br>
+可以看到，对于混合场景、更新场景 Casper 要好很多<br>
+而只读场景跟其他最好的差不多<br>
+但 Casper 目标是混合场景，从测试效果看基本是达到了<br>
+
+        <a data-fancybox="gallery" href="http://localhost:8888/12.jpg">
+            <img class="mx-auto" alt="" src="http://localhost:8888/12.jpg" />
+        </a>
+     
+Figure 12: Casper matches or significantly outperforms other column layouts approaches for a variety of workloads (experiments with 16 threads, chunks of 1M values, block size 16KB, and ghost values 0.1%).</p>
+<p>对于混合、只读、只更新的场景，Casper 比其他都要好，而且吞吐量也不会降低<br>
+基本上只有 read only的跟其他场景差不多，其他都要更好<br>
+
+        <a data-fancybox="gallery" href="http://localhost:8888/13.jpg">
+            <img class="mx-auto" alt="" src="http://localhost:8888/13.jpg" />
+        </a>
+     
+Figure 13: Casper offers significant performance benefits.</p>
+<ul>
+<li>In (a) for a hybrid workload with skewed point queries and inserts, Casper outperforms all approaches by balancing the read and update performance.</li>
+<li>In (b) for a read-heavy workload with range queries, point queries, and a few inserts, Casper matches the state-of-the-art delta-store design. Finally,</li>
+<li>in (c) for an update-only workload, Casper significantly outperforms by 2× or more all other approaches.</li>
+</ul>
+<p>通过提升 ghost-value 的比列，也能提升性能<br>
+对于插入、更新、混合场景都有不少提升<br>
+1% 的数据是 ghost-value情况下，插入延迟可以降低 2倍<br>
+
+        <a data-fancybox="gallery" href="http://localhost:8888/14.jpg">
+            <img class="mx-auto" alt="" src="http://localhost:8888/14.jpg" />
+        </a>
+     
+Figure 14: Using ghost values (4 thr., 1M chunks, 16KB blocks).</p>
+<p>在满足 SLA 的同时，性能、吞吐量也没有下降<br>
+降低插入延迟的要求后， SLA 也会呈比列提高<br>
+Casper平衡了总体吞吐量，并以较小的性能损失(&lt; 3%) 满足插入SLA<br>
+
+        <a data-fancybox="gallery" href="http://localhost:8888/15.jpg">
+            <img class="mx-auto" alt="" src="http://localhost:8888/15.jpg" />
+        </a>
+     
+Figure 15: Casper meets performance SLA executing a hybrid workload (Q1,Q4,Q6) (1M chunk size, 16KB block size).</p>
+<p>Casper提供了一个健壮的物理布局，它吸收了高达15%的质量位移和高达10%的旋转位移方面的不确定性，而没有任何明显的损失<br>
+然而，随着不确定性的增加，我们观察到性能损失高达60%<br>
+通过开发新的健壮调优范例，有机会获得更高的收益。我们把使用鲁棒优化技术的新问题表述作为未来的工作<br>
+
+        <a data-fancybox="gallery" href="http://localhost:8888/16.jpg">
+            <img class="mx-auto" alt="" src="http://localhost:8888/16.jpg" />
+        </a>
+     
+Figure 16: Testing Casper’s robustness.</p>
+<p>总结一下</p>
+<ul>
+<li>delta存储支持主要为更新的场景，等宽分区支持读密集场景，Casper 两者都支持</li>
+<li>列排序并不总是最优的</li>
+<li>查询以range 为主时，等宽分区表现比较好</li>
+<li>ghost-value 对列布局影响很大</li>
+<li>ghost-value 对更新有很大提升，对读开销影响很小</li>
+</ul>
+<p>后续计划</p>
+<ul>
+<li>Offline Physical Design and Data Partitioning</li>
+<li>Casper是在读取性能、更新性能和内存利用之间进行三方面权衡的第一种方法，它通过分区决策和为更新较多的分区使用额外空间(幽灵值)来实现。</li>
+<li>Physical Design by Querying</li>
+<li>Learning Database Tuning</li>
+<li>Column-Stores and Updates</li>
+<li>Casper支持沿着三个维度进行调优，平衡读取性能、更新性能和内存利用率</li>
+<li>Ghost Values</li>
+</ul>
+<h2 id="参考引用">参考引用</h2>
+<ul>
+<li>The SAP HANA Database – An Architecture Overview. IEEE Data Engineering Bulletin, 35(1):28–33,2012.</li>
+<li>A Common Database Approach for OLTP and OLAP Using an In-Memory Column Database. In Proceedings of the ACM SIGMOD International Conference on Management of Data, pages 1–2, 2009</li>
+<li>SAP HANA: ¨The Evolution from a Modern Main-Memory Data Platform to an Enterprise Application Platform. PVLDB, 6(11):1184–1185, 2013</li>
+<li><a href="https://zhuanlan.zhihu.com/p/400225192">《Optimal Column Layout for Hybrid Workloads》论文读后感</a></li>
+<li>[ Bridging the Archipelago between Row-Stores and Column-Stores for Hybrid Workloads 2016]</li>
+<li>[Multi-Version Concurrency Control for Main-Memory Database System 2015]</li>
+<li>[Efficient Transaction Processing for Hyrise in Mixed Workload Environments 2014</li>
+<li>[Clay: Fine-Grained Adaptive Partitioning for General Database Schemas 2016]</li>
+</ul>
+
+			<script type="text/javascript"
+        async
+        src="https://cdn.bootcss.com/mathjax/2.7.3/MathJax.js?config=TeX-AMS-MML_HTMLorMML">
+MathJax.Hub.Config({
+  tex2jax: {
+    inlineMath: [['$','$'], ['\\(','\\)']],
+    displayMath: [['$$','$$'], ['\[\[','\]\]']],
+    processEscapes: true,
+    processEnvironments: true,
+    skipTags: ['script', 'noscript', 'style', 'textarea', 'pre'],
+    TeX: { equationNumbers: { autoNumber: "AMS" },
+         extensions: ["AMSmath.js", "AMSsymbols.js"] }
+  }
+});
+
+MathJax.Hub.Queue(function() {
+    
+    
+    
+    var all = MathJax.Hub.getAllJax(), i;
+    for(i = 0; i < all.length; i += 1) {
+        all[i].SourceElement().parentNode.className += ' has-jax';
+    }
+});
+</script>
+
+<style>
+code.has-jax {
+    font: inherit;
+    font-size: 100%;
+    background: inherit;
+    border: inherit;
+    color: #515151;
+}
+</style>
+        </div>
+
+        
+
+
+        
+
+<div class="post-archive">
+    <h2>相关文章</h2>
+    <ul class="listing">
+        
+        <li><a href="/post/2023/05/column-stores_vs_row-stores_how_different_are_they_really/">Column-Stores vs. Row-Stores: How Different Are They Really?</a></li>
+        
+        <li><a href="/post/2023/05/lakehouse-a-new-generation-of-open-platforms-that-unify/">Lakehouse A New Generation of Open Platforms that Unify Data Warehousing and Advanced Analytics</a></li>
+        
+        <li><a href="/post/2023/05/building-an-elastic-query-engine-on-disaggregated-storage/">Building An Elastic Query Engine on Disaggregated Storage</a></li>
+        
+        <li><a href="/post/2023/05/what-goes-around-comes-around/">What Goes Around Comes Around</a></li>
+        
+        <li><a href="/post/2023/02/cpu-and-cache-efficient-management-of-memory-resident-databases/">CPU and Cache Efficient Management of Memory-Resident Databases</a></li>
+        
+    </ul>
+</div>
+
+
+        <div class="post-meta meta-tags">
+            
+            <ul class="clearfix">
+                
+                <li><a href='/tags/%E8%AE%BA%E6%96%87'>论文</a></li>
+                
+                <li><a href='/tags/%E5%88%97%E5%AD%98'>列存</a></li>
+                
+            </ul>
+            
+        </div>
+    </article>
+    
+    
+
+    
+    
+    <div class="post bg-white">
+      <script src="https://utteranc.es/client.js"
+            repo= "himichael/hugoblogtalks"
+            issue-term="pathname"
+            theme="github-light"
+            crossorigin="anonymous"
+            async>
+      </script>
+    </div>
+    
+</div>
+
+
+                </div>
+
+                <div id="secondary">
+    <section class="widget">
+        <form id="search" action='https://code0xff.org/search/' method="get" accept-charset="utf-8" target="_blank" _lpchecked="1">
+      
+      <input type="text" name="q" maxlength="20" placeholder="Search">
+      <input type="hidden" name="sitesearch" value="https://code0xff.org/">
+      <button type="submit" class="submit icon-search"></button>
+</form>
+    </section>
+    
+    <section class="widget">
+        <h3 class="widget-title">最近文章</h3>
+<ul class="widget-list">
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/05/optimal_column_layout_for_hybrid_workloads/" title="Optimal Column Layout for Hybrid Workloads">Optimal Column Layout for Hybrid Workloads</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/05/column-stores_vs_row-stores_how_different_are_they_really/" title="Column-Stores vs. Row-Stores: How Different Are They Really?">Column-Stores vs. Row-Stores: How Different Are They Really?</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/05/lakehouse-a-new-generation-of-open-platforms-that-unify/" title="Lakehouse A New Generation of Open Platforms that Unify Data Warehousing and Advanced Analytics">Lakehouse A New Generation of Open Platforms that Unify Data Warehousing and Advanced Analytics</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/05/building-an-elastic-query-engine-on-disaggregated-storage/" title="Building An Elastic Query Engine on Disaggregated Storage">Building An Elastic Query Engine on Disaggregated Storage</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/05/what-goes-around-comes-around/" title="What Goes Around Comes Around">What Goes Around Comes Around</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/04/levedb-%E5%A4%9A%E7%89%88%E6%9C%AC%E5%92%8C%E5%8E%8B%E7%BC%A9/" title="LevelDB 多版本和压缩">LevelDB 多版本和压缩</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/04/levedb-%E5%B7%A5%E5%85%B7%E7%B1%BB/" title="LevelDB 辅助工具类">LevelDB 辅助工具类</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/04/levedb-sstable%E6%A8%A1%E5%9D%97/" title="LevelDB SSTable模块">LevelDB SSTable模块</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/04/levedb-memtable%E6%A8%A1%E5%9D%97/" title="LevelDB MemTable模块">LevelDB MemTable模块</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/04/levedb-log%E6%A8%A1%E5%9D%97/" title="LevelDB Log模块">LevelDB Log模块</a>
+    </li>
+    
+</ul>
+    </section>
+
+    
+
+    <section class="widget">
+        <h3 class="widget-title"><a href='/categories/'>分类</a></h3>
+<ul class="widget-list">
+    
+    <li><a href="https://code0xff.org/categories/%E5%88%86%E5%B8%83%E5%BC%8F/">分布式 (6)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E5%8E%9F%E7%90%86%E5%88%86%E6%9E%90/">原理分析 (13)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E5%95%86%E4%B8%9A/">商业 (3)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E5%A4%A7%E6%95%B0%E6%8D%AE/">大数据 (22)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%95%B0%E6%8D%AE%E5%BA%93/">数据库 (26)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%96%87%E5%AD%A6%E5%92%8C%E8%89%BA%E6%9C%AF/">文学和艺术 (2)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%97%85%E8%A1%8C/">旅行 (10)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%9E%B6%E6%9E%84/">架构 (2)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E7%AE%97%E6%B3%95/">算法 (8)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E7%B3%BB%E7%BB%9F/">系统 (5)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E7%BC%96%E7%A8%8B%E8%AF%AD%E8%A8%80/">编程语言 (2)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E8%A1%8C%E4%B8%9A%E8%A7%82%E5%AF%9F/">行业观察 (1)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E8%AF%BB%E4%B9%A6%E7%AC%94%E8%AE%B0/">读书笔记 (11)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E9%9A%8F%E4%BE%BF%E5%86%99%E5%86%99/">随便写写 (3)</a></li>
+    
+</ul>
+    </section>
+
+    <section class="widget">
+        <h3 class="widget-title">归档</a></h3>
+<ul class="widget-list">
+    
+    <li><a href="https://code0xff.org/years/2021%E5%B9%B4/">2021年 (31)</a></li>
+    
+    <li><a href="https://code0xff.org/years/2022%E5%B9%B4/">2022年 (55)</a></li>
+    
+    <li><a href="https://code0xff.org/years/2023%E5%B9%B4/">2023年 (28)</a></li>
+    
+</ul>
+    </section>
+
+    <section class="widget">
+        <h3 class="widget-title"><a href='/tags/'>标签</a></h3>
+<div class="tagcloud">
+    
+    <a href="https://code0xff.org/tags/b%E6%A0%91/">B树 </a>
+    
+    <a href="https://code0xff.org/tags/cmu-database/">CMU-Database </a>
+    
+    <a href="https://code0xff.org/tags/flink/">flink </a>
+    
+    <a href="https://code0xff.org/tags/hive/">Hive </a>
+    
+    <a href="https://code0xff.org/tags/k8s/">k8s </a>
+    
+    <a href="https://code0xff.org/tags/kudu/">kudu </a>
+    
+    <a href="https://code0xff.org/tags/kyuubi/">Kyuubi </a>
+    
+    <a href="https://code0xff.org/tags/lakehouse/">Lakehouse </a>
+    
+    <a href="https://code0xff.org/tags/leveldb/">LevelDB </a>
+    
+    <a href="https://code0xff.org/tags/llvm/">LLVM </a>
+    
+    <a href="https://code0xff.org/tags/manacher/">Manacher </a>
+    
+    <a href="https://code0xff.org/tags/mapreduce/">MapReduce </a>
+    
+    <a href="https://code0xff.org/tags/mysql/">MySQL </a>
+    
+    <a href="https://code0xff.org/tags/newsql/">NewSQL </a>
+    
+    <a href="https://code0xff.org/tags/oceanbase/">OceanBase </a>
+    
+    <a href="https://code0xff.org/tags/paxos/">paxos </a>
+    
+    <a href="https://code0xff.org/tags/raft/">raft </a>
+    
+    <a href="https://code0xff.org/tags/scala/">scala </a>
+    
+    <a href="https://code0xff.org/tags/simd/">SIMD </a>
+    
+    <a href="https://code0xff.org/tags/snowflake/">snowflake </a>
+    
+    <a href="https://code0xff.org/tags/spark/">spark </a>
+    
+    <a href="https://code0xff.org/tags/unix/">unix </a>
+    
+    <a href="https://code0xff.org/tags/%E4%BA%8C%E5%88%86%E6%9F%A5%E6%89%BE/">二分查找 </a>
+    
+    <a href="https://code0xff.org/tags/%E4%BA%8C%E5%8F%89%E6%A0%91%E9%81%8D%E5%8E%86/">二叉树遍历 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%88%86%E5%B8%83%E5%BC%8F/">分布式 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%88%97%E5%AD%98/">列存 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%8A%A8%E6%80%81%E6%B3%A8%E5%85%A5/">动态注入 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%8E%86%E5%8F%B2/">历史 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%90%91%E9%87%8F%E5%8C%96/">向量化 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%9B%9E%E6%BA%AF/">回溯 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%9B%BD%E5%86%85%E6%97%85%E8%A1%8C/">国内旅行 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%9B%BD%E5%A4%96%E6%97%85%E8%A1%8C/">国外旅行 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%A4%9A%E7%A7%9F%E6%88%B7/">多租户 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%A4%A7%E6%95%B0%E6%8D%AE/">大数据 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%AD%98%E5%82%A8/">存储 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%B7%A5%E4%BD%9C%E8%AE%B0%E5%BD%95/">工作记录 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%BE%AE%E6%9C%8D%E5%8A%A1/">微服务 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%95%B0%E6%8D%AE%E5%BA%93/">数据库 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%95%B0%E6%8D%AE%E6%A8%A1%E5%9E%8B/">数据模型 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%9F%A5%E8%AF%A2%E4%BC%98%E5%8C%96/">查询优化 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%9F%A5%E8%AF%A2%E7%BC%96%E8%AF%91/">查询编译 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%B1%87%E7%BC%96/">汇编 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%B5%8B%E8%AF%95/">测试 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%B9%96%E4%BB%93%E4%B8%80%E4%BD%93/">湖仓一体 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%94%9F%E6%B4%BB/">生活 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%94%B5%E5%BD%B1/">电影 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%AE%97%E6%B3%95/">算法 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BB%8F%E6%B5%8E/">经济 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BC%93%E5%AD%98/">缓存 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BC%96%E8%AF%91%E5%8E%9F%E7%90%86/">编译原理 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BD%91%E7%BB%9C/">网络 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AE%A1%E7%AE%97%E6%A1%86%E6%9E%B6/">计算框架 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AE%BA%E6%96%87/">论文 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AF%BB%E4%B9%A6/">读书 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AF%BB%E4%B9%A6%E7%AC%94%E8%AE%B0/">读书笔记 </a>
+    
+</div>
+    </section>
+
+    
+
+    <section class="widget">
+        <h3 class="widget-title">RSS</h3>
+        <ul class="widget-list">
+            <li><a href="https://code0xff.org/index.xml">文章 RSS</a></li>
+        </ul>
+    </section>
+</div>
+            </div>
+        </div>
+    </div>
+    <footer id="footer">
+    <div>
+        &copy; 2023 <a href="https://code0xff.org/">记录每个瞬间 By 老王</a>
+        
+    </div>
+    <br />
+    <div>
+        <div class="github-badge">
+            <a href="https://gohugo.io/" target="_black" rel="nofollow"><span class="badge-subject">Powered by</span><span class="badge-value bg-blue">Hugo</span></a>
+        </div>
+        <div class="github-badge">
+            <a href="https://github.com/flysnow-org/maupassant-hugo" target="_black"><span class="badge-subject">Theme</span><span class="badge-value bg-yellowgreen">Maupassant</span></a>
+        </div>
+    </div>
+</footer>
+
+
+    
+    <script type="text/javascript">
+        window.MathJax = {
+            tex2jax: {
+                inlineMath: [['$', '$']],
+                processEscapes: true
+                }
+            };
+    </script>
+    <script src='https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.5/MathJax.js?config=TeX-MML-AM_CHTML' async></script><script src="https://cdn.bootcdn.net/ajax/libs/fancybox/3.5.7/jquery.fancybox.min.js"></script>
+
+<a id="rocket" href="#top"></a>
+<script type="text/javascript" src='/js/totop.js?v=0.0.0' async=""></script>
+
+<script type="application/javascript">
+var doNotTrack = false;
+if (!doNotTrack) {
+	window.ga=window.ga||function(){(ga.q=ga.q||[]).push(arguments)};ga.l=+new Date;
+	ga('create', 'GA ID', 'auto');
+	
+	ga('send', 'pageview');
+}
+</script>
+<script async src='https://www.google-analytics.com/analytics.js'></script>
+
+
+
+    <script type="text/javascript" src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js" async></script>
+
+
+
+
+</body>
+
+</html>
