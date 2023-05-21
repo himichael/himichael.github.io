@@ -1,0 +1,791 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    
+    <meta name="referrer" content="no-referrer-when-downgrade">
+    
+
+    <title>Column Sketches: A Scan Accelerator for Rapid and Robust Predicate Evaluation | 记录每个瞬间</title>
+    <meta property="og:title" content="Column Sketches: A Scan Accelerator for Rapid and Robust Predicate Evaluation - 记录每个瞬间">
+    <meta property="og:type" content="article">
+        
+    <meta property="article:published_time" content='2023-05-17T09:23:04&#43;08:00'>
+        
+        
+    <meta property="article:modified_time" content='2023-05-17T09:23:04&#43;08:00'>
+        
+    <meta name="Keywords" content="">
+    <meta name="description" content="Column Sketches: A Scan Accelerator for Rapid and Robust Predicate Evaluation">
+        <meta name="author" content="隔壁老王">
+        
+    <meta property="og:url" content="https://code0xff.org/post/2023/05/column_sketches/">
+    <link rel="shortcut icon" href='/favicon.ico'  type="image/x-icon">
+
+    <link rel="stylesheet" href='/css/normalize.css'>
+    <link rel="stylesheet" href='/css/style.css'>
+    <script type="text/javascript" src="//cdn.bootcdn.net/ajax/libs/jquery/3.4.1/jquery.min.js"></script>
+
+    
+    
+    
+        <link href="https://cdn.bootcdn.net/ajax/libs/fancybox/3.5.7/jquery.fancybox.min.css" rel="stylesheet">
+    
+    
+    
+    
+</head>
+
+
+<body>
+    <header id="header" class="clearfix">
+    <div class="container">
+        <div class="col-group">
+            <div class="site-name ">
+                
+                    <a id="logo" href="https://code0xff.org/">
+                        记录每个瞬间
+                    </a>
+                
+                
+            </div>
+            <div>
+                <nav id="nav-menu" class="clearfix">
+                    <a class="current" href="https://code0xff.org/">首页</a>
+                    
+                    <a  href="https://code0xff.org/linked/" title="链接">链接</a>
+                    
+                    <a  href="https://code0xff.org/archives/" title="归档">归档</a>
+                    
+                    <a  href="https://code0xff.org/about/" title="关于">关于</a>
+                    
+                </nav>
+            </div>
+        </div>
+    </div>
+</header>
+
+    <div id="body">
+        <div class="container">
+            <div class="col-group">
+
+                <div class="col-8" id="main">
+                    
+<div class="res-cons">
+    
+    <article class="post">
+        <header>
+            <h1 class="post-title">Column Sketches: A Scan Accelerator for Rapid and Robust Predicate Evaluation</h1>
+        </header>
+        <date class="post-meta meta-date">
+            2023年5月17日
+        </date>
+<nav id="TableOfContents">
+  <ul>
+    <li>
+      <ul>
+        <li><a href="#背景">背景</a></li>
+        <li><a href="#架构">架构</a></li>
+        <li><a href="#压缩构建">压缩构建</a></li>
+        <li><a href="#性能分析">性能分析</a></li>
+        <li><a href="#参考">参考</a></li>
+      </ul>
+    </li>
+  </ul>
+</nav>
+        
+        <div class="post-meta">
+            
+            <span class="post-meta meta-tags">
+                <ul class="clearfix">
+                    <a href='/categories/%E6%95%B0%E6%8D%AE%E5%BA%93'>数据库</a>
+                </ul>
+            </span>
+            
+        </div>
+        
+        
+        <div class="post-meta">
+            <span id="busuanzi_container_page_pv">|<span id="busuanzi_value_page_pv"></span><span>
+                    阅读</span></span>
+        </div>
+        
+        
+        <div class="post-content">
+            <blockquote>
+<p>原文
+<a href="https://15721.courses.cs.cmu.edu/spring2023/papers/04-olapindexes/hentschel-sigmod18.pdf">https://15721.courses.cs.cmu.edu/spring2023/papers/04-olapindexes/hentschel-sigmod18.pdf</a></p>
+</blockquote>
+<h2 id="背景">背景</h2>
+<p>各种索引、存储模式 对于 谓词求值来说，只能用于特定的模式</p>
+<ul>
+<li>选择率</li>
+<li>数据分布</li>
+<li>数据聚集</li>
+</ul>
+<p>对于非特定场景来说，这种技术表现的就不好了，论文提出了一个新的索引模式<br>
+Column Sketch<br>
+通过有损压缩的方式，可以让索引快速获取数据、计算任何查询性能、同时内存开销也不大<br>
+现有的技术问题</p>
+<ul>
+<li>传统索引，如B 树，在选择率低的时候才有用，选择率高的时候就比 scan 差很多了；而列scan 的性能很好，即使很低的选择率也不亚于B 树</li>
+<li>轻量级索引，如 Zone Map、以及 Column Imprints、Feature Based Data Skipping都是基于元数据统计信息过滤block；但数据没有聚集性则没什么效果</li>
+<li>早期裁剪，如ByteSlicing、Bit-Slicing、Approximate and Refine，比较每个bit 为，比如谓词100，同时比较高bit 0和低bit 100</li>
+<li>对于早期裁剪，如果大量的高bit 都是0，相当于都要比较第二个bit，则裁剪效果不好，跟 scan可能差不多</li>
+</ul>
+<p>
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/05/Column_Sketches/1.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/05/Column_Sketches/1.jpg" />
+        </a>
+    
+Figure 1: For certain workloads, no state of the art methods provide any significant performance benefit over a scan.</p>
+<p>CS的好处</p>
+<ul>
+<li>有损压缩允许有效的算法找到编码方案，使代码值始终具有信息量</li>
+<li>编码后的数据量更小</li>
+<li>相比于无损压缩，对于索引的摄取速度更快</li>
+</ul>
+<p>
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/05/Column_Sketches/t_1.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/05/Column_Sketches/t_1.jpg" />
+        </a>
+    
+Table 1: Each technique has scenarios where it is the best for select performance. However, Column Sketches are the only technique which improves performance in every scenario.</p>
+<p>论文的贡献</p>
+<ul>
+<li>提出了 Column Sketch 用于scan，使用有损压缩加速，不关心选择率、数据分布、数据聚集</li>
+<li>如何使用有损压缩来创建信息位表示，同时保持低内存开销</li>
+<li>给出了对列进行有效扫描的算法，以及如何将这种方式整合到现代系统架构中</li>
+</ul>
+<h2 id="架构">架构</h2>
+<p>Column Sketch 由两个部分组成</p>
+<ul>
+<li>一个是映射函数</li>
+<li>通过映射函数，将原始值映射到 编码后的压缩列上</li>
+</ul>
+<p>比如下图，数组是有序的，这里建立了一个函数，包含 60、132、170、256<br>
+小于60的都被映射为00， 小于 132的映射为 01，小于 170的是 10，小于 256的是 11<br>
+然后每个原始值 8bit，就被压缩成 2bit 了<br>
+后面查找 x &lt; 90的时候，根据映射函数，可以得知，需要查找的范围是 00,01<br>
+然后找到对应的value，这里可能需要反复查询原始列，后面会讲进一步优化<br>
+可以看到 00 列的值肯定是小于的，不需要回原表检查，而 01 需要回原表检查   <br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/05/Column_Sketches/2.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/05/Column_Sketches/2.jpg" />
+        </a>
+    <br>
+Figure 2: Column Sketches use their compression map to transform (possibly compressed) values in the base data to smaller code values in the sketched column. These codes are then used to filter most values in the base data during predicate evaluation.</p>
+<p>所以这里函数映射完后，是满足这两个条件的</p>
+<ul>
+<li>for x,y ∈ I8, S (x) , S (y) ⇒ x , y</li>
+<li>for x,y ∈ I8, S (x) &lt; S (y) ⇒ x &lt; y</li>
+</ul>
+<p>Algorithm 1 Select where B &lt; x</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">7
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-cpp" data-lang="cpp"><span style="display:flex;"><span><span style="color:#8be9fd;font-style:italic">Require</span>: S is a function which is order preserving, B is the base attribute, Bs is the sketched column
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">for</span> i <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">0</span> to B.size <span style="color:#ff79c6">do</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">if</span> Bs [i] <span style="color:#ff79c6">&lt;</span> S (x) then
+</span></span><span style="display:flex;"><span>        write position i to result output
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">else</span> <span style="color:#ff79c6">if</span> Bs [i] <span style="color:#ff79c6">==</span> S (x) then
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">if</span> B[i] <span style="color:#ff79c6">&lt;</span> x then
+</span></span><span style="display:flex;"><span>            write position i to result output
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>byte 需要对其，否则会有 30%的性能损失<br>
+源入股有序可以直接这么映射，无序的话需要做hash</p>
+<h2 id="压缩构建">压缩构建</h2>
+<p>目标是，映射的函数，尽可能少的访问原表，有效的支持修改</p>
+<ul>
+<li>对于访问频繁的值，分配一个唯一code，比如表中有很多 90，如果是非唯一编码则要频繁回表，分配唯一code就可以解决此问题</li>
+<li>对于非唯一code，要尽可能保持值分配的均匀</li>
+<li>尽可能保持有序</li>
+<li>对于未来的新值无需重新编码，对于有序CS，不允许有连续的唯一code值，对于无需CS 只要有一个非唯一code 即可(新来的value给它)</li>
+<li>对于频繁访问的值，将其识别(识别过程中不影响性能和鲁棒性)，可以提升性能</li>
+</ul>
+<p>构建数值压缩映射（Numerical Compression Maps）</p>
+<ul>
+<li>在原数据列上采样，得到样板后做排序</li>
+<li>然后根据样板的值(处理频繁值、非频繁值)生成对应的直方图</li>
+<li>确定直方图中每个柱(桶)的范围端点，然后根据每个柱(桶)的端点来分配对应的 code值</li>
+<li>此时 Compression map CM就建立好了，利用该 CM 对原数据列进行一一映射 ，形成 code值组成的 sketches column列 <br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/05/Column_Sketches/3.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/05/Column_Sketches/3.jpg" />
+        </a>
+    <br>
+Figure 3: Bucket sizes track the distribution of the data.</li>
+</ul>
+<p>数值类型map构建过程</p>
+<ul>
+<li>先对样本排序</li>
+<li>查找频繁值， 分为 c 个组，如果是频繁值 一定会跨组出现</li>
+<li>频繁值 &gt; n/c</li>
+<li>重复这个过程，直到处理完所有频繁值，再将非唯一值尽可能均匀的分不到每个柱子里</li>
+<li>利用构造好的compression map构造sketch column</li>
+<li>如下，2、40都是唯一值<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/05/Column_Sketches/x1.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/05/Column_Sketches/x1.jpg" />
+        </a>
+    </li>
+</ul>
+<p>分类压缩类型map</p>
+<ul>
+<li>字典编码的工作原理是为每个唯一的值 赋予自己的数字代码</li>
+<li>比如有 1200唯一值的数据集，字典编码的每个值需要11bit</li>
+<li>分类压缩是找到高频的前缀，比如只需要前 2个、或者3个bit 就表示高频前缀</li>
+<li>通过高频前缀 + 低频后缀，可能总空间比普通编码要长一些，但是对于scan 更优</li>
+<li>唯一值的选择类型 数值压缩，通过直方图找到频率高的，建立唯一值</li>
+<li>分配多少个 code作为唯一值，也是根据频率 z 的分布来的，或者设置一个常数</li>
+<li>通过 hash 函数，将value相对均匀的分散到 每个 非唯一code上
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/05/Column_Sketches/4_6.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/05/Column_Sketches/4_6.jpg" />
+        </a>
+    <br>
+Figure 4: Lossy dictionaries trade uniqueness for better compression.<br>
+Figure 5: The number of unique codes should be neither too high nor too low.<br>
+Figure 6: Regardless of the level of skew, the number of values in non-unique codes is low.</li>
+</ul>
+<p>Algorithm 2 Column Sketches Scan<br>
+Select where B &lt; x, Column Sketch of one byte values</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">15
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">16
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">17
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">18
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">19
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">20
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">21
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">22
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">23
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">24
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-cpp" data-lang="cpp"><span style="display:flex;"><span><span style="color:#6272a4">// Require: S is a function which is order preserving
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">// repeat_sx = _mm128_set1_epi8(S (x ))
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span><span style="color:#ff79c6">for</span> each segment b in sketched column <span style="color:#ff79c6">do</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#6272a4">/* Work over the code one block of data at a time */</span>
+</span></span><span style="display:flex;"><span>    position<span style="color:#ff79c6">=</span> b× segment size
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">for</span> number of simd iterations in segment size <span style="color:#ff79c6">do</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#6272a4">/* Perform logical comparisons necessary for predicate evaluation
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">        on each code. The 1,2 denote that this is done twice */</span>
+</span></span><span style="display:flex;"><span>        codes1,<span style="color:#bd93f9">2</span> <span style="color:#ff79c6">=</span> _mm_load_si128(codes_address)
+</span></span><span style="display:flex;"><span>        definite1,<span style="color:#bd93f9">2</span> <span style="color:#ff79c6">=</span> _mm_cmplt_epi8(codes,repeat_sx)
+</span></span><span style="display:flex;"><span>        possible1,<span style="color:#bd93f9">2</span> <span style="color:#ff79c6">=</span> _mm_cmpeq_epi8(codes,repeat_sx)
+</span></span><span style="display:flex;"><span>        bitvector_def1,<span style="color:#bd93f9">2</span> <span style="color:#ff79c6">=</span> _mm128_movemask_epi8(definite1)
+</span></span><span style="display:flex;"><span>        bitvector_possible1,<span style="color:#bd93f9">2</span> <span style="color:#ff79c6">=</span> _mm128_movemask_epi8(possible1)
+</span></span><span style="display:flex;"><span>        <span style="color:#6272a4">/* Store results we are certain of */</span>
+</span></span><span style="display:flex;"><span>        bitvector_def <span style="color:#ff79c6">=</span> (bitvector_def1 « <span style="color:#bd93f9">16</span>) <span style="color:#ff79c6">|</span> bitvector_def2
+</span></span><span style="display:flex;"><span>        store(bitvector_def) into result
+</span></span><span style="display:flex;"><span>        <span style="color:#6272a4">/* Check if the boundary values have any matching tuples and
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">        store qualifying positions. */</span>
+</span></span><span style="display:flex;"><span>        conditional store bitvector_possible1,<span style="color:#bd93f9">2</span> into temp_result.
+</span></span><span style="display:flex;"><span>        position <span style="color:#ff79c6">+</span> <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">32</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#6272a4">/* Check all tuples that we are uncertain about */</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">for</span> position in temp_result <span style="color:#ff79c6">do</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">if</span> B[position] <span style="color:#ff79c6">==</span> x then
+</span></span><span style="display:flex;"><span>            set bit position <span style="color:#ff79c6">+</span> beginning position in result
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>代码解释：</p>
+<ul>
+<li>将要处理的列拆分成多个段（segment）。</li>
+<li>对于每个段，使用SIMD指令进行并行计算。</li>
+<li>在每个段中的SIMD迭代中，加载代码向量（codes1和codes2）和重复向量（repeat_sx）。</li>
+<li>执行逻辑比较操作，比较代码向量和重复向量，得到确定性匹配结果（definite1和definite2）和可能性匹配结果（possible1和possible2）。</li>
+<li>将确定性匹配结果和可能性匹配结果转换为位向量（bitvector_def1, bitvector_def2, bitvector_possible1, bitvector_possible2）。</li>
+<li>将确定性匹配结果存储到结果向量（result）中。</li>
+<li>检查边界值是否有匹配的元组，并将符合条件的位置存储到临时结果向量（temp_result）中。</li>
+<li>更新当前段的位置。</li>
+<li>对于临时结果向量中的每个位置，如果满足条件，则在结果向量中设置相应的位。</li>
+<li>重复步骤2至步骤9，直到处理完所有段。</li>
+</ul>
+<h2 id="性能分析">性能分析</h2>
+<p>对比几种索引</p>
+<ul>
+<li>B 树</li>
+<li>Column Imprints</li>
+<li>Optimized Scan</li>
+<li>BitWeaving</li>
+<li>Column Sketch</li>
+</ul>
+<p><strong>统一分布的数值数据</strong><br>
+图7、可以发现，在选择率很低的时候，B 树的效率是最好的，一旦选择率上升了，B树就不行了<br>
+优化scan 在接近 1的时候也会很好<br>
+其他如Column Imprints、BitWeaving 都比较稳定，Column Sketch 平均看是最好的<br>
+图8、谓词求值期间，因为SC 读取的内存是压缩过的，是最少的，所以 L1 miss也是最少的<br>
+Column Imprints、zone map对于聚集元素表现最好，非聚集就不行了<br>
+BitWeaving 是早期做裁剪，但可能要读很多bit，不如 CS<br>
+图10、对于谓词比较，执行一个tuple需要多少周期，scan是最多的，CS是最少<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/05/Column_Sketches/7_10.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/05/Column_Sketches/7_10.jpg" />
+        </a>
+    <br>
+Figure 7: Column Sketches outperform other access methods in all but the most selective queries.<br>
+Figure 8: Column Sketches incur fewer cache misses than competing techniques.<br>
+Figure 9: Column Sketches need to access the base data very infrequently.<br>
+Figure 10: Column Sketches need fewer cycles to evaluate single and double sided predicates.</p>
+<hr>
+<p><strong>倾斜分布的数值数据</strong><br>
+下面两个对比是当输入数据未编码的效果，测试鲁棒性，可以看到CS 的鲁棒性不错<br>
+对于数据size，从4字节增加到 16字节，scan的效率成比例下降，而SC 因为是缓存到cache中的，性能跟 4字节时差不多<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/05/Column_Sketches/11_12.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/05/Column_Sketches/11_12.jpg" />
+        </a>
+    <br>
+Figure 11: Column Sketches perform well even in the case of a bad compression map.<br>
+Figure 12: Column Sketches retain nearly identical performance with larger base data.</p>
+<p>
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/05/Column_Sketches/t_2.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/05/Column_Sketches/t_2.jpg" />
+        </a>
+     <br>
+Table 2: Scan Performance under Skewed Datasets</p>
+<p>&ndash;</p>
+<p><strong>分类数据</strong><br>
+这里做了三组对比，等值、唯一code，等值、非唯一code，小于、非唯一code<br>
+从三种情况看，CS 表现都是最好的<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/05/Column_Sketches/13.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/05/Column_Sketches/13.jpg" />
+        </a>
+    <br>
+Figure 13: Column Sketches is the fastest scan across unique and non-unique codes, and across equality and range comparisons</p>
+<p><strong>负载性能</strong><br>
+测试各种类型数据，摄入的情况<br>
+读取 1亿条数据，连续跑 5次<br>
+可以看到 CS 是 BitWeaving 的 5 - 16倍性能<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/05/Column_Sketches/t_3.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/05/Column_Sketches/t_3.jpg" />
+        </a>
+    <br>
+Table 3: Time to load all batches (sec.)</p>
+<p>进一步工作</p>
+<ul>
+<li>Compression and Optimized Scans.</li>
+<li>Early Pruning Extensions</li>
+<li>Lightweight Indexing</li>
+<li>Other Operators over Early Pruning Techniques</li>
+<li>SIMD Scan Optimizations</li>
+</ul>
+<h2 id="参考">参考</h2>
+<ul>
+<li><a href="https://zhuanlan.zhihu.com/p/457791379">2018 Sigmod : Column Sketches: A Scan Accelerator for Rapid and Robust Predicate Evaluation笔记</a></li>
+<li>A. Lamb, M. Fuller, and R. Varadarajan. The Vertica Analytic Database: C-Store 7 Years Later. Proceedings of the VLDB Endowment, 5(12):1790–1801, 2012.</li>
+<li>Y. Li and J. M. Patel. BitWeaving: Fast Scans for Main Memory Data Processing. In Proceedings of the ACM SIGMOD International Conference on Management of Data, pages 289–300, 2013.</li>
+</ul>
+
+			<script type="text/javascript"
+        async
+        src="https://cdn.bootcss.com/mathjax/2.7.3/MathJax.js?config=TeX-AMS-MML_HTMLorMML">
+MathJax.Hub.Config({
+  tex2jax: {
+    inlineMath: [['$','$'], ['\\(','\\)']],
+    displayMath: [['$$','$$'], ['\[\[','\]\]']],
+    processEscapes: true,
+    processEnvironments: true,
+    skipTags: ['script', 'noscript', 'style', 'textarea', 'pre'],
+    TeX: { equationNumbers: { autoNumber: "AMS" },
+         extensions: ["AMSmath.js", "AMSsymbols.js"] }
+  }
+});
+
+MathJax.Hub.Queue(function() {
+    
+    
+    
+    var all = MathJax.Hub.getAllJax(), i;
+    for(i = 0; i < all.length; i += 1) {
+        all[i].SourceElement().parentNode.className += ' has-jax';
+    }
+});
+</script>
+
+<style>
+code.has-jax {
+    font: inherit;
+    font-size: 100%;
+    background: inherit;
+    border: inherit;
+    color: #515151;
+}
+</style>
+        </div>
+
+        
+
+
+        
+
+<div class="post-archive">
+    <h2>相关文章</h2>
+    <ul class="listing">
+        
+        <li><a href="/post/2023/05/optimal_column_layout_for_hybrid_workloads/">Optimal Column Layout for Hybrid Workloads</a></li>
+        
+        <li><a href="/post/2023/05/column-stores_vs_row-stores_how_different_are_they_really/">Column-Stores vs. Row-Stores: How Different Are They Really?</a></li>
+        
+        <li><a href="/post/2023/05/lakehouse-a-new-generation-of-open-platforms-that-unify/">Lakehouse A New Generation of Open Platforms that Unify Data Warehousing and Advanced Analytics</a></li>
+        
+        <li><a href="/post/2023/05/building-an-elastic-query-engine-on-disaggregated-storage/">Building An Elastic Query Engine on Disaggregated Storage</a></li>
+        
+        <li><a href="/post/2023/05/what-goes-around-comes-around/">What Goes Around Comes Around</a></li>
+        
+    </ul>
+</div>
+
+
+        <div class="post-meta meta-tags">
+            
+            <ul class="clearfix">
+                
+                <li><a href='/tags/%E8%AE%BA%E6%96%87'>论文</a></li>
+                
+                <li><a href='/tags/%E7%B4%A2%E5%BC%95'>索引</a></li>
+                
+            </ul>
+            
+        </div>
+    </article>
+    
+    
+
+    
+    
+    <div class="post bg-white">
+      <script src="https://utteranc.es/client.js"
+            repo= "himichael/hugoblogtalks"
+            issue-term="pathname"
+            theme="github-light"
+            crossorigin="anonymous"
+            async>
+      </script>
+    </div>
+    
+</div>
+
+
+                </div>
+
+                <div id="secondary">
+    <section class="widget">
+        <form id="search" action='https://code0xff.org/search/' method="get" accept-charset="utf-8" target="_blank" _lpchecked="1">
+      
+      <input type="text" name="q" maxlength="20" placeholder="Search">
+      <input type="hidden" name="sitesearch" value="https://code0xff.org/">
+      <button type="submit" class="submit icon-search"></button>
+</form>
+    </section>
+    
+    <section class="widget">
+        <h3 class="widget-title">最近文章</h3>
+<ul class="widget-list">
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/05/column_sketches/" title="Column Sketches: A Scan Accelerator for Rapid and Robust Predicate Evaluation">Column Sketches: A Scan Accelerator for Rapid and Robust Predicate Evaluation</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/05/optimal_column_layout_for_hybrid_workloads/" title="Optimal Column Layout for Hybrid Workloads">Optimal Column Layout for Hybrid Workloads</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/05/column-stores_vs_row-stores_how_different_are_they_really/" title="Column-Stores vs. Row-Stores: How Different Are They Really?">Column-Stores vs. Row-Stores: How Different Are They Really?</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/05/lakehouse-a-new-generation-of-open-platforms-that-unify/" title="Lakehouse A New Generation of Open Platforms that Unify Data Warehousing and Advanced Analytics">Lakehouse A New Generation of Open Platforms that Unify Data Warehousing and Advanced Analytics</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/05/building-an-elastic-query-engine-on-disaggregated-storage/" title="Building An Elastic Query Engine on Disaggregated Storage">Building An Elastic Query Engine on Disaggregated Storage</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/05/what-goes-around-comes-around/" title="What Goes Around Comes Around">What Goes Around Comes Around</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/04/levedb-%E5%A4%9A%E7%89%88%E6%9C%AC%E5%92%8C%E5%8E%8B%E7%BC%A9/" title="LevelDB 多版本和压缩">LevelDB 多版本和压缩</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/04/levedb-%E5%B7%A5%E5%85%B7%E7%B1%BB/" title="LevelDB 辅助工具类">LevelDB 辅助工具类</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/04/levedb-sstable%E6%A8%A1%E5%9D%97/" title="LevelDB SSTable模块">LevelDB SSTable模块</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/04/levedb-memtable%E6%A8%A1%E5%9D%97/" title="LevelDB MemTable模块">LevelDB MemTable模块</a>
+    </li>
+    
+</ul>
+    </section>
+
+    
+
+    <section class="widget">
+        <h3 class="widget-title"><a href='/categories/'>分类</a></h3>
+<ul class="widget-list">
+    
+    <li><a href="https://code0xff.org/categories/%E5%88%86%E5%B8%83%E5%BC%8F/">分布式 (6)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E5%8E%9F%E7%90%86%E5%88%86%E6%9E%90/">原理分析 (13)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E5%95%86%E4%B8%9A/">商业 (3)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E5%A4%A7%E6%95%B0%E6%8D%AE/">大数据 (22)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%95%B0%E6%8D%AE%E5%BA%93/">数据库 (27)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%96%87%E5%AD%A6%E5%92%8C%E8%89%BA%E6%9C%AF/">文学和艺术 (2)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%97%85%E8%A1%8C/">旅行 (10)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%9E%B6%E6%9E%84/">架构 (2)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E7%AE%97%E6%B3%95/">算法 (8)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E7%B3%BB%E7%BB%9F/">系统 (5)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E7%BC%96%E7%A8%8B%E8%AF%AD%E8%A8%80/">编程语言 (2)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E8%A1%8C%E4%B8%9A%E8%A7%82%E5%AF%9F/">行业观察 (1)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E8%AF%BB%E4%B9%A6%E7%AC%94%E8%AE%B0/">读书笔记 (11)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E9%9A%8F%E4%BE%BF%E5%86%99%E5%86%99/">随便写写 (3)</a></li>
+    
+</ul>
+    </section>
+
+    <section class="widget">
+        <h3 class="widget-title">归档</a></h3>
+<ul class="widget-list">
+    
+    <li><a href="https://code0xff.org/years/2021%E5%B9%B4/">2021年 (31)</a></li>
+    
+    <li><a href="https://code0xff.org/years/2022%E5%B9%B4/">2022年 (55)</a></li>
+    
+    <li><a href="https://code0xff.org/years/2023%E5%B9%B4/">2023年 (29)</a></li>
+    
+</ul>
+    </section>
+
+    <section class="widget">
+        <h3 class="widget-title"><a href='/tags/'>标签</a></h3>
+<div class="tagcloud">
+    
+    <a href="https://code0xff.org/tags/b%E6%A0%91/">B树 </a>
+    
+    <a href="https://code0xff.org/tags/cmu-database/">CMU-Database </a>
+    
+    <a href="https://code0xff.org/tags/flink/">flink </a>
+    
+    <a href="https://code0xff.org/tags/hive/">Hive </a>
+    
+    <a href="https://code0xff.org/tags/k8s/">k8s </a>
+    
+    <a href="https://code0xff.org/tags/kudu/">kudu </a>
+    
+    <a href="https://code0xff.org/tags/kyuubi/">Kyuubi </a>
+    
+    <a href="https://code0xff.org/tags/lakehouse/">Lakehouse </a>
+    
+    <a href="https://code0xff.org/tags/leveldb/">LevelDB </a>
+    
+    <a href="https://code0xff.org/tags/llvm/">LLVM </a>
+    
+    <a href="https://code0xff.org/tags/manacher/">Manacher </a>
+    
+    <a href="https://code0xff.org/tags/mapreduce/">MapReduce </a>
+    
+    <a href="https://code0xff.org/tags/mysql/">MySQL </a>
+    
+    <a href="https://code0xff.org/tags/newsql/">NewSQL </a>
+    
+    <a href="https://code0xff.org/tags/oceanbase/">OceanBase </a>
+    
+    <a href="https://code0xff.org/tags/paxos/">paxos </a>
+    
+    <a href="https://code0xff.org/tags/raft/">raft </a>
+    
+    <a href="https://code0xff.org/tags/scala/">scala </a>
+    
+    <a href="https://code0xff.org/tags/simd/">SIMD </a>
+    
+    <a href="https://code0xff.org/tags/snowflake/">snowflake </a>
+    
+    <a href="https://code0xff.org/tags/spark/">spark </a>
+    
+    <a href="https://code0xff.org/tags/unix/">unix </a>
+    
+    <a href="https://code0xff.org/tags/%E4%BA%8C%E5%88%86%E6%9F%A5%E6%89%BE/">二分查找 </a>
+    
+    <a href="https://code0xff.org/tags/%E4%BA%8C%E5%8F%89%E6%A0%91%E9%81%8D%E5%8E%86/">二叉树遍历 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%88%86%E5%B8%83%E5%BC%8F/">分布式 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%88%97%E5%AD%98/">列存 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%8A%A8%E6%80%81%E6%B3%A8%E5%85%A5/">动态注入 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%8E%86%E5%8F%B2/">历史 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%90%91%E9%87%8F%E5%8C%96/">向量化 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%9B%9E%E6%BA%AF/">回溯 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%9B%BD%E5%86%85%E6%97%85%E8%A1%8C/">国内旅行 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%9B%BD%E5%A4%96%E6%97%85%E8%A1%8C/">国外旅行 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%A4%9A%E7%A7%9F%E6%88%B7/">多租户 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%A4%A7%E6%95%B0%E6%8D%AE/">大数据 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%AD%98%E5%82%A8/">存储 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%B7%A5%E4%BD%9C%E8%AE%B0%E5%BD%95/">工作记录 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%BE%AE%E6%9C%8D%E5%8A%A1/">微服务 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%95%B0%E6%8D%AE%E5%BA%93/">数据库 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%95%B0%E6%8D%AE%E6%A8%A1%E5%9E%8B/">数据模型 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%9F%A5%E8%AF%A2%E4%BC%98%E5%8C%96/">查询优化 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%9F%A5%E8%AF%A2%E7%BC%96%E8%AF%91/">查询编译 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%B1%87%E7%BC%96/">汇编 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%B5%8B%E8%AF%95/">测试 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%B9%96%E4%BB%93%E4%B8%80%E4%BD%93/">湖仓一体 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%94%9F%E6%B4%BB/">生活 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%94%B5%E5%BD%B1/">电影 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%AE%97%E6%B3%95/">算法 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%B4%A2%E5%BC%95/">索引 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BB%8F%E6%B5%8E/">经济 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BC%93%E5%AD%98/">缓存 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BC%96%E8%AF%91%E5%8E%9F%E7%90%86/">编译原理 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BD%91%E7%BB%9C/">网络 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AE%A1%E7%AE%97%E6%A1%86%E6%9E%B6/">计算框架 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AE%BA%E6%96%87/">论文 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AF%BB%E4%B9%A6/">读书 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AF%BB%E4%B9%A6%E7%AC%94%E8%AE%B0/">读书笔记 </a>
+    
+</div>
+    </section>
+
+    
+
+    <section class="widget">
+        <h3 class="widget-title">RSS</h3>
+        <ul class="widget-list">
+            <li><a href="https://code0xff.org/index.xml">文章 RSS</a></li>
+        </ul>
+    </section>
+</div>
+            </div>
+        </div>
+    </div>
+    <footer id="footer">
+    <div>
+        &copy; 2023 <a href="https://code0xff.org/">记录每个瞬间 By 老王</a>
+        
+    </div>
+    <br />
+    <div>
+        <div class="github-badge">
+            <a href="https://gohugo.io/" target="_black" rel="nofollow"><span class="badge-subject">Powered by</span><span class="badge-value bg-blue">Hugo</span></a>
+        </div>
+        <div class="github-badge">
+            <a href="https://github.com/flysnow-org/maupassant-hugo" target="_black"><span class="badge-subject">Theme</span><span class="badge-value bg-yellowgreen">Maupassant</span></a>
+        </div>
+    </div>
+</footer>
+
+
+    
+    <script type="text/javascript">
+        window.MathJax = {
+            tex2jax: {
+                inlineMath: [['$', '$']],
+                processEscapes: true
+                }
+            };
+    </script>
+    <script src='https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.5/MathJax.js?config=TeX-MML-AM_CHTML' async></script><script src="https://cdn.bootcdn.net/ajax/libs/fancybox/3.5.7/jquery.fancybox.min.js"></script>
+
+<a id="rocket" href="#top"></a>
+<script type="text/javascript" src='/js/totop.js?v=0.0.0' async=""></script>
+
+<script type="application/javascript">
+var doNotTrack = false;
+if (!doNotTrack) {
+	window.ga=window.ga||function(){(ga.q=ga.q||[]).push(arguments)};ga.l=+new Date;
+	ga('create', 'GA ID', 'auto');
+	
+	ga('send', 'pageview');
+}
+</script>
+<script async src='https://www.google-analytics.com/analytics.js'></script>
+
+
+
+    <script type="text/javascript" src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js" async></script>
+
+
+
+
+</body>
+
+</html>
