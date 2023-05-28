@@ -1,0 +1,772 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    
+    <meta name="referrer" content="no-referrer-when-downgrade">
+    
+
+    <title>Column Imprints: A Secondary Index Structure | 记录每个瞬间</title>
+    <meta property="og:title" content="Column Imprints: A Secondary Index Structure - 记录每个瞬间">
+    <meta property="og:type" content="article">
+        
+    <meta property="article:published_time" content='2023-05-26T18:11:07&#43;08:00'>
+        
+        
+    <meta property="article:modified_time" content='2023-05-26T18:11:07&#43;08:00'>
+        
+    <meta name="Keywords" content="">
+    <meta name="description" content="Column Imprints: A Secondary Index Structure">
+        <meta name="author" content="隔壁老王">
+        
+    <meta property="og:url" content="https://code0xff.org/post/2023/05/column_imprints/">
+    <link rel="shortcut icon" href='/favicon.ico'  type="image/x-icon">
+
+    <link rel="stylesheet" href='/css/normalize.css'>
+    <link rel="stylesheet" href='/css/style.css'>
+    <script type="text/javascript" src="//cdn.bootcdn.net/ajax/libs/jquery/3.4.1/jquery.min.js"></script>
+
+    
+    
+    
+        <link href="https://cdn.bootcdn.net/ajax/libs/fancybox/3.5.7/jquery.fancybox.min.css" rel="stylesheet">
+    
+    
+    
+    
+</head>
+
+
+<body>
+    <header id="header" class="clearfix">
+    <div class="container">
+        <div class="col-group">
+            <div class="site-name ">
+                
+                    <a id="logo" href="https://code0xff.org/">
+                        记录每个瞬间
+                    </a>
+                
+                
+            </div>
+            <div>
+                <nav id="nav-menu" class="clearfix">
+                    <a class="current" href="https://code0xff.org/">首页</a>
+                    
+                    <a  href="https://code0xff.org/linked/" title="链接">链接</a>
+                    
+                    <a  href="https://code0xff.org/archives/" title="归档">归档</a>
+                    
+                    <a  href="https://code0xff.org/about/" title="关于">关于</a>
+                    
+                </nav>
+            </div>
+        </div>
+    </div>
+</header>
+
+    <div id="body">
+        <div class="container">
+            <div class="col-group">
+
+                <div class="col-8" id="main">
+                    
+<div class="res-cons">
+    
+    <article class="post">
+        <header>
+            <h1 class="post-title">Column Imprints: A Secondary Index Structure</h1>
+        </header>
+        <date class="post-meta meta-date">
+            2023年5月26日
+        </date>
+<nav id="TableOfContents">
+  <ul>
+    <li>
+      <ul>
+        <li><a href="#column-imprints-原理">column imprints 原理</a></li>
+        <li><a href="#一些操作">一些操作</a></li>
+        <li><a href="#实验">实验</a></li>
+      </ul>
+    </li>
+  </ul>
+</nav>
+        
+        <div class="post-meta">
+            
+            <span class="post-meta meta-tags">
+                <ul class="clearfix">
+                    <a href='/categories/%E6%95%B0%E6%8D%AE%E5%BA%93'>数据库</a>
+                </ul>
+            </span>
+            
+        </div>
+        
+        
+        <div class="post-meta">
+            <span id="busuanzi_container_page_pv">|<span id="busuanzi_value_page_pv"></span><span>
+                    阅读</span></span>
+        </div>
+        
+        
+        <div class="post-content">
+            <blockquote>
+<p>原文
+<a href="https://15721.courses.cs.cmu.edu/spring2023/papers/04-olapindexes/p893-sidirourgos.pdf">https://15721.courses.cs.cmu.edu/spring2023/papers/04-olapindexes/p893-sidirourgos.pdf</a></p>
+</blockquote>
+<h2 id="column-imprints-原理">column imprints 原理</h2>
+<p>论文提出了一个新的基于主内存的二级索引 column imprints<br>
+主索引 vs 二级索引</p>
+<ul>
+<li>主索引跟数据布局有关，还带有导航功能</li>
+<li>二级索引只有导航跟布局无关，占空间很小</li>
+</ul>
+<p><code>zone map</code> vs <code>bit map</code> vs <code>column imprint</code></p>
+<ul>
+<li>zone map将列分区，然后存一个最大最小值</li>
+<li>bitmap 按照值的基于划分成若干个bit 组，根据对应的位置是否有值设置 1</li>
+<li>column imprint 是基于缓存行的</li>
+<li>bit map是 包含了8组bit位，CI 则将其按照cache line大小，压缩成 3，这里假设一个cache line可以存 3个数字</li>
+<li>实际的cache line一般是 64个字节</li>
+<li>zone map只包含了min、max，如果很多随机值正好在min、max内，则zone map就没效果了</li>
+<li>而 CI 因为bit vector中包含了随机值的 bit，可以处理各种场景</li>
+<li>同时 CI 相比 bitmap，其每个 bit vector对应的是cache line，而 bitmap对应的是一个值，所以空间更小
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/05/Column_Imprints/1.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/05/Column_Imprints/1.jpg" />
+        </a>
+    <br>
+Figure 1: A simple column and an example of zonemaps,bitmaps, and imprints indexes.</li>
+</ul>
+<p>上述场景列基数很小，是 1:1 的映射<br>
+如果基数很大，采用近似直方图将 域划分范围，将每个 bit 映射为一个范围</p>
+<p>cache line的压缩</p>
+<ul>
+<li>将相同内容的 imprint vector 作为一个来存储</li>
+<li>比如下图第一个，counter为7，repeat没有设置，表示这 7 个都是随机内容，需要完全存储</li>
+<li>后面一个标记为 counter 13，repeat设置了，表示这 13个都是重复内容，使用一个 vector就可以表示了</li>
+<li>这里有个关键点，多少个数据size 表示为一个 imprint vector</li>
+<li>理论上应该跟底层硬件有关，因为这个技术是针对主内存数据库的，所以imprint vector大小就跟cache line一样，也就是 64 字节
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/05/Column_Imprints/2.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/05/Column_Imprints/2.jpg" />
+        </a>
+    <br>
+Figure 2: Column imprint index with compression (23 cachelines).</li>
+</ul>
+<p>算法-1，函数返回一个 imprint 索引结构imp，其中包含imprint数组和cacheline字典 <br>
+上述 Algorithm-1，就是 imprint vector的大致工作原理   <br>
+将数据列划分为多个区间（bin）并为每个区间生成一个imprint值<br>
+根据上一value 跟当前value是否相同，来设置 repeat，counter <br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/05/Column_Imprints/a-1.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/05/Column_Imprints/a-1.jpg" />
+        </a>
+    <br>
+Algorithm 1 Main function to create the column imprints index: imprints()<br>
+Input: column col of size col_sz<br>
+Output: imprints index structure imp for column col</p>
+<p>算法2的目标是</p>
+<ul>
+<li>根据给定的列数据和imprints索引结构确定索引的分箱数量和范围</li>
+<li>如果样本中的唯一值数量少于64个，则将这些唯一值分配给索引的范围，并确定索引的分箱数量</li>
+<li>如果唯一值数量超过64个，则根据样本中的分位数设置索引的范围</li>
+<li>该算法的最终目的是为了确定imprints索引的分箱策略和范围，以支持高效的数据查询和定位<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/05/Column_Imprints/a-2.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/05/Column_Imprints/a-2.jpg" />
+        </a>
+    <br>
+Algorithm 2 Define the number of bins and the ranges of the bins of the histogram: binning()
+Input: imprints index structure imp, column col<br>
+Output: number of bins imp.bins and the ranges imp.b</li>
+</ul>
+<p>构建列印记索引的算法被设计为高效且优化了CPU性能</p>
+<ul>
+<li>imprints() 函数的复杂度与列的大小成线性关系，记为 n</li>
+<li>每个缓存行包含 c 个值，其中最耗时的部分是调用 get_bin() 函数</li>
+<li>每个值需要进行 3 次比较。由于在每次比较中搜索空间被划分为两半</li>
+<li>因此每个值需要进行 3 × log64 = 18 次比较</li>
+<li>因此，为了创建完整的印记索引，我们需要进行 18 × n 次比较</li>
+</ul>
+<h2 id="一些操作">一些操作</h2>
+<p>算法3的目标</p>
+<ul>
+<li>在基于列imprints索引的情况下，评估范围查询</li>
+<li>给定imprints索引结构和查询范围Q（由低值和高值组成）</li>
+<li>该算法通过匹配imprints向量和掩码来筛选出满足查询范围条件的数据</li>
+<li>对于匹配的数据，如果重复标志未设置，则直接将对应的数据ID添加到结果集中</li>
+<li>如果重复标志已设置，则需要进一步检查每个数据的确切值是否满足查询条件</li>
+<li>最终，算法返回满足查询条件的数据ID组成的结果数组res</li>
+<li>该算法利用imprints索引的特性，在快速定位和筛选数据方面具有高效性能</li>
+<li>可能存在用户的查询包含多个谓词，涉及同一个关系的多个属性。在这种情况下，会多次调用算法3的query()
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/05/Column_Imprints/a-3.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/05/Column_Imprints/a-3.jpg" />
+        </a>
+      <br>
+Algorithm 3 Evaluate range queries over the column imprints index: query()   <br>
+Input: imprints index structure imp, column col, query Q = [low, high]<br>
+Output: array res of ids</li>
+</ul>
+<p>更新采用append，有两点需要注意</p>
+<ul>
+<li>必要时调整分箱的边界。应尽量避免这种调整，因为它需要完全重建索引</li>
+<li>更新位向量。对于位图索引，这是一个昂贵的操作，因为需要更新所有位向量，即使它们不映射新值</li>
+<li>在列式数据库中，不会执行原地更新，因为其代价过高</li>
+<li>相反，使用增量结构来跟踪更新，并在查询时将它们合并</li>
+<li>增量结构可以简单地由两个表组成，其中包含需要与基本表进行并集和差集操作的插入和删除</li>
+<li>或者它可以是更复杂的结构，例如位置更新树</li>
+</ul>
+<p>印记可能会产生误报</p>
+<ul>
+<li>因此相应的印记向量可能会忽略删除操作</li>
+<li>然而，插入操作将需要设置额外的位到受影响缓存行的印记</li>
+<li>这种方法最终会使印记索引饱和。在这些情况下，通常会忽略整个二级索引，并在下一次查询扫描期间重建它</li>
+<li>在常规扫描期间重建印记索引的开销很小，以至于用户几乎察觉不到</li>
+</ul>
+<p>相关工作</p>
+<ul>
+<li>imprint column 可以看做是 bitmap 家族的新成员</li>
+<li>bloom filter 不适合范围返厂，这是 imprint column 的目标</li>
+<li>更新的 Word-Aligned Hybrid 存储模型</li>
+<li>当索引高基数属性时，压缩间隔编码位图的长度太大，解决方案是：多级索引方案，以帮助设计一个最优的分组策略</li>
+</ul>
+<h2 id="实验">实验</h2>
+<p>实验的数据</p>
+<ul>
+<li>Routing，2.4亿的地理数据，包含经度、维度，旅行ID、时间戳等</li>
+<li>SDSS，6.2G 的天文数据，各种双精度、单精度数据</li>
+<li>cNET，描述技术产品属性的分类数据集，稀疏大宽表</li>
+<li>Airtraffic，包含航班信息、延误等统计信息的数据</li>
+<li>TPC-H，因子为 100 的TPC-H 数据集<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/05/Column_Imprints/t-1.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/05/Column_Imprints/t-1.jpg" />
+        </a>
+    <br>
+Table 1: Dataset statistics</li>
+</ul>
+<p>Word-Aligned Hybrid (WAH)</p>
+<ul>
+<li>是一种压缩数据结构和位向量编码技术，用于高效地表示大规模位数据</li>
+<li>设计目标是在高压缩率和快速位操作之间实现平衡</li>
+<li>WAH 结合了两种不同的位向量编码方法：字对齐压缩 (Word-Aligned Compression) 和混合位对齐压缩 (Hybrid Word-Aligned Compression)</li>
+<li>字对齐压缩将连续的位序列压缩成以字（通常为32位）为单位的块，以减少存储空间</li>
+<li>每个块包含一个控制字和若干字节的位数据，其中控制字指示每个字节中的位是否为填充位（全0）或实际数据位</li>
+<li>混合位对齐压缩结合了字对齐压缩和运行长度编码 (Run-Length Encoding, RLE)</li>
+<li>它通过将连续的填充位或实际数据位组织成运行长度来进一步压缩数据</li>
+<li>在混合位对齐压缩中，长运行（即连续的填充位或实际数据位）被压缩为一个运行长度标记，而短运行则直接以字对齐压缩的方式存储</li>
+<li>WAH 的优点是在高度压缩位数据的同时能够支持快速的位操作，如位与、位或和位运算等</li>
+<li>它被广泛应用于各种领域，如数据库管理系统、数据压缩和位图索引等，以提高存储效率和查询性能</li>
+</ul>
+<p>我们将两个位向量之间的编辑距离定义为第一个位向量中需要设置和取消设置才能成为第二个位向量的位数<br>
+列熵E的值在0.0到1.0之间<br>
+熵E 越高，数据就越随机，聚类也就越少</p>
+<ul>
+<li>下图中bit 被设置了就记为 x、否则是 .</li>
+<li>第一个图中，是 天文数据，熵非常高，也就是前后元素都不同，这样的记录很难被压缩</li>
+<li>后面 3 个明显 熵就很低了</li>
+<li>最后一个是 TPC-H 的数据，也是非常有规律的 
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/05/Column_Imprints/3.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/05/Column_Imprints/3.jpg" />
+        </a>
+    <br>
+Figure 3: Prints of column imprint indexes (’x’ = bit set, ’.’ = bit unset) and the respective column entropy E.</li>
+</ul>
+<p>图4展示了不同列的熵的累积分布情况<br>
+其中高熵的列表示值分布更加不规律或多样化。这并不意味着列的数量越多，熵就越高<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/05/Column_Imprints/4.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/05/Column_Imprints/4.jpg" />
+        </a>
+    <br>
+Figure 4: Cumulative distribution of the columns’ entropy E.</p>
+<p>图5 是不同索引，zonemap、WAH、imprint column 的存储开销</p>
+<ul>
+<li>WAH索引的存储开销最大，其次是区域映射，而列印索引对存储空间的要求最小</li>
+<li>列印索引的存储效率通常比区域映射和WAH索引高出一个到两个数量级</li>
+<li>也存在例外情况，特别是对于WAH索引，其存储需求波动最大</li>
+<li>对于包含 8字节有序带有主键的数据，WAH 比 imprint column更好</li>
+<li>对比三个索引的创建时间开销，基本都是线性的</li>
+<li>zone map最快，然后是 imprint column，WAH 最慢
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/05/Column_Imprints/5.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/05/Column_Imprints/5.jpg" />
+        </a>
+    <br>
+Figure 5: Index size and creation time for different types of columns (x-axis enumerates the columns, ordered by size).</li>
+</ul>
+<p>对比索引压缩后的占比情况</p>
+<ul>
+<li>WAH、imprint column、zonemap 在大多数情况下都表现的很好</li>
+<li>但是航天数据这种带有双精度的值，使的数据分布非常随机，WAH的压缩就非常不好</li>
+<li>可以看到 WAH 的压缩波动很大</li>
+<li>而 imprint column 的总体表现跟 zone map 差不多
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/05/Column_Imprints/6.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/05/Column_Imprints/6.jpg" />
+        </a>
+     
+Figure 6: Index size overhead % over the size of the columns.</li>
+</ul>
+<p>对比 熵增加时，imprint column 和 WAH 的对比</p>
+<ul>
+<li>在熵小于 0.4 的时候，imprint 和 WAH表现的差不多，总体都是 10% 左右</li>
+<li>随着熵的增加，imprint一致比较稳定，在 12%左右，因为多需要每个cacheline单位的64位，使其对高熵值免疫</li>
+<li>而WAH索引则有可能变得非常低效，因为没有很多压缩机会
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/05/Column_Imprints/7.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/05/Column_Imprints/7.jpg" />
+        </a>
+     
+Figure 7: Index size overhead % over column entropy E</li>
+</ul>
+<p>针对不同查询的选择率情况</p>
+<ul>
+<li>创建十个不同选择性的范围查询。选择性从小于0.1开始，每次增加0.1，直到超过0.9</li>
+<li>对于查询时间，所有三个索引和顺序扫描产生了相同的图案，但这些图案在y轴上有所偏移</li>
+<li>总体而言，imprints是最快的索引，因为图中的点在y轴上最靠下</li>
+<li>如果查询的选择性较低，返回的数据量较多，观察到的索引之间的差异就越小</li>
+<li>顺序扫描在这种情况下也变得具有竞争力。这是因为解压数据并实例化几乎所有ID的开销超过了顺序扫描整个列并检查每个值所需的时间</li>
+<li>对于选择性较低的查询，zonemaps的查询时间与顺序扫描类似，因为与imprints和WAH位图相比，zonemaps需要的管理开销最小
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/05/Column_Imprints/8.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/05/Column_Imprints/8.jpg" />
+        </a>
+     
+Figure 8: Query time for decreasing selectivity.</li>
+</ul>
+<p>图9中绘制了查询的累积时间分布</p>
+<ul>
+<li>计算在每个时间段结束执行的查询数量，并累积它们。在图9中，曲线越陡峭，表示在较短时间内完成的查询数量越多，因此整体上索引效率越高</li>
+<li>使用imprints索引的近15,000个查询在每个查询中所需的时间少于0.1毫秒</li>
+<li>其次是zonemaps，在相同时间范围内能够评估超过7,500个查询</li>
+<li>然而，随着评估时间的增加，不同方法之间的时间差距减小
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/05/Column_Imprints/9.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/05/Column_Imprints/9.jpg" />
+        </a>
+    <br>
+Figure 9: Cumulative distribution of query times.</li>
+</ul>
+<p>图10显示了每个查询所实现的改进因素</p>
+<ul>
+<li>大于1的点表示相对于基准的改进因素，而小于1的点表示一种方法比基准慢的倍数</li>
+<li>绿色圆圈表示imprints相对于顺序扫描的改进，而红色三角形表示位图与WAH相对于顺序扫描的改进</li>
+<li>对于选择性较低的查询，imprints变得不那么有竞争力，而WAH可能比扫描慢得多</li>
+<li>这一观察结果与大多数现代数据库系统的策略一致，即如果查询优化器的成本模型检测到选择性较低的选择，则优先选择顺序扫描而不是任何索引探测</li>
+<li>WAH压缩的处理开销超过了从主存储器到CPU缓存的数据吞吐量</li>
+<li>图10的下图是相同的比较，但将zonemap索引作为基准，而不是顺序扫描。这里也可以看到相同的趋势</li>
+<li>尽管zonemaps更具竞争力，因此imprints的改进因素接近100倍</li>
+<li>然而，在一些低选择性的情况下，由于计算需求较少，zonemaps可能比imprints更快
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/05/Column_Imprints/10.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/05/Column_Imprints/10.jpg" />
+        </a>
+     
+Figure 10: Factor of improvement over scan and zonemap.</li>
+</ul>
+<p>图11的上图显示了索引探测次数，而下图显示了比较次数</p>
+<ul>
+<li>对于所有选择性在0.4到0.5之间的查询，WAH的索引探测次数是所有索引中最高的，几乎总是大于总记录数</li>
+<li>这是因为对于每个记录，需要探测多个位向量，WAH实现了最好的过滤，因为数据比较的次数通常非常低</li>
+<li>zonemaps的索引探测次数保持稳定，即与列的缓存行数相同，zonemaps的比较次数取决于数据的倾斜程度，可能会有所变化</li>
+<li>imprint 在索引探测和数据比较之间实现了平衡。熵较高的列需要更多的索引探测但较少的数据比较</li>
+<li>另一方面，熵较低的列需要较少的索引探测但较多的数据比较</li>
+<li>对于选择性较高的查询，imprint column 相对于顺序扫描可以实现1000倍的改进，相对于zonemap可以实现100倍的改进</li>
+<li>进一步的实验表明，查询评估时间与列的大小或索引的大小之间存在关联，而这又与列的熵相关
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/05/Column_Imprints/11.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/05/Column_Imprints/11.jpg" />
+        </a>
+     
+Figure 11: Number of index probes and value comparisons for queries with selectivity between 0.4 and 0.5.</li>
+</ul>
+
+			<script type="text/javascript"
+        async
+        src="https://cdn.bootcss.com/mathjax/2.7.3/MathJax.js?config=TeX-AMS-MML_HTMLorMML">
+MathJax.Hub.Config({
+  tex2jax: {
+    inlineMath: [['$','$'], ['\\(','\\)']],
+    displayMath: [['$$','$$'], ['\[\[','\]\]']],
+    processEscapes: true,
+    processEnvironments: true,
+    skipTags: ['script', 'noscript', 'style', 'textarea', 'pre'],
+    TeX: { equationNumbers: { autoNumber: "AMS" },
+         extensions: ["AMSmath.js", "AMSsymbols.js"] }
+  }
+});
+
+MathJax.Hub.Queue(function() {
+    
+    
+    
+    var all = MathJax.Hub.getAllJax(), i;
+    for(i = 0; i < all.length; i += 1) {
+        all[i].SourceElement().parentNode.className += ' has-jax';
+    }
+});
+</script>
+
+<style>
+code.has-jax {
+    font: inherit;
+    font-size: 100%;
+    background: inherit;
+    border: inherit;
+    color: #515151;
+}
+</style>
+        </div>
+
+        
+
+
+        
+
+<div class="post-archive">
+    <h2>相关文章</h2>
+    <ul class="listing">
+        
+        <li><a href="/post/2023/05/sql_server_column_store_indexes/">SQL Server Column Store Indexes</a></li>
+        
+        <li><a href="/post/2023/05/bitmap_index/">Bitmap Index Design and Evaluation </a></li>
+        
+        <li><a href="/post/2023/05/column_sketches/">Column Sketches: A Scan Accelerator for Rapid and Robust Predicate Evaluation</a></li>
+        
+        <li><a href="/post/2023/05/advanced_database_systems-history_of_databases/">Advanced Database Systems: History of Databases</a></li>
+        
+        <li><a href="/post/2023/05/optimal_column_layout_for_hybrid_workloads/">Optimal Column Layout for Hybrid Workloads</a></li>
+        
+    </ul>
+</div>
+
+
+        <div class="post-meta meta-tags">
+            
+            <ul class="clearfix">
+                
+                <li><a href='/tags/%E8%AE%BA%E6%96%87'>论文</a></li>
+                
+                <li><a href='/tags/%E7%B4%A2%E5%BC%95'>索引</a></li>
+                
+            </ul>
+            
+        </div>
+    </article>
+    
+    
+
+    
+    
+    <div class="post bg-white">
+      <script src="https://utteranc.es/client.js"
+            repo= "himichael/hugoblogtalks"
+            issue-term="pathname"
+            theme="github-light"
+            crossorigin="anonymous"
+            async>
+      </script>
+    </div>
+    
+</div>
+
+
+                </div>
+
+                <div id="secondary">
+    <section class="widget">
+        <form id="search" action='https://code0xff.org/search/' method="get" accept-charset="utf-8" target="_blank" _lpchecked="1">
+      
+      <input type="text" name="q" maxlength="20" placeholder="Search">
+      <input type="hidden" name="sitesearch" value="https://code0xff.org/">
+      <button type="submit" class="submit icon-search"></button>
+</form>
+    </section>
+    
+    <section class="widget">
+        <h3 class="widget-title">最近文章</h3>
+<ul class="widget-list">
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/05/column_imprints/" title="Column Imprints: A Secondary Index Structure">Column Imprints: A Secondary Index Structure</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/05/sql_server_column_store_indexes/" title="SQL Server Column Store Indexes">SQL Server Column Store Indexes</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/05/bitmap_index/" title="Bitmap Index Design and Evaluation ">Bitmap Index Design and Evaluation </a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/05/advanced_database_systems-history_of_databases/" title="Advanced Database Systems: History of Databases">Advanced Database Systems: History of Databases</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/05/column_sketches/" title="Column Sketches: A Scan Accelerator for Rapid and Robust Predicate Evaluation">Column Sketches: A Scan Accelerator for Rapid and Robust Predicate Evaluation</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/05/optimal_column_layout_for_hybrid_workloads/" title="Optimal Column Layout for Hybrid Workloads">Optimal Column Layout for Hybrid Workloads</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/05/column-stores_vs_row-stores_how_different_are_they_really/" title="Column-Stores vs. Row-Stores: How Different Are They Really?">Column-Stores vs. Row-Stores: How Different Are They Really?</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/05/lakehouse-a-new-generation-of-open-platforms-that-unify/" title="Lakehouse A New Generation of Open Platforms that Unify Data Warehousing and Advanced Analytics">Lakehouse A New Generation of Open Platforms that Unify Data Warehousing and Advanced Analytics</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/05/building-an-elastic-query-engine-on-disaggregated-storage/" title="Building An Elastic Query Engine on Disaggregated Storage">Building An Elastic Query Engine on Disaggregated Storage</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/05/what-goes-around-comes-around/" title="What Goes Around Comes Around">What Goes Around Comes Around</a>
+    </li>
+    
+</ul>
+    </section>
+
+    
+
+    <section class="widget">
+        <h3 class="widget-title"><a href='/categories/'>分类</a></h3>
+<ul class="widget-list">
+    
+    <li><a href="https://code0xff.org/categories/%E5%88%86%E5%B8%83%E5%BC%8F/">分布式 (6)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E5%8E%9F%E7%90%86%E5%88%86%E6%9E%90/">原理分析 (13)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E5%95%86%E4%B8%9A/">商业 (3)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E5%A4%A7%E6%95%B0%E6%8D%AE/">大数据 (22)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%95%B0%E6%8D%AE%E5%BA%93/">数据库 (30)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%96%87%E5%AD%A6%E5%92%8C%E8%89%BA%E6%9C%AF/">文学和艺术 (2)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%97%85%E8%A1%8C/">旅行 (10)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%9E%B6%E6%9E%84/">架构 (2)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E7%AE%97%E6%B3%95/">算法 (8)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E7%B3%BB%E7%BB%9F/">系统 (5)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E7%BC%96%E7%A8%8B%E8%AF%AD%E8%A8%80/">编程语言 (2)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E8%A1%8C%E4%B8%9A%E8%A7%82%E5%AF%9F/">行业观察 (1)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E8%AF%BB%E4%B9%A6%E7%AC%94%E8%AE%B0/">读书笔记 (12)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E9%9A%8F%E4%BE%BF%E5%86%99%E5%86%99/">随便写写 (3)</a></li>
+    
+</ul>
+    </section>
+
+    <section class="widget">
+        <h3 class="widget-title">归档</a></h3>
+<ul class="widget-list">
+    
+    <li><a href="https://code0xff.org/years/2021%E5%B9%B4/">2021年 (31)</a></li>
+    
+    <li><a href="https://code0xff.org/years/2022%E5%B9%B4/">2022年 (55)</a></li>
+    
+    <li><a href="https://code0xff.org/years/2023%E5%B9%B4/">2023年 (33)</a></li>
+    
+</ul>
+    </section>
+
+    <section class="widget">
+        <h3 class="widget-title"><a href='/tags/'>标签</a></h3>
+<div class="tagcloud">
+    
+    <a href="https://code0xff.org/tags/b%E6%A0%91/">B树 </a>
+    
+    <a href="https://code0xff.org/tags/cmu-database/">CMU-Database </a>
+    
+    <a href="https://code0xff.org/tags/flink/">flink </a>
+    
+    <a href="https://code0xff.org/tags/hive/">Hive </a>
+    
+    <a href="https://code0xff.org/tags/k8s/">k8s </a>
+    
+    <a href="https://code0xff.org/tags/kudu/">kudu </a>
+    
+    <a href="https://code0xff.org/tags/kyuubi/">Kyuubi </a>
+    
+    <a href="https://code0xff.org/tags/lakehouse/">Lakehouse </a>
+    
+    <a href="https://code0xff.org/tags/leveldb/">LevelDB </a>
+    
+    <a href="https://code0xff.org/tags/llvm/">LLVM </a>
+    
+    <a href="https://code0xff.org/tags/manacher/">Manacher </a>
+    
+    <a href="https://code0xff.org/tags/mapreduce/">MapReduce </a>
+    
+    <a href="https://code0xff.org/tags/mysql/">MySQL </a>
+    
+    <a href="https://code0xff.org/tags/newsql/">NewSQL </a>
+    
+    <a href="https://code0xff.org/tags/oceanbase/">OceanBase </a>
+    
+    <a href="https://code0xff.org/tags/paxos/">paxos </a>
+    
+    <a href="https://code0xff.org/tags/raft/">raft </a>
+    
+    <a href="https://code0xff.org/tags/scala/">scala </a>
+    
+    <a href="https://code0xff.org/tags/simd/">SIMD </a>
+    
+    <a href="https://code0xff.org/tags/snowflake/">snowflake </a>
+    
+    <a href="https://code0xff.org/tags/spark/">spark </a>
+    
+    <a href="https://code0xff.org/tags/unix/">unix </a>
+    
+    <a href="https://code0xff.org/tags/%E4%BA%8C%E5%88%86%E6%9F%A5%E6%89%BE/">二分查找 </a>
+    
+    <a href="https://code0xff.org/tags/%E4%BA%8C%E5%8F%89%E6%A0%91%E9%81%8D%E5%8E%86/">二叉树遍历 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%88%86%E5%B8%83%E5%BC%8F/">分布式 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%88%97%E5%AD%98/">列存 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%8A%A8%E6%80%81%E6%B3%A8%E5%85%A5/">动态注入 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%8E%86%E5%8F%B2/">历史 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%90%91%E9%87%8F%E5%8C%96/">向量化 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%9B%9E%E6%BA%AF/">回溯 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%9B%BD%E5%86%85%E6%97%85%E8%A1%8C/">国内旅行 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%9B%BD%E5%A4%96%E6%97%85%E8%A1%8C/">国外旅行 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%A4%9A%E7%A7%9F%E6%88%B7/">多租户 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%A4%A7%E6%95%B0%E6%8D%AE/">大数据 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%AD%98%E5%82%A8/">存储 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%B7%A5%E4%BD%9C%E8%AE%B0%E5%BD%95/">工作记录 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%BE%AE%E6%9C%8D%E5%8A%A1/">微服务 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%95%B0%E6%8D%AE%E5%BA%93/">数据库 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%95%B0%E6%8D%AE%E6%A8%A1%E5%9E%8B/">数据模型 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%9F%A5%E8%AF%A2%E4%BC%98%E5%8C%96/">查询优化 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%9F%A5%E8%AF%A2%E7%BC%96%E8%AF%91/">查询编译 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%B1%87%E7%BC%96/">汇编 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%B5%8B%E8%AF%95/">测试 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%B9%96%E4%BB%93%E4%B8%80%E4%BD%93/">湖仓一体 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%94%9F%E6%B4%BB/">生活 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%94%B5%E5%BD%B1/">电影 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%AE%97%E6%B3%95/">算法 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%B4%A2%E5%BC%95/">索引 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BB%8F%E6%B5%8E/">经济 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BC%93%E5%AD%98/">缓存 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BC%96%E8%AF%91%E5%8E%9F%E7%90%86/">编译原理 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BD%91%E7%BB%9C/">网络 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AE%A1%E7%AE%97%E6%A1%86%E6%9E%B6/">计算框架 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AE%BA%E6%96%87/">论文 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AF%BB%E4%B9%A6/">读书 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AF%BB%E4%B9%A6%E7%AC%94%E8%AE%B0/">读书笔记 </a>
+    
+</div>
+    </section>
+
+    
+
+    <section class="widget">
+        <h3 class="widget-title">RSS</h3>
+        <ul class="widget-list">
+            <li><a href="https://code0xff.org/index.xml">文章 RSS</a></li>
+        </ul>
+    </section>
+</div>
+            </div>
+        </div>
+    </div>
+    <footer id="footer">
+    <div>
+        &copy; 2023 <a href="https://code0xff.org/">记录每个瞬间 By 老王</a>
+        
+    </div>
+    <br />
+    <div>
+        <div class="github-badge">
+            <a href="https://gohugo.io/" target="_black" rel="nofollow"><span class="badge-subject">Powered by</span><span class="badge-value bg-blue">Hugo</span></a>
+        </div>
+        <div class="github-badge">
+            <a href="https://github.com/flysnow-org/maupassant-hugo" target="_black"><span class="badge-subject">Theme</span><span class="badge-value bg-yellowgreen">Maupassant</span></a>
+        </div>
+    </div>
+</footer>
+
+
+    
+    <script type="text/javascript">
+        window.MathJax = {
+            tex2jax: {
+                inlineMath: [['$', '$']],
+                processEscapes: true
+                }
+            };
+    </script>
+    <script src='https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.5/MathJax.js?config=TeX-MML-AM_CHTML' async></script><script src="https://cdn.bootcdn.net/ajax/libs/fancybox/3.5.7/jquery.fancybox.min.js"></script>
+
+<a id="rocket" href="#top"></a>
+<script type="text/javascript" src='/js/totop.js?v=0.0.0' async=""></script>
+
+<script type="application/javascript">
+var doNotTrack = false;
+if (!doNotTrack) {
+	window.ga=window.ga||function(){(ga.q=ga.q||[]).push(arguments)};ga.l=+new Date;
+	ga('create', 'GA ID', 'auto');
+	
+	ga('send', 'pageview');
+}
+</script>
+<script async src='https://www.google-analytics.com/analytics.js'></script>
+
+
+
+    <script type="text/javascript" src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js" async></script>
+
+
+
+
+</body>
+
+</html>
