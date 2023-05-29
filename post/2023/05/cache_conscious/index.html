@@ -1,0 +1,681 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    
+    <meta name="referrer" content="no-referrer-when-downgrade">
+    
+
+    <title>Cache Conscious Indexing for Decision-Support in Main Memory | 记录每个瞬间</title>
+    <meta property="og:title" content="Cache Conscious Indexing for Decision-Support in Main Memory - 记录每个瞬间">
+    <meta property="og:type" content="article">
+        
+    <meta property="article:published_time" content='2023-05-28T09:11:07&#43;08:00'>
+        
+        
+    <meta property="article:modified_time" content='2023-05-28T09:11:07&#43;08:00'>
+        
+    <meta name="Keywords" content="">
+    <meta name="description" content="Cache Conscious Indexing for Decision-Support in Main Memory">
+        <meta name="author" content="隔壁老王">
+        
+    <meta property="og:url" content="https://code0xff.org/post/2023/05/cache_conscious/">
+    <link rel="shortcut icon" href='/favicon.ico'  type="image/x-icon">
+
+    <link rel="stylesheet" href='/css/normalize.css'>
+    <link rel="stylesheet" href='/css/style.css'>
+    <script type="text/javascript" src="//cdn.bootcdn.net/ajax/libs/jquery/3.4.1/jquery.min.js"></script>
+
+    
+    
+    
+        <link href="https://cdn.bootcdn.net/ajax/libs/fancybox/3.5.7/jquery.fancybox.min.css" rel="stylesheet">
+    
+    
+    
+    
+</head>
+
+
+<body>
+    <header id="header" class="clearfix">
+    <div class="container">
+        <div class="col-group">
+            <div class="site-name ">
+                
+                    <a id="logo" href="https://code0xff.org/">
+                        记录每个瞬间
+                    </a>
+                
+                
+            </div>
+            <div>
+                <nav id="nav-menu" class="clearfix">
+                    <a class="current" href="https://code0xff.org/">首页</a>
+                    
+                    <a  href="https://code0xff.org/linked/" title="链接">链接</a>
+                    
+                    <a  href="https://code0xff.org/archives/" title="归档">归档</a>
+                    
+                    <a  href="https://code0xff.org/about/" title="关于">关于</a>
+                    
+                </nav>
+            </div>
+        </div>
+    </div>
+</header>
+
+    <div id="body">
+        <div class="container">
+            <div class="col-group">
+
+                <div class="col-8" id="main">
+                    
+<div class="res-cons">
+    
+    <article class="post">
+        <header>
+            <h1 class="post-title">Cache Conscious Indexing for Decision-Support in Main Memory</h1>
+        </header>
+        <date class="post-meta meta-date">
+            2023年5月28日
+        </date>
+<nav id="TableOfContents">
+  <ul>
+    <li>
+      <ul>
+        <li><a href="#背景">背景</a></li>
+        <li><a href="#cache-sensitive-search-trees">Cache Sensitive Search Trees</a></li>
+        <li><a href="#实验">实验</a></li>
+        <li><a href="#参考">参考</a></li>
+      </ul>
+    </li>
+  </ul>
+</nav>
+        
+        <div class="post-meta">
+            
+            <span class="post-meta meta-tags">
+                <ul class="clearfix">
+                    <a href='/categories/%E6%95%B0%E6%8D%AE%E5%BA%93'>数据库</a>
+                </ul>
+            </span>
+            
+        </div>
+        
+        
+        <div class="post-meta">
+            <span id="busuanzi_container_page_pv">|<span id="busuanzi_value_page_pv"></span><span>
+                    阅读</span></span>
+        </div>
+        
+        
+        <div class="post-content">
+            <blockquote>
+<p>原文
+<a href="https://15721.courses.cs.cmu.edu/spring2023/papers/04-olapindexes/rao-vldb97.pdf">https://15721.courses.cs.cmu.edu/spring2023/papers/04-olapindexes/rao-vldb97.pdf</a></p>
+</blockquote>
+<h2 id="背景">背景</h2>
+<p>现代系统是从面向磁盘，转向了面向主内存的数据库<br>
+而从 1986年开始，CPU的增速是 60%一年，内存只有10%，两者差距越来越大<br>
+这就导致 cache miss 增加了两个数量级<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/05/Cache_Conscious/1.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/05/Cache_Conscious/1.jpg" />
+        </a>
+    <br>
+Figure 1: Processor-memory performance imbalance</p>
+<p>另一个点是 OLAP 主要还是读场景，论文主要关注的点还是 OLAP 场景<br>
+而索引技术在 OLTP 的主内存数据库中仍然有很大用处，论文就提出了一个新的索引技术<br>
+Cache-Sensitive Search Trees，CSS-trees <br>
+这种技术的好处是做到了空间、时间的权衡，都是比较优秀的<br>
+对比现有的各种技术</p>
+<ul>
+<li>array binary search</li>
+<li>T tree、enhanced B+ tree</li>
+<li>hash indexes、interpolation search</li>
+</ul>
+<p>有些技术的空间占用很小，如 二分查找不占空间，但是时间占用挺大的(cache miss)<br>
+有些时间上很好，但是空间占用很大如 hash indexes<br>
+CSS tree在空间和时间上比 增强 B树、T树 更好<br>
+所以对主内存索引来说，要关注的就是亮点</p>
+<ul>
+<li>时间</li>
+<li>空间
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/05/Cache_Conscious/2.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/05/Cache_Conscious/2.jpg" />
+        </a>
+    <br>
+Figure 2: Space/time Tradeoffs</li>
+</ul>
+<p>论文是在主内存数据库基础上，提出了针对 cache 有效性改进的一些算法<br>
+并和现有算法的评估</p>
+<h2 id="cache-sensitive-search-trees">Cache Sensitive Search Trees</h2>
+<p>现有的各种索引问题</p>
+<ul>
+<li>Array Binary Search，如果排序的数组远大于cache，那么最坏的情况是，有多少次比较，就有多少次 cache miss</li>
+<li>T tree，将连续排序的数据放在一起了，看上去是缓存敏感的实际跟二分类似，只有min、max用到了，cache miss仍然有，比二分好不了多少</li>
+<li>B tree，虽然是面向磁盘的，但他的cache有效性比 T树更好，因为有多个子节点指针，cache中可以满足多个比较条件</li>
+<li>增强B tree，在OLAP 场景的优化，节点时全满的，另外节点大小匹配了cache line</li>
+<li>hash，这也是缓存敏感的，但hash不保证顺序还需要额外一个有序列表，另外hash需要非常大的空间，否则冲突链可能会很长</li>
+</ul>
+<p>CSS 树结构如下，假设 m = 4，也就是一个 node 包含 4个元素</p>
+<ul>
+<li>这种结构有点像 B树 + 树堆的组合，一棵树有 N + 1 个子节点</li>
+<li>但是这些子节点并不是用指针来指向的，而是用数组下标</li>
+<li>这是在一个排序数组之上，用了一个额外的辅助数组实现的</li>
+<li>它的叶子节点位置，跟实际排序数组的位置正好是相反的，类似一个满二叉树的结构</li>
+<li>31-55，56-80是左子树的叶结点，在排序数组中对应的 后半部分</li>
+<li>16-20，21-25，26-30 对应的是排序数组的左半部分</li>
+<li>一个内部节点b，其子节点编号为 b(m + 1) + 1 &ndash; b(m + 1) + (m + 1)<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/05/Cache_Conscious/3.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/05/Cache_Conscious/3.jpg" />
+        </a>
+     
+Figure 3: Layout of a full CSS-tree</li>
+</ul>
+<p>更清晰的结构如下<br>
+$O(log{m+1}N)$， CSS 树的比较次数<br>
+$O(log{2}N)$，   二分的比较次数<br>
+差别是 m + 1 和 2<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/05/Cache_Conscious/x1.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/05/Cache_Conscious/x1.jpg" />
+        </a>
+    </p>
+<p>CSS tree 的构建</p>
+<ul>
+<li>首先将排序数组逻辑上分为两部分，part-1，part-2</li>
+<li>然后建立目录到 排序数组的映射</li>
+<li>从最后一个内部开始处理，它指向的是part-1的最大值</li>
+<li>需要注意的是，对于part-1部分，最后的叶结点其祖先节点，其值可能不完整</li>
+<li>比如下图的节点11，其祖先节点就不完整，这时候，叶结点不完整的部分，直接填充最大值就行了</li>
+<li>也就是part-1部分，最后一部分可能有很多重复的值，算法需要特殊处理一下</li>
+<li>好处是不用考虑数组下标越界问题
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/05/Cache_Conscious/x2.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/05/Cache_Conscious/x2.jpg" />
+        </a>
+    </li>
+</ul>
+<p>CSS tree 的搜索</p>
+<ul>
+<li>跟 B树 的搜索类似，先从根节点开始，然后在一个 node 内做二分</li>
+<li>这样就可以定位到子节点了，如果子节点也是内部节点继续二分定位</li>
+<li>当找到叶子节点了，继续分为定位，如果发现重复的，那就是 最左边的值</li>
+</ul>
+<p>Level CSS-Trees</p>
+<ul>
+<li>当m取8的时候，在非叶子节点中的二分搜索是下面这样的</li>
+<li>一个节点会有9个branch。其中的7个需要比较3次，而2个需要4次</li>
+<li>为了使得每个branch都比较一样多的次数，建议当m = 2^k时，只使用其中的m-1个存储索引</li>
+<li>这样的实现就叫作Level CSS-Trees</li>
+<li>好处是：搜索的时间可以稍微减少一些，缺点是：存储索引的空间增大了
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/05/Cache_Conscious/4.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/05/Cache_Conscious/4.jpg" />
+        </a>
+     
+Figure 4: Node with 8 keys</li>
+</ul>
+<h2 id="实验">实验</h2>
+<p>时间分析</p>
+<ul>
+<li>分支因子、层的数量、内节点的比较次数、叶节点比较次数</li>
+<li>以及移动的次数，cache miss(node size 大于/小于 cache line情况)</li>
+<li>当 node size &gt; cache line时，CSS tree的cache miss 是最少的
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/05/Cache_Conscious/t-1.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/05/Cache_Conscious/t-1.jpg" />
+        </a>
+     
+Table 1: Time analysis</li>
+</ul>
+<p>空间分析</p>
+<ul>
+<li>Space (indirect)，说明这个空间是可以重排列的</li>
+<li>Space (direct)，说明这个需求的空间不能重排列
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/05/Cache_Conscious/t-2.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/05/Cache_Conscious/t-2.jpg" />
+        </a>
+     <br>
+Table 2: Space analysis</li>
+</ul>
+<p>比较各个算法的 build 时间，插值搜索是最差的<br>
+CSS tree 可以在 1秒内构建 2500W 个key，因为可以考虑周期重建索引<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/05/Cache_Conscious/5.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/05/Cache_Conscious/5.jpg" />
+        </a>
+     
+Figure 5: Varying array size, Ultra Sparc II</p>
+<p>比较访问时间，以及 cache miss 次数<br>
+从过去的报告看， T 树 比 二分查找和 B 树更好，这是因为报告太久远了，CPU和内存差别不是那么大<br>
+论文中显示 T 树的结果很不好<br>
+B 树比 CSS树 大约慢了 50%，这是 cache miss 导致的<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/05/Cache_Conscious/6.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/05/Cache_Conscious/6.jpg" />
+        </a>
+     
+Figure 6: Ultra Sparc II, 16 integers per node</p>
+<p>下面是固定排序数组的大小，将每个算法的 node 设置为可变的<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/05/Cache_Conscious/7.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/05/Cache_Conscious/7.jpg" />
+        </a>
+     
+Figure 7: Varying node size, 10 million keys</p>
+<p>CSS tree 可以将搜索时间 减少为 二分查找的 1/3<br>
+而只需要一些额外的空间<br>
+对比了 CSS tree 和增强 B树 的cache miss，随着 CPU 和内存的差距越来越大<br>
+5年后，其 cache miss 可能就是 8(b) 的结果了<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/05/Cache_Conscious/8.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/05/Cache_Conscious/8.jpg" />
+        </a>
+     
+Figure 8: Time breakdown (16 integers per node)</p>
+<p>图9显示了五年内B+树和css树之间预计的空间/时间权衡<br>
+最优的css树比最优的增强B+树快近30%  <br>
+在极限情况下，如果缓存丢失代价大于总代价，css -树可以比增强的快50%   <br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/05/Cache_Conscious/9.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/05/Cache_Conscious/9.jpg" />
+        </a>
+     
+Figure 9: Space/time Tradeoffs (in five years)</p>
+<h2 id="参考">参考</h2>
+<ul>
+<li><a href="https://blog.csdn.net/bryanlai0720/article/details/45850049">CSS-Tree的原理与实现</a></li>
+<li><a href="https://segmentfault.com/a/1190000018502294">T-Tree、T*-Tree的理解与简单内存数据库的实现</a></li>
+</ul>
+
+			<script type="text/javascript"
+        async
+        src="https://cdn.bootcss.com/mathjax/2.7.3/MathJax.js?config=TeX-AMS-MML_HTMLorMML">
+MathJax.Hub.Config({
+  tex2jax: {
+    inlineMath: [['$','$'], ['\\(','\\)']],
+    displayMath: [['$$','$$'], ['\[\[','\]\]']],
+    processEscapes: true,
+    processEnvironments: true,
+    skipTags: ['script', 'noscript', 'style', 'textarea', 'pre'],
+    TeX: { equationNumbers: { autoNumber: "AMS" },
+         extensions: ["AMSmath.js", "AMSsymbols.js"] }
+  }
+});
+
+MathJax.Hub.Queue(function() {
+    
+    
+    
+    var all = MathJax.Hub.getAllJax(), i;
+    for(i = 0; i < all.length; i += 1) {
+        all[i].SourceElement().parentNode.className += ' has-jax';
+    }
+});
+</script>
+
+<style>
+code.has-jax {
+    font: inherit;
+    font-size: 100%;
+    background: inherit;
+    border: inherit;
+    color: #515151;
+}
+</style>
+        </div>
+
+        
+
+
+        
+
+<div class="post-archive">
+    <h2>相关文章</h2>
+    <ul class="listing">
+        
+        <li><a href="/post/2023/05/column_imprints/">Column Imprints: A Secondary Index Structure</a></li>
+        
+        <li><a href="/post/2023/05/sql_server_column_store_indexes/">SQL Server Column Store Indexes</a></li>
+        
+        <li><a href="/post/2023/05/bitmap_index/">Bitmap Index Design and Evaluation </a></li>
+        
+        <li><a href="/post/2023/05/column_sketches/">Column Sketches: A Scan Accelerator for Rapid and Robust Predicate Evaluation</a></li>
+        
+        <li><a href="/post/2023/05/advanced_database_systems-history_of_databases/">Advanced Database Systems: History of Databases</a></li>
+        
+    </ul>
+</div>
+
+
+        <div class="post-meta meta-tags">
+            
+            <ul class="clearfix">
+                
+                <li><a href='/tags/%E8%AE%BA%E6%96%87'>论文</a></li>
+                
+                <li><a href='/tags/%E7%B4%A2%E5%BC%95'>索引</a></li>
+                
+            </ul>
+            
+        </div>
+    </article>
+    
+    
+
+    
+    
+    <div class="post bg-white">
+      <script src="https://utteranc.es/client.js"
+            repo= "himichael/hugoblogtalks"
+            issue-term="pathname"
+            theme="github-light"
+            crossorigin="anonymous"
+            async>
+      </script>
+    </div>
+    
+</div>
+
+
+                </div>
+
+                <div id="secondary">
+    <section class="widget">
+        <form id="search" action='https://code0xff.org/search/' method="get" accept-charset="utf-8" target="_blank" _lpchecked="1">
+      
+      <input type="text" name="q" maxlength="20" placeholder="Search">
+      <input type="hidden" name="sitesearch" value="https://code0xff.org/">
+      <button type="submit" class="submit icon-search"></button>
+</form>
+    </section>
+    
+    <section class="widget">
+        <h3 class="widget-title">最近文章</h3>
+<ul class="widget-list">
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/05/cache_conscious/" title="Cache Conscious Indexing for Decision-Support in Main Memory">Cache Conscious Indexing for Decision-Support in Main Memory</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/05/column_imprints/" title="Column Imprints: A Secondary Index Structure">Column Imprints: A Secondary Index Structure</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/05/sql_server_column_store_indexes/" title="SQL Server Column Store Indexes">SQL Server Column Store Indexes</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/05/bitmap_index/" title="Bitmap Index Design and Evaluation ">Bitmap Index Design and Evaluation </a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/05/advanced_database_systems-history_of_databases/" title="Advanced Database Systems: History of Databases">Advanced Database Systems: History of Databases</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/05/column_sketches/" title="Column Sketches: A Scan Accelerator for Rapid and Robust Predicate Evaluation">Column Sketches: A Scan Accelerator for Rapid and Robust Predicate Evaluation</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/05/optimal_column_layout_for_hybrid_workloads/" title="Optimal Column Layout for Hybrid Workloads">Optimal Column Layout for Hybrid Workloads</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/05/column-stores_vs_row-stores_how_different_are_they_really/" title="Column-Stores vs. Row-Stores: How Different Are They Really?">Column-Stores vs. Row-Stores: How Different Are They Really?</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/05/lakehouse-a-new-generation-of-open-platforms-that-unify/" title="Lakehouse A New Generation of Open Platforms that Unify Data Warehousing and Advanced Analytics">Lakehouse A New Generation of Open Platforms that Unify Data Warehousing and Advanced Analytics</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/05/building-an-elastic-query-engine-on-disaggregated-storage/" title="Building An Elastic Query Engine on Disaggregated Storage">Building An Elastic Query Engine on Disaggregated Storage</a>
+    </li>
+    
+</ul>
+    </section>
+
+    
+
+    <section class="widget">
+        <h3 class="widget-title"><a href='/categories/'>分类</a></h3>
+<ul class="widget-list">
+    
+    <li><a href="https://code0xff.org/categories/%E5%88%86%E5%B8%83%E5%BC%8F/">分布式 (6)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E5%8E%9F%E7%90%86%E5%88%86%E6%9E%90/">原理分析 (13)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E5%95%86%E4%B8%9A/">商业 (3)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E5%A4%A7%E6%95%B0%E6%8D%AE/">大数据 (22)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%95%B0%E6%8D%AE%E5%BA%93/">数据库 (31)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%96%87%E5%AD%A6%E5%92%8C%E8%89%BA%E6%9C%AF/">文学和艺术 (2)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%97%85%E8%A1%8C/">旅行 (10)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%9E%B6%E6%9E%84/">架构 (2)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E7%AE%97%E6%B3%95/">算法 (8)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E7%B3%BB%E7%BB%9F/">系统 (5)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E7%BC%96%E7%A8%8B%E8%AF%AD%E8%A8%80/">编程语言 (2)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E8%A1%8C%E4%B8%9A%E8%A7%82%E5%AF%9F/">行业观察 (1)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E8%AF%BB%E4%B9%A6%E7%AC%94%E8%AE%B0/">读书笔记 (12)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E9%9A%8F%E4%BE%BF%E5%86%99%E5%86%99/">随便写写 (3)</a></li>
+    
+</ul>
+    </section>
+
+    <section class="widget">
+        <h3 class="widget-title">归档</a></h3>
+<ul class="widget-list">
+    
+    <li><a href="https://code0xff.org/years/2021%E5%B9%B4/">2021年 (31)</a></li>
+    
+    <li><a href="https://code0xff.org/years/2022%E5%B9%B4/">2022年 (55)</a></li>
+    
+    <li><a href="https://code0xff.org/years/2023%E5%B9%B4/">2023年 (34)</a></li>
+    
+</ul>
+    </section>
+
+    <section class="widget">
+        <h3 class="widget-title"><a href='/tags/'>标签</a></h3>
+<div class="tagcloud">
+    
+    <a href="https://code0xff.org/tags/b%E6%A0%91/">B树 </a>
+    
+    <a href="https://code0xff.org/tags/cmu-database/">CMU-Database </a>
+    
+    <a href="https://code0xff.org/tags/flink/">flink </a>
+    
+    <a href="https://code0xff.org/tags/hive/">Hive </a>
+    
+    <a href="https://code0xff.org/tags/k8s/">k8s </a>
+    
+    <a href="https://code0xff.org/tags/kudu/">kudu </a>
+    
+    <a href="https://code0xff.org/tags/kyuubi/">Kyuubi </a>
+    
+    <a href="https://code0xff.org/tags/lakehouse/">Lakehouse </a>
+    
+    <a href="https://code0xff.org/tags/leveldb/">LevelDB </a>
+    
+    <a href="https://code0xff.org/tags/llvm/">LLVM </a>
+    
+    <a href="https://code0xff.org/tags/manacher/">Manacher </a>
+    
+    <a href="https://code0xff.org/tags/mapreduce/">MapReduce </a>
+    
+    <a href="https://code0xff.org/tags/mysql/">MySQL </a>
+    
+    <a href="https://code0xff.org/tags/newsql/">NewSQL </a>
+    
+    <a href="https://code0xff.org/tags/oceanbase/">OceanBase </a>
+    
+    <a href="https://code0xff.org/tags/paxos/">paxos </a>
+    
+    <a href="https://code0xff.org/tags/raft/">raft </a>
+    
+    <a href="https://code0xff.org/tags/scala/">scala </a>
+    
+    <a href="https://code0xff.org/tags/simd/">SIMD </a>
+    
+    <a href="https://code0xff.org/tags/snowflake/">snowflake </a>
+    
+    <a href="https://code0xff.org/tags/spark/">spark </a>
+    
+    <a href="https://code0xff.org/tags/unix/">unix </a>
+    
+    <a href="https://code0xff.org/tags/%E4%BA%8C%E5%88%86%E6%9F%A5%E6%89%BE/">二分查找 </a>
+    
+    <a href="https://code0xff.org/tags/%E4%BA%8C%E5%8F%89%E6%A0%91%E9%81%8D%E5%8E%86/">二叉树遍历 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%88%86%E5%B8%83%E5%BC%8F/">分布式 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%88%97%E5%AD%98/">列存 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%8A%A8%E6%80%81%E6%B3%A8%E5%85%A5/">动态注入 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%8E%86%E5%8F%B2/">历史 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%90%91%E9%87%8F%E5%8C%96/">向量化 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%9B%9E%E6%BA%AF/">回溯 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%9B%BD%E5%86%85%E6%97%85%E8%A1%8C/">国内旅行 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%9B%BD%E5%A4%96%E6%97%85%E8%A1%8C/">国外旅行 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%A4%9A%E7%A7%9F%E6%88%B7/">多租户 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%A4%A7%E6%95%B0%E6%8D%AE/">大数据 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%AD%98%E5%82%A8/">存储 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%B7%A5%E4%BD%9C%E8%AE%B0%E5%BD%95/">工作记录 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%BE%AE%E6%9C%8D%E5%8A%A1/">微服务 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%95%B0%E6%8D%AE%E5%BA%93/">数据库 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%95%B0%E6%8D%AE%E6%A8%A1%E5%9E%8B/">数据模型 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%9F%A5%E8%AF%A2%E4%BC%98%E5%8C%96/">查询优化 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%9F%A5%E8%AF%A2%E7%BC%96%E8%AF%91/">查询编译 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%B1%87%E7%BC%96/">汇编 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%B5%8B%E8%AF%95/">测试 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%B9%96%E4%BB%93%E4%B8%80%E4%BD%93/">湖仓一体 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%94%9F%E6%B4%BB/">生活 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%94%B5%E5%BD%B1/">电影 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%AE%97%E6%B3%95/">算法 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%B4%A2%E5%BC%95/">索引 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BB%8F%E6%B5%8E/">经济 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BC%93%E5%AD%98/">缓存 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BC%96%E8%AF%91%E5%8E%9F%E7%90%86/">编译原理 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BD%91%E7%BB%9C/">网络 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AE%A1%E7%AE%97%E6%A1%86%E6%9E%B6/">计算框架 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AE%BA%E6%96%87/">论文 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AF%BB%E4%B9%A6/">读书 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AF%BB%E4%B9%A6%E7%AC%94%E8%AE%B0/">读书笔记 </a>
+    
+</div>
+    </section>
+
+    
+
+    <section class="widget">
+        <h3 class="widget-title">RSS</h3>
+        <ul class="widget-list">
+            <li><a href="https://code0xff.org/index.xml">文章 RSS</a></li>
+        </ul>
+    </section>
+</div>
+            </div>
+        </div>
+    </div>
+    <footer id="footer">
+    <div>
+        &copy; 2023 <a href="https://code0xff.org/">记录每个瞬间 By 老王</a>
+        
+    </div>
+    <br />
+    <div>
+        <div class="github-badge">
+            <a href="https://gohugo.io/" target="_black" rel="nofollow"><span class="badge-subject">Powered by</span><span class="badge-value bg-blue">Hugo</span></a>
+        </div>
+        <div class="github-badge">
+            <a href="https://github.com/flysnow-org/maupassant-hugo" target="_black"><span class="badge-subject">Theme</span><span class="badge-value bg-yellowgreen">Maupassant</span></a>
+        </div>
+    </div>
+</footer>
+
+
+    
+    <script type="text/javascript">
+        window.MathJax = {
+            tex2jax: {
+                inlineMath: [['$', '$']],
+                processEscapes: true
+                }
+            };
+    </script>
+    <script src='https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.5/MathJax.js?config=TeX-MML-AM_CHTML' async></script><script src="https://cdn.bootcdn.net/ajax/libs/fancybox/3.5.7/jquery.fancybox.min.js"></script>
+
+<a id="rocket" href="#top"></a>
+<script type="text/javascript" src='/js/totop.js?v=0.0.0' async=""></script>
+
+<script type="application/javascript">
+var doNotTrack = false;
+if (!doNotTrack) {
+	window.ga=window.ga||function(){(ga.q=ga.q||[]).push(arguments)};ga.l=+new Date;
+	ga('create', 'GA ID', 'auto');
+	
+	ga('send', 'pageview');
+}
+</script>
+<script async src='https://www.google-analytics.com/analytics.js'></script>
+
+
+
+    <script type="text/javascript" src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js" async></script>
+
+
+
+
+</body>
+
+</html>
