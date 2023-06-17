@@ -1,0 +1,749 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    
+    <meta name="referrer" content="no-referrer-when-downgrade">
+    
+
+    <title>资源隔离修改配置动态加载 | 记录每个瞬间</title>
+    <meta property="og:title" content="资源隔离修改配置动态加载 - 记录每个瞬间">
+    <meta property="og:type" content="article">
+        
+    <meta property="article:published_time" content='2023-05-14T11:23:04&#43;08:00'>
+        
+        
+    <meta property="article:modified_time" content='2023-05-14T11:23:04&#43;08:00'>
+        
+    <meta name="Keywords" content="">
+    <meta name="description" content="资源隔离修改配置动态加载">
+        <meta name="author" content="隔壁老王">
+        
+    <meta property="og:url" content="https://code0xff.org/post/2023/06/%E8%B5%84%E6%BA%90%E9%9A%94%E7%A6%BB%E4%BF%AE%E6%94%B9%E9%85%8D%E7%BD%AE%E5%8A%A8%E6%80%81%E5%8A%A0%E8%BD%BD/">
+    <link rel="shortcut icon" href='/favicon.ico'  type="image/x-icon">
+
+    <link rel="stylesheet" href='/css/normalize.css'>
+    <link rel="stylesheet" href='/css/style.css'>
+    <script type="text/javascript" src="//cdn.bootcdn.net/ajax/libs/jquery/3.4.1/jquery.min.js"></script>
+
+    
+    
+    
+        <link href="https://cdn.bootcdn.net/ajax/libs/fancybox/3.5.7/jquery.fancybox.min.css" rel="stylesheet">
+    
+    
+    
+    
+</head>
+
+
+<body>
+    <header id="header" class="clearfix">
+    <div class="container">
+        <div class="col-group">
+            <div class="site-name ">
+                
+                    <a id="logo" href="https://code0xff.org/">
+                        记录每个瞬间
+                    </a>
+                
+                
+            </div>
+            <div>
+                <nav id="nav-menu" class="clearfix">
+                    <a class="current" href="https://code0xff.org/">首页</a>
+                    
+                    <a  href="https://code0xff.org/linked/" title="链接">链接</a>
+                    
+                    <a  href="https://code0xff.org/archives/" title="归档">归档</a>
+                    
+                    <a  href="https://code0xff.org/about/" title="关于">关于</a>
+                    
+                </nav>
+            </div>
+        </div>
+    </div>
+</header>
+
+    <div id="body">
+        <div class="container">
+            <div class="col-group">
+
+                <div class="col-8" id="main">
+                    
+<div class="res-cons">
+    
+    <article class="post">
+        <header>
+            <h1 class="post-title">资源隔离修改配置动态加载</h1>
+        </header>
+        <date class="post-meta meta-date">
+            2023年5月14日
+        </date>
+<nav id="TableOfContents">
+  <ul>
+    <li>
+      <ul>
+        <li><a href="#需求">需求</a></li>
+        <li><a href="#设计">设计</a>
+          <ul>
+            <li><a href="#总体架构">总体架构</a></li>
+            <li><a href="#新增语法">新增语法</a></li>
+            <li><a href="#master连接engine">master连接engine</a></li>
+            <li><a href="#更新资源的实现细节">更新资源的实现细节</a></li>
+            <li><a href="#发布engine的三种方式">发布engine的三种方式</a></li>
+            <li><a href="#基于pod标签对比更新">基于pod标签对比更新</a></li>
+            <li><a href="#异常处理">异常处理</a></li>
+            <li><a href="#优雅重启">优雅重启</a></li>
+          </ul>
+        </li>
+      </ul>
+    </li>
+  </ul>
+</nav>
+        
+        <div class="post-meta">
+            
+            <span class="post-meta meta-tags">
+                <ul class="clearfix">
+                    <a href='/categories/%E5%A4%A7%E6%95%B0%E6%8D%AE'>大数据</a>
+                </ul>
+            </span>
+            
+        </div>
+        
+        
+        <div class="post-meta">
+            <span id="busuanzi_container_page_pv">|<span id="busuanzi_value_page_pv"></span><span>
+                    阅读</span></span>
+        </div>
+        
+        
+        <div class="post-content">
+            <h2 id="需求">需求</h2>
+<p>基于<code>资源隔离</code>这个大功能的基础之上，增加的一个小功能<br>
+当修改 租户、资源池、资源单元时 能做到动态更新配置，不需要用户手动操作<br>
+因为在实际的场景中，用户可能也没权限，也不方便去操作 k8 集群，所以需要提供一种方式，能让用户修改完配置后，实现配置自动更新</p>
+<p>虽然只是一个 子功能，但是比 资源隔离本身可能还要复杂，牵涉到 多个组件</p>
+<ul>
+<li>k8s</li>
+<li>zookeeper</li>
+<li>proxy，proxy-master，engine</li>
+</ul>
+<p>而且需要考虑到很多异常的情况</p>
+<ul>
+<li>如节点宕机</li>
+<li>写元数据、写 ZK节点是非原子性的，如何保证冥等性，或者事务补偿</li>
+<li>如何将元数据中的信息，跟 k8s 中的 pod 做快速对比</li>
+</ul>
+<h2 id="设计">设计</h2>
+<h3 id="总体架构">总体架构</h3>
+<p>总体架构如下：<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/06/%E8%B5%84%E6%BA%90%E9%9A%94%E7%A6%BB%E4%BF%AE%E6%94%B9%E9%85%8D%E7%BD%AE%E5%8A%A8%E6%80%81%E5%8A%A0%E8%BD%BD/1.png">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/06/%E8%B5%84%E6%BA%90%E9%9A%94%E7%A6%BB%E4%BF%AE%E6%94%B9%E9%85%8D%E7%BD%AE%E5%8A%A8%E6%80%81%E5%8A%A0%E8%BD%BD/1.png" />
+        </a>
+       <br>
+用户执行了更新资源的请求后，由 proxy交给某个engine，engine负责更新元数据库 <br>
+之后，将新增的信息注册到 ZK 上，由于engine可能会宕机，所以这里注册的 ZK节点，需要是持久性的节点<br>
+proxy-master会定期轮询 ZK(也可以做到基于通知的方式更实时的处理)，当发现有更新时，获取这些更新信息<br>
+比如</p>
+<ul>
+<li>ZK上的信息是更新了资源单元 uc_1 的完整信息，这个相当于是旧的信息</li>
+<li>master请求 engine-inner，找到 uc_1 的最新信息，并通过反查的方式，获取 资源单元关联的资源池，租户信息</li>
+<li>根据 根据查询得到的 资源单元、资源池、租户，去 k8s 上查找对应的 pod</li>
+<li>根据 pod 对比 元数据库中最新查到的配置</li>
+<li>如果有变更则 删除对应的 pod，创建新的 pod</li>
+<li>最后删除掉 ZK 路径，完成这次动态变更</li>
+</ul>
+<h3 id="新增语法">新增语法</h3>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">15
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">16
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">17
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">18
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">19
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">20
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">21
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">22
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">23
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">24
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">25
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">26
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">27
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">28
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-sql" data-lang="sql"><span style="display:flex;"><span><span style="color:#6272a4">-- 查询这个租户有多少 engine
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span><span style="color:#ff79c6">SHOW</span> ENGINES 【租户名称】
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">SHOW</span> ENGINES t_1
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4">-- 查询这个租户，在某个资源池下有多少 engine
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span><span style="color:#ff79c6">SHOW</span> ENGINES POOL 【租户名称】 【资源池名称】
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">SHOW</span> ENGINES POOL  t_1  rp_1
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4">-- 查询这个租户，在某个资源池下，有多少指定资源单元配置的 engine
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span><span style="color:#ff79c6">SHOW</span> ENGINES UNIT 【租户名称】【资源池名称】【资源单元名称】
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">SHOW</span> ENGINES UNIT t_1 rp_1 uc_1
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4">-- 启动 engine
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span><span style="color:#ff79c6">START</span> ENGINE 【租户名】【资源池名】【资源单元名】
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">START</span> ENGINE t_1 rp_1 uc_1
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4">-- 重启 engine
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span><span style="color:#ff79c6">RESTART</span> ENGINE 【资源池名称】【engine名称】
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">RESTART</span> ENGINE rp_1 <span style="color:#f1fa8c">&#39;engine-pod_name&#39;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4">-- 关闭 engine
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>STOP ENGINE 【资源池名称】【engine名称】
+</span></span><span style="display:flex;"><span>STOP ENGINE rp_1 <span style="color:#f1fa8c">&#39;egnine-pod-name&#39;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4">-- engine详细信息
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span><span style="color:#ff79c6">DESCRIBE</span> ENGINE 【资源池名称】【engine名称】
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">DESC</span> ENGINE 【资源池名称】【engine名称】
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">DESCRIBE</span> ENGINE rp_1 <span style="color:#f1fa8c">&#39;engine-pod-name&#39;</span>
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>反查信息</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">5
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-sql" data-lang="sql"><span style="display:flex;"><span><span style="color:#6272a4">-- 根据资源单元名称，反查关联的资源池信息
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span><span style="color:#ff79c6">SHOW</span> RESOURCE UNIT uc_1 <span style="color:#ff79c6">FOR</span> POOL
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4">-- 根据资源池名称，反查关联的租户信息
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span><span style="color:#ff79c6">SHOW</span> RESOURCE POOL rp_1 FRO TENANT
+</span></span></code></pre></td></tr></table>
+</div>
+</div><h3 id="master连接engine">master连接engine</h3>
+<p>由于proxy只是一个代理，没有计算能力，proxy-master也是一样的<br>
+而proxy-master在 处理动态更新的时候，需要查询元数据信息<br>
+获取一些反查信息，这时候，master 需要连接 eninge，通过engine来返回对应的信息<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/06/%E8%B5%84%E6%BA%90%E9%9A%94%E7%A6%BB%E4%BF%AE%E6%94%B9%E9%85%8D%E7%BD%AE%E5%8A%A8%E6%80%81%E5%8A%A0%E8%BD%BD/2.png">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/06/%E8%B5%84%E6%BA%90%E9%9A%94%E7%A6%BB%E4%BF%AE%E6%94%B9%E9%85%8D%E7%BD%AE%E5%8A%A8%E6%80%81%E5%8A%A0%E8%BD%BD/2.png" />
+        </a>
+    </p>
+<p>这里会出现 thrift协议，非 open-session情况下的，首次连接 engine问题</p>
+<ul>
+<li>当客户端执行 创建 jdbc连接时，会触发到 proxy，然后proxy 会发送 open-session请求给engine</li>
+<li>之后 proxy跟engine就建立了连接</li>
+<li>因为是用户主动发送的请求，所以proxy是能拿到用户名/密码的</li>
+<li>但这里是在非 JDBC主动请求的情况下，就没有用户名/密码了，所以需要预置一套密码</li>
+<li>这种情况，只对于 simple情况下才有影响</li>
+<li>如果是 SASL，kerberos，proxy -&gt; engien，使用的是 SASL，加密协议但是无密码，所以不用校验</li>
+</ul>
+<p>目前 simple 的方式还没有特殊处理</p>
+<h3 id="更新资源的实现细节">更新资源的实现细节</h3>
+<p>以更新一个 租户为例</p>
+<ul>
+<li>假设原租户关联了 rp_1, rp_2</li>
+<li>rp1 管理了 uc_1，uc_2</li>
+<li>rp_2 关联了 uc_3</li>
+</ul>
+<p>更新后</p>
+<ul>
+<li>租户关联了 rp_1，rp_3</li>
+<li>rp_1 关联了uc_1，uc_2 不动</li>
+<li>rp_3 关联了 uc_4</li>
+</ul>
+<p>engine更新完后，将 原租户的信息挂到 ZK 上<br>
+master 定期读取 ZK 上的路径</p>
+<ul>
+<li>从 ZK 上获取到了 t_1 信息</li>
+<li>然后从数据库中获取最新的 t_1 信息</li>
+<li>获取到 t_1 关联的 资源池 rp1，去 rp_1 下检查，看 rp_1 下面的 engine是否满足 uc_1，uc_2 的配置，如果缺失需要新启动</li>
+<li>去rp_3 下检查，对应的 engine是否满足 uc_4 的配置，没有缺失需要启动</li>
+<li>再去老的 rp_2下面检查，这时候不应该有 t_1 的的engine了，如果有需要将其关闭</li>
+</ul>
+<p>
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/06/%E8%B5%84%E6%BA%90%E9%9A%94%E7%A6%BB%E4%BF%AE%E6%94%B9%E9%85%8D%E7%BD%AE%E5%8A%A8%E6%80%81%E5%8A%A0%E8%BD%BD/3.png">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/06/%E8%B5%84%E6%BA%90%E9%9A%94%E7%A6%BB%E4%BF%AE%E6%94%B9%E9%85%8D%E7%BD%AE%E5%8A%A8%E6%80%81%E5%8A%A0%E8%BD%BD/3.png" />
+        </a>
+    </p>
+<h3 id="发布engine的三种方式">发布engine的三种方式</h3>
+<p>发布engine，调用的命令是 START ENGINE t_1 rp_1 uc_1<br>
+将一个 engine 发布到指定的 资源池，也就是 k8s 的namespace 下，并根据 uc_1 的配置创建 engine<br>
+这里跟之前不同的是</p>
+<ul>
+<li>之前发布 engine，都是 proxy发布的</li>
+<li>而这次是需要执行SQL命令，所以实际发布者是 engine</li>
+<li>也就是 engine，发布 engine</li>
+</ul>
+<p>engine 发布 engine目前有三种方式</p>
+<ul>
+<li>基于线程的方式，这需要将 spark.kubernetes.submission.waitAppCompletion=true，false则发不完线程退出，导致当前engien关联的executor也会退出，原因还不清楚</li>
+<li>基于线程的发布，就是套用了之前的逻辑，完全不动，但是需要将上述配置开启，开启的坏处是，每次发布一个engine都会出现一个监控线程，长期下来这是不合适的</li>
+<li>使用进程的发布方式，在 engine内，新启动一个进程，然后用这个进程来调用SparkSubmit 发布新的engine，这样就不会有上述问题了</li>
+<li>带来的副作用是，新进程相当于一个新的JVM，也会占用额外内存，弄不好会超过 pod资源限制，可能会导致 pod 出现 OOM</li>
+<li>基于 proxy-master来发布，engine 如果接受到发布的命令，则将这个命令注册到 ZK 上，然后就不管了，可以正常返回</li>
+<li>之后proxy-master拿到 ZK 上的信息，去发布 engine，proxy-master发布 engine就是套用了之前的逻辑</li>
+</ul>
+<p>目前使用的是第三种方式</p>
+<h3 id="基于pod标签对比更新">基于pod标签对比更新</h3>
+<p>从数据库中新获取的 资源，需要跟老的，已经发布的 pod 做对比<br>
+比如，原先的 资源单元配置是：driver 1C1G，executor 2C2G，min：1，max：2，以及一堆的扩展属性<br>
+pod会将这些信息，做成标签，比如</p>
+<ul>
+<li>记录 unit_name=uc_1</li>
+<li>资源单元配置 unit_configs=1_1G_2_2G 表示 driver 1C1G，executor 2C2G</li>
+<li>扩展属性unit_properties，这个比较长，不适合直接放进去，这里对扩展属性内容做了 MD5 编码</li>
+</ul>
+<pre tabindex="0"><code>Name:               my-app-aba01288bd33e1ff-driver
+Namespace:          my-namespace
+Priority:           0
+PriorityClassName:  &lt;none&gt;
+Node:               10.111.40.111/10.111.40.111
+Start Time:         .........
+Labels:             name=my-app
+                    namespace=my-namespace
+                    pool_name=rp_2
+                    spark-app-name=my-app
+                    spark-app-selector=spark-8032fb14ef9148cb978de4031f064fe5
+                    spark-role=driver
+                    spark-version=3.3.3
+                    tenant_name=t_1
+                    unit_configs=1_2G_2_2G
+                    unit_name=uc_3
+                    unit_properties=99914b932bd37a50b983c5e7c90ae93b
+</code></pre><p>通过这种方式，就可以使用 租户名称的标签、资源池名称标签、资源单元名称，然后就可以定位到具体的 engine 了<br>
+同时因为有标签过滤，查询的性能也会很快<br>
+如果 master 通过 标签对比，发现 已有的 pod 跟数据库最新的配置是一样的，说明 这个pod已经被启动了，可能是之前 master宕机了，那么直接忽略就可以了<br>
+如果发现有缺失的，比如需要 3个这样的engine，实际只发现了 2个，那么就将剩余的 1个 再创建起来就可以了</p>
+<h3 id="异常处理">异常处理</h3>
+<p>master是通过分布式锁确定的，所以proxy-master只会有一个<br>
+如果一个master宕机了，那么就会出现选举，如果配置了两个proxy，剩下的那个proxy就会变成master<br>
+如果只有一个proxy，等k8s自动启动了新 proxy后，这个proxy会继续作为master</p>
+<p>master会定期遍历 ZK 路径下 /my-app/ny-project/lock/alter 这样的节点<br>
+这个节点只有一个，而且是持久节点，除非主动删除不会自己消失<br>
+master 异常处理</p>
+<ul>
+<li>当 master 根据 alter节点的信息，发现要创建 3个 pod，但是创建完 1个后，就宕机了</li>
+<li>新master接管后继续获取到这个 alter节点，然后通过元数据库的最新信息，和 pod标签对比，发现需要再创建 2个pod，于是继续处理</li>
+<li>当处理完剩下的 2个pod后，新master又宕机了</li>
+<li>第二个 master接管后，拿到 alter节点的信息，然后对比 最新数据和 pod 的标签，发现都一样，于是什么都不做</li>
+<li>第二个master 删除 ZK 上的 alter 节点，本次动态更新结束</li>
+</ul>
+<p>engine修改资源异常处理</p>
+<ul>
+<li>由于只有一个 alter节点，当 修改了一个资源后，再次修改时，创建对应的 alter节点会失败，只有等master处理完后才能继续修改</li>
+<li>engine 先将 alter的信息注册到 ZK 上，然后再更新元数据库，假设更新元数据之前就宕机了</li>
+<li>master 获取到了 alter节点信息，再获取最新的元数据信息(没有修改过)，然后跟 pod做对比</li>
+<li>发现没有任何修改，于是删除这个 alter节点，本次动态更新结束(相当于什么都没更新)</li>
+</ul>
+<h3 id="优雅重启">优雅重启</h3>
+<p>普通重启就是 先启动一个pod，然后再立马删除一个 pod<br>
+这种做法不太优雅，会导致之前的任务处理失败<br>
+更优雅的方式</p>
+<ul>
+<li>将 engine 对应的 ZK 节点删除</li>
+<li>删除 ZK 节点后，因为新请求会首先检查 ZK，现在没有了，所以新请求就不会转发给这个engine了</li>
+<li>当前的 engine监听自己的 ZK 节点，当发生变化时，如被删除，则触发一个监听检查</li>
+<li>这个监听检查会定期检查当前是否还有 运行的任务，如果有继续等待</li>
+<li>如果没有，就将自己杀掉</li>
+</ul>
+
+			<script type="text/javascript"
+        async
+        src="https://cdn.bootcss.com/mathjax/2.7.3/MathJax.js?config=TeX-AMS-MML_HTMLorMML">
+MathJax.Hub.Config({
+  tex2jax: {
+    inlineMath: [['$','$'], ['\\(','\\)']],
+    displayMath: [['$$','$$'], ['\[\[','\]\]']],
+    processEscapes: true,
+    processEnvironments: true,
+    skipTags: ['script', 'noscript', 'style', 'textarea', 'pre'],
+    TeX: { equationNumbers: { autoNumber: "AMS" },
+         extensions: ["AMSmath.js", "AMSsymbols.js"] }
+  }
+});
+
+MathJax.Hub.Queue(function() {
+    
+    
+    
+    var all = MathJax.Hub.getAllJax(), i;
+    for(i = 0; i < all.length; i += 1) {
+        all[i].SourceElement().parentNode.className += ' has-jax';
+    }
+});
+</script>
+
+<style>
+code.has-jax {
+    font: inherit;
+    font-size: 100%;
+    background: inherit;
+    border: inherit;
+    color: #515151;
+}
+</style>
+        </div>
+
+        
+
+
+        
+
+<div class="post-archive">
+    <h2>相关文章</h2>
+    <ul class="listing">
+        
+        <li><a href="/post/2023/06/%E8%B5%84%E6%BA%90%E9%9A%94%E7%A6%BB%E8%AE%BE%E8%AE%A1/">资源隔离设计</a></li>
+        
+        <li><a href="/post/2023/06/%E9%95%9C%E5%83%8F%E5%90%88%E5%B9%B6%E9%85%8D%E7%BD%AE%E6%96%87%E4%BB%B6%E5%90%8C%E6%AD%A5/">镜像合并&amp;配置文件同步</a></li>
+        
+        <li><a href="/post/2022/09/%E9%AB%98%E5%8F%AF%E7%94%A8%E8%AE%BE%E8%AE%A1/">高可用设计</a></li>
+        
+        <li><a href="/post/2022/08/kyuubi%E8%AE%BE%E8%AE%A1%E8%B0%83%E7%A0%94/">Kyuubi设计调研</a></li>
+        
+        <li><a href="/post/2022/07/%E5%AE%B9%E7%81%BE%E9%83%A8%E7%BD%B2%E8%B0%83%E7%A0%94/">容灾部署调研</a></li>
+        
+    </ul>
+</div>
+
+
+        <div class="post-meta meta-tags">
+            
+            <ul class="clearfix">
+                
+                <li><a href='/tags/%E5%B7%A5%E4%BD%9C%E8%AE%B0%E5%BD%95'>工作记录</a></li>
+                
+            </ul>
+            
+        </div>
+    </article>
+    
+    
+
+    
+    
+    <div class="post bg-white">
+      <script src="https://utteranc.es/client.js"
+            repo= "himichael/hugoblogtalks"
+            issue-term="pathname"
+            theme="github-light"
+            crossorigin="anonymous"
+            async>
+      </script>
+    </div>
+    
+</div>
+
+
+                </div>
+
+                <div id="secondary">
+    <section class="widget">
+        <form id="search" action='https://code0xff.org/search/' method="get" accept-charset="utf-8" target="_blank" _lpchecked="1">
+      
+      <input type="text" name="q" maxlength="20" placeholder="Search">
+      <input type="hidden" name="sitesearch" value="https://code0xff.org/">
+      <button type="submit" class="submit icon-search"></button>
+</form>
+    </section>
+    
+    <section class="widget">
+        <h3 class="widget-title">最近文章</h3>
+<ul class="widget-list">
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/06/bitweaving/" title="BitWeaving: Fast Scans for Main Memory Data Processing">BitWeaving: Fast Scans for Main Memory Data Processing</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/05/cache_conscious/" title="Cache Conscious Indexing for Decision-Support in Main Memory">Cache Conscious Indexing for Decision-Support in Main Memory</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/05/column_imprints/" title="Column Imprints: A Secondary Index Structure">Column Imprints: A Secondary Index Structure</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/05/sql_server_column_store_indexes/" title="SQL Server Column Store Indexes">SQL Server Column Store Indexes</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/05/bitmap_index/" title="Bitmap Index Design and Evaluation ">Bitmap Index Design and Evaluation </a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/05/advanced_database_systems-history_of_databases/" title="Advanced Database Systems: History of Databases">Advanced Database Systems: History of Databases</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/05/column_sketches/" title="Column Sketches: A Scan Accelerator for Rapid and Robust Predicate Evaluation">Column Sketches: A Scan Accelerator for Rapid and Robust Predicate Evaluation</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/06/%E8%B5%84%E6%BA%90%E9%9A%94%E7%A6%BB%E4%BF%AE%E6%94%B9%E9%85%8D%E7%BD%AE%E5%8A%A8%E6%80%81%E5%8A%A0%E8%BD%BD/" title="资源隔离修改配置动态加载">资源隔离修改配置动态加载</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/06/%E8%B5%84%E6%BA%90%E9%9A%94%E7%A6%BB%E8%AE%BE%E8%AE%A1/" title="资源隔离设计">资源隔离设计</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/05/optimal_column_layout_for_hybrid_workloads/" title="Optimal Column Layout for Hybrid Workloads">Optimal Column Layout for Hybrid Workloads</a>
+    </li>
+    
+</ul>
+    </section>
+
+    
+
+    <section class="widget">
+        <h3 class="widget-title"><a href='/categories/'>分类</a></h3>
+<ul class="widget-list">
+    
+    <li><a href="https://code0xff.org/categories/%E5%88%86%E5%B8%83%E5%BC%8F/">分布式 (6)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E5%8E%9F%E7%90%86%E5%88%86%E6%9E%90/">原理分析 (13)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E5%95%86%E4%B8%9A/">商业 (3)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E5%A4%A7%E6%95%B0%E6%8D%AE/">大数据 (25)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%95%B0%E6%8D%AE%E5%BA%93/">数据库 (32)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%96%87%E5%AD%A6%E5%92%8C%E8%89%BA%E6%9C%AF/">文学和艺术 (2)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%97%85%E8%A1%8C/">旅行 (10)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%9E%B6%E6%9E%84/">架构 (2)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E7%AE%97%E6%B3%95/">算法 (8)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E7%B3%BB%E7%BB%9F/">系统 (5)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E7%BC%96%E7%A8%8B%E8%AF%AD%E8%A8%80/">编程语言 (2)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E8%A1%8C%E4%B8%9A%E8%A7%82%E5%AF%9F/">行业观察 (1)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E8%AF%BB%E4%B9%A6%E7%AC%94%E8%AE%B0/">读书笔记 (12)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E9%9A%8F%E4%BE%BF%E5%86%99%E5%86%99/">随便写写 (3)</a></li>
+    
+</ul>
+    </section>
+
+    <section class="widget">
+        <h3 class="widget-title">归档</a></h3>
+<ul class="widget-list">
+    
+    <li><a href="https://code0xff.org/years/2021%E5%B9%B4/">2021年 (31)</a></li>
+    
+    <li><a href="https://code0xff.org/years/2022%E5%B9%B4/">2022年 (55)</a></li>
+    
+    <li><a href="https://code0xff.org/years/2023%E5%B9%B4/">2023年 (38)</a></li>
+    
+</ul>
+    </section>
+
+    <section class="widget">
+        <h3 class="widget-title"><a href='/tags/'>标签</a></h3>
+<div class="tagcloud">
+    
+    <a href="https://code0xff.org/tags/b%E6%A0%91/">B树 </a>
+    
+    <a href="https://code0xff.org/tags/cmu-database/">CMU-Database </a>
+    
+    <a href="https://code0xff.org/tags/flink/">flink </a>
+    
+    <a href="https://code0xff.org/tags/hive/">Hive </a>
+    
+    <a href="https://code0xff.org/tags/k8s/">k8s </a>
+    
+    <a href="https://code0xff.org/tags/kudu/">kudu </a>
+    
+    <a href="https://code0xff.org/tags/kyuubi/">Kyuubi </a>
+    
+    <a href="https://code0xff.org/tags/lakehouse/">Lakehouse </a>
+    
+    <a href="https://code0xff.org/tags/leveldb/">LevelDB </a>
+    
+    <a href="https://code0xff.org/tags/llvm/">LLVM </a>
+    
+    <a href="https://code0xff.org/tags/manacher/">Manacher </a>
+    
+    <a href="https://code0xff.org/tags/mapreduce/">MapReduce </a>
+    
+    <a href="https://code0xff.org/tags/mysql/">MySQL </a>
+    
+    <a href="https://code0xff.org/tags/newsql/">NewSQL </a>
+    
+    <a href="https://code0xff.org/tags/oceanbase/">OceanBase </a>
+    
+    <a href="https://code0xff.org/tags/paxos/">paxos </a>
+    
+    <a href="https://code0xff.org/tags/raft/">raft </a>
+    
+    <a href="https://code0xff.org/tags/scala/">scala </a>
+    
+    <a href="https://code0xff.org/tags/simd/">SIMD </a>
+    
+    <a href="https://code0xff.org/tags/snowflake/">snowflake </a>
+    
+    <a href="https://code0xff.org/tags/spark/">spark </a>
+    
+    <a href="https://code0xff.org/tags/unix/">unix </a>
+    
+    <a href="https://code0xff.org/tags/%E4%BA%8C%E5%88%86%E6%9F%A5%E6%89%BE/">二分查找 </a>
+    
+    <a href="https://code0xff.org/tags/%E4%BA%8C%E5%8F%89%E6%A0%91%E9%81%8D%E5%8E%86/">二叉树遍历 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%88%86%E5%B8%83%E5%BC%8F/">分布式 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%88%97%E5%AD%98/">列存 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%8A%A8%E6%80%81%E6%B3%A8%E5%85%A5/">动态注入 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%8E%86%E5%8F%B2/">历史 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%90%91%E9%87%8F%E5%8C%96/">向量化 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%9B%9E%E6%BA%AF/">回溯 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%9B%BD%E5%86%85%E6%97%85%E8%A1%8C/">国内旅行 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%9B%BD%E5%A4%96%E6%97%85%E8%A1%8C/">国外旅行 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%A4%9A%E7%A7%9F%E6%88%B7/">多租户 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%A4%A7%E6%95%B0%E6%8D%AE/">大数据 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%AD%98%E5%82%A8/">存储 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%B7%A5%E4%BD%9C%E8%AE%B0%E5%BD%95/">工作记录 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%BE%AE%E6%9C%8D%E5%8A%A1/">微服务 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%95%B0%E6%8D%AE%E5%BA%93/">数据库 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%95%B0%E6%8D%AE%E6%A8%A1%E5%9E%8B/">数据模型 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%9F%A5%E8%AF%A2%E4%BC%98%E5%8C%96/">查询优化 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%9F%A5%E8%AF%A2%E7%BC%96%E8%AF%91/">查询编译 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%B1%87%E7%BC%96/">汇编 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%B5%8B%E8%AF%95/">测试 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%B9%96%E4%BB%93%E4%B8%80%E4%BD%93/">湖仓一体 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%94%9F%E6%B4%BB/">生活 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%94%B5%E5%BD%B1/">电影 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%AE%97%E6%B3%95/">算法 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%B4%A2%E5%BC%95/">索引 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BB%8F%E6%B5%8E/">经济 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BC%93%E5%AD%98/">缓存 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BC%96%E8%AF%91%E5%8E%9F%E7%90%86/">编译原理 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BD%91%E7%BB%9C/">网络 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AE%A1%E7%AE%97%E6%A1%86%E6%9E%B6/">计算框架 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AE%BA%E6%96%87/">论文 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AF%BB%E4%B9%A6/">读书 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AF%BB%E4%B9%A6%E7%AC%94%E8%AE%B0/">读书笔记 </a>
+    
+</div>
+    </section>
+
+    
+
+    <section class="widget">
+        <h3 class="widget-title">RSS</h3>
+        <ul class="widget-list">
+            <li><a href="https://code0xff.org/index.xml">文章 RSS</a></li>
+        </ul>
+    </section>
+</div>
+            </div>
+        </div>
+    </div>
+    <footer id="footer">
+    <div>
+        &copy; 2023 <a href="https://code0xff.org/">记录每个瞬间 By 老王</a>
+        
+    </div>
+    <br />
+    <div>
+        <div class="github-badge">
+            <a href="https://gohugo.io/" target="_black" rel="nofollow"><span class="badge-subject">Powered by</span><span class="badge-value bg-blue">Hugo</span></a>
+        </div>
+        <div class="github-badge">
+            <a href="https://github.com/flysnow-org/maupassant-hugo" target="_black"><span class="badge-subject">Theme</span><span class="badge-value bg-yellowgreen">Maupassant</span></a>
+        </div>
+    </div>
+</footer>
+
+
+    
+    <script type="text/javascript">
+        window.MathJax = {
+            tex2jax: {
+                inlineMath: [['$', '$']],
+                processEscapes: true
+                }
+            };
+    </script>
+    <script src='https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.5/MathJax.js?config=TeX-MML-AM_CHTML' async></script><script src="https://cdn.bootcdn.net/ajax/libs/fancybox/3.5.7/jquery.fancybox.min.js"></script>
+
+<a id="rocket" href="#top"></a>
+<script type="text/javascript" src='/js/totop.js?v=0.0.0' async=""></script>
+
+<script type="application/javascript">
+var doNotTrack = false;
+if (!doNotTrack) {
+	window.ga=window.ga||function(){(ga.q=ga.q||[]).push(arguments)};ga.l=+new Date;
+	ga('create', 'GA ID', 'auto');
+	
+	ga('send', 'pageview');
+}
+</script>
+<script async src='https://www.google-analytics.com/analytics.js'></script>
+
+
+
+    <script type="text/javascript" src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js" async></script>
+
+
+
+
+</body>
+
+</html>
