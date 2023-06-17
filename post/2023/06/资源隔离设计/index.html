@@ -1,0 +1,2132 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    
+    <meta name="referrer" content="no-referrer-when-downgrade">
+    
+
+    <title>资源隔离设计 | 记录每个瞬间</title>
+    <meta property="og:title" content="资源隔离设计 - 记录每个瞬间">
+    <meta property="og:type" content="article">
+        
+    <meta property="article:published_time" content='2023-05-13T11:23:04&#43;08:00'>
+        
+        
+    <meta property="article:modified_time" content='2023-05-13T11:23:04&#43;08:00'>
+        
+    <meta name="Keywords" content="">
+    <meta name="description" content="资源隔离设计">
+        <meta name="author" content="隔壁老王">
+        
+    <meta property="og:url" content="https://code0xff.org/post/2023/06/%E8%B5%84%E6%BA%90%E9%9A%94%E7%A6%BB%E8%AE%BE%E8%AE%A1/">
+    <link rel="shortcut icon" href='/favicon.ico'  type="image/x-icon">
+
+    <link rel="stylesheet" href='/css/normalize.css'>
+    <link rel="stylesheet" href='/css/style.css'>
+    <script type="text/javascript" src="//cdn.bootcdn.net/ajax/libs/jquery/3.4.1/jquery.min.js"></script>
+
+    
+    
+    
+        <link href="https://cdn.bootcdn.net/ajax/libs/fancybox/3.5.7/jquery.fancybox.min.css" rel="stylesheet">
+    
+    
+    
+    
+</head>
+
+
+<body>
+    <header id="header" class="clearfix">
+    <div class="container">
+        <div class="col-group">
+            <div class="site-name ">
+                
+                    <a id="logo" href="https://code0xff.org/">
+                        记录每个瞬间
+                    </a>
+                
+                
+            </div>
+            <div>
+                <nav id="nav-menu" class="clearfix">
+                    <a class="current" href="https://code0xff.org/">首页</a>
+                    
+                    <a  href="https://code0xff.org/linked/" title="链接">链接</a>
+                    
+                    <a  href="https://code0xff.org/archives/" title="归档">归档</a>
+                    
+                    <a  href="https://code0xff.org/about/" title="关于">关于</a>
+                    
+                </nav>
+            </div>
+        </div>
+    </div>
+</header>
+
+    <div id="body">
+        <div class="container">
+            <div class="col-group">
+
+                <div class="col-8" id="main">
+                    
+<div class="res-cons">
+    
+    <article class="post">
+        <header>
+            <h1 class="post-title">资源隔离设计</h1>
+        </header>
+        <date class="post-meta meta-date">
+            2023年5月13日
+        </date>
+<nav id="TableOfContents">
+  <ul>
+    <li>
+      <ul>
+        <li><a href="#设计">设计</a>
+          <ul>
+            <li><a href="#总体概述">总体概述</a></li>
+            <li><a href="#proxy处理时候的特殊情况">proxy处理时候的特殊情况</a></li>
+            <li><a href="#zookeeper路径">Zookeeper路径</a></li>
+            <li><a href="#租户session">租户session</a></li>
+            <li><a href="#资源选择">资源选择</a></li>
+            <li><a href="#事务问题">事务问题</a></li>
+            <li><a href="#细节补充">细节补充</a></li>
+          </ul>
+        </li>
+        <li><a href="#来自kyuubi社区的回答">来自Kyuubi社区的回答</a></li>
+        <li><a href="#语法">语法</a>
+          <ul>
+            <li><a href="#概览">概览</a></li>
+            <li><a href="#资源单元">资源单元</a>
+              <ul>
+                <li><a href="#创建语法">创建语法</a></li>
+                <li><a href="#修改语法">修改语法</a></li>
+                <li><a href="#删除语法">删除语法</a></li>
+                <li><a href="#查询语法">查询语法</a></li>
+              </ul>
+            </li>
+            <li><a href="#资源池">资源池</a>
+              <ul>
+                <li><a href="#创建语法-1">创建语法</a></li>
+                <li><a href="#更新语法">更新语法</a></li>
+                <li><a href="#删除语法-1">删除语法</a></li>
+                <li><a href="#查询语法-1">查询语法</a></li>
+              </ul>
+            </li>
+            <li><a href="#租户">租户</a>
+              <ul>
+                <li><a href="#创建语法-2">创建语法</a></li>
+                <li><a href="#修改语法-1">修改语法</a></li>
+                <li><a href="#删除语法-2">删除语法</a></li>
+                <li><a href="#查询语法-2">查询语法</a></li>
+              </ul>
+            </li>
+          </ul>
+        </li>
+        <li><a href="#场景">场景</a></li>
+        <li><a href="#语法文件">语法文件</a></li>
+      </ul>
+    </li>
+  </ul>
+</nav>
+        
+        <div class="post-meta">
+            
+            <span class="post-meta meta-tags">
+                <ul class="clearfix">
+                    <a href='/categories/%E5%A4%A7%E6%95%B0%E6%8D%AE'>大数据</a>
+                </ul>
+            </span>
+            
+        </div>
+        
+        
+        <div class="post-meta">
+            <span id="busuanzi_container_page_pv">|<span id="busuanzi_value_page_pv"></span><span>
+                    阅读</span></span>
+        </div>
+        
+        
+        <div class="post-content">
+            <h2 id="设计">设计</h2>
+<h3 id="总体概述">总体概述</h3>
+<p>首先要增加几张表</p>
+<ul>
+<li>资源池</li>
+<li>租户资源</li>
+<li>资源单元</li>
+</ul>
+<p>当一个请求交给<code>proxy</code>后</p>
+<ul>
+<li>proxy 会拿到当前请求的<strong>用户信息</strong>，然后去 租户资源、资源池表中，找到合适的资源池，也就是k8s的namespace</li>
+<li>之后，再选择一个合适的 engine</li>
+<li>如果没有合适的engine，或者 namespace下是空的，则创建一个对应的 engine</li>
+<li>这个 engine的配置信息就是从资源池表中获取的<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/06/%E8%B5%84%E6%BA%90%E9%9A%94%E7%A6%BB%E8%AE%BE%E8%AE%A1/a1.png">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/06/%E8%B5%84%E6%BA%90%E9%9A%94%E7%A6%BB%E8%AE%BE%E8%AE%A1/a1.png" />
+        </a>
+    </li>
+</ul>
+<p>每个 proxy都是无状态的，请求会随机的落到一台 proxy上<br>
+proxy会从 Zookeeper上找到一堆 engine列表<br>
+proxy根据 用户信息，将请求转发到 对应的 namespace下<br>
+这个namespace下可能有多个engine，用户可以配置一些选择策略，选择合适的engine<br>
+目前没有用户端的选择策略，根据负载选择一个合适的engine</p>
+<h3 id="proxy处理时候的特殊情况">proxy处理时候的特殊情况</h3>
+<p>proxy可以拿到所有 namespace，所有engine信息<br>
+然后根据 租户的信息，选择一个具体的 engine<br>
+表中也定义了 租户-&gt;资源的关系，而proxy只是转发层，但此时需要读取数据库，所以就矛盾了<br>
+目前有这么几种方案</p>
+<ul>
+<li>内部engine</li>
+<li>proxy+local-session</li>
+<li>将元数据做成独立服务</li>
+</ul>
+<p><strong>内部engine</strong></p>
+<ul>
+<li>每个engine是根据 表中的配置来创建的</li>
+<li>但是这种特殊场景下，是请求先到某个engine上，然后engine去元数据库中查配置，所以这种engine的配置就需要提前定义了</li>
+<li>根据application配置中的定义，创建对应的engine</li>
+</ul>
+<p>这种设计的优缺点</p>
+<ul>
+<li>好处是：设计相当对简单，比较清晰，如果想增加高可用，可以配置2套内部engine</li>
+<li>坏处是：请求多走了一层、另外内部engine也需要一点点资源，会造成一点点浪费</li>
+</ul>
+<p><strong>proxy+local-session</strong></p>
+<ul>
+<li>master-proxy单独起一个local-spark-session，用来读取元数据表</li>
+<li>读取到后元数据后，对外提供 API，其他普通proxy读取master的API，获取具体内存</li>
+</ul>
+<p>这种设计的优缺点</p>
+<ul>
+<li>好处是：不怎么占用资源</li>
+<li>坏处是：对于普通proxy还是会多走一层、如果master-proxy挂了，会选主然后创建spark-session，会有一段时间请求不可用</li>
+<li>master和内部的engine(local-session)是强绑定的，而 内部engine就不存在这种问题</li>
+</ul>
+<p><strong>元数据独立服务</strong></p>
+<ul>
+<li>将元数据做成独立的服务，所有的应用都去请求这个元数据服务</li>
+<li>元数据服务可以是单个engine(local-session)，也可以是用engine+executor组合</li>
+</ul>
+<p>这种设计的优缺点</p>
+<ul>
+<li>好处是：结构上比较清晰</li>
+<li>坏处是：部署复杂度增加很多、每个请求都需要多走一层、浪费了一些资源</li>
+</ul>
+<p>对比上述三种方案</p>
+<ul>
+<li>都会多走一层，所以多走一层是不可避免的，如果加上缓存，差不多就是一次网络I/O时间，大概能控制到10ms以内</li>
+<li>独立元数据会造成部署复杂度增加，proxy+local-session会有单节问题，相对来说内部engine更好一些<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/06/%E8%B5%84%E6%BA%90%E9%9A%94%E7%A6%BB%E8%AE%BE%E8%AE%A1/a2.png">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/06/%E8%B5%84%E6%BA%90%E9%9A%94%E7%A6%BB%E8%AE%BE%E8%AE%A1/a2.png" />
+        </a>
+    </li>
+</ul>
+<h3 id="zookeeper路径">Zookeeper路径</h3>
+<p>之前的是这样的：</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-shell" data-lang="shell"><span style="display:flex;"><span>/my_app/my_project/engine/172.16.10.98
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>现在变为：</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-shell" data-lang="shell"><span style="display:flex;"><span>/my_app/my_project/engine/namespace-1/172.16.10.1
+</span></span><span style="display:flex;"><span>/my_app/my_project/engine/namespace-1/172.16.10.2
+</span></span><span style="display:flex;"><span>/my_app/my_project/engine/namespace-2/172.16.10.11
+</span></span><span style="display:flex;"><span>/my_app/my_project/engine/namespace-2/172.16.10.12
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>session 路径</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-shell" data-lang="shell"><span style="display:flex;"><span>/my_app/my_project/sessin/tenant-1
+</span></span><span style="display:flex;"><span>/my_app/my_project/sessin/tenant-2
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>内容为：</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">6
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-shell" data-lang="shell"><span style="display:flex;"><span><span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span><span style="color:#f1fa8c">&#34;pool-1&#34;</span>:<span style="color:#f1fa8c">&#34;engine-ip&#34;</span>,
+</span></span><span style="display:flex;"><span><span style="color:#f1fa8c">&#34;pool-2&#34;</span>:<span style="color:#f1fa8c">&#34;engine-ip&#34;</span>,
+</span></span><span style="display:flex;"><span><span style="color:#f1fa8c">&#34;选择策略&#34;</span>:<span style="color:#f1fa8c">&#34;none&#34;</span>,
+</span></span><span style="display:flex;"><span><span style="color:#f1fa8c">&#34;session类型&#34;</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">}</span>
+</span></span></code></pre></td></tr></table>
+</div>
+</div><h3 id="租户session">租户session</h3>
+<p>将用户的session类型保存到zookeeper上<br>
+比如：</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-shell" data-lang="shell"><span style="display:flex;"><span>/my_app/junge-ha/session/tenant-1
+</span></span><span style="display:flex;"><span>/my_app/junge-ha/session/tenant-2
+</span></span><span style="display:flex;"><span>/my_app/junge-ha/session/tenant-3
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>每个 znode 路径表示一个租户信息<br>
+内容可以指定为session的类型<br>
+当前支持的类型：</p>
+<ul>
+<li>一次性，请求来了创建一个engine，执行完后删除此engine(需要考虑SQL失败后engine销毁问题)</li>
+<li>租户级别，一个租户的多个请求共享一个engine(默认)</li>
+<li>应用级别，一个应用内的多个租户共享一个engine</li>
+</ul>
+<blockquote>
+<p>kyuubi的session是这么定义的</p>
+<ul>
+<li>单连接的，一个连接一个session，连接执行结束引擎结束，同一个用户的多个连接之间不共享</li>
+<li>用户级别，一个用户的多个请求可以共享一个引擎</li>
+<li>组级别， 一个组内的多个用户可以共享一个引擎</li>
+<li>server，全局共享级别</li>
+</ul>
+</blockquote>
+<p>总体来说跟 kyuubi 比较像</p>
+<p><strong>单连接session</strong><br>
+执行过程如下：</p>
+<ol>
+<li>当请求落到某个proxy时，proxy会首先去 内部engine查找这个 用户的资源信息</li>
+<li>根据用户信息，去Zookeeper上查找对应的节点，如果是一次性的，会注册一个节点(分布式锁)</li>
+<li>根据对应的资源信息，去启动engine(将engine分配到某个namespace下，并分配指定的资源)</li>
+<li>engine将自身注册到Zookeeper上</li>
+</ol>
+<p>这里还有一些细节没有画出来，比如当 engine执行完返回后，server突然挂掉了，engine的回收问题<br>
+engine自身有一个session计数，当计数为0， 并且超时后，会将自己杀掉<br>
+这样proxy就不用管engine销毁问题了 <br>
+这里可以做个优化，proxy不需要再去 zookeeper上创建 engine信息了，反正都是一次性的<br>
+proxy把必要的信息，通过 ENV 方式传递过去就可以了，之后engine自己注册到zookeeper上<br>
+等请求执行完后，自己销毁</p>
+<p><strong>用户级别session</strong><br>
+跟单连接方式类似</p>
+<ol>
+<li>请求落到某个proxy，proxy去内部engine查询这个用户的资源信息</li>
+<li>proxy去zookeeper上查找是否有对应的engine信息，没有就创建一个</li>
+<li>根据获取到的engine信息，去连接对应的engine，发出请求</li>
+<li>第二次来请求时，继续从zookeeper上获取信息，此时engine是启动的(如果engine那边没有超时自己销毁)，就重用这个engine</li>
+</ol>
+<p><strong>资源池级别session</strong><br>
+跟用户级别类似</p>
+<ol>
+<li>请求落到某个proxy上，proxy去内部engine查询这个用户的资源信息</li>
+<li>proxy去zookeeper上查找，找不到就创建engine</li>
+<li>连接engine，执行请求</li>
+<li>后面的请求可以继续复用这个engine</li>
+</ol>
+<p>三种方式的执行过程如下，创建engine时，需要有分布式锁<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/06/%E8%B5%84%E6%BA%90%E9%9A%94%E7%A6%BB%E8%AE%BE%E8%AE%A1/a3.png">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/06/%E8%B5%84%E6%BA%90%E9%9A%94%E7%A6%BB%E8%AE%BE%E8%AE%A1/a3.png" />
+        </a>
+    </p>
+<h3 id="资源选择">资源选择</h3>
+<p>proxy 拿到 用户资源表后，根据预定义的 选择策略，从 多个资源池中选择一个<br>
+对应的，从多个资源池中，选择一个资源单元，并创建若干个资源单元<br>
+目前还没想好具体的选择策略，可以简单一点</p>
+<ul>
+<li>多个资源池的话，就随机、或者按照权重固定分配一个</li>
+<li>多个资源单元的话，就按照负载选择一个</li>
+</ul>
+<p>proxy是一直存在的，除非用户手动选择关闭，或者扩缩容<br>
+engine会根据超时时间自动关闭<br>
+engine也没有master，都是对等的engine，如果要维持 最大、最小数量，也可以用分布式锁实现<br>
+多个engine抢锁，然后统计出当前engine数量，大于 min，那么就将自己销毁，后面engine抢到锁之后继续判断<br>
+直到engine数量等于 min<br>
+如果 engine数量为 min时，可能会宕机挂掉一些，此时就无法创建了<br>
+等待下次proxy访问时，如果发现数量不满足，就继续创建 engine</p>
+<h3 id="事务问题">事务问题</h3>
+<p>假设有一个用户<code>A</code>，这个用户相关的信息会出现在至少这些表中：</p>
+<ul>
+<li>用户表基本表</li>
+<li>用户权限表</li>
+<li>用户资源表</li>
+</ul>
+<p>当删除用户 A后，要将上述三张表中的 A用户这条记录全部删掉<br>
+这是一个<strong>事务</strong>操作<br>
+但是目前 delta-lake 还不支持多表事务，所有同时删除 三个表的某个数据时，可能会存在事务不一致的问题</p>
+<p>目前想到的解决办法是</p>
+<ul>
+<li>以一个表为准，比如用户基本表</li>
+<li>当这个基础表的数据是可以保证事务的</li>
+<li>基础表的数据如果删除后，出现宕机了，那么后面需要有定时任务负责清理其他表数据</li>
+</ul>
+<h3 id="细节补充">细节补充</h3>
+<p>1、预启动问题<br>
+2、engine的session计数问题<br>
+3、创建engine后的k8s监听线程<br>
+4、内嵌Zookeeper</p>
+<hr>
+<p>预启动</p>
+<ul>
+<li>需要一个master</li>
+<li>定期扫描 用户资源表，然后创建出对应的engine</li>
+<li>创建过程也是需要分布式锁，这个过程跟普通proxy创建engine是类似的</li>
+</ul>
+<p>engine的计数问题</p>
+<ul>
+<li>jdbc请求每来一个，就++， 每次结束就&ndash;</li>
+<li>同理，API请求也需要记录</li>
+</ul>
+<p>k8s的监听线程</p>
+<ul>
+<li>proxy每次往 k8s上提交engine时候，就会创建一个监听线程</li>
+<li>proxy可能会有很多这种线程，考虑将这种线程去掉</li>
+</ul>
+<p>内嵌Zookeeper</p>
+<ul>
+<li>kyuubi是有这种嵌入式zookeeper的</li>
+</ul>
+<h2 id="来自kyuubi社区的回答">来自Kyuubi社区的回答</h2>
+<p>在写设计文档时，发现一些细节无法自圆其说，于是翻看了Kyuubi的代码，还找到了Kyuubi的社区群，咨询了一些问题</p>
+<ul>
+<li>问题：session为单连接的情况下，server启动了一个engine，之后engine执行完返回了，此时server突然挂了，怎么回收这个engine呢</li>
+</ul>
+<blockquote>
+<ul>
+<li>回答：engine 有 session 计数，当 session 为 0 后，经过 idle timeout 会自杀</li>
+</ul>
+</blockquote>
+<ul>
+<li>问题：如果设置了用户级别session，在业务量比较低的时段，engine能自动回收吗</li>
+</ul>
+<blockquote>
+<ul>
+<li>回答：同上，基于session计数的</li>
+</ul>
+</blockquote>
+<ul>
+<li>问题：第一次请求时需要先创建engine，会有等待时间，有配置能支持预启动engine吗</li>
+</ul>
+<blockquote>
+<ul>
+<li>回答：目前做不到</li>
+</ul>
+</blockquote>
+<ul>
+<li>问题：如果某个用户关联了多个engine，那么server是根据什么策略将请求落到 某个具体engine上的</li>
+</ul>
+<blockquote>
+<ul>
+<li>回答： Kyuubi 内部有一套基于 zk 路径的引擎路由机制，基于此提出了 引擎隔离级别 的概念，可以参阅 <a href="https://kyuubi.readthedocs.io/en/master/deployment/settings.html">https://kyuubi.readthedocs.io/en/master/deployment/settings.html</a></li>
+</ul>
+</blockquote>
+<ul>
+<li>问题：kyuubi的server可以启动多个，这些server之间是对等的吗，还是有一个server-master？</li>
+</ul>
+<blockquote>
+<ul>
+<li>回答：对等，客户端随机选择</li>
+</ul>
+</blockquote>
+<ul>
+<li>问题：请求落到kuyybi的server层后，如果没有合适的engine，则会启动一个engine，如果每次请求落到不同的server上，server发现都不满足条件，需要启动engine，这样的话每个server都可以启动engine，是不会就乱了，这块是怎么管理的呢？</li>
+</ul>
+<blockquote>
+<ul>
+<li>回答：创建 engine 时，会在 zk 上加个分布式锁</li>
+</ul>
+</blockquote>
+<h2 id="语法">语法</h2>
+<h3 id="概览">概览</h3>
+<p>新增三张表，都在 <code>information_schema</code>库下面<br>
+三个表为：</p>
+<ul>
+<li>资源单元</li>
+<li>资源池</li>
+<li>租户</li>
+</ul>
+<p>三个表的关系：<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/06/%E8%B5%84%E6%BA%90%E9%9A%94%E7%A6%BB%E8%AE%BE%E8%AE%A1/1.png">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/06/%E8%B5%84%E6%BA%90%E9%9A%94%E7%A6%BB%E8%AE%BE%E8%AE%A1/1.png" />
+        </a>
+    </p>
+<h3 id="资源单元">资源单元</h3>
+<p>资源单元可以理解为 <strong>一个spark集群</strong>，定义了 driver的cpu和内存配置，executor的cpu和内存配置，以及executor数量<br>
+资源单元是一个静态配置，告诉 用户、管理员，现在有了这么一个 大小的集群，后面如果有请求的话，就按照这个配置来，启动对应配置、对应大小的集群</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-sql" data-lang="sql"><span style="display:flex;"><span><span style="color:#ff79c6">create</span> <span style="color:#ff79c6">table</span> resources_unit(
+</span></span><span style="display:flex;"><span>	string name,            <span style="color:#6272a4">-- 资源单元名称
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>        string driver_cores,    <span style="color:#6272a4">-- driver的 CPU 核数 
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>	    string driver_memory,   <span style="color:#6272a4">-- driver的 内存数量
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>        string executor_cores.  <span style="color:#6272a4">-- executor的 CPU核数
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>        string executor_memory, <span style="color:#6272a4">-- executor的 内存数量
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>        string executor_min,    <span style="color:#6272a4">-- executor最小数量
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>        string executor_max,    <span style="color:#6272a4">-- executor最大数量
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>        string properties       <span style="color:#6272a4">-- 扩展属性
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>)
+</span></span></code></pre></td></tr></table>
+</div>
+</div><table>
+<thead>
+<tr>
+<th>name</th>
+<th>driver_cores</th>
+<th>driver_memory</th>
+<th>executor_cores</th>
+<th>executor_memory</th>
+<th>executor_min</th>
+<th>executor_max</th>
+<th>properties</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>资源单元名称</td>
+<td>driver的CPU核数</td>
+<td>driver的内存数量</td>
+<td>executor的CPU核数</td>
+<td>executor的内存数量</td>
+<td>executor最小数量</td>
+<td>executor最大数量</td>
+<td>扩展属性</td>
+</tr>
+</tbody>
+</table>
+<h4 id="创建语法">创建语法</h4>
+<p>扩展属性 with properties 是可选的</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">6
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-sql" data-lang="sql"><span style="display:flex;"><span><span style="color:#ff79c6">CREATE</span> RESOURCE UNIT uc_1 DRIVER_CORES <span style="color:#bd93f9">1</span> DRIVER_MEMORY <span style="color:#f1fa8c">&#39;2G&#39;</span> EXECUTOR_CORES <span style="color:#bd93f9">2</span> EXECUTOR_MEMORY <span style="color:#f1fa8c">&#39;2G&#39;</span> EXECUTOR_MIN <span style="color:#bd93f9">1</span> EXECUTOR_MAX <span style="color:#bd93f9">10</span>
+</span></span><span style="display:flex;"><span> <span style="color:#ff79c6">WITH</span> PROPERTIES (
+</span></span><span style="display:flex;"><span> <span style="color:#f1fa8c">&#39;a1&#39;</span> <span style="color:#ff79c6">=</span> <span style="color:#f1fa8c">&#39;xxx1&#39;</span>,
+</span></span><span style="display:flex;"><span> <span style="color:#f1fa8c">&#39;a2&#39;</span> <span style="color:#ff79c6">=</span> <span style="color:#f1fa8c">&#39;xxx2&#39;</span>,
+</span></span><span style="display:flex;"><span> <span style="color:#f1fa8c">&#39;hello&#39;</span> <span style="color:#ff79c6">=</span> <span style="color:#f1fa8c">&#39;test&#39;</span>
+</span></span><span style="display:flex;"><span> );   
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/06/%E8%B5%84%E6%BA%90%E9%9A%94%E7%A6%BB%E8%AE%BE%E8%AE%A1/2.png">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/06/%E8%B5%84%E6%BA%90%E9%9A%94%E7%A6%BB%E8%AE%BE%E8%AE%A1/2.png" />
+        </a>
+    </p>
+<p>创建支持 <code>IF NOT EXIST</code>，当目标资源存在时，会忽略 不会报错</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-sql" data-lang="sql"><span style="display:flex;"><span><span style="color:#ff79c6">CREATE</span> RESOURCE UNIT <span style="color:#ff79c6">IF</span> <span style="color:#ff79c6">NOT</span> EXIST uc_1 DRIVER_CORES <span style="color:#bd93f9">1</span> DRIVER_MEMORY <span style="color:#f1fa8c">&#39;2G&#39;</span> EXECUTOR_CORES <span style="color:#bd93f9">2</span> EXECUTOR_MEMORY <span style="color:#f1fa8c">&#39;2G&#39;</span> EXECUTOR_MIN <span style="color:#bd93f9">1</span> EXECUTOR_MAX <span style="color:#bd93f9">10</span>;
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>逗号是可选的，可以加也可以不加</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">6
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-sql" data-lang="sql"><span style="display:flex;"><span><span style="color:#ff79c6">CREATE</span> RESOURCE UNIT uc_1 DRIVER_CORES <span style="color:#bd93f9">1</span>, DRIVER_MEMORY <span style="color:#f1fa8c">&#39;2G&#39;</span>, EXECUTOR_CORES <span style="color:#bd93f9">2</span>, EXECUTOR_MEMORY <span style="color:#f1fa8c">&#39;2G&#39;</span>, EXECUTOR_MIN <span style="color:#bd93f9">1</span>, EXECUTOR_MAX <span style="color:#bd93f9">10</span>
+</span></span><span style="display:flex;"><span> <span style="color:#ff79c6">WITH</span> PROPERTIES (
+</span></span><span style="display:flex;"><span> <span style="color:#f1fa8c">&#39;a1&#39;</span> <span style="color:#ff79c6">=</span> <span style="color:#f1fa8c">&#39;xxx1&#39;</span>,
+</span></span><span style="display:flex;"><span> <span style="color:#f1fa8c">&#39;a2&#39;</span> <span style="color:#ff79c6">=</span> <span style="color:#f1fa8c">&#39;xxx2&#39;</span>,
+</span></span><span style="display:flex;"><span> <span style="color:#f1fa8c">&#39;hello&#39;</span> <span style="color:#ff79c6">=</span> <span style="color:#f1fa8c">&#39;test&#39;</span>
+</span></span><span style="display:flex;"><span> );  
+</span></span></code></pre></td></tr></table>
+</div>
+</div><h4 id="修改语法">修改语法</h4>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">15
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">16
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">17
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">18
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">19
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">20
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">21
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-sql" data-lang="sql"><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">ALTER</span> RESOURCE UNIT uc_1 DRIVER_CORES <span style="color:#bd93f9">1</span> DRIVER_MEMORY <span style="color:#f1fa8c">&#39;2G&#39;</span> EXECUTOR_CORES <span style="color:#bd93f9">2</span> EXECUTOR_MEMORY <span style="color:#f1fa8c">&#39;2G&#39;</span> EXECUTOR_MIN <span style="color:#bd93f9">1</span> EXECUTOR_MAX <span style="color:#bd93f9">10</span>
+</span></span><span style="display:flex;"><span> <span style="color:#ff79c6">WITH</span> PROPERTIES (
+</span></span><span style="display:flex;"><span> <span style="color:#f1fa8c">&#39;a1&#39;</span> <span style="color:#ff79c6">=</span> <span style="color:#f1fa8c">&#39;xxx1&#39;</span>,
+</span></span><span style="display:flex;"><span> <span style="color:#f1fa8c">&#39;a2&#39;</span> <span style="color:#ff79c6">=</span> <span style="color:#f1fa8c">&#39;xxx2&#39;</span>,
+</span></span><span style="display:flex;"><span> <span style="color:#f1fa8c">&#39;hello&#39;</span> <span style="color:#ff79c6">=</span> <span style="color:#f1fa8c">&#39;test&#39;</span>
+</span></span><span style="display:flex;"><span> );
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">#</span> 可以设置其中一个参数
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">ALTER</span> RESOURCE UNIT uc_1 DRIVER_CORES <span style="color:#bd93f9">1</span> 
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">#</span> 也可以设置多个
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">ALTER</span> RESOURCE UNIT uc_1 DRIVER_CORES <span style="color:#bd93f9">1</span> EXECUTOR_CORES <span style="color:#bd93f9">2</span> 
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">#</span> 可以只设置扩展属性  
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">ALTER</span> RESOURCE UNIT uc_1
+</span></span><span style="display:flex;"><span> <span style="color:#ff79c6">WITH</span> PROPERTIES (
+</span></span><span style="display:flex;"><span> <span style="color:#f1fa8c">&#39;a1&#39;</span> <span style="color:#ff79c6">=</span> <span style="color:#f1fa8c">&#39;xxx1&#39;</span>,
+</span></span><span style="display:flex;"><span> <span style="color:#f1fa8c">&#39;a2&#39;</span> <span style="color:#ff79c6">=</span> <span style="color:#f1fa8c">&#39;xxx2&#39;</span>,
+</span></span><span style="display:flex;"><span> <span style="color:#f1fa8c">&#39;hello&#39;</span> <span style="color:#ff79c6">=</span> <span style="color:#f1fa8c">&#39;test&#39;</span>
+</span></span><span style="display:flex;"><span> );
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>逗号是可选的</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">6
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-sql" data-lang="sql"><span style="display:flex;"><span><span style="color:#ff79c6">ALTER</span> RESOURCE UNIT uc_1, DRIVER_CORES <span style="color:#bd93f9">1</span>, DRIVER_MEMORY <span style="color:#f1fa8c">&#39;2G&#39;</span>, EXECUTOR_CORES <span style="color:#bd93f9">2</span>, EXECUTOR_MEMORY <span style="color:#f1fa8c">&#39;2G&#39;</span> ,EXECUTOR_MIN <span style="color:#bd93f9">1</span>, EXECUTOR_MAX <span style="color:#bd93f9">10</span>
+</span></span><span style="display:flex;"><span> <span style="color:#ff79c6">WITH</span> PROPERTIES (
+</span></span><span style="display:flex;"><span> <span style="color:#f1fa8c">&#39;a1&#39;</span> <span style="color:#ff79c6">=</span> <span style="color:#f1fa8c">&#39;xxx1&#39;</span>,
+</span></span><span style="display:flex;"><span> <span style="color:#f1fa8c">&#39;a2&#39;</span> <span style="color:#ff79c6">=</span> <span style="color:#f1fa8c">&#39;xxx2&#39;</span>,
+</span></span><span style="display:flex;"><span> <span style="color:#f1fa8c">&#39;hello&#39;</span> <span style="color:#ff79c6">=</span> <span style="color:#f1fa8c">&#39;test&#39;</span>
+</span></span><span style="display:flex;"><span> );
+</span></span></code></pre></td></tr></table>
+</div>
+</div><h4 id="删除语法">删除语法</h4>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-sql" data-lang="sql"><span style="display:flex;"><span>REMOVE RESOURCE UNIT uc_1
+</span></span></code></pre></td></tr></table>
+</div>
+</div><h4 id="查询语法">查询语法</h4>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-sql" data-lang="sql"><span style="display:flex;"><span><span style="color:#ff79c6">SHOW</span> RESOURCE UNIT uc_1;
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">SHOW</span> RESOURCE UNIT <span style="color:#6272a4">-- 查询全部
+</span></span></span></code></pre></td></tr></table>
+</div>
+</div><p>t_1 是标识符，不需要带 &rsquo; 引号<br>
+DRIVER_CPU、DRIVER_MEMORY、EXECUTOR_CPU、EXECUTOR_MEMORY、EXECUTOR_MIN、EXECUTOR_MAX <br>
+创建时，这<code>6</code>个值都是必填的，顺序可以任意  <br>
+修改时，这个<code>6</code>个参数可以选择修改的其中 任意一个或者多个，顺序可以任意<br>
+其中 CPU的值范围是 [1, 2147483647]<br>
+内存是字符串，必须是整数开头，整数范围是 [1, 2147483647]，必须以 &lsquo;G&rsquo;、&lsquo;g&rsquo;、&lsquo;M&rsquo;、&rsquo;m&rsquo; 结尾 <br>
+最大、最小数量必须是整数，范围是 [1, 2147483647]</p>
+<h3 id="资源池">资源池</h3>
+<p>资源池映射到 k8s中的一个namespace<br>
+其中包含了若干个 spark小集群，每个小集群的具体配置、节点数量，是定义在资源单元中的<br>
+资源池中的 params 参数，包含了三个参数</p>
+<ul>
+<li>资源单元名称，也就是使用哪个预定义的 小集群</li>
+<li>min， 也就是要启动 <strong>最少</strong> 个这样的小集群</li>
+<li>max， 也就是 <strong>最多</strong> 启动多少个这样的小集群</li>
+</ul>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">6
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-sql" data-lang="sql"><span style="display:flex;"><span><span style="color:#ff79c6">create</span> <span style="color:#ff79c6">table</span> resources_pool(
+</span></span><span style="display:flex;"><span>	string name,       <span style="color:#6272a4">-- 资源池名称
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>    string namespace,  <span style="color:#6272a4">-- 对应的 k8s namespace 
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>	string params,     <span style="color:#6272a4">-- 资源单元参数列表
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>    string properties  <span style="color:#6272a4">--扩展属性，先留着为 空字符，待以后扩展 
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>)
+</span></span></code></pre></td></tr></table>
+</div>
+</div><table>
+<thead>
+<tr>
+<th>name</th>
+<th>namespace_name</th>
+<th>params</th>
+<th>properties</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>资源池名称</td>
+<td>对应的K8S的namespace名称</td>
+<td>关联的资源单元参数列表</td>
+<td>扩展属性，先留着为空</td>
+</tr>
+</tbody>
+</table>
+<p>params 内容：</p>
+<pre tabindex="0"><code>  {
+    &#34;unitName&#34;: &#34;uc_1&#34;,
+    &#34;min&#34;: &#34;1&#34;,
+    &#34;max&#34;: &#34;10&#34;
+  },
+  {
+    &#34;unitName&#34;: &#34;uc_2&#34;,
+    &#34;min&#34;: &#34;2&#34;,
+    &#34;max&#34;: &#34;3&#34;
+  },
+  {
+    &#34;unitName&#34;: &#34;uc_3&#34;,
+    &#34;min&#34;: &#34;1&#34;,
+    &#34;max&#34;: &#34;2&#34;
+  }
+]
+</code></pre><h4 id="创建语法-1">创建语法</h4>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">7
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-sql" data-lang="sql"><span style="display:flex;"><span><span style="color:#ff79c6">CREATE</span> RESOURCE POOL rp_1 <span style="color:#f1fa8c">&#39;namespace_1&#39;</span> (UNIT <span style="color:#f1fa8c">&#39;uc_1&#39;</span>  UNIT_MAX <span style="color:#bd93f9">10</span> UNIT_MIN <span style="color:#bd93f9">1</span>),
+</span></span><span style="display:flex;"><span>(UNIT <span style="color:#f1fa8c">&#39;uc_2&#39;</span> UNIT_MIN <span style="color:#bd93f9">2</span> UNIT_MAX <span style="color:#bd93f9">3</span>), (UNIT <span style="color:#f1fa8c">&#39;uc_3&#39;</span> UNIT_MAX <span style="color:#bd93f9">2</span> UNIT_MIN <span style="color:#bd93f9">1</span>) 
+</span></span><span style="display:flex;"><span> <span style="color:#ff79c6">WITH</span> PROPERTIES (
+</span></span><span style="display:flex;"><span> <span style="color:#f1fa8c">&#39;a1&#39;</span> <span style="color:#ff79c6">=</span> <span style="color:#f1fa8c">&#39;xxx1&#39;</span>,
+</span></span><span style="display:flex;"><span> <span style="color:#f1fa8c">&#39;a2&#39;</span> <span style="color:#ff79c6">=</span> <span style="color:#f1fa8c">&#39;xxx2&#39;</span>,
+</span></span><span style="display:flex;"><span> <span style="color:#f1fa8c">&#39;hello&#39;</span> <span style="color:#ff79c6">=</span> <span style="color:#f1fa8c">&#39;test&#39;</span>
+</span></span><span style="display:flex;"><span> );
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/06/%E8%B5%84%E6%BA%90%E9%9A%94%E7%A6%BB%E8%AE%BE%E8%AE%A1/3.png">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/06/%E8%B5%84%E6%BA%90%E9%9A%94%E7%A6%BB%E8%AE%BE%E8%AE%A1/3.png" />
+        </a>
+    </p>
+<p>创建支持<code>IF NOT EXIST</code>语法，当目标资源存在时，忽略，不会报错</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-sql" data-lang="sql"><span style="display:flex;"><span><span style="color:#ff79c6">CREATE</span> RESOURCE POOL <span style="color:#ff79c6">IF</span> <span style="color:#ff79c6">NOT</span> EXIST rp_1 <span style="color:#f1fa8c">&#39;namespace_1&#39;</span> (UNIT <span style="color:#f1fa8c">&#39;uc_1&#39;</span>  UNIT_MAX <span style="color:#bd93f9">10</span> UNIT_MIN <span style="color:#bd93f9">1</span>),
+</span></span><span style="display:flex;"><span>(UNIT <span style="color:#f1fa8c">&#39;uc_2&#39;</span> UNIT_MIN <span style="color:#bd93f9">2</span> UNIT_MAX <span style="color:#bd93f9">3</span>), (UNIT <span style="color:#f1fa8c">&#39;uc_3&#39;</span> UNIT_MAX <span style="color:#bd93f9">2</span> UNIT_MIN <span style="color:#bd93f9">1</span>) ;
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>逗号是可选的</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">7
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-sql" data-lang="sql"><span style="display:flex;"><span><span style="color:#ff79c6">CREATE</span> RESOURCE POOL rp_1, <span style="color:#f1fa8c">&#39;namespace_1&#39;</span>, (UNIT <span style="color:#f1fa8c">&#39;uc_1&#39;</span>,  UNIT_MAX <span style="color:#bd93f9">10</span>, UNIT_MIN <span style="color:#bd93f9">1</span>),
+</span></span><span style="display:flex;"><span>(UNIT <span style="color:#f1fa8c">&#39;uc_2&#39;</span>, UNIT_MIN <span style="color:#bd93f9">2</span>, UNIT_MAX <span style="color:#bd93f9">3</span>), (UNIT <span style="color:#f1fa8c">&#39;uc_3&#39;</span>, UNIT_MAX <span style="color:#bd93f9">2</span> UNIT_MIN <span style="color:#bd93f9">1</span>) ,
+</span></span><span style="display:flex;"><span> <span style="color:#ff79c6">WITH</span> PROPERTIES (
+</span></span><span style="display:flex;"><span> <span style="color:#f1fa8c">&#39;a1&#39;</span> <span style="color:#ff79c6">=</span> <span style="color:#f1fa8c">&#39;xxx1&#39;</span>,
+</span></span><span style="display:flex;"><span> <span style="color:#f1fa8c">&#39;a2&#39;</span> <span style="color:#ff79c6">=</span> <span style="color:#f1fa8c">&#39;xxx2&#39;</span>,
+</span></span><span style="display:flex;"><span> <span style="color:#f1fa8c">&#39;hello&#39;</span> <span style="color:#ff79c6">=</span> <span style="color:#f1fa8c">&#39;test&#39;</span>
+</span></span><span style="display:flex;"><span> );
+</span></span></code></pre></td></tr></table>
+</div>
+</div><h4 id="更新语法">更新语法</h4>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">15
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">16
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">17
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">18
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">19
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">20
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">21
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">22
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-sql" data-lang="sql"><span style="display:flex;"><span><span style="color:#ff79c6">ALTER</span> RESOURCE POOL rp_1 <span style="color:#f1fa8c">&#39;namespace_2&#39;</span> (REMOVE UNIT <span style="color:#f1fa8c">&#39;uc_1&#39;</span>), 
+</span></span><span style="display:flex;"><span>(<span style="color:#ff79c6">ADD</span> UNIT <span style="color:#f1fa8c">&#39;uc_12&#39;</span>, UNIT_MIN <span style="color:#bd93f9">2</span>, UNIT_MAX <span style="color:#bd93f9">3</span>)
+</span></span><span style="display:flex;"><span> <span style="color:#ff79c6">WITH</span> PROPERTIES (
+</span></span><span style="display:flex;"><span> <span style="color:#f1fa8c">&#39;a1&#39;</span> <span style="color:#ff79c6">=</span> <span style="color:#f1fa8c">&#39;xxx1&#39;</span>,
+</span></span><span style="display:flex;"><span> <span style="color:#f1fa8c">&#39;a2&#39;</span> <span style="color:#ff79c6">=</span> <span style="color:#f1fa8c">&#39;xxx2&#39;</span>,
+</span></span><span style="display:flex;"><span> <span style="color:#f1fa8c">&#39;hello&#39;</span> <span style="color:#ff79c6">=</span> <span style="color:#f1fa8c">&#39;test&#39;</span>
+</span></span><span style="display:flex;"><span> );
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">#</span> 可以只更新 namespace
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">ALTER</span> RESOURCE POOL rp_1 <span style="color:#f1fa8c">&#39;namespace_2&#39;</span>;
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">#</span> 可以只更新资源单元部分
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">ALTER</span> RESOURCE POOL rp_1  (REMOVE UNIT <span style="color:#f1fa8c">&#39;uc_1&#39;</span>), 
+</span></span><span style="display:flex;"><span>(<span style="color:#ff79c6">ADD</span> UNIT <span style="color:#f1fa8c">&#39;uc_12&#39;</span>, UNIT_MIN <span style="color:#bd93f9">2</span>, UNIT_MAX <span style="color:#bd93f9">3</span>)
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">#</span> 可以只更新扩展属性
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">ALTER</span> RESOURCE POOL rp_1
+</span></span><span style="display:flex;"><span> <span style="color:#ff79c6">WITH</span> PROPERTIES (
+</span></span><span style="display:flex;"><span> <span style="color:#f1fa8c">&#39;a1&#39;</span> <span style="color:#ff79c6">=</span> <span style="color:#f1fa8c">&#39;xxx1&#39;</span>,
+</span></span><span style="display:flex;"><span> <span style="color:#f1fa8c">&#39;a2&#39;</span> <span style="color:#ff79c6">=</span> <span style="color:#f1fa8c">&#39;xxx2&#39;</span>,
+</span></span><span style="display:flex;"><span> <span style="color:#f1fa8c">&#39;hello&#39;</span> <span style="color:#ff79c6">=</span> <span style="color:#f1fa8c">&#39;test&#39;</span>
+</span></span><span style="display:flex;"><span> );
+</span></span></code></pre></td></tr></table>
+</div>
+</div><h4 id="删除语法-1">删除语法</h4>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-sql" data-lang="sql"><span style="display:flex;"><span>REMOVE RESOURCE POOL rp_1
+</span></span></code></pre></td></tr></table>
+</div>
+</div><h4 id="查询语法-1">查询语法</h4>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-sql" data-lang="sql"><span style="display:flex;"><span><span style="color:#ff79c6">SHOW</span> RESOURCE POOL rp_1
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">SHOW</span> RESOURCE POOL <span style="color:#6272a4">--查询全部
+</span></span></span></code></pre></td></tr></table>
+</div>
+</div><p>创建、更新中的 (UNIT &lsquo;uc_1&rsquo;  UNIT_MAX 10 UNIT_MIN 1)  可以有多个
+UNIT &lsquo;uc_1&rsquo; 表示之前创建好的资源单元名称，这个参数必须先开头   <br>
+UNIT_MAX 表示最大资源单元数量，UNIT_MIN 表示最小资源单元数量，这两个参数顺序任意<br>
+创建、修改资源池时，关联的资源单元必须存在</p>
+<p>逗号是可选的</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">7
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-sql" data-lang="sql"><span style="display:flex;"><span><span style="color:#ff79c6">ALTER</span> RESOURCE POOL rp_1, <span style="color:#f1fa8c">&#39;namespace_2&#39;</span>, (REMOVE UNIT <span style="color:#f1fa8c">&#39;uc_1&#39;</span>), 
+</span></span><span style="display:flex;"><span>(<span style="color:#ff79c6">ADD</span> UNIT <span style="color:#f1fa8c">&#39;uc_12&#39;</span>, UNIT_MIN <span style="color:#bd93f9">2</span>, UNIT_MAX <span style="color:#bd93f9">3</span>),
+</span></span><span style="display:flex;"><span> <span style="color:#ff79c6">WITH</span> PROPERTIES (
+</span></span><span style="display:flex;"><span> <span style="color:#f1fa8c">&#39;a1&#39;</span> <span style="color:#ff79c6">=</span> <span style="color:#f1fa8c">&#39;xxx1&#39;</span>,
+</span></span><span style="display:flex;"><span> <span style="color:#f1fa8c">&#39;a2&#39;</span> <span style="color:#ff79c6">=</span> <span style="color:#f1fa8c">&#39;xxx2&#39;</span>,
+</span></span><span style="display:flex;"><span> <span style="color:#f1fa8c">&#39;hello&#39;</span> <span style="color:#ff79c6">=</span> <span style="color:#f1fa8c">&#39;test&#39;</span>
+</span></span><span style="display:flex;"><span> );
+</span></span></code></pre></td></tr></table>
+</div>
+</div><h3 id="租户">租户</h3>
+<p>租户的session类型：</p>
+<ul>
+<li>once_session，一次性session，没来一个请求，就创建一个对应的集群，对应ETL任务</li>
+<li>user_session，一个租户内的多个请求，公用这个session</li>
+<li>global_session，多个租户公用一个session</li>
+</ul>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">7
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-sql" data-lang="sql"><span style="display:flex;"><span><span style="color:#ff79c6">create</span> <span style="color:#ff79c6">table</span> tenant_info(
+</span></span><span style="display:flex;"><span>	string name,           <span style="color:#6272a4">-- 租户名称
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>    string resources,      <span style="color:#6272a4">-- 对应的 资源池名称列表 
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>	string session_type,   <span style="color:#6272a4">-- session类型，枚举类型：一次性、会话级别、全局共享
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>    string strategy,       <span style="color:#6272a4">-- 选择策略，选择一个具体的资源池，默认为随机选择(如果关联了多个资源池)
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>    string properties      <span style="color:#6272a4">-- 自定义租户的一些扩展属性，如不同租户有不同的root_path，可以定义在这里
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>)
+</span></span></code></pre></td></tr></table>
+</div>
+</div><table>
+<thead>
+<tr>
+<th>name</th>
+<th>resource</th>
+<th>session_typ</th>
+<th>strategy</th>
+<th>properties</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>租户名称</td>
+<td>关联的资源池名称列表</td>
+<td>session类型</td>
+<td>选择策略</td>
+<td>扩展属性</td>
+</tr>
+</tbody>
+</table>
+<h4 id="创建语法-2">创建语法</h4>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">6
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-sql" data-lang="sql"><span style="display:flex;"><span><span style="color:#ff79c6">CREATE</span> RESOURCE TENANT  t_1  (POOL <span style="color:#f1fa8c">&#39;rp_1&#39;</span>), (POOL <span style="color:#f1fa8c">&#39;rp_2&#39;</span>) <span style="color:#ff79c6">TYPE</span> <span style="color:#f1fa8c">&#39;user_session&#39;</span> STRATEGY <span style="color:#f1fa8c">&#39;my strategy&#39;</span>
+</span></span><span style="display:flex;"><span> <span style="color:#ff79c6">WITH</span> PROPERTIES (
+</span></span><span style="display:flex;"><span> <span style="color:#f1fa8c">&#39;a1&#39;</span> <span style="color:#ff79c6">=</span> <span style="color:#f1fa8c">&#39;xxx1&#39;</span>,
+</span></span><span style="display:flex;"><span> <span style="color:#f1fa8c">&#39;a2&#39;</span> <span style="color:#ff79c6">=</span> <span style="color:#f1fa8c">&#39;xxx2&#39;</span>,
+</span></span><span style="display:flex;"><span> <span style="color:#f1fa8c">&#39;hello&#39;</span> <span style="color:#ff79c6">=</span> <span style="color:#f1fa8c">&#39;test&#39;</span>
+</span></span><span style="display:flex;"><span> );
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/06/%E8%B5%84%E6%BA%90%E9%9A%94%E7%A6%BB%E8%AE%BE%E8%AE%A1/4.png">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/06/%E8%B5%84%E6%BA%90%E9%9A%94%E7%A6%BB%E8%AE%BE%E8%AE%A1/4.png" />
+        </a>
+    </p>
+<p>创建语法支持<code>IF NOT EXIST</code>，当目标资源存在时，会忽略不会报错</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-sql" data-lang="sql"><span style="display:flex;"><span><span style="color:#ff79c6">CREATE</span> RESOURCE TENANT <span style="color:#ff79c6">IF</span> <span style="color:#ff79c6">NOT</span> EXIST  t_1  (POOL <span style="color:#f1fa8c">&#39;rp_1&#39;</span>), (POOL <span style="color:#f1fa8c">&#39;rp_2&#39;</span>) <span style="color:#ff79c6">TYPE</span> <span style="color:#f1fa8c">&#39;user_session&#39;</span> STRATEGY <span style="color:#f1fa8c">&#39;my strategy&#39;</span>;
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>逗号是可选的</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">6
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-sql" data-lang="sql"><span style="display:flex;"><span><span style="color:#ff79c6">CREATE</span> RESOURCE TENANT  t_1,  (POOL <span style="color:#f1fa8c">&#39;rp_1&#39;</span>), (POOL <span style="color:#f1fa8c">&#39;rp_2&#39;</span>), <span style="color:#ff79c6">TYPE</span> <span style="color:#f1fa8c">&#39;user_session&#39;</span> ,STRATEGY <span style="color:#f1fa8c">&#39;my strategy&#39;</span>,
+</span></span><span style="display:flex;"><span> <span style="color:#ff79c6">WITH</span> PROPERTIES (
+</span></span><span style="display:flex;"><span> <span style="color:#f1fa8c">&#39;a1&#39;</span> <span style="color:#ff79c6">=</span> <span style="color:#f1fa8c">&#39;xxx1&#39;</span>,
+</span></span><span style="display:flex;"><span> <span style="color:#f1fa8c">&#39;a2&#39;</span> <span style="color:#ff79c6">=</span> <span style="color:#f1fa8c">&#39;xxx2&#39;</span>,
+</span></span><span style="display:flex;"><span> <span style="color:#f1fa8c">&#39;hello&#39;</span> <span style="color:#ff79c6">=</span> <span style="color:#f1fa8c">&#39;test&#39;</span>
+</span></span><span style="display:flex;"><span> );
+</span></span></code></pre></td></tr></table>
+</div>
+</div><h4 id="修改语法-1">修改语法</h4>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">15
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">16
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">17
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">18
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">19
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">20
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">21
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-sql" data-lang="sql"><span style="display:flex;"><span><span style="color:#ff79c6">ALTER</span> RESOURCE TENANT  t_1  (<span style="color:#ff79c6">ADD</span> POOL <span style="color:#f1fa8c">&#39;rp_1&#39;</span>) <span style="color:#ff79c6">TYPE</span> <span style="color:#f1fa8c">&#39;global_session&#39;</span> STRATEGY  <span style="color:#f1fa8c">&#39;my strategy&#39;</span>
+</span></span><span style="display:flex;"><span> <span style="color:#ff79c6">WITH</span> PROPERTIES (
+</span></span><span style="display:flex;"><span> <span style="color:#f1fa8c">&#39;a1&#39;</span> <span style="color:#ff79c6">=</span> <span style="color:#f1fa8c">&#39;xxx1&#39;</span>,
+</span></span><span style="display:flex;"><span> <span style="color:#f1fa8c">&#39;a2&#39;</span> <span style="color:#ff79c6">=</span> <span style="color:#f1fa8c">&#39;xxx2&#39;</span>,
+</span></span><span style="display:flex;"><span> <span style="color:#f1fa8c">&#39;hello&#39;</span> <span style="color:#ff79c6">=</span> <span style="color:#f1fa8c">&#39;test&#39;</span>
+</span></span><span style="display:flex;"><span> );
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">#</span> 可以只更新资源池部分
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">ALTER</span> RESOURCE TENANT  t_1  (<span style="color:#ff79c6">ADD</span> POOL <span style="color:#f1fa8c">&#39;rp_1&#39;</span>),(REMOVE POOL <span style="color:#f1fa8c">&#39;rp_2&#39;</span>);
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">#</span> 可以只更新session类型、策略部分
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">ALTER</span> RESOURCE TENANT  t_1  <span style="color:#ff79c6">TYPE</span> <span style="color:#f1fa8c">&#39;global_session&#39;</span>;
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">ALTER</span> RESOURCE TENANT  t_1  STRATEGY  <span style="color:#f1fa8c">&#39;my strategy&#39;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">#</span> 可以只更新扩展属性部分
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">ALTER</span> RESOURCE TENANT  t_1
+</span></span><span style="display:flex;"><span> <span style="color:#ff79c6">WITH</span> PROPERTIES (
+</span></span><span style="display:flex;"><span> <span style="color:#f1fa8c">&#39;a1&#39;</span> <span style="color:#ff79c6">=</span> <span style="color:#f1fa8c">&#39;xxx1&#39;</span>,
+</span></span><span style="display:flex;"><span> <span style="color:#f1fa8c">&#39;a2&#39;</span> <span style="color:#ff79c6">=</span> <span style="color:#f1fa8c">&#39;xxx2&#39;</span>,
+</span></span><span style="display:flex;"><span> <span style="color:#f1fa8c">&#39;hello&#39;</span> <span style="color:#ff79c6">=</span> <span style="color:#f1fa8c">&#39;test&#39;</span>
+</span></span><span style="display:flex;"><span> );
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>逗号是可选的</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">6
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-sql" data-lang="sql"><span style="display:flex;"><span><span style="color:#ff79c6">ALTER</span> RESOURCE TENANT  t_1,  (<span style="color:#ff79c6">ADD</span> POOL <span style="color:#f1fa8c">&#39;rp_1&#39;</span>) ,<span style="color:#ff79c6">TYPE</span> <span style="color:#f1fa8c">&#39;global_session&#39;</span>, STRATEGY  <span style="color:#f1fa8c">&#39;my strategy&#39;</span>,
+</span></span><span style="display:flex;"><span> <span style="color:#ff79c6">WITH</span> PROPERTIES (
+</span></span><span style="display:flex;"><span> <span style="color:#f1fa8c">&#39;a1&#39;</span> <span style="color:#ff79c6">=</span> <span style="color:#f1fa8c">&#39;xxx1&#39;</span>,
+</span></span><span style="display:flex;"><span> <span style="color:#f1fa8c">&#39;a2&#39;</span> <span style="color:#ff79c6">=</span> <span style="color:#f1fa8c">&#39;xxx2&#39;</span>,
+</span></span><span style="display:flex;"><span> <span style="color:#f1fa8c">&#39;hello&#39;</span> <span style="color:#ff79c6">=</span> <span style="color:#f1fa8c">&#39;test&#39;</span>
+</span></span><span style="display:flex;"><span> );
+</span></span></code></pre></td></tr></table>
+</div>
+</div><h4 id="删除语法-2">删除语法</h4>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-sql" data-lang="sql"><span style="display:flex;"><span>REMOVE RESOURCE TENANT t_1
+</span></span></code></pre></td></tr></table>
+</div>
+</div><h4 id="查询语法-2">查询语法</h4>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-sql" data-lang="sql"><span style="display:flex;"><span><span style="color:#ff79c6">SHOW</span> RESOURCE TENANT t_1
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">SHOW</span> RESOURCE TENANT <span style="color:#6272a4">--查询全部
+</span></span></span></code></pre></td></tr></table>
+</div>
+</div><p>t_1 是标识符，不能写成 &rsquo;t_1&rsquo;<br>
+创建、更新时，对应的 资源池名称必须存在<br>
+session策略，选择策略 的内容目前不做校验</p>
+<p>将租户关联的资源池、资源单元信息展示出来</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-sql" data-lang="sql"><span style="display:flex;"><span><span style="color:#ff79c6">SHOW</span> RESOURCE TENANT t_1 <span style="color:#ff79c6">WITH</span> POOL <span style="color:#ff79c6">AND</span> UNIT
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/06/%E8%B5%84%E6%BA%90%E9%9A%94%E7%A6%BB%E8%AE%BE%E8%AE%A1/5.png">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/06/%E8%B5%84%E6%BA%90%E9%9A%94%E7%A6%BB%E8%AE%BE%E8%AE%A1/5.png" />
+        </a>
+    </p>
+<p>将租户关联的资源池 信息展示出来</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-sql" data-lang="sql"><span style="display:flex;"><span><span style="color:#ff79c6">SHOW</span> RESOURCE TENANT t_1 <span style="color:#ff79c6">WITH</span> POOL
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/06/%E8%B5%84%E6%BA%90%E9%9A%94%E7%A6%BB%E8%AE%BE%E8%AE%A1/6.png">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/06/%E8%B5%84%E6%BA%90%E9%9A%94%E7%A6%BB%E8%AE%BE%E8%AE%A1/6.png" />
+        </a>
+    </p>
+<h2 id="场景">场景</h2>
+<p>1、一个ETL任务和普通任务 配置</p>
+<ul>
+<li>普通任务就是默认的会话级别</li>
+<li>ETL的会话为一次性的</li>
+<li>ETL任务可以跟 普通任务放到一个资源池里面，也可以分开放</li>
+<li>普通任务晚上不支持，资源超时自动回收，这样晚上跑ETL任务可以获取更多资源</li>
+</ul>
+<p>2、多个ETL任务配置</p>
+<ul>
+<li>仍然是配置租户session为一次性的</li>
+<li>多个ETL任务的执行 跟一个ETL类似，跑完资源自动回收</li>
+<li>如果多个ETL任务很占资源，可以给 租户配置两个或多个资源池</li>
+<li>多个ETL任务，就会均匀的分配到不同的资源池</li>
+</ul>
+<p>3、不想配置资源池、租户之类的</p>
+<ul>
+<li>提供一个默认资源池</li>
+<li>某租户如果找不到合适的资源池，就将转到这个默认资源池</li>
+<li>相当于所有人公用一个大的资源池</li>
+</ul>
+<p>4、调整资源单元</p>
+<ul>
+<li>调整资源单元会影响到资源池，也会影响到其他租户</li>
+<li>可以单独配置一个资源单元，新建一个资源池，将这个租户关联到新建的资源池上</li>
+</ul>
+<p>5、调整资源池</p>
+<ul>
+<li>同调整资源单元，如果影响其他租户，需要再单独配置</li>
+</ul>
+<p>6、显示现在有哪些资源单元，资源池占用量是多少</p>
+<ul>
+<li>可以用 show resource 语法去查询</li>
+</ul>
+<p>7、多个租户，每个租户都有若干普通任务和ETL任务</p>
+<ul>
+<li>配置每个租户对应一个资源池，不干扰</li>
+<li>也可以配置几个租户公用一个资源池</li>
+</ul>
+<p>8、一个租户有大查询，也有小查询</p>
+<ul>
+<li>创建两个资源单元，对应大小任务，放到一个或者两个资源池中</li>
+<li>大小查询分别转到不同资源池</li>
+<li>前端proxy层，目前还没有这种转发功能，目前可能就是随机转发</li>
+</ul>
+<p>9、资源池调度控制问题</p>
+<ul>
+<li>比如控制某个资源池，能调度 A类资源单元10个， B类资源单元5个</li>
+<li>可以通过k8s标签的方式调度</li>
+<li>这块暂不实现，增加一个空的字段，作为扩展</li>
+</ul>
+<p>10、不同租户的元数据库分开</p>
+<ul>
+<li>现在所有租户公用一个元数据库，没法分开</li>
+<li>这块暂不实现，增加一个扩展字段，后续有类似需求可以放在扩展里面</li>
+</ul>
+<h2 id="语法文件">语法文件</h2>
+<p>ANTLR 的 g4 文件内容：</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">  1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">  2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">  3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">  4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">  5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">  6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">  7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">  8
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">  9
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 10
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 11
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 12
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 13
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 14
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 15
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 16
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 17
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 18
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 19
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 20
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 21
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 22
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 23
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 24
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 25
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 26
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 27
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 28
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 29
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 30
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 31
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 32
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 33
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 34
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 35
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 36
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 37
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 38
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 39
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 40
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 41
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 42
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 43
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 44
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 45
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 46
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 47
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 48
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 49
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 50
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 51
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 52
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 53
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 54
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 55
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 56
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 57
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 58
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 59
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 60
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 61
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 62
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 63
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 64
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 65
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 66
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 67
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 68
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 69
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 70
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 71
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 72
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 73
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 74
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 75
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 76
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 77
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 78
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 79
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 80
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 81
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 82
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 83
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 84
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 85
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 86
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 87
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 88
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 89
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 90
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 91
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 92
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 93
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 94
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 95
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 96
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 97
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 98
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 99
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">100
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">101
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">102
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">103
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">104
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">105
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">106
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">107
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">108
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">109
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">110
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">111
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">112
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">113
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">114
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">115
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">116
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">117
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">118
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">119
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">120
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">121
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">122
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">123
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">124
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">125
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">126
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">127
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">128
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">129
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">130
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">131
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">132
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">133
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">134
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">135
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">136
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">137
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">138
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">139
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">140
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">141
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">142
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">143
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">144
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">145
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">146
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">147
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">148
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">149
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">150
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">151
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">152
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">153
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">154
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">155
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">156
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">157
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">158
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">159
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">160
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">161
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">162
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">163
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">164
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">165
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">166
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">167
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">168
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">169
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">170
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">171
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">172
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">173
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">174
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">175
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">176
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">177
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">178
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">179
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">180
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">181
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">182
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">183
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">184
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">185
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">186
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">187
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">188
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">189
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">190
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">191
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">192
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">193
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">194
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">195
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">196
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">197
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">198
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">199
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">200
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">201
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">202
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">203
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">204
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">205
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">206
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">207
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">208
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">209
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">210
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">211
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">212
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">213
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">214
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">215
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">216
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">217
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">218
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">219
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">220
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">221
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">222
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">223
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">224
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">225
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">226
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">227
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">228
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">229
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">230
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">231
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">232
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">233
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">234
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">235
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">236
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">237
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">238
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">239
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">240
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">241
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">242
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">243
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">244
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">245
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">246
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">247
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">248
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">249
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">250
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">251
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">252
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">253
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">254
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">255
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">256
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">257
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">258
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">259
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">260
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">261
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">262
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">263
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">264
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">265
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">266
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">267
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">268
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">269
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">270
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">271
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">272
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">273
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">274
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">275
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">276
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">277
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">278
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">279
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">280
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">281
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">282
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">283
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">284
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">285
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">286
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-java" data-lang="java"><span style="display:flex;"><span>grammar ResourceSqlBase<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>@members <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>  <span style="color:#6272a4">/**
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * Verify whether current token is a valid decimal token (which contains dot).
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * Returns true if the character that follows the token is not a digit or letter or underscore.
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   *
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * For example:
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * For char stream &#34;2.3&#34;, &#34;2.&#34; is not a valid decimal token, because it is followed by digit &#39;3&#39;.
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * For char stream &#34;2.3_&#34;, &#34;2.3&#34; is not a valid decimal token, because it is followed by &#39;_&#39;.
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * For char stream &#34;2.3W&#34;, &#34;2.3&#34; is not a valid decimal token, because it is followed by &#39;W&#39;.
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * For char stream &#34;12.0D 34.E2+0.12 &#34;  12.0D is a valid decimal token because it is folllowed
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * by a space. 34.E2 is a valid decimal token because it is followed by symbol &#39;+&#39;
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * which is not a digit or letter or underscore.
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   */</span>
+</span></span><span style="display:flex;"><span>  <span style="color:#8be9fd;font-style:italic">public</span> <span style="color:#8be9fd">boolean</span> <span style="color:#50fa7b">isValidDecimal</span><span style="color:#ff79c6">()</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#8be9fd">int</span> nextChar <span style="color:#ff79c6">=</span> _input<span style="color:#ff79c6">.</span><span style="color:#50fa7b">LA</span><span style="color:#ff79c6">(</span>1<span style="color:#ff79c6">);</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">if</span> <span style="color:#ff79c6">(</span>nextChar <span style="color:#ff79c6">&gt;=</span> <span style="color:#f1fa8c">&#39;A&#39;</span> <span style="color:#ff79c6">&amp;&amp;</span> nextChar <span style="color:#ff79c6">&lt;=</span> <span style="color:#f1fa8c">&#39;Z&#39;</span> <span style="color:#ff79c6">||</span> nextChar <span style="color:#ff79c6">&gt;=</span> <span style="color:#f1fa8c">&#39;0&#39;</span> <span style="color:#ff79c6">&amp;&amp;</span> nextChar <span style="color:#ff79c6">&lt;=</span> <span style="color:#f1fa8c">&#39;9&#39;</span> <span style="color:#ff79c6">||</span>
+</span></span><span style="display:flex;"><span>      nextChar <span style="color:#ff79c6">==</span> <span style="color:#f1fa8c">&#39;_&#39;</span><span style="color:#ff79c6">)</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>      <span style="color:#ff79c6">return</span> <span style="color:#ff79c6">false</span><span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">}</span> <span style="color:#ff79c6">else</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>      <span style="color:#ff79c6">return</span> <span style="color:#ff79c6">true</span><span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">}</span>
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">}</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">}</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>tokens <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>    DELIMITER
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">}</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>singleStatement
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">:</span> statement <span style="color:#f1fa8c">&#39;;&#39;</span><span style="color:#ff79c6">*</span> EOF
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>statement
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">:</span> CREATE RESOURCE createStatement                                           #create
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">|</span> ALTER RESOURCE  alterStatement                                            #alter
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">|</span> SHOW RESOURCE   showStatement                                             #show
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">|</span> REMOVE RESOURCE removeStatement                                           #remove
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">|</span> SHOW ENGINES          tenant<span style="color:#ff79c6">=</span>identifier                                         #showEngines
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">|</span> SHOW ENGINES POOL     tenant<span style="color:#ff79c6">=</span>identifier pool<span style="color:#ff79c6">=</span>identifier                         #showEnginesPool
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">|</span> SHOW ENGINES UNIT     tenant<span style="color:#ff79c6">=</span>identifier pool<span style="color:#ff79c6">=</span>identifier unit<span style="color:#ff79c6">=</span>identifier         #showEnginesUnit
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">|</span> START ENGINE          tenant<span style="color:#ff79c6">=</span>identifier pool<span style="color:#ff79c6">=</span>identifier unit<span style="color:#ff79c6">=</span>identifier         #startEngine
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">|</span> RESTART ENGINE        pool<span style="color:#ff79c6">=</span>identifier name<span style="color:#ff79c6">=</span>STRING                               #restartEngine
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">|</span> STOP ENGINE           pool<span style="color:#ff79c6">=</span>identifier name<span style="color:#ff79c6">=</span>STRING                               #stopEngine
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">|</span> <span style="color:#ff79c6">(</span>DESCRIBE <span style="color:#ff79c6">|</span> DESC<span style="color:#ff79c6">)</span>  ENGINE pool<span style="color:#ff79c6">=</span>identifier name<span style="color:#ff79c6">=</span>STRING                           #descEngine
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>createStatement
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">:</span> UNIT ifNotExist<span style="color:#ff79c6">?</span> name<span style="color:#ff79c6">=</span>identifier COMMA<span style="color:#ff79c6">?</span>  unitOptions COMMA<span style="color:#ff79c6">?</span>  withProperties<span style="color:#ff79c6">?</span>                        #createResourceUnit
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">|</span> POOL ifNotExist<span style="color:#ff79c6">?</span> name<span style="color:#ff79c6">=</span>identifier COMMA<span style="color:#ff79c6">?</span>  namespaceClause COMMA<span style="color:#ff79c6">?</span> poolClause COMMA<span style="color:#ff79c6">?</span> withProperties<span style="color:#ff79c6">?</span>   #createResourcePool
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">|</span> TENANT ifNotExist<span style="color:#ff79c6">?</span> name<span style="color:#ff79c6">=</span>identifier COMMA<span style="color:#ff79c6">?</span> poolListClause COMMA<span style="color:#ff79c6">?</span> tenantInfos COMMA<span style="color:#ff79c6">?</span> withProperties<span style="color:#ff79c6">?</span>  #createTenant
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>alterStatement
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">:</span> UNIT name<span style="color:#ff79c6">=</span>identifier COMMA<span style="color:#ff79c6">?</span> alterUnitOptions<span style="color:#ff79c6">?</span> COMMA<span style="color:#ff79c6">?</span> withProperties<span style="color:#ff79c6">?</span>                                #alterResourceUnit
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">|</span> POOL name<span style="color:#ff79c6">=</span>identifier  COMMA<span style="color:#ff79c6">?</span> namespaceClause<span style="color:#ff79c6">?</span> COMMA<span style="color:#ff79c6">?</span> alterPoolClause<span style="color:#ff79c6">?</span> COMMA<span style="color:#ff79c6">?</span> withProperties<span style="color:#ff79c6">?</span>        #alterResourcePool
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">|</span> TENANT name<span style="color:#ff79c6">=</span>identifier COMMA<span style="color:#ff79c6">?</span> alterPoolListClause<span style="color:#ff79c6">?</span> COMMA<span style="color:#ff79c6">?</span> tenantInfos<span style="color:#ff79c6">?</span> COMMA<span style="color:#ff79c6">?</span> withProperties<span style="color:#ff79c6">?</span>       #alterTenant
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>showStatement
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">:</span> UNIT <span style="color:#ff79c6">(</span>name<span style="color:#ff79c6">=</span>identifier <span style="color:#ff79c6">(</span>FOR POOL<span style="color:#ff79c6">)?</span> <span style="color:#ff79c6">)?</span>                                      #showResourceUnit
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">|</span> POOL <span style="color:#ff79c6">(</span>name<span style="color:#ff79c6">=</span>identifier <span style="color:#ff79c6">(</span>FOR TENANT<span style="color:#ff79c6">)?</span> <span style="color:#ff79c6">)?</span>                                    #showResourcePool
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">|</span> TENANT <span style="color:#ff79c6">(</span>name<span style="color:#ff79c6">=</span>identifier <span style="color:#ff79c6">(</span>WITH <span style="color:#50fa7b">POOL</span> <span style="color:#ff79c6">(</span>AND UNIT<span style="color:#ff79c6">)?</span> <span style="color:#ff79c6">)?</span> <span style="color:#ff79c6">)?</span>                      #showTenant
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>removeStatement
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">:</span> UNIT name<span style="color:#ff79c6">=</span>identifier                                                      #removeUnit
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">|</span> POOL name<span style="color:#ff79c6">=</span>identifier                                                      #removePool
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">|</span> TENANT name<span style="color:#ff79c6">=</span>identifier                                                    #removeTenant
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>unitOptions
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">:</span> unitOption <span style="color:#ff79c6">(</span>COMMA<span style="color:#ff79c6">?</span> unitOption<span style="color:#ff79c6">)*</span>                                           #resourceUnitOptions
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>alterUnitOptions
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">:</span> unitOption <span style="color:#ff79c6">(</span>COMMA<span style="color:#ff79c6">?</span> unitOption<span style="color:#ff79c6">)*</span>                                           #alterResourceUnitOptions
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>unitOption
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">:</span> DRIVER_CORES driverCpu<span style="color:#ff79c6">=</span>INTEGER_VALUE                                      #driverCpuOption
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">|</span> DRIVER_MEMORY driverMemory<span style="color:#ff79c6">=</span>STRING                                         #driverMemoryOption
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">|</span> EXECUTOR_CORES executorCpu<span style="color:#ff79c6">=</span>INTEGER_VALUE                                  #executorCpuOption
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">|</span> EXECUTOR_MEMORY executorMemory<span style="color:#ff79c6">=</span>STRING                                     #executorMemoryOption
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">|</span> EXECUTOR_MIN executorMin<span style="color:#ff79c6">=</span>INTEGER_VALUE                                    #executorMin
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">|</span> EXECUTOR_MAX executorMax<span style="color:#ff79c6">=</span>INTEGER_VALUE                                    #executorMax
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>namespaceClause
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">:</span> namespace<span style="color:#ff79c6">=</span>STRING                                                          #resourcePoolNamespace
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>poolClause
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">:</span> <span style="color:#f1fa8c">&#39;(&#39;</span> poolOptions <span style="color:#f1fa8c">&#39;)&#39;</span> <span style="color:#ff79c6">(</span>COMMA <span style="color:#f1fa8c">&#39;(&#39;</span> poolOptions <span style="color:#f1fa8c">&#39;)&#39;</span><span style="color:#ff79c6">)*</span>                          #createResourcePoolOptions
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>poolOptions
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">:</span> <span style="color:#ff79c6">(</span>UNIT name<span style="color:#ff79c6">=</span>STRING COMMA<span style="color:#ff79c6">?</span>  poolOption COMMA<span style="color:#ff79c6">?</span> poolOption<span style="color:#ff79c6">)</span>                   #createResourcePoolOption
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>alterPoolClause
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">:</span> <span style="color:#f1fa8c">&#39;(&#39;</span> alterPoolOptions <span style="color:#f1fa8c">&#39;)&#39;</span> <span style="color:#ff79c6">(</span>COMMA <span style="color:#f1fa8c">&#39;(&#39;</span> alterPoolOptions <span style="color:#f1fa8c">&#39;)&#39;</span><span style="color:#ff79c6">)*</span>                #alterResourcePoolOptions
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>alterPoolOptions
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">:</span> <span style="color:#ff79c6">(</span>ADD UNIT name<span style="color:#ff79c6">=</span>STRING  COMMA<span style="color:#ff79c6">?</span> poolOption COMMA<span style="color:#ff79c6">?</span> poolOption<span style="color:#ff79c6">)</span>               #addResourcePoolOption
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">|</span> <span style="color:#ff79c6">(</span>REMOVE UNIT name<span style="color:#ff79c6">=</span>STRING<span style="color:#ff79c6">)</span>                                                 #removeResourcePoolOption
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>poolOption
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">:</span> UNIT_MIN min<span style="color:#ff79c6">=</span>INTEGER_VALUE                                                #resourcePoolOptionMin
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">|</span> UNIT_MAX max<span style="color:#ff79c6">=</span>INTEGER_VALUE                                                #resourcePoolOptionMax
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>poolListClause
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">:</span> <span style="color:#f1fa8c">&#39;(&#39;</span> poolListOption <span style="color:#f1fa8c">&#39;)&#39;</span> <span style="color:#ff79c6">(</span>COMMA <span style="color:#f1fa8c">&#39;(&#39;</span> poolListOption <span style="color:#f1fa8c">&#39;)&#39;</span><span style="color:#ff79c6">)*</span>                    #createResourceTenantPoolList
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>poolListOption
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">:</span> <span style="color:#ff79c6">(</span>POOL name<span style="color:#ff79c6">=</span>STRING<span style="color:#ff79c6">)</span>                                                        #createResourceTenantPoolOption
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>alterPoolListClause
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">:</span> <span style="color:#f1fa8c">&#39;(&#39;</span> alterPoolListOption <span style="color:#f1fa8c">&#39;)&#39;</span> <span style="color:#ff79c6">(</span>COMMA <span style="color:#f1fa8c">&#39;(&#39;</span> alterPoolListOption <span style="color:#f1fa8c">&#39;)&#39;</span><span style="color:#ff79c6">)*</span>          #alterResourceTenantPoolList
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>alterPoolListOption
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">:</span> <span style="color:#ff79c6">(</span>ADD POOL name<span style="color:#ff79c6">=</span>STRING<span style="color:#ff79c6">)</span>                                                    #addResourceTenantPoolOption
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">|</span> <span style="color:#ff79c6">(</span>REMOVE POOL name<span style="color:#ff79c6">=</span>STRING<span style="color:#ff79c6">)</span>                                                 #removeResourceTenantPoolOption
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>tenantInfos
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">:</span> tenantInfo <span style="color:#ff79c6">(</span>COMMA <span style="color:#ff79c6">?</span>tenantInfo<span style="color:#ff79c6">)?</span>                                           #resourceTenantInfos
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>tenantInfo
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">:</span> TYPE  infoType<span style="color:#ff79c6">=</span>STRING                                                     #resourceTenantType
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">|</span> STRATEGY infoStrategy<span style="color:#ff79c6">=</span>STRING                                              #resourceTenantStrategy
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>identifier
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">:</span> IDENTIFIER                                                                #unquotedIdentifier
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">|</span> quotedIdentifier                                                          #quotedIdentifierAlternative
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>quotedIdentifier
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">:</span> BACKQUOTED_IDENTIFIER
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>withProperties
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">:</span> WITH PROPERTIES <span style="color:#f1fa8c">&#39;(&#39;</span> withProperty <span style="color:#ff79c6">(</span>COMMA withProperty<span style="color:#ff79c6">)*</span> <span style="color:#f1fa8c">&#39;)&#39;</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>withProperty
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">:</span> STRING <span style="color:#f1fa8c">&#39;=&#39;</span> STRING
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>ifNotExist
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">:</span> IF NOT EXIST
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4">// key word
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span><span style="color:#8be9fd;font-style:italic">CREATE:</span> &#39;CREATE&#39;<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span><span style="color:#8be9fd;font-style:italic">ALTER:</span> &#39;ALTER&#39;<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span><span style="color:#8be9fd;font-style:italic">SHOW:</span> &#39;SHOW&#39;<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span><span style="color:#8be9fd;font-style:italic">REMOVE:</span> &#39;REMOVE&#39;<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span><span style="color:#8be9fd;font-style:italic">RESOURCE:</span> &#39;RESOURCE&#39;<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span><span style="color:#8be9fd;font-style:italic">UNIT:</span> &#39;UNIT&#39;<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span><span style="color:#8be9fd;font-style:italic">POOL:</span> &#39;POOL&#39;<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span><span style="color:#8be9fd;font-style:italic">TENANT:</span> &#39;TENANT&#39;<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span><span style="color:#8be9fd;font-style:italic">DRIVER_CORES:</span> &#39;DRIVER_CORES&#39;<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span><span style="color:#8be9fd;font-style:italic">DRIVER_MEMORY:</span> &#39;DRIVER_MEMORY&#39;<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span><span style="color:#8be9fd;font-style:italic">EXECUTOR_CORES:</span> &#39;EXECUTOR_CORES&#39;<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span><span style="color:#8be9fd;font-style:italic">EXECUTOR_MEMORY:</span> &#39;EXECUTOR_MEMORY&#39;<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span><span style="color:#8be9fd;font-style:italic">UNIT_MIN:</span> &#39;UNIT_MIN&#39;<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span><span style="color:#8be9fd;font-style:italic">UNIT_MAX:</span> &#39;UNIT_MAX&#39;<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span><span style="color:#8be9fd;font-style:italic">LEFT_PAREN:</span> <span style="color:#f1fa8c">&#39;(&#39;</span><span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span><span style="color:#8be9fd;font-style:italic">RIGHT_PAREN:</span> <span style="color:#f1fa8c">&#39;)&#39;</span><span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span><span style="color:#8be9fd;font-style:italic">POOL_LIST:</span> &#39;POOL_LIST&#39;<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span><span style="color:#8be9fd;font-style:italic">WITH:</span> &#39;WITH&#39;<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span><span style="color:#8be9fd;font-style:italic">AND:</span> &#39;AND&#39;<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span><span style="color:#8be9fd;font-style:italic">EXECUTOR_MIN:</span> &#39;EXECUTOR_MIN&#39;<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span><span style="color:#8be9fd;font-style:italic">EXECUTOR_MAX:</span> &#39;EXECUTOR_MAX&#39;<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span><span style="color:#8be9fd;font-style:italic">PROPERTIES:</span> &#39;PROPERTIES&#39;<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span><span style="color:#8be9fd;font-style:italic">TYPE:</span> &#39;TYPE&#39;<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span><span style="color:#8be9fd;font-style:italic">STRATEGY:</span> &#39;STRATEGY&#39;<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span><span style="color:#8be9fd;font-style:italic">ADD:</span> &#39;ADD&#39;<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span><span style="color:#8be9fd;font-style:italic">IF:</span> &#39;IF&#39;<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span><span style="color:#8be9fd;font-style:italic">NOT:</span> &#39;NOT&#39;<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span><span style="color:#8be9fd;font-style:italic">EXIST:</span> &#39;EXIST&#39;<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span><span style="color:#8be9fd;font-style:italic">COMMA:</span> <span style="color:#f1fa8c">&#39;,&#39;</span><span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span><span style="color:#8be9fd;font-style:italic">ENGINE:</span> &#39;ENGINE&#39;<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span><span style="color:#8be9fd;font-style:italic">ENGINES:</span> &#39;ENGINES&#39;<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span><span style="color:#8be9fd;font-style:italic">START:</span> &#39;START&#39;<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span><span style="color:#8be9fd;font-style:italic">RESTART:</span> &#39;RESTART&#39;<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span><span style="color:#8be9fd;font-style:italic">STOP:</span> &#39;STOP&#39;<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span><span style="color:#8be9fd;font-style:italic">DESCRIBE:</span> &#39;DESCRIBE&#39;<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span><span style="color:#8be9fd;font-style:italic">DESC:</span> &#39;DESC&#39;<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span><span style="color:#8be9fd;font-style:italic">EXECUTORS:</span> &#39;EXECUTORS&#39;<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span><span style="color:#8be9fd;font-style:italic">FOR:</span> &#39;FOR&#39;<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span>STRING
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">:</span> <span style="color:#f1fa8c">&#39;\&#39;&#39;</span> <span style="color:#ff79c6">(</span> <span style="color:#ff79c6">~(</span><span style="color:#f1fa8c">&#39;\&#39;&#39;</span><span style="color:#ff79c6">|</span><span style="color:#f1fa8c">&#39;\\&#39;</span><span style="color:#ff79c6">)</span> <span style="color:#ff79c6">|</span> <span style="color:#ff79c6">(</span><span style="color:#f1fa8c">&#39;\\&#39;</span> <span style="color:#ff79c6">.)</span> <span style="color:#ff79c6">)*</span> <span style="color:#f1fa8c">&#39;\&#39;&#39;</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">|</span> <span style="color:#f1fa8c">&#39;&#34;&#39;</span> <span style="color:#ff79c6">(</span> <span style="color:#ff79c6">~(</span><span style="color:#f1fa8c">&#39;&#34;&#39;</span><span style="color:#ff79c6">|</span><span style="color:#f1fa8c">&#39;\\&#39;</span><span style="color:#ff79c6">)</span> <span style="color:#ff79c6">|</span> <span style="color:#ff79c6">(</span><span style="color:#f1fa8c">&#39;\\&#39;</span> <span style="color:#ff79c6">.)</span> <span style="color:#ff79c6">)*</span> <span style="color:#f1fa8c">&#39;&#34;&#39;</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>DOUBLEQUOTED_STRING
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">:</span><span style="color:#f1fa8c">&#39;&#34;&#39;</span> <span style="color:#ff79c6">(</span> <span style="color:#ff79c6">~(</span><span style="color:#f1fa8c">&#39;&#34;&#39;</span><span style="color:#ff79c6">|</span><span style="color:#f1fa8c">&#39;\\&#39;</span><span style="color:#ff79c6">)</span> <span style="color:#ff79c6">|</span> <span style="color:#ff79c6">(</span><span style="color:#f1fa8c">&#39;\\&#39;</span> <span style="color:#ff79c6">.)</span> <span style="color:#ff79c6">)*</span> <span style="color:#f1fa8c">&#39;&#34;&#39;</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>BIGINT_LITERAL
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">:</span> DIGIT<span style="color:#ff79c6">+</span> <span style="color:#f1fa8c">&#39;L&#39;</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>SMALLINT_LITERAL
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">:</span> DIGIT<span style="color:#ff79c6">+</span> <span style="color:#f1fa8c">&#39;S&#39;</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>TINYINT_LITERAL
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">:</span> DIGIT<span style="color:#ff79c6">+</span> <span style="color:#f1fa8c">&#39;Y&#39;</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>INTEGER_VALUE
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">:</span> DIGIT<span style="color:#ff79c6">+</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>DECIMAL_VALUE
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">:</span> DIGIT<span style="color:#ff79c6">+</span> EXPONENT
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">|</span> DECIMAL_DIGITS EXPONENT<span style="color:#ff79c6">?</span> <span style="color:#ff79c6">{</span>isValidDecimal<span style="color:#ff79c6">()}?</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>DOUBLE_LITERAL
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">:</span> DIGIT<span style="color:#ff79c6">+</span> EXPONENT<span style="color:#ff79c6">?</span> <span style="color:#f1fa8c">&#39;D&#39;</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">|</span> DECIMAL_DIGITS EXPONENT<span style="color:#ff79c6">?</span> <span style="color:#f1fa8c">&#39;D&#39;</span> <span style="color:#ff79c6">{</span>isValidDecimal<span style="color:#ff79c6">()}?</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>BIGDECIMAL_LITERAL
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">:</span> DIGIT<span style="color:#ff79c6">+</span> EXPONENT<span style="color:#ff79c6">?</span> &#39;BD&#39;
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">|</span> DECIMAL_DIGITS EXPONENT<span style="color:#ff79c6">?</span> &#39;BD&#39; <span style="color:#ff79c6">{</span>isValidDecimal<span style="color:#ff79c6">()}?</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>IDENTIFIER
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">:</span> <span style="color:#ff79c6">(</span>LETTER <span style="color:#ff79c6">|</span> DIGIT <span style="color:#ff79c6">|</span> <span style="color:#f1fa8c">&#39;_&#39;</span><span style="color:#ff79c6">)+</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>BACKQUOTED_IDENTIFIER
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">:</span> <span style="color:#f1fa8c">&#39;`&#39;</span> <span style="color:#ff79c6">(</span> <span style="color:#ff79c6">~</span><span style="color:#f1fa8c">&#39;`&#39;</span> <span style="color:#ff79c6">|</span> &#39;``&#39; <span style="color:#ff79c6">)*</span> <span style="color:#f1fa8c">&#39;`&#39;</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>fragment DECIMAL_DIGITS
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">:</span> DIGIT<span style="color:#ff79c6">+</span> <span style="color:#f1fa8c">&#39;.&#39;</span> DIGIT<span style="color:#ff79c6">*</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">|</span> <span style="color:#f1fa8c">&#39;.&#39;</span> DIGIT<span style="color:#ff79c6">+</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>fragment EXPONENT
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">:</span> <span style="color:#f1fa8c">&#39;E&#39;</span> <span style="color:#ff79c6">[+-]?</span> DIGIT<span style="color:#ff79c6">+</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>fragment DIGIT
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">:</span> <span style="color:#ff79c6">[</span>0<span style="color:#ff79c6">-</span>9<span style="color:#ff79c6">]</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>fragment LETTER
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">:</span> <span style="color:#ff79c6">[</span>A<span style="color:#ff79c6">-</span>Za<span style="color:#ff79c6">-</span>z<span style="color:#ff79c6">]</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>SIMPLE_COMMENT
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">:</span> &#39;<span style="color:#ff79c6">--</span>&#39; <span style="color:#ff79c6">~[</span>\r\n<span style="color:#ff79c6">]*</span> <span style="color:#f1fa8c">&#39;\r&#39;</span><span style="color:#ff79c6">?</span> <span style="color:#f1fa8c">&#39;\n&#39;</span><span style="color:#ff79c6">?</span> <span style="color:#ff79c6">-&gt;</span> channel<span style="color:#ff79c6">(</span>HIDDEN<span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>BRACKETED_COMMENT
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">:</span> &#39;<span style="color:#6272a4">/*&#39; .*? &#39;*/</span>&#39; <span style="color:#ff79c6">-&gt;</span> channel<span style="color:#ff79c6">(</span>HIDDEN<span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>WS  <span style="color:#ff79c6">:</span> <span style="color:#ff79c6">[</span> \r\n\t<span style="color:#ff79c6">]+</span> <span style="color:#ff79c6">-&gt;</span> channel<span style="color:#ff79c6">(</span>HIDDEN<span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4">// Catch-all for anything we can&#39;t recognize.
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">// We use this to be able to ignore and recover all the text
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">// when splitting statements with DelimiterLexer
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>UNRECOGNIZED
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">:</span> <span style="color:#ff79c6">.</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">;</span>
+</span></span></code></pre></td></tr></table>
+</div>
+</div>
+			<script type="text/javascript"
+        async
+        src="https://cdn.bootcss.com/mathjax/2.7.3/MathJax.js?config=TeX-AMS-MML_HTMLorMML">
+MathJax.Hub.Config({
+  tex2jax: {
+    inlineMath: [['$','$'], ['\\(','\\)']],
+    displayMath: [['$$','$$'], ['\[\[','\]\]']],
+    processEscapes: true,
+    processEnvironments: true,
+    skipTags: ['script', 'noscript', 'style', 'textarea', 'pre'],
+    TeX: { equationNumbers: { autoNumber: "AMS" },
+         extensions: ["AMSmath.js", "AMSsymbols.js"] }
+  }
+});
+
+MathJax.Hub.Queue(function() {
+    
+    
+    
+    var all = MathJax.Hub.getAllJax(), i;
+    for(i = 0; i < all.length; i += 1) {
+        all[i].SourceElement().parentNode.className += ' has-jax';
+    }
+});
+</script>
+
+<style>
+code.has-jax {
+    font: inherit;
+    font-size: 100%;
+    background: inherit;
+    border: inherit;
+    color: #515151;
+}
+</style>
+        </div>
+
+        
+
+
+        
+
+<div class="post-archive">
+    <h2>相关文章</h2>
+    <ul class="listing">
+        
+        <li><a href="/post/2023/06/%E9%95%9C%E5%83%8F%E5%90%88%E5%B9%B6%E9%85%8D%E7%BD%AE%E6%96%87%E4%BB%B6%E5%90%8C%E6%AD%A5/">镜像合并&amp;配置文件同步</a></li>
+        
+        <li><a href="/post/2022/09/%E9%AB%98%E5%8F%AF%E7%94%A8%E8%AE%BE%E8%AE%A1/">高可用设计</a></li>
+        
+        <li><a href="/post/2022/08/kyuubi%E8%AE%BE%E8%AE%A1%E8%B0%83%E7%A0%94/">Kyuubi设计调研</a></li>
+        
+        <li><a href="/post/2022/07/%E5%AE%B9%E7%81%BE%E9%83%A8%E7%BD%B2%E8%B0%83%E7%A0%94/">容灾部署调研</a></li>
+        
+        <li><a href="/post/2022/06/%E8%87%AA%E5%AE%9A%E4%B9%89hiveserver%E8%AE%BE%E8%AE%A1/">自定义HiveServer设计</a></li>
+        
+    </ul>
+</div>
+
+
+        <div class="post-meta meta-tags">
+            
+            <ul class="clearfix">
+                
+                <li><a href='/tags/%E5%B7%A5%E4%BD%9C%E8%AE%B0%E5%BD%95'>工作记录</a></li>
+                
+            </ul>
+            
+        </div>
+    </article>
+    
+    
+
+    
+    
+    <div class="post bg-white">
+      <script src="https://utteranc.es/client.js"
+            repo= "himichael/hugoblogtalks"
+            issue-term="pathname"
+            theme="github-light"
+            crossorigin="anonymous"
+            async>
+      </script>
+    </div>
+    
+</div>
+
+
+                </div>
+
+                <div id="secondary">
+    <section class="widget">
+        <form id="search" action='https://code0xff.org/search/' method="get" accept-charset="utf-8" target="_blank" _lpchecked="1">
+      
+      <input type="text" name="q" maxlength="20" placeholder="Search">
+      <input type="hidden" name="sitesearch" value="https://code0xff.org/">
+      <button type="submit" class="submit icon-search"></button>
+</form>
+    </section>
+    
+    <section class="widget">
+        <h3 class="widget-title">最近文章</h3>
+<ul class="widget-list">
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/06/bitweaving/" title="BitWeaving: Fast Scans for Main Memory Data Processing">BitWeaving: Fast Scans for Main Memory Data Processing</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/05/cache_conscious/" title="Cache Conscious Indexing for Decision-Support in Main Memory">Cache Conscious Indexing for Decision-Support in Main Memory</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/05/column_imprints/" title="Column Imprints: A Secondary Index Structure">Column Imprints: A Secondary Index Structure</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/05/sql_server_column_store_indexes/" title="SQL Server Column Store Indexes">SQL Server Column Store Indexes</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/05/bitmap_index/" title="Bitmap Index Design and Evaluation ">Bitmap Index Design and Evaluation </a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/05/advanced_database_systems-history_of_databases/" title="Advanced Database Systems: History of Databases">Advanced Database Systems: History of Databases</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/05/column_sketches/" title="Column Sketches: A Scan Accelerator for Rapid and Robust Predicate Evaluation">Column Sketches: A Scan Accelerator for Rapid and Robust Predicate Evaluation</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/06/%E8%B5%84%E6%BA%90%E9%9A%94%E7%A6%BB%E8%AE%BE%E8%AE%A1/" title="资源隔离设计">资源隔离设计</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/05/optimal_column_layout_for_hybrid_workloads/" title="Optimal Column Layout for Hybrid Workloads">Optimal Column Layout for Hybrid Workloads</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/06/%E9%95%9C%E5%83%8F%E5%90%88%E5%B9%B6%E9%85%8D%E7%BD%AE%E6%96%87%E4%BB%B6%E5%90%8C%E6%AD%A5/" title="镜像合并&amp;配置文件同步">镜像合并&amp;配置文件同步</a>
+    </li>
+    
+</ul>
+    </section>
+
+    
+
+    <section class="widget">
+        <h3 class="widget-title"><a href='/categories/'>分类</a></h3>
+<ul class="widget-list">
+    
+    <li><a href="https://code0xff.org/categories/%E5%88%86%E5%B8%83%E5%BC%8F/">分布式 (6)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E5%8E%9F%E7%90%86%E5%88%86%E6%9E%90/">原理分析 (13)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E5%95%86%E4%B8%9A/">商业 (3)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E5%A4%A7%E6%95%B0%E6%8D%AE/">大数据 (24)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%95%B0%E6%8D%AE%E5%BA%93/">数据库 (32)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%96%87%E5%AD%A6%E5%92%8C%E8%89%BA%E6%9C%AF/">文学和艺术 (2)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%97%85%E8%A1%8C/">旅行 (10)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%9E%B6%E6%9E%84/">架构 (2)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E7%AE%97%E6%B3%95/">算法 (8)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E7%B3%BB%E7%BB%9F/">系统 (5)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E7%BC%96%E7%A8%8B%E8%AF%AD%E8%A8%80/">编程语言 (2)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E8%A1%8C%E4%B8%9A%E8%A7%82%E5%AF%9F/">行业观察 (1)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E8%AF%BB%E4%B9%A6%E7%AC%94%E8%AE%B0/">读书笔记 (12)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E9%9A%8F%E4%BE%BF%E5%86%99%E5%86%99/">随便写写 (3)</a></li>
+    
+</ul>
+    </section>
+
+    <section class="widget">
+        <h3 class="widget-title">归档</a></h3>
+<ul class="widget-list">
+    
+    <li><a href="https://code0xff.org/years/2021%E5%B9%B4/">2021年 (31)</a></li>
+    
+    <li><a href="https://code0xff.org/years/2022%E5%B9%B4/">2022年 (55)</a></li>
+    
+    <li><a href="https://code0xff.org/years/2023%E5%B9%B4/">2023年 (37)</a></li>
+    
+</ul>
+    </section>
+
+    <section class="widget">
+        <h3 class="widget-title"><a href='/tags/'>标签</a></h3>
+<div class="tagcloud">
+    
+    <a href="https://code0xff.org/tags/b%E6%A0%91/">B树 </a>
+    
+    <a href="https://code0xff.org/tags/cmu-database/">CMU-Database </a>
+    
+    <a href="https://code0xff.org/tags/flink/">flink </a>
+    
+    <a href="https://code0xff.org/tags/hive/">Hive </a>
+    
+    <a href="https://code0xff.org/tags/k8s/">k8s </a>
+    
+    <a href="https://code0xff.org/tags/kudu/">kudu </a>
+    
+    <a href="https://code0xff.org/tags/kyuubi/">Kyuubi </a>
+    
+    <a href="https://code0xff.org/tags/lakehouse/">Lakehouse </a>
+    
+    <a href="https://code0xff.org/tags/leveldb/">LevelDB </a>
+    
+    <a href="https://code0xff.org/tags/llvm/">LLVM </a>
+    
+    <a href="https://code0xff.org/tags/manacher/">Manacher </a>
+    
+    <a href="https://code0xff.org/tags/mapreduce/">MapReduce </a>
+    
+    <a href="https://code0xff.org/tags/mysql/">MySQL </a>
+    
+    <a href="https://code0xff.org/tags/newsql/">NewSQL </a>
+    
+    <a href="https://code0xff.org/tags/oceanbase/">OceanBase </a>
+    
+    <a href="https://code0xff.org/tags/paxos/">paxos </a>
+    
+    <a href="https://code0xff.org/tags/raft/">raft </a>
+    
+    <a href="https://code0xff.org/tags/scala/">scala </a>
+    
+    <a href="https://code0xff.org/tags/simd/">SIMD </a>
+    
+    <a href="https://code0xff.org/tags/snowflake/">snowflake </a>
+    
+    <a href="https://code0xff.org/tags/spark/">spark </a>
+    
+    <a href="https://code0xff.org/tags/unix/">unix </a>
+    
+    <a href="https://code0xff.org/tags/%E4%BA%8C%E5%88%86%E6%9F%A5%E6%89%BE/">二分查找 </a>
+    
+    <a href="https://code0xff.org/tags/%E4%BA%8C%E5%8F%89%E6%A0%91%E9%81%8D%E5%8E%86/">二叉树遍历 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%88%86%E5%B8%83%E5%BC%8F/">分布式 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%88%97%E5%AD%98/">列存 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%8A%A8%E6%80%81%E6%B3%A8%E5%85%A5/">动态注入 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%8E%86%E5%8F%B2/">历史 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%90%91%E9%87%8F%E5%8C%96/">向量化 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%9B%9E%E6%BA%AF/">回溯 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%9B%BD%E5%86%85%E6%97%85%E8%A1%8C/">国内旅行 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%9B%BD%E5%A4%96%E6%97%85%E8%A1%8C/">国外旅行 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%A4%9A%E7%A7%9F%E6%88%B7/">多租户 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%A4%A7%E6%95%B0%E6%8D%AE/">大数据 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%AD%98%E5%82%A8/">存储 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%B7%A5%E4%BD%9C%E8%AE%B0%E5%BD%95/">工作记录 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%BE%AE%E6%9C%8D%E5%8A%A1/">微服务 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%95%B0%E6%8D%AE%E5%BA%93/">数据库 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%95%B0%E6%8D%AE%E6%A8%A1%E5%9E%8B/">数据模型 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%9F%A5%E8%AF%A2%E4%BC%98%E5%8C%96/">查询优化 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%9F%A5%E8%AF%A2%E7%BC%96%E8%AF%91/">查询编译 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%B1%87%E7%BC%96/">汇编 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%B5%8B%E8%AF%95/">测试 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%B9%96%E4%BB%93%E4%B8%80%E4%BD%93/">湖仓一体 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%94%9F%E6%B4%BB/">生活 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%94%B5%E5%BD%B1/">电影 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%AE%97%E6%B3%95/">算法 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%B4%A2%E5%BC%95/">索引 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BB%8F%E6%B5%8E/">经济 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BC%93%E5%AD%98/">缓存 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BC%96%E8%AF%91%E5%8E%9F%E7%90%86/">编译原理 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BD%91%E7%BB%9C/">网络 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AE%A1%E7%AE%97%E6%A1%86%E6%9E%B6/">计算框架 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AE%BA%E6%96%87/">论文 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AF%BB%E4%B9%A6/">读书 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AF%BB%E4%B9%A6%E7%AC%94%E8%AE%B0/">读书笔记 </a>
+    
+</div>
+    </section>
+
+    
+
+    <section class="widget">
+        <h3 class="widget-title">RSS</h3>
+        <ul class="widget-list">
+            <li><a href="https://code0xff.org/index.xml">文章 RSS</a></li>
+        </ul>
+    </section>
+</div>
+            </div>
+        </div>
+    </div>
+    <footer id="footer">
+    <div>
+        &copy; 2023 <a href="https://code0xff.org/">记录每个瞬间 By 老王</a>
+        
+    </div>
+    <br />
+    <div>
+        <div class="github-badge">
+            <a href="https://gohugo.io/" target="_black" rel="nofollow"><span class="badge-subject">Powered by</span><span class="badge-value bg-blue">Hugo</span></a>
+        </div>
+        <div class="github-badge">
+            <a href="https://github.com/flysnow-org/maupassant-hugo" target="_black"><span class="badge-subject">Theme</span><span class="badge-value bg-yellowgreen">Maupassant</span></a>
+        </div>
+    </div>
+</footer>
+
+
+    
+    <script type="text/javascript">
+        window.MathJax = {
+            tex2jax: {
+                inlineMath: [['$', '$']],
+                processEscapes: true
+                }
+            };
+    </script>
+    <script src='https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.5/MathJax.js?config=TeX-MML-AM_CHTML' async></script><script src="https://cdn.bootcdn.net/ajax/libs/fancybox/3.5.7/jquery.fancybox.min.js"></script>
+
+<a id="rocket" href="#top"></a>
+<script type="text/javascript" src='/js/totop.js?v=0.0.0' async=""></script>
+
+<script type="application/javascript">
+var doNotTrack = false;
+if (!doNotTrack) {
+	window.ga=window.ga||function(){(ga.q=ga.q||[]).push(arguments)};ga.l=+new Date;
+	ga('create', 'GA ID', 'auto');
+	
+	ga('send', 'pageview');
+}
+</script>
+<script async src='https://www.google-analytics.com/analytics.js'></script>
+
+
+
+    <script type="text/javascript" src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js" async></script>
+
+
+
+
+</body>
+
+</html>
