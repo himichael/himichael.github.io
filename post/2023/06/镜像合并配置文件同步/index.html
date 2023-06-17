@@ -1,0 +1,889 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    
+    <meta name="referrer" content="no-referrer-when-downgrade">
+    
+
+    <title>镜像合并&amp;配置文件同步 | 记录每个瞬间</title>
+    <meta property="og:title" content="镜像合并&amp;配置文件同步 - 记录每个瞬间">
+    <meta property="og:type" content="article">
+        
+    <meta property="article:published_time" content='2023-05-12T11:23:04&#43;08:00'>
+        
+        
+    <meta property="article:modified_time" content='2023-05-12T11:23:04&#43;08:00'>
+        
+    <meta name="Keywords" content="">
+    <meta name="description" content="镜像合并&amp;配置文件同步">
+        <meta name="author" content="隔壁老王">
+        
+    <meta property="og:url" content="https://code0xff.org/post/2023/06/%E9%95%9C%E5%83%8F%E5%90%88%E5%B9%B6%E9%85%8D%E7%BD%AE%E6%96%87%E4%BB%B6%E5%90%8C%E6%AD%A5/">
+    <link rel="shortcut icon" href='/favicon.ico'  type="image/x-icon">
+
+    <link rel="stylesheet" href='/css/normalize.css'>
+    <link rel="stylesheet" href='/css/style.css'>
+    <script type="text/javascript" src="//cdn.bootcdn.net/ajax/libs/jquery/3.4.1/jquery.min.js"></script>
+
+    
+    
+    
+        <link href="https://cdn.bootcdn.net/ajax/libs/fancybox/3.5.7/jquery.fancybox.min.css" rel="stylesheet">
+    
+    
+    
+    
+</head>
+
+
+<body>
+    <header id="header" class="clearfix">
+    <div class="container">
+        <div class="col-group">
+            <div class="site-name ">
+                
+                    <a id="logo" href="https://code0xff.org/">
+                        记录每个瞬间
+                    </a>
+                
+                
+            </div>
+            <div>
+                <nav id="nav-menu" class="clearfix">
+                    <a class="current" href="https://code0xff.org/">首页</a>
+                    
+                    <a  href="https://code0xff.org/linked/" title="链接">链接</a>
+                    
+                    <a  href="https://code0xff.org/archives/" title="归档">归档</a>
+                    
+                    <a  href="https://code0xff.org/about/" title="关于">关于</a>
+                    
+                </nav>
+            </div>
+        </div>
+    </div>
+</header>
+
+    <div id="body">
+        <div class="container">
+            <div class="col-group">
+
+                <div class="col-8" id="main">
+                    
+<div class="res-cons">
+    
+    <article class="post">
+        <header>
+            <h1 class="post-title">镜像合并&amp;配置文件同步</h1>
+        </header>
+        <date class="post-meta meta-date">
+            2023年5月12日
+        </date>
+<nav id="TableOfContents">
+  <ul>
+    <li><a href="#文件同步">文件同步</a>
+      <ul>
+        <li><a href="#背景">背景</a></li>
+        <li><a href="#实现方案">实现方案</a>
+          <ul>
+            <li><a href="#基于zkminiohdfs的同步">基于ZK、minio、HDFS的同步</a></li>
+            <li><a href="#基于-http同步组播">基于 http同步，组播</a></li>
+            <li><a href="#基于环境变量">基于环境变量</a></li>
+          </ul>
+        </li>
+        <li><a href="#实现细节">实现细节</a>
+          <ul>
+            <li><a href="#操作步骤">操作步骤</a></li>
+          </ul>
+        </li>
+      </ul>
+    </li>
+    <li><a href="#镜像统一">镜像统一</a>
+      <ul>
+        <li><a href="#背景-1">背景</a></li>
+        <li><a href="#实现">实现</a></li>
+        <li><a href="#dockerfile">dockerfile</a>
+          <ul>
+            <li><a href="#统一镜像后的dockerfile">统一镜像后的dockerfile</a></li>
+            <li><a href="#基础镜像-dockerfile">基础镜像 dockerfile</a></li>
+          </ul>
+        </li>
+      </ul>
+    </li>
+  </ul>
+</nav>
+        
+        <div class="post-meta">
+            
+            <span class="post-meta meta-tags">
+                <ul class="clearfix">
+                    <a href='/categories/%E5%A4%A7%E6%95%B0%E6%8D%AE'>大数据</a>
+                </ul>
+            </span>
+            
+        </div>
+        
+        
+        <div class="post-meta">
+            <span id="busuanzi_container_page_pv">|<span id="busuanzi_value_page_pv"></span><span>
+                    阅读</span></span>
+        </div>
+        
+        
+        <div class="post-content">
+            <h1 id="文件同步">文件同步</h1>
+<h2 id="背景">背景</h2>
+<p>Spark的 driver template，executor template，在跨 k8s 的 namespace 下，需要再搞一份<br>
+比如 executor需要这些</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">7
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-yaml" data-lang="yaml"><span style="display:flex;"><span>    <span style="color:#ff79c6">volumeMounts</span>:
+</span></span><span style="display:flex;"><span>        - <span style="color:#ff79c6">mountPath</span>: /tmp/krb5_conf
+</span></span><span style="display:flex;"><span>          <span style="color:#ff79c6">name</span>: my_project-krb5-conf
+</span></span><span style="display:flex;"><span>        - <span style="color:#ff79c6">mountPath</span>: /tmp/krb5_keytab
+</span></span><span style="display:flex;"><span>          <span style="color:#ff79c6">name</span>: my_project-krb5-keytab
+</span></span><span style="display:flex;"><span>        - <span style="color:#ff79c6">mountPath</span>: /my_project/resources/kerberos
+</span></span><span style="display:flex;"><span>          <span style="color:#ff79c6">name</span>: keytab-config		
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>driver的就更多了</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">15
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">16
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">17
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">18
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">19
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-yaml" data-lang="yaml"><span style="display:flex;"><span>    <span style="color:#ff79c6">volumeMounts</span>:
+</span></span><span style="display:flex;"><span>        - <span style="color:#ff79c6">mountPath</span>: /tmp/krb5
+</span></span><span style="display:flex;"><span>          <span style="color:#ff79c6">name</span>: kerberos-temp
+</span></span><span style="display:flex;"><span>        - <span style="color:#ff79c6">mountPath</span>: /my_project/resources/kerberos
+</span></span><span style="display:flex;"><span>          <span style="color:#ff79c6">name</span>: keytab-config
+</span></span><span style="display:flex;"><span>        - <span style="color:#ff79c6">mountPath</span>: /tmp/executoe_template
+</span></span><span style="display:flex;"><span>          <span style="color:#ff79c6">name</span>: my_project-executor-template
+</span></span><span style="display:flex;"><span>        - <span style="color:#ff79c6">mountPath</span>: /my_project/resources
+</span></span><span style="display:flex;"><span>          <span style="color:#ff79c6">name</span>: resource-config
+</span></span><span style="display:flex;"><span>        - <span style="color:#ff79c6">mountPath</span>: /tmp/application-properties
+</span></span><span style="display:flex;"><span>          <span style="color:#ff79c6">name</span>: my_project-app-properties
+</span></span><span style="display:flex;"><span>        - <span style="color:#ff79c6">mountPath</span>: /my_project/resources/config
+</span></span><span style="display:flex;"><span>          <span style="color:#ff79c6">name</span>: app-config
+</span></span><span style="display:flex;"><span>        - <span style="color:#ff79c6">mountPath</span>: /tmp/scheduler-config
+</span></span><span style="display:flex;"><span>          <span style="color:#ff79c6">name</span>: my_project-scheduler-config	
+</span></span><span style="display:flex;"><span>        - <span style="color:#ff79c6">mountPath</span>: /my_project/resources/scheduler-config
+</span></span><span style="display:flex;"><span>          <span style="color:#ff79c6">name</span>: scheduler-config	
+</span></span><span style="display:flex;"><span>        - <span style="color:#ff79c6">mountPath</span>: /tmp/ranger
+</span></span><span style="display:flex;"><span>          <span style="color:#ff79c6">name</span>: my_project-ranger-xml	
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>在资源隔离场景下，使用了 k8s 的 namespace，由于 namespace是天然隔离的，所以 不同 namespace 中的 配置文件没法共用</p>
+<p>
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/06/%E9%95%9C%E5%83%8F%E5%90%88%E5%B9%B6&amp;%E9%85%8D%E7%BD%AE%E6%96%87%E4%BB%B6%E5%90%8C%E6%AD%A5/1.png">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/06/%E9%95%9C%E5%83%8F%E5%90%88%E5%B9%B6&amp;%E9%85%8D%E7%BD%AE%E6%96%87%E4%BB%B6%E5%90%8C%E6%AD%A5/1.png" />
+        </a>
+    <br>
+如上，本来有一个 namespace-1，下面有若干文件，这时候，基于 namespace 1 启动了一个新的 pod，是放在 namespace-2下的，但如果要正常使用这个 pod，就需要在 namespace 2 下把相关文件重新创建一遍</p>
+<p>希望达成的效果</p>
+<ul>
+<li>proxy 创建 engine时，不需要再创建配置文件了，可以自动完成</li>
+<li>跨 k8s 的 namespace 下创建 engine时，也不需要冗余手动创建配置文件了，可以自动完成</li>
+</ul>
+<h2 id="实现方案">实现方案</h2>
+<p>目前想到了有这么一些方案</p>
+<ul>
+<li>基于 ZK 同步配置文件</li>
+<li>基于 minio 同步配置文件</li>
+<li>基于 HDFS 同步配置文件</li>
+<li>内置一个 http，其他 pod主动拉取</li>
+<li>pod 之间使用组播实现同步</li>
+<li>基于环境变量同步</li>
+</ul>
+<h3 id="基于zkminiohdfs的同步">基于ZK、minio、HDFS的同步</h3>
+<p>这几种本质是差不多的，都是把配置文件放到一个外部组件中<br>
+这些依赖都有一些问题</p>
+<ul>
+<li>HDFS 是最麻烦的一个，因为使用 HDFS，得先有 krb5 文件，但此时还没有这个文件</li>
+<li>minio需要密码，可能需要通过 env 先传递过去</li>
+<li>zk 目前只需要 ip 和port可以直接获取，但如果环境要求必须用 kerberos 连接，那也不好搞了</li>
+</ul>
+<h3 id="基于-http同步组播">基于 http同步，组播</h3>
+<p>proxy 自身启动一个 http 服务，然后 engine 主动去连接这个 http<br>
+但 proxy 如果宕机了，engine 就不知道去哪里获取了<br>
+使用组播的方式，大家都先加入一个组播，然后识别出各自的身份<br>
+这样即使proxy挂了，新的proxy如果能加入这个组，engine还是可以找到的<br>
+实现组播也有一些问题</p>
+<ul>
+<li>所有的应用都是基于 k8s的，那就相当于每个应用一个组播，如何确保组播地址不冲突，相互不会干扰</li>
+<li>几个proxy + 几百个engine时，如何平衡读取 proxy，以及很多细节需要处理</li>
+</ul>
+<h3 id="基于环境变量">基于环境变量</h3>
+<p>这个比较简单，直接将配置文件的内容写到环境变量中<br>
+新 pod 启动后，直接读取环境变量的值，然后将值的内容 写入到指定的路径中 <br>
+比如直接将 环境变量中的值，写入到 /my_project/resources/config/application.properties<br>
+之后的逻辑就按正常方式读取 application.properties 即可</p>
+<h2 id="实现细节">实现细节</h2>
+<p>拉取配置文件(不管是基于ZK、或是ENV)，这个动作本身的需要在正常逻辑启动之前执行<br>
+因为正常的逻辑需要读取配置文件，krb5等，如果拉取动作跟正常逻辑混在一起了，可能还没拉取就报错了<br>
+同时拉取这个动作，跟正常逻辑不应该耦合太紧，所以放到 init 容器里面做这些事情比较合适<br>
+一个 namespace 内的拉取流程</p>
+<ul>
+<li>proxy 需要配置出 engine 的init 容器</li>
+<li>之后再创建出一个 volume，这个 volume 跟 pod 生命周期一样即可，pod 销毁了配置文件也就没了</li>
+<li>proxy 读取本地，也就是容器内的配置文件，作为 env传递给 engine 的 init 容器</li>
+<li>init 容器读取解析出这些 env，保存到 共享的 volume 中</li>
+<li>engine 的正常逻辑继续正常，此时配置文件都被 init 容器正常放置好了，engine后续的逻辑不需动，正常执行
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/06/%E9%95%9C%E5%83%8F%E5%90%88%E5%B9%B6&amp;%E9%85%8D%E7%BD%AE%E6%96%87%E4%BB%B6%E5%90%8C%E6%AD%A5/2.png">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/06/%E9%95%9C%E5%83%8F%E5%90%88%E5%B9%B6&amp;%E9%85%8D%E7%BD%AE%E6%96%87%E4%BB%B6%E5%90%8C%E6%AD%A5/2.png" />
+        </a>
+    </li>
+</ul>
+<p>跨 namespace 的拉取流程</p>
+<ul>
+<li>这个流程总体上跟 namespace内的 是差不多</li>
+<li>proxy 也是要创建出 init容器、volume，只是发布到 不同的namespace中</li>
+<li>新namespace 下的 engine会继续创建出 executor，他们两个是在同一个 namespace 下的</li>
+<li>engine 也会创建出 executor 的 init 容器、volume</li>
+<li>之后把 krb5的两个文件传递到 init 容器的 env中，init 读取写入到共享的 volume中</li>
+<li>之后 executor 就可以读取到这些文件，后面走正常逻辑可
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/06/%E9%95%9C%E5%83%8F%E5%90%88%E5%B9%B6&amp;%E9%85%8D%E7%BD%AE%E6%96%87%E4%BB%B6%E5%90%8C%E6%AD%A5/3.png">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/06/%E9%95%9C%E5%83%8F%E5%90%88%E5%B9%B6&amp;%E9%85%8D%E7%BD%AE%E6%96%87%E4%BB%B6%E5%90%8C%E6%AD%A5/3.png" />
+        </a>
+    </li>
+</ul>
+<h3 id="操作步骤">操作步骤</h3>
+<p>增加配置：</p>
+<pre tabindex="0"><code class="language-properties" data-lang="properties">spark.kubernetes.driver.pod.featureSteps=org.apache.spark.server.k8s.extension.EngineSetup,org.apache.spark.server.k8s.extension.EngineNamespaceFeature
+spark.kubernetes.executor.pod.featureSteps=org.apache.spark.server.k8s.extension.ExecutorSetup
+</code></pre><p>
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/06/%E9%95%9C%E5%83%8F%E5%90%88%E5%B9%B6&amp;%E9%85%8D%E7%BD%AE%E6%96%87%E4%BB%B6%E5%90%8C%E6%AD%A5/4.png">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/06/%E9%95%9C%E5%83%8F%E5%90%88%E5%B9%B6&amp;%E9%85%8D%E7%BD%AE%E6%96%87%E4%BB%B6%E5%90%8C%E6%AD%A5/4.png" />
+        </a>
+    <br>
+启动后，查看 pod 描述，会有一个 init 容器，这个是自动创建的<br>
+其中 cmd 命令是java -cp .:/xxxx.jar com.test.XXX<br>
+这个类是在 init容器中，启动一个拉取 ENV 的逻辑<br>
+env 的name 是文件名，value是文件内容的base64编码<br>
+然后是 mount，这个也是自动生成的<br>
+最后增加 host-aliase，proxy拿到自己的 host-aliase，然后直接设置到 engine 的pod 上<br>
+进入 engine pod，host 就被自动设置上了</p>
+<h1 id="镜像统一">镜像统一</h1>
+<h2 id="背景-1">背景</h2>
+<p>目前项目包含了两个镜像，一个 实际业务 镜像，一个是 sparkexecutor 镜像
+在流水线部署 的时候，源码实际是被编译了两次</p>
+<p>一次是编译打包生成 实际业务 镜像
+一次是编译打包 将文件拷贝至 spark-executor 镜像</p>
+<p>两次编译导致每次部署时间都很长
+在实际项目部署时也需要管理两个镜像
+因上述原因，现将 两个镜像 合二为一，统一成一个镜像</p>
+<h2 id="实现">实现</h2>
+<p>将两个镜像合并为一个，大致有三种策略</p>
+<ul>
+<li>将原基础镜像(OpenJDK11)，跟 spark-executor镜像整合，变成新的基础镜像，项目编译代码后，将编译后的文件直接拷贝到整合的镜像中</li>
+<li>原基础镜像不动，打包时，将spark-executor镜像中的内容拷贝到基础镜像中，将项目的编译后的文件也拷贝到基础镜像中</li>
+<li>将原基础镜像的内容拷贝到 spark-executor镜像中，之后项目编译的文件也拷贝到 spark-executor中</li>
+</ul>
+<p>第一种方式，后续Spark 升级的话维护起来会麻烦一点，好处是流水线打包速度会更快<br>
+第二种方式，维护起来会简单一些，基础镜像和spark-executor可以单独升级，但部署流水线会慢 2-3 分钟<br>
+第三种方式，spark-executor镜像使用的是ubuntu，有些工具不支持，另外还需要冗余的拷贝一份JDK<br>
+目前使用的是 第二种方式<br>
+镜像合并后，需要一种机制来判断，是启动 engine，还是 executor<br>
+目前的做法是，如果环境变量中不包含 MY_PROJECT_EXECUTOR，则认为当前角色是 engine，启动 engine<br>
+否则，启动 executor<br>
+当 engine启动 executor之前，会执行一个 k8s扩展，将 MY_PROJECT_EXECUTOR 变量设置进去，于是新 pod 启动时就认为自己是 executor</p>
+<h2 id="dockerfile">dockerfile</h2>
+<h3 id="统一镜像后的dockerfile">统一镜像后的dockerfile</h3>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">15
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">16
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">17
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">18
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">19
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">20
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">21
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">22
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">23
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">24
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">25
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">26
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">27
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">28
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">29
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">30
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">31
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">32
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">33
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">34
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">35
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">36
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">37
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">38
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">39
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">40
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">41
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">42
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">43
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">44
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">45
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">46
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">47
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">48
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">49
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">50
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">51
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">52
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">53
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">54
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">55
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-dockerfile" data-lang="dockerfile"><span style="display:flex;"><span><span style="color:#6272a4"># builder</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">FROM</span><span style="color:#f1fa8c"> maven:3.6.3-openjdk-11-slim AS builder</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">COPY</span> . .
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">COPY</span> settings.xml <span style="color:#8be9fd;font-style:italic">$MAVEN_CONFIG</span>/
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">WORKDIR</span><span style="color:#f1fa8c"> /</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">RUN</span> mvn clean package -Dmaven.test.skip<span style="color:#ff79c6">=</span>true
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4"># 使用 Spark3.3.2 的镜像，后续升级的话，将这里的版本号修改一下即可</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">FROM</span><span style="color:#f1fa8c"> spark:3.3.2-amd64 AS SPARK_IMAGE</span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4"># 基础镜像，包含 JDK11.0.16，以及一些方便排查的工具和命令</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">FROM</span><span style="color:#f1fa8c"> base:OpenJDK-11.0.16_V1.0</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">ARG</span> <span style="color:#8be9fd;font-style:italic">TARGET</span><span style="color:#ff79c6">=</span>/my_project-main/target
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">ARG</span> <span style="color:#8be9fd;font-style:italic">MY_PROJECT</span><span style="color:#ff79c6">=</span>/my_project
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">ARG</span> <span style="color:#8be9fd;font-style:italic">DEPENDENCY</span><span style="color:#ff79c6">=</span>/dependency
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">ARG</span> <span style="color:#8be9fd;font-style:italic">SPARK_HOME</span><span style="color:#ff79c6">=</span>/opt/spark
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">ARG</span> <span style="color:#8be9fd;font-style:italic">JAVA_HOME</span><span style="color:#ff79c6">=</span>/usr/local/openjdk-11.0.16+8-x64
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">ENV</span> <span style="color:#8be9fd;font-style:italic">SPARK_HOME</span><span style="color:#ff79c6">=</span><span style="color:#8be9fd;font-style:italic">$SPARK_HOME</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">ENV</span> <span style="color:#8be9fd;font-style:italic">MY_PROJECT_DOCKER_IMAGE</span><span style="color:#ff79c6">=</span>my_project.container.image
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">ENV</span> SPARK_CLASSPATH <span style="color:#8be9fd;font-style:italic">$SPARK_CLASSPATH</span>:<span style="color:#8be9fd;font-style:italic">$SPARK_HOME</span>/lib/*
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4"># 将 Spark 镜像中的目录、相关文件、核心启动脚本拷贝到 基础镜像中</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">COPY</span> --from<span style="color:#ff79c6">=</span>SPARK_IMAGE     /opt/spark                  /opt/spark
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">COPY</span> --from<span style="color:#ff79c6">=</span>SPARK_IMAGE     /opt/decom.sh               /opt
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">COPY</span> --from<span style="color:#ff79c6">=</span>SPARK_IMAGE     /opt/entrypoint.sh          /opt
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">COPY</span> --from<span style="color:#ff79c6">=</span>SPARK_IMAGE     /usr/bin/tini               /usr/bin
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">COPY</span> --from<span style="color:#ff79c6">=</span>builder         <span style="color:#8be9fd;font-style:italic">$DEPENDENCY</span>/bootstrap.sh    /opt
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">COPY</span> --from<span style="color:#ff79c6">=</span>builder <span style="color:#8be9fd;font-style:italic">$TARGET</span>/main-*.jar             <span style="color:#8be9fd;font-style:italic">$MY_PROJECT</span>/engine-main.jar
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">COPY</span> --from<span style="color:#ff79c6">=</span>builder <span style="color:#8be9fd;font-style:italic">$TARGET</span>/lib                    <span style="color:#8be9fd;font-style:italic">$MY_PROJECT</span>/lib
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">COPY</span> --from<span style="color:#ff79c6">=</span>builder <span style="color:#8be9fd;font-style:italic">$TARGET</span>/lib                    <span style="color:#8be9fd;font-style:italic">$SPARK_HOME</span>/lib
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">COPY</span> --from<span style="color:#ff79c6">=</span>builder <span style="color:#8be9fd;font-style:italic">$TARGET</span>/main-*.jar             <span style="color:#8be9fd;font-style:italic">$SPARK_HOME</span>/lib
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">COPY</span> --from<span style="color:#ff79c6">=</span>builder <span style="color:#8be9fd;font-style:italic">$TARGET</span>/resources/scheduler-config               <span style="color:#8be9fd;font-style:italic">$MY_PROJECT</span>/resources/scheduler-config
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">COPY</span> --from<span style="color:#ff79c6">=</span>builder <span style="color:#8be9fd;font-style:italic">$TARGET</span>/resources/custom-log4j2-json-layout.json <span style="color:#8be9fd;font-style:italic">$MY_PROJECT</span>/resources/custom-log4j2-json-layout.json
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">COPY</span> --from<span style="color:#ff79c6">=</span>builder <span style="color:#8be9fd;font-style:italic">$TARGET</span>/resources/log4j2-spring.xml              <span style="color:#8be9fd;font-style:italic">$MY_PROJECT</span>/resources/log4j2-spring.xml
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">RUN</span> ln -sf /usr/share/zoneinfo/Asia/Shanghai /etc/localtime  <span style="color:#ff79c6">&amp;&amp;</span> <span style="color:#f1fa8c">\
+</span></span></span><span style="display:flex;"><span><span style="color:#f1fa8c"></span>    <span style="color:#8be9fd;font-style:italic">echo</span> <span style="color:#f1fa8c">&#39;Asia/Shanghai&#39;</span> &gt; /etc/timezone                     <span style="color:#ff79c6">&amp;&amp;</span> <span style="color:#f1fa8c">\
+</span></span></span><span style="display:flex;"><span><span style="color:#f1fa8c"></span>    useradd -ms /bin/bash hive                               <span style="color:#ff79c6">&amp;&amp;</span> <span style="color:#f1fa8c">\
+</span></span></span><span style="display:flex;"><span><span style="color:#f1fa8c"></span>    chmod +x /opt/bootstrap.sh                               
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">EXPOSE</span><span style="color:#f1fa8c"> 8011</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">EXPOSE</span><span style="color:#f1fa8c"> 4040</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">EXPOSE</span><span style="color:#f1fa8c"> 7078</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">EXPOSE</span><span style="color:#f1fa8c"> 7079</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">WORKDIR</span><span style="color:#f1fa8c"> /my_project</span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4"># 统一镜像后的核心启动脚本</span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4"># 如果环境变量中包含 MY_PROJECT_EXECUTOR，则脚本调用 executor 的启动逻辑</span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4"># 否则，调用启动 my_project 的启动逻辑</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">ENTRYPOINT</span> [ <span style="color:#f1fa8c">&#34;/opt/bootstrap.sh&#34;</span> ]
+</span></span></code></pre></td></tr></table>
+</div>
+</div><h3 id="基础镜像-dockerfile">基础镜像 dockerfile</h3>
+<p>基于 JDK11 打的基础镜像dockerfile</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">15
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">16
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">17
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">18
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">19
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">20
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">21
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">22
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">23
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">24
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">25
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">26
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">27
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">28
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">29
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">30
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-dockerfile" data-lang="dockerfile"><span style="display:flex;"><span><span style="color:#6272a4"># 基于 CentOS 7.4 基础上，创建新基础镜像</span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4"># 此基础镜像包含 OpenJDK 11.0.16，和 Spark-executor 镜像的 JDK 版本保持一致</span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4"># 并增加了一些排查工具和命令</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">FROM</span><span style="color:#f1fa8c"> centos:centos7.4.1708</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">LABEL</span> <span style="color:#8be9fd;font-style:italic">describe</span><span style="color:#ff79c6">=</span><span style="color:#f1fa8c">&#34;MY_PROJECT base image(OpenJDK 11.0.16)&#34;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">RUN</span> rm -f /etc/yum.repos.d/*
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">COPY</span> My_project-Centos7-public.repo /etc/yum.repos.d/
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">COPY</span> openjdk-11.0.16+8-x64 /usr/local/openjdk-11.0.16+8-x64
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">COPY</span> arthas /arthas
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">RUN</span> yum -y install krb5-devel krb5-workstation <span style="color:#ff79c6">&amp;&amp;</span> <span style="color:#f1fa8c">\
+</span></span></span><span style="display:flex;"><span><span style="color:#f1fa8c"></span>    yum -y install curl <span style="color:#ff79c6">&amp;&amp;</span> <span style="color:#f1fa8c">\
+</span></span></span><span style="display:flex;"><span><span style="color:#f1fa8c"></span>    yum -y install dstat <span style="color:#ff79c6">&amp;&amp;</span> <span style="color:#f1fa8c">\
+</span></span></span><span style="display:flex;"><span><span style="color:#f1fa8c"></span>    yum -y install traceroute <span style="color:#ff79c6">&amp;&amp;</span> <span style="color:#f1fa8c">\
+</span></span></span><span style="display:flex;"><span><span style="color:#f1fa8c"></span>    yum -y install wget <span style="color:#ff79c6">&amp;&amp;</span> <span style="color:#f1fa8c">\
+</span></span></span><span style="display:flex;"><span><span style="color:#f1fa8c"></span>    yum -y install lsof <span style="color:#ff79c6">&amp;&amp;</span> <span style="color:#f1fa8c">\
+</span></span></span><span style="display:flex;"><span><span style="color:#f1fa8c"></span>    yum -y install tcpdump <span style="color:#ff79c6">&amp;&amp;</span> <span style="color:#f1fa8c">\
+</span></span></span><span style="display:flex;"><span><span style="color:#f1fa8c"></span>    yum -y install net-tools <span style="color:#ff79c6">&amp;&amp;</span> <span style="color:#f1fa8c">\
+</span></span></span><span style="display:flex;"><span><span style="color:#f1fa8c"></span>    yum -y install sysstat <span style="color:#ff79c6">&amp;&amp;</span> <span style="color:#f1fa8c">\
+</span></span></span><span style="display:flex;"><span><span style="color:#f1fa8c"></span>    yum -y install telnet <span style="color:#ff79c6">&amp;&amp;</span> <span style="color:#f1fa8c">\
+</span></span></span><span style="display:flex;"><span><span style="color:#f1fa8c"></span>    yum -y install psmisc <span style="color:#ff79c6">&amp;&amp;</span> <span style="color:#f1fa8c">\
+</span></span></span><span style="display:flex;"><span><span style="color:#f1fa8c"></span>    <span style="color:#8be9fd;font-style:italic">echo</span> <span style="color:#f1fa8c">&#34;alias ll=&#39;ls -l&#39;&#34;</span> &gt;&gt; /root/.bashrc <span style="color:#ff79c6">&amp;&amp;</span> <span style="color:#f1fa8c">\
+</span></span></span><span style="display:flex;"><span><span style="color:#f1fa8c"></span>    yum -y remove perl <span style="color:#ff79c6">&amp;&amp;</span> <span style="color:#f1fa8c">\
+</span></span></span><span style="display:flex;"><span><span style="color:#f1fa8c"></span>    rm -rf /var/cache/yum <span style="color:#ff79c6">&amp;&amp;</span> <span style="color:#f1fa8c">\
+</span></span></span><span style="display:flex;"><span><span style="color:#f1fa8c"></span>    touch /var/cache/yum
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">ENV</span> <span style="color:#8be9fd;font-style:italic">PATH</span><span style="color:#ff79c6">=</span><span style="color:#f1fa8c">${</span><span style="color:#8be9fd;font-style:italic">PATH</span><span style="color:#f1fa8c">}</span>:/usr/local/openjdk-11.0.16+8-x64/bin
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">ENV</span> <span style="color:#8be9fd;font-style:italic">TZ</span><span style="color:#ff79c6">=</span>Asia/Shanghai
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">ENV</span> LANG zh_CN.UTF-8
+</span></span></code></pre></td></tr></table>
+</div>
+</div>
+			<script type="text/javascript"
+        async
+        src="https://cdn.bootcss.com/mathjax/2.7.3/MathJax.js?config=TeX-AMS-MML_HTMLorMML">
+MathJax.Hub.Config({
+  tex2jax: {
+    inlineMath: [['$','$'], ['\\(','\\)']],
+    displayMath: [['$$','$$'], ['\[\[','\]\]']],
+    processEscapes: true,
+    processEnvironments: true,
+    skipTags: ['script', 'noscript', 'style', 'textarea', 'pre'],
+    TeX: { equationNumbers: { autoNumber: "AMS" },
+         extensions: ["AMSmath.js", "AMSsymbols.js"] }
+  }
+});
+
+MathJax.Hub.Queue(function() {
+    
+    
+    
+    var all = MathJax.Hub.getAllJax(), i;
+    for(i = 0; i < all.length; i += 1) {
+        all[i].SourceElement().parentNode.className += ' has-jax';
+    }
+});
+</script>
+
+<style>
+code.has-jax {
+    font: inherit;
+    font-size: 100%;
+    background: inherit;
+    border: inherit;
+    color: #515151;
+}
+</style>
+        </div>
+
+        
+
+
+        
+
+<div class="post-archive">
+    <h2>相关文章</h2>
+    <ul class="listing">
+        
+        <li><a href="/post/2022/09/%E9%AB%98%E5%8F%AF%E7%94%A8%E8%AE%BE%E8%AE%A1/">高可用设计</a></li>
+        
+        <li><a href="/post/2022/08/kyuubi%E8%AE%BE%E8%AE%A1%E8%B0%83%E7%A0%94/">Kyuubi设计调研</a></li>
+        
+        <li><a href="/post/2022/07/%E5%AE%B9%E7%81%BE%E9%83%A8%E7%BD%B2%E8%B0%83%E7%A0%94/">容灾部署调研</a></li>
+        
+        <li><a href="/post/2022/06/%E8%87%AA%E5%AE%9A%E4%B9%89hiveserver%E8%AE%BE%E8%AE%A1/">自定义HiveServer设计</a></li>
+        
+        <li><a href="/post/2022/01/%E5%87%A0%E7%A7%8D%E5%BC%80%E6%BA%90%E6%95%B0%E6%8D%AE%E5%BA%93%E5%AF%B9%E5%85%83%E6%95%B0%E6%8D%AE%E7%9A%84%E7%AE%A1%E7%90%86/">几种开源数据库对元数据的管理</a></li>
+        
+    </ul>
+</div>
+
+
+        <div class="post-meta meta-tags">
+            
+            <ul class="clearfix">
+                
+                <li><a href='/tags/%E5%B7%A5%E4%BD%9C%E8%AE%B0%E5%BD%95'>工作记录</a></li>
+                
+            </ul>
+            
+        </div>
+    </article>
+    
+    
+
+    
+    
+    <div class="post bg-white">
+      <script src="https://utteranc.es/client.js"
+            repo= "himichael/hugoblogtalks"
+            issue-term="pathname"
+            theme="github-light"
+            crossorigin="anonymous"
+            async>
+      </script>
+    </div>
+    
+</div>
+
+
+                </div>
+
+                <div id="secondary">
+    <section class="widget">
+        <form id="search" action='https://code0xff.org/search/' method="get" accept-charset="utf-8" target="_blank" _lpchecked="1">
+      
+      <input type="text" name="q" maxlength="20" placeholder="Search">
+      <input type="hidden" name="sitesearch" value="https://code0xff.org/">
+      <button type="submit" class="submit icon-search"></button>
+</form>
+    </section>
+    
+    <section class="widget">
+        <h3 class="widget-title">最近文章</h3>
+<ul class="widget-list">
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/06/bitweaving/" title="BitWeaving: Fast Scans for Main Memory Data Processing">BitWeaving: Fast Scans for Main Memory Data Processing</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/05/cache_conscious/" title="Cache Conscious Indexing for Decision-Support in Main Memory">Cache Conscious Indexing for Decision-Support in Main Memory</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/05/column_imprints/" title="Column Imprints: A Secondary Index Structure">Column Imprints: A Secondary Index Structure</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/05/sql_server_column_store_indexes/" title="SQL Server Column Store Indexes">SQL Server Column Store Indexes</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/05/bitmap_index/" title="Bitmap Index Design and Evaluation ">Bitmap Index Design and Evaluation </a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/05/advanced_database_systems-history_of_databases/" title="Advanced Database Systems: History of Databases">Advanced Database Systems: History of Databases</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/05/column_sketches/" title="Column Sketches: A Scan Accelerator for Rapid and Robust Predicate Evaluation">Column Sketches: A Scan Accelerator for Rapid and Robust Predicate Evaluation</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/05/optimal_column_layout_for_hybrid_workloads/" title="Optimal Column Layout for Hybrid Workloads">Optimal Column Layout for Hybrid Workloads</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/06/%E9%95%9C%E5%83%8F%E5%90%88%E5%B9%B6%E9%85%8D%E7%BD%AE%E6%96%87%E4%BB%B6%E5%90%8C%E6%AD%A5/" title="镜像合并&amp;配置文件同步">镜像合并&amp;配置文件同步</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/05/column-stores_vs_row-stores_how_different_are_they_really/" title="Column-Stores vs. Row-Stores: How Different Are They Really?">Column-Stores vs. Row-Stores: How Different Are They Really?</a>
+    </li>
+    
+</ul>
+    </section>
+
+    
+
+    <section class="widget">
+        <h3 class="widget-title"><a href='/categories/'>分类</a></h3>
+<ul class="widget-list">
+    
+    <li><a href="https://code0xff.org/categories/%E5%88%86%E5%B8%83%E5%BC%8F/">分布式 (6)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E5%8E%9F%E7%90%86%E5%88%86%E6%9E%90/">原理分析 (13)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E5%95%86%E4%B8%9A/">商业 (3)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E5%A4%A7%E6%95%B0%E6%8D%AE/">大数据 (23)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%95%B0%E6%8D%AE%E5%BA%93/">数据库 (32)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%96%87%E5%AD%A6%E5%92%8C%E8%89%BA%E6%9C%AF/">文学和艺术 (2)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%97%85%E8%A1%8C/">旅行 (10)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%9E%B6%E6%9E%84/">架构 (2)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E7%AE%97%E6%B3%95/">算法 (8)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E7%B3%BB%E7%BB%9F/">系统 (5)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E7%BC%96%E7%A8%8B%E8%AF%AD%E8%A8%80/">编程语言 (2)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E8%A1%8C%E4%B8%9A%E8%A7%82%E5%AF%9F/">行业观察 (1)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E8%AF%BB%E4%B9%A6%E7%AC%94%E8%AE%B0/">读书笔记 (12)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E9%9A%8F%E4%BE%BF%E5%86%99%E5%86%99/">随便写写 (3)</a></li>
+    
+</ul>
+    </section>
+
+    <section class="widget">
+        <h3 class="widget-title">归档</a></h3>
+<ul class="widget-list">
+    
+    <li><a href="https://code0xff.org/years/2021%E5%B9%B4/">2021年 (31)</a></li>
+    
+    <li><a href="https://code0xff.org/years/2022%E5%B9%B4/">2022年 (55)</a></li>
+    
+    <li><a href="https://code0xff.org/years/2023%E5%B9%B4/">2023年 (36)</a></li>
+    
+</ul>
+    </section>
+
+    <section class="widget">
+        <h3 class="widget-title"><a href='/tags/'>标签</a></h3>
+<div class="tagcloud">
+    
+    <a href="https://code0xff.org/tags/b%E6%A0%91/">B树 </a>
+    
+    <a href="https://code0xff.org/tags/cmu-database/">CMU-Database </a>
+    
+    <a href="https://code0xff.org/tags/flink/">flink </a>
+    
+    <a href="https://code0xff.org/tags/hive/">Hive </a>
+    
+    <a href="https://code0xff.org/tags/k8s/">k8s </a>
+    
+    <a href="https://code0xff.org/tags/kudu/">kudu </a>
+    
+    <a href="https://code0xff.org/tags/kyuubi/">Kyuubi </a>
+    
+    <a href="https://code0xff.org/tags/lakehouse/">Lakehouse </a>
+    
+    <a href="https://code0xff.org/tags/leveldb/">LevelDB </a>
+    
+    <a href="https://code0xff.org/tags/llvm/">LLVM </a>
+    
+    <a href="https://code0xff.org/tags/manacher/">Manacher </a>
+    
+    <a href="https://code0xff.org/tags/mapreduce/">MapReduce </a>
+    
+    <a href="https://code0xff.org/tags/mysql/">MySQL </a>
+    
+    <a href="https://code0xff.org/tags/newsql/">NewSQL </a>
+    
+    <a href="https://code0xff.org/tags/oceanbase/">OceanBase </a>
+    
+    <a href="https://code0xff.org/tags/paxos/">paxos </a>
+    
+    <a href="https://code0xff.org/tags/raft/">raft </a>
+    
+    <a href="https://code0xff.org/tags/scala/">scala </a>
+    
+    <a href="https://code0xff.org/tags/simd/">SIMD </a>
+    
+    <a href="https://code0xff.org/tags/snowflake/">snowflake </a>
+    
+    <a href="https://code0xff.org/tags/spark/">spark </a>
+    
+    <a href="https://code0xff.org/tags/unix/">unix </a>
+    
+    <a href="https://code0xff.org/tags/%E4%BA%8C%E5%88%86%E6%9F%A5%E6%89%BE/">二分查找 </a>
+    
+    <a href="https://code0xff.org/tags/%E4%BA%8C%E5%8F%89%E6%A0%91%E9%81%8D%E5%8E%86/">二叉树遍历 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%88%86%E5%B8%83%E5%BC%8F/">分布式 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%88%97%E5%AD%98/">列存 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%8A%A8%E6%80%81%E6%B3%A8%E5%85%A5/">动态注入 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%8E%86%E5%8F%B2/">历史 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%90%91%E9%87%8F%E5%8C%96/">向量化 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%9B%9E%E6%BA%AF/">回溯 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%9B%BD%E5%86%85%E6%97%85%E8%A1%8C/">国内旅行 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%9B%BD%E5%A4%96%E6%97%85%E8%A1%8C/">国外旅行 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%A4%9A%E7%A7%9F%E6%88%B7/">多租户 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%A4%A7%E6%95%B0%E6%8D%AE/">大数据 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%AD%98%E5%82%A8/">存储 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%B7%A5%E4%BD%9C%E8%AE%B0%E5%BD%95/">工作记录 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%BE%AE%E6%9C%8D%E5%8A%A1/">微服务 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%95%B0%E6%8D%AE%E5%BA%93/">数据库 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%95%B0%E6%8D%AE%E6%A8%A1%E5%9E%8B/">数据模型 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%9F%A5%E8%AF%A2%E4%BC%98%E5%8C%96/">查询优化 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%9F%A5%E8%AF%A2%E7%BC%96%E8%AF%91/">查询编译 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%B1%87%E7%BC%96/">汇编 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%B5%8B%E8%AF%95/">测试 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%B9%96%E4%BB%93%E4%B8%80%E4%BD%93/">湖仓一体 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%94%9F%E6%B4%BB/">生活 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%94%B5%E5%BD%B1/">电影 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%AE%97%E6%B3%95/">算法 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%B4%A2%E5%BC%95/">索引 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BB%8F%E6%B5%8E/">经济 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BC%93%E5%AD%98/">缓存 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BC%96%E8%AF%91%E5%8E%9F%E7%90%86/">编译原理 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BD%91%E7%BB%9C/">网络 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AE%A1%E7%AE%97%E6%A1%86%E6%9E%B6/">计算框架 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AE%BA%E6%96%87/">论文 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AF%BB%E4%B9%A6/">读书 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AF%BB%E4%B9%A6%E7%AC%94%E8%AE%B0/">读书笔记 </a>
+    
+</div>
+    </section>
+
+    
+
+    <section class="widget">
+        <h3 class="widget-title">RSS</h3>
+        <ul class="widget-list">
+            <li><a href="https://code0xff.org/index.xml">文章 RSS</a></li>
+        </ul>
+    </section>
+</div>
+            </div>
+        </div>
+    </div>
+    <footer id="footer">
+    <div>
+        &copy; 2023 <a href="https://code0xff.org/">记录每个瞬间 By 老王</a>
+        
+    </div>
+    <br />
+    <div>
+        <div class="github-badge">
+            <a href="https://gohugo.io/" target="_black" rel="nofollow"><span class="badge-subject">Powered by</span><span class="badge-value bg-blue">Hugo</span></a>
+        </div>
+        <div class="github-badge">
+            <a href="https://github.com/flysnow-org/maupassant-hugo" target="_black"><span class="badge-subject">Theme</span><span class="badge-value bg-yellowgreen">Maupassant</span></a>
+        </div>
+    </div>
+</footer>
+
+
+    
+    <script type="text/javascript">
+        window.MathJax = {
+            tex2jax: {
+                inlineMath: [['$', '$']],
+                processEscapes: true
+                }
+            };
+    </script>
+    <script src='https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.5/MathJax.js?config=TeX-MML-AM_CHTML' async></script><script src="https://cdn.bootcdn.net/ajax/libs/fancybox/3.5.7/jquery.fancybox.min.js"></script>
+
+<a id="rocket" href="#top"></a>
+<script type="text/javascript" src='/js/totop.js?v=0.0.0' async=""></script>
+
+<script type="application/javascript">
+var doNotTrack = false;
+if (!doNotTrack) {
+	window.ga=window.ga||function(){(ga.q=ga.q||[]).push(arguments)};ga.l=+new Date;
+	ga('create', 'GA ID', 'auto');
+	
+	ga('send', 'pageview');
+}
+</script>
+<script async src='https://www.google-analytics.com/analytics.js'></script>
+
+
+
+    <script type="text/javascript" src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js" async></script>
+
+
+
+
+</body>
+
+</html>
