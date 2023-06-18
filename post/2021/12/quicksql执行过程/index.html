@@ -1,0 +1,1599 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    
+    <meta name="referrer" content="no-referrer-when-downgrade">
+    
+
+    <title>QuickSQL执行过程 | 记录每个瞬间</title>
+    <meta property="og:title" content="QuickSQL执行过程 - 记录每个瞬间">
+    <meta property="og:type" content="article">
+        
+    <meta property="article:published_time" content='2021-12-26T13:06:19&#43;08:00'>
+        
+        
+    <meta property="article:modified_time" content='2021-12-26T13:06:19&#43;08:00'>
+        
+    <meta name="Keywords" content="">
+    <meta name="description" content="QuickSQL执行过程">
+        <meta name="author" content="隔壁老王">
+        
+    <meta property="og:url" content="https://code0xff.org/post/2021/12/quicksql%E6%89%A7%E8%A1%8C%E8%BF%87%E7%A8%8B/">
+    <link rel="shortcut icon" href='/favicon.ico'  type="image/x-icon">
+
+    <link rel="stylesheet" href='/css/normalize.css'>
+    <link rel="stylesheet" href='/css/style.css'>
+    <script type="text/javascript" src="//cdn.bootcdn.net/ajax/libs/jquery/3.4.1/jquery.min.js"></script>
+
+    
+    
+    
+        <link href="https://cdn.bootcdn.net/ajax/libs/fancybox/3.5.7/jquery.fancybox.min.css" rel="stylesheet">
+    
+    
+    
+    
+</head>
+
+
+<body>
+    <header id="header" class="clearfix">
+    <div class="container">
+        <div class="col-group">
+            <div class="site-name ">
+                
+                    <a id="logo" href="https://code0xff.org/">
+                        记录每个瞬间
+                    </a>
+                
+                
+            </div>
+            <div>
+                <nav id="nav-menu" class="clearfix">
+                    <a class="current" href="https://code0xff.org/">首页</a>
+                    
+                    <a  href="https://code0xff.org/linked/" title="链接">链接</a>
+                    
+                    <a  href="https://code0xff.org/archives/" title="归档">归档</a>
+                    
+                    <a  href="https://code0xff.org/about/" title="关于">关于</a>
+                    
+                </nav>
+            </div>
+        </div>
+    </div>
+</header>
+
+    <div id="body">
+        <div class="container">
+            <div class="col-group">
+
+                <div class="col-8" id="main">
+                    
+<div class="res-cons">
+    
+    <article class="post">
+        <header>
+            <h1 class="post-title">QuickSQL执行过程</h1>
+        </header>
+        <date class="post-meta meta-date">
+            2021年12月26日
+        </date>
+<nav id="TableOfContents">
+  <ul>
+    <li><a href="#执行过程">执行过程</a>
+      <ul>
+        <li><a href="#时序图分析">时序图分析</a></li>
+        <li><a href="#一条sql的执行过程">一条sql的执行过程</a></li>
+      </ul>
+    </li>
+    <li><a href="#跨数据执行详解">跨数据执行详解</a>
+      <ul>
+        <li><a href="#从逻辑计划到物理计划">从逻辑计划到物理计划</a></li>
+        <li><a href="#执行原理">执行原理</a></li>
+      </ul>
+    </li>
+    <li><a href="#跨数据拼装过程">跨数据拼装过程</a>
+      <ul>
+        <li><a href="#背景">背景</a></li>
+        <li><a href="#整体结构">整体结构</a></li>
+        <li><a href="#组装过程">组装过程</a></li>
+        <li><a href="#编译过程">编译过程</a>
+          <ul>
+            <li><a href="#依赖">依赖</a></li>
+          </ul>
+        </li>
+        <li><a href="#问题">问题</a></li>
+        <li><a href="#拼装的跨数据源代码">拼装的跨数据源代码</a>
+          <ul>
+            <li><a href="#生成的代码">生成的代码</a></li>
+          </ul>
+        </li>
+      </ul>
+    </li>
+  </ul>
+</nav>
+        
+        <div class="post-meta">
+            
+            <span class="post-meta meta-tags">
+                <ul class="clearfix">
+                    <a href='/categories/%E5%A4%A7%E6%95%B0%E6%8D%AE'>大数据</a>
+                </ul>
+            </span>
+            
+        </div>
+        
+        
+        <div class="post-meta">
+            <span id="busuanzi_container_page_pv">|<span id="busuanzi_value_page_pv"></span><span>
+                    阅读</span></span>
+        </div>
+        
+        
+        <div class="post-content">
+            <h1 id="执行过程">执行过程</h1>
+<h2 id="时序图分析">时序图分析</h2>
+<p>生成pipeline的过程：<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2021/12/quick_sql/1.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2021/12/quick_sql/1.jpg" />
+        </a>
+    </p>
+<p>spark pipeline的执行过程：
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2021/12/quick_sql/2.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2021/12/quick_sql/2.jpg" />
+        </a>
+    </p>
+<p>jdbc pipeline的执行过程：<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2021/12/quick_sql/3.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2021/12/quick_sql/3.jpg" />
+        </a>
+    </p>
+<hr>
+<h2 id="一条sql的执行过程">一条sql的执行过程</h2>
+<p>一个跨数据源的查询，sql如下：</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-sql" data-lang="sql"><span style="display:flex;"><span><span style="color:#ff79c6">SELECT</span> <span style="color:#ff79c6">*</span> <span style="color:#ff79c6">FROM</span> depts <span style="color:#ff79c6">INNER</span> <span style="color:#ff79c6">JOIN</span> (<span style="color:#ff79c6">SELECT</span> <span style="color:#ff79c6">*</span> <span style="color:#ff79c6">FROM</span> student <span style="color:#ff79c6">WHERE</span> city <span style="color:#ff79c6">in</span> (<span style="color:#f1fa8c">&#39;FRAMINGHAM&#39;</span>, <span style="color:#f1fa8c">&#39;BROCKTON&#39;</span>, <span style="color:#f1fa8c">&#39;CONCORD&#39;</span>)) FILTERED <span style="color:#ff79c6">ON</span> depts.name <span style="color:#ff79c6">=</span> FILTERED.<span style="color:#ff79c6">type</span> 
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>首先进行sql解析、验证、优化，得到的语法树如下：</p>
+<pre tabindex="0"><code>LogicalProject(deptno=[$0], name=[$1], city=[$2], province=[$3], digest=[$4], type=[$5], stu_id=[$6]): rowcount = 375.0, cumulative cost = {910.0 rows, 2961.1 cpu, 0.0 io}, id = 21
+  LogicalJoin(condition=[=($1, $5)], joinType=[inner]): rowcount = 375.0, cumulative cost = {535.0 rows, 336.1 cpu, 0.0 io}, id = 19
+    LogicalTableScan(table=[[custom_name, depts]]): rowcount = 100.0, cumulative cost = {100.0 rows, 101.0 cpu, 0.0 io}, id = 7
+    LogicalProject(city=[$0], province=[$1], digest=[$2], type=[$3], stu_id=[$4]): rowcount = 25.0, cumulative cost = {60.0 rows, 235.1 cpu, 0.0 io}, id = 17
+      LogicalFilter(condition=[OR(=($0, &#39;FRAMINGHAM&#39;), =($0, &#39;BROCKTON&#39;), =($0, &#39;CONCORD&#39;))]): rowcount = 25.0, cumulative cost = {35.0 rows, 110.1 cpu, 0.0 io}, id = 15
+        ElasticsearchTableScan(table=[[esTest, student]]): rowcount = 100.0, cumulative cost = {10.0 rows, 10.100000000000001 cpu, 0.0 io}, id = 8
+</code></pre><p>quick sql会将不同的数据源，组装成<code>TemporaryTableScan</code>类，于是上面的语法树就变成了：</p>
+<pre tabindex="0"><code>LogicalProject(deptno=[$0], name=[$1], city=[$2], province=[$3], digest=[$4], type=[$5], stu_id=[$6]): rowcount = 1500.0, cumulative cost = {3200.0 rows, 10702.0 cpu, 0.0 io}, id = 21
+  LogicalJoin(condition=[=($1, $5)], joinType=[inner]): rowcount = 1500.0, cumulative cost = {1700.0 rows, 202.0 cpu, 0.0 io}, id = 19
+    TemporaryTableScan(table=[[custom_name_depts_0]]): rowcount = 100.0, cumulative cost = {100.0 rows, 101.0 cpu, 0.0 io}, id = 24
+    TemporaryTableScan(table=[[esTest_student_1]]): rowcount = 100.0, cumulative cost = {100.0 rows, 101.0 cpu, 0.0 io}, id = 26
+</code></pre><p>生成过程中，还会对不同数据源查询的语句做详细解析，也就是查es的sql变成正常的es查询语句：</p>
+<pre tabindex="0"><code>List&lt;ExtractProcedure&gt;:
+CSV：SELECT deptno, name FROM custom_name.depts
+ES：{&#34;query&#34;:{&#34;constant_score&#34;:{&#34;filter&#34;:{&#34;bool&#34;:{&#34;should&#34;:[{&#34;term&#34;:{&#34;city&#34;:&#34;FRAMINGHAM&#34;}},{&#34;term&#34;:{&#34;city&#34;:&#34;BROCKTON&#34;}},{&#34;term&#34;:{&#34;city&#34;:&#34;CONCORD&#34;}}]}}}},&#34;_source&#34;:[&#34;city&#34;,&#34;province&#34;,&#34;digest&#34;,&#34;type&#34;,&#34;stu_id&#34;]}
+</code></pre><p>之后在运行期间，动态生成一个类，然后再编译这个类，生成的类如下：</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">15
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">16
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">17
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">18
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">19
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">20
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">21
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">22
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">23
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">24
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">25
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">26
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">27
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">28
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">29
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">30
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">31
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">32
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">33
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">34
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">35
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">36
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">37
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">38
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">39
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">40
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">41
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">42
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">43
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">44
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">45
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">46
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">47
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">48
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">49
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">50
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">51
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">52
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">53
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">54
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">55
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">56
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">57
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">58
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">59
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">60
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">61
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-java" data-lang="java"><span style="display:flex;"><span><span style="color:#ff79c6">import</span> com.qihoo.qsql.exec.Requirement<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">import</span> org.apache.spark.sql.catalyst.expressions.Attribute<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">import</span> org.apache.spark.sql.Row<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">import</span> java.util.stream.Collectors<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">import</span> org.apache.spark.sql.RowFactory<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">import</span> org.apache.spark.sql.SparkSession<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">import</span> java.util.Collections<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">import</span> java.util.Map<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">import</span> java.util.HashMap<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">import</span> com.qihoo.qsql.exec.spark.SparkRequirement<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">import</span> java.util.regex.Pattern<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">import</span> scala.collection.JavaConversions<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">import</span> java.util.AbstractMap.SimpleEntry<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">import</span> java.util.regex.Matcher<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">import</span> com.qihoo.qsql.codegen.spark.SparkElasticsearchGenerator<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">import</span> org.apache.spark.api.java.JavaRDD<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">import</span> org.elasticsearch.spark.sql.api.java.JavaEsSparkSQL<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">import</span> org.apache.spark.sql.Dataset<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">import</span> java.util.Arrays<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">import</span> org.apache.commons.lang.StringEscapeUtils<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">import</span> java.util.List<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#8be9fd;font-style:italic">public</span> <span style="color:#8be9fd;font-style:italic">class</span> <span style="color:#50fa7b">Requirement32110</span> <span style="color:#8be9fd;font-style:italic">extends</span> SparkRequirement <span style="color:#ff79c6">{</span> 
+</span></span><span style="display:flex;"><span>	<span style="color:#8be9fd;font-style:italic">public</span> <span style="color:#50fa7b">Requirement32110</span><span style="color:#ff79c6">(</span>SparkSession spark<span style="color:#ff79c6">){</span>
+</span></span><span style="display:flex;"><span>		<span style="color:#8be9fd;font-style:italic">super</span><span style="color:#ff79c6">(</span>spark<span style="color:#ff79c6">);</span>
+</span></span><span style="display:flex;"><span>	<span style="color:#ff79c6">}</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>	<span style="color:#8be9fd;font-style:italic">public</span> Object <span style="color:#50fa7b">execute</span><span style="color:#ff79c6">()</span> <span style="color:#8be9fd;font-style:italic">throws</span> Exception <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>		Dataset<span style="color:#ff79c6">&lt;</span>Row<span style="color:#ff79c6">&gt;</span> tmp<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span>		<span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>			Map<span style="color:#ff79c6">&lt;</span>String<span style="color:#ff79c6">,</span> String<span style="color:#ff79c6">&gt;</span> config <span style="color:#ff79c6">=</span> SparkElasticsearchGenerator<span style="color:#ff79c6">.</span><span style="color:#50fa7b">config</span><span style="color:#ff79c6">(</span><span style="color:#f1fa8c">&#34;localhost&#34;</span><span style="color:#ff79c6">,</span> <span style="color:#f1fa8c">&#34;9025&#34;</span><span style="color:#ff79c6">,</span> <span style="color:#f1fa8c">&#34;username&#34;</span><span style="color:#ff79c6">,</span> <span style="color:#f1fa8c">&#34;password&#34;</span><span style="color:#ff79c6">,</span> <span style="color:#f1fa8c">&#34;student&#34;</span><span style="color:#ff79c6">,</span>
+</span></span><span style="display:flex;"><span>			<span style="color:#f1fa8c">&#34;{\&#34;query\&#34;:{\&#34;constant_score\&#34;:{\&#34;filter\&#34;:{\&#34;bool\&#34;:{\&#34;should\&#34;:[{\&#34;term\&#34;:{\&#34;city\&#34;:\&#34;FRAMINGHAM\&#34;}},{\&#34;term\&#34;:{\&#34;city\&#34;:\
+</span></span></span><span style="display:flex;"><span><span style="color:#f1fa8c">			&#34;</span>BROCKTON\<span style="color:#f1fa8c">&#34;}},{\&#34;term\&#34;:{\&#34;city\&#34;:\&#34;CONCORD\&#34;}}]}}}},\&#34;_source\&#34;:[\&#34;city\&#34;,\&#34;province\&#34;,\&#34;digest\&#34;,\&#34;type\&#34;,\&#34;stu_id\&#34;]}&#34;</span><span style="color:#ff79c6">,</span>
+</span></span><span style="display:flex;"><span>			<span style="color:#f1fa8c">&#34;1&#34;</span><span style="color:#ff79c6">);</span>
+</span></span><span style="display:flex;"><span>			tmp <span style="color:#ff79c6">=</span> JavaEsSparkSQL<span style="color:#ff79c6">.</span><span style="color:#50fa7b">esDF</span><span style="color:#ff79c6">(</span>spark<span style="color:#ff79c6">,</span> config<span style="color:#ff79c6">);</span>
+</span></span><span style="display:flex;"><span>			tmp<span style="color:#ff79c6">.</span><span style="color:#50fa7b">createOrReplaceTempView</span><span style="color:#ff79c6">(</span><span style="color:#f1fa8c">&#34;esTest_student_1&#34;</span><span style="color:#ff79c6">);</span>
+</span></span><span style="display:flex;"><span>		<span style="color:#ff79c6">}</span>
+</span></span><span style="display:flex;"><span>		<span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>			spark<span style="color:#ff79c6">.</span><span style="color:#50fa7b">read</span><span style="color:#ff79c6">()</span>
+</span></span><span style="display:flex;"><span>            <span style="color:#ff79c6">.</span><span style="color:#50fa7b">option</span><span style="color:#ff79c6">(</span><span style="color:#f1fa8c">&#34;header&#34;</span><span style="color:#ff79c6">,</span> <span style="color:#f1fa8c">&#34;true&#34;</span><span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>            <span style="color:#ff79c6">.</span><span style="color:#50fa7b">option</span><span style="color:#ff79c6">(</span><span style="color:#f1fa8c">&#34;inferSchema&#34;</span><span style="color:#ff79c6">,</span> <span style="color:#f1fa8c">&#34;true&#34;</span><span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>            <span style="color:#ff79c6">.</span><span style="color:#50fa7b">option</span><span style="color:#ff79c6">(</span><span style="color:#f1fa8c">&#34;timestampFormat&#34;</span><span style="color:#ff79c6">,</span> <span style="color:#f1fa8c">&#34;yyyy/MM/dd HH:mm:ss ZZ&#34;</span><span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>            <span style="color:#ff79c6">.</span><span style="color:#50fa7b">option</span><span style="color:#ff79c6">(</span><span style="color:#f1fa8c">&#34;delimiter&#34;</span><span style="color:#ff79c6">,</span> <span style="color:#f1fa8c">&#34;,&#34;</span><span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>            <span style="color:#ff79c6">.</span><span style="color:#50fa7b">csv</span><span style="color:#ff79c6">(</span><span style="color:#f1fa8c">&#34;D:\\code\\Quicksql\\data\\sales\\DEPTS.csv&#34;</span><span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>            <span style="color:#ff79c6">.</span><span style="color:#50fa7b">toDF</span><span style="color:#ff79c6">()</span>
+</span></span><span style="display:flex;"><span>            <span style="color:#ff79c6">.</span><span style="color:#50fa7b">createOrReplaceTempView</span><span style="color:#ff79c6">(</span><span style="color:#f1fa8c">&#34;custom_name_depts&#34;</span><span style="color:#ff79c6">);</span>
+</span></span><span style="display:flex;"><span>        
+</span></span><span style="display:flex;"><span>			tmp <span style="color:#ff79c6">=</span> spark<span style="color:#ff79c6">.</span><span style="color:#50fa7b">sql</span><span style="color:#ff79c6">(</span><span style="color:#f1fa8c">&#34;SELECT deptno, name FROM custom_name_depts&#34;</span><span style="color:#ff79c6">);</span>
+</span></span><span style="display:flex;"><span>			tmp<span style="color:#ff79c6">.</span><span style="color:#50fa7b">createOrReplaceTempView</span><span style="color:#ff79c6">(</span><span style="color:#f1fa8c">&#34;custom_name_depts_0&#34;</span><span style="color:#ff79c6">);</span>
+</span></span><span style="display:flex;"><span>		<span style="color:#ff79c6">}</span>
+</span></span><span style="display:flex;"><span>			
+</span></span><span style="display:flex;"><span>		String sql <span style="color:#ff79c6">=</span> <span style="color:#f1fa8c">&#34;SELECT custom_name_depts_0.deptno, custom_name_depts_0.name, esTest_student_1.city, esTest_student_1.province,
+</span></span></span><span style="display:flex;"><span><span style="color:#f1fa8c">		esTest_student_1.digest, esTest_student_1.type, esTest_student_1.stu_id FROM custom_name_depts_0 INNER JOIN esTest_student_1 ON
+</span></span></span><span style="display:flex;"><span><span style="color:#f1fa8c">		custom_name_depts_0.name = esTest_student_1.type&#34;</span><span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span>		
+</span></span><span style="display:flex;"><span>		tmp <span style="color:#ff79c6">=</span> spark<span style="color:#ff79c6">.</span><span style="color:#50fa7b">sql</span><span style="color:#ff79c6">(</span>sql<span style="color:#ff79c6">);</span>
+</span></span><span style="display:flex;"><span>		tmp<span style="color:#ff79c6">.</span><span style="color:#50fa7b">show</span><span style="color:#ff79c6">(</span>200<span style="color:#ff79c6">);</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>		<span style="color:#ff79c6">return</span> <span style="color:#ff79c6">null</span><span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span>	<span style="color:#ff79c6">}</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">}</span>
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>这里可以很明显的看到，先查询了<strong>es</strong>，将结果保存到<strong>esTest_student_1</strong>中，之后再查询<strong>csv</strong>，将结果保存到<strong>custom_name_depts_0</strong>。<br>
+最后，再做一个联合查询，也就是下面这个sql：</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-sql" data-lang="sql"><span style="display:flex;"><span><span style="color:#ff79c6">SELECT</span> custom_name_depts_0.deptno, custom_name_depts_0.name, esTest_student_1.city, esTest_student_1.province, esTest_student_1.digest,
+</span></span><span style="display:flex;"><span> esTest_student_1.<span style="color:#ff79c6">type</span>, esTest_student_1.stu_id <span style="color:#ff79c6">FROM</span> custom_name_depts_0 <span style="color:#ff79c6">INNER</span> <span style="color:#ff79c6">JOIN</span> esTest_student_1 <span style="color:#ff79c6">ON</span> custom_name_depts_0.name <span style="color:#ff79c6">=</span>
+</span></span><span style="display:flex;"><span> esTest_student_1.<span style="color:#ff79c6">type</span>
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>这里也有很多优化的地方，比如上面的执行过程，看起来是串行的。</p>
+<h1 id="跨数据执行详解">跨数据执行详解</h1>
+<h2 id="从逻辑计划到物理计划">从逻辑计划到物理计划</h2>
+<p>一个跨数据源的sql：</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-sql" data-lang="sql"><span style="display:flex;"><span><span style="color:#ff79c6">select</span> <span style="color:#ff79c6">*</span> <span style="color:#ff79c6">from</span> CSV <span style="color:#ff79c6">join</span> ES <span style="color:#ff79c6">where</span> .... <span style="color:#ff79c6">on</span> ...
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>对应完整的解析过程：
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2021/12/quick_sql/4.png">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2021/12/quick_sql/4.png" />
+        </a>
+    </p>
+<p>执行步骤：</p>
+<ul>
+<li>首先将这个sql解析并优化，生成一个语法树</li>
+<li>之后会遍历这棵树，从根节点递归遍历，然后将<code>TableScan</code>替换成<code>TemporaryTableScan</code>
+<ul>
+<li>这里有些不确定的地方，蓝色图中有<code>LogicalFilter</code>，这代表一个<code>where</code>条件，但转换成<code>TemporaryTableScan</code>就没了</li>
+</ul>
+</li>
+<li>替换过程会将语法树修改，之后还会得到一个<strong>逻辑计划</strong> 到 <strong>物理计划</strong>的映射，对应上图米黄色部分。</li>
+<li>最后拼装一个QueryProcedure，这是一个单链表，头结点是ES，next指向CSV，然后是一个<strong>DataSetTransformProcedure</strong>，这个对应是一个混合查询，尾节点是用于展示的</li>
+</ul>
+<p>回答一下刚才自己的问题，为什么转成成<code>TemporaryTableScan</code>后，<code>LogicalFilter</code>好像丢失了？<br>
+大致原因可能是，生成<code>TemporaryTableScan</code>只是做拆分的。<br>
+因为一个<code>TemporaryTableScan</code>对应一个查询计划，这样就可以拆分成<code>N</code>个查询丢给Spark。<br>
+在封装QueryProcedure时，给每个 提取器传入的不是 <code>TemporaryTableScan</code>，而是<code>LogicalProject</code>，比如传给ES的就是一个逻辑执行计划，对应上图蓝色部分 LogicalProject -&gt; LogicalFilter -&gt; ElasticsearchTableScan。<br>
+有了这么一层关系，where条件就不会丢失了。</p>
+<p>之后根据QueryProcedure生成对应的Pipeline，pipeline在查询的时候，会调用 <strong>提取器</strong>，获得一个完整的可以执行的SQL。<br>
+ES这个提取器比较有意思，它是根据逻辑计划，再反向转换成一个sql，然后又一次解析了这个sql(生成token并校验)，接着是得到物理计划，最后根据物理计划转成真实的ES查询语句：</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-json" data-lang="json"><span style="display:flex;"><span>{<span style="color:#ff79c6">&#34;query&#34;</span>:{<span style="color:#ff79c6">&#34;constant_score&#34;</span>:{<span style="color:#ff79c6">&#34;filter&#34;</span>:{<span style="color:#ff79c6">&#34;bool&#34;</span>:{<span style="color:#ff79c6">&#34;should&#34;</span>:[{<span style="color:#ff79c6">&#34;term&#34;</span>:{<span style="color:#ff79c6">&#34;city&#34;</span>:<span style="color:#f1fa8c">&#34;FRAMINGHAM&#34;</span>}},
+</span></span><span style="display:flex;"><span>{<span style="color:#ff79c6">&#34;term&#34;</span>:{<span style="color:#ff79c6">&#34;city&#34;</span>:<span style="color:#f1fa8c">&#34;BROCKTON&#34;</span>}},{<span style="color:#ff79c6">&#34;term&#34;</span>:{<span style="color:#ff79c6">&#34;city&#34;</span>:<span style="color:#f1fa8c">&#34;CONCORD&#34;</span>}}]}}}},<span style="color:#ff79c6">&#34;_source&#34;</span>:[<span style="color:#f1fa8c">&#34;city&#34;</span>,<span style="color:#f1fa8c">&#34;province&#34;</span>,<span style="color:#f1fa8c">&#34;digest&#34;</span>,<span style="color:#f1fa8c">&#34;type&#34;</span>,<span style="color:#f1fa8c">&#34;stu_id&#34;</span>]}
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>如果这么看的话，<code>TemporaryTableScan</code>丢失一部分信息，确实是没关系。</p>
+<p>下面是生成query_procedure过程的时序图：
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2021/12/quick_sql/5.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2021/12/quick_sql/5.jpg" />
+        </a>
+    </p>
+<h2 id="执行原理">执行原理</h2>
+<p>根据前面生成的<code>QueryProcedure</code>单链表，动态拼装出执行类：
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2021/12/quick_sql/6.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2021/12/quick_sql/6.jpg" />
+        </a>
+    <br>
+执行过程如下：</p>
+<ul>
+<li><code>QueryProcedure</code>是一个单链表，每个节点都是一个具体的<strong>ScanTable</strong>，之后将每个节点的信息挨个取出，调用<code>toRecognizedQuery</code>生成一个可以执行的语句，如果是<code>ES</code>就对应一个<code>json</code>查询语句。</li>
+<li>将信息交给<code>SparkBodyWrapper</code>进行拼装，这里拼装的比较原始，就是利用字符串进行拼接
+<ul>
+<li>生成import信息</li>
+<li>生成<code>csv</code>查询的java语句</li>
+<li>生成<code>es</code>查询的java语句</li>
+<li>拼装出一个<code>join</code>语句，对前面<code>csv</code>和<code>es</code>的查询结果进行合并查询</li>
+<li>完整拼装，拼出一个完整的<code>java类</code></li>
+</ul>
+</li>
+<li>将拼装的 java 类交给<code>JavaCompiler</code>进行编译，编译后得到一个class，然后再反射生成一个对应</li>
+<li>执行这个对象的<code>execute</code>函数，执行一个 spark 任务</li>
+</ul>
+<p>下面是spark pipeline的执行过程，这里主要是拼接成一个java类
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2021/12/quick_sql/7.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2021/12/quick_sql/7.jpg" />
+        </a>
+    </p>
+<p>下面是动态编译的时序图，这里是编译再反射执行
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2021/12/quick_sql/8.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2021/12/quick_sql/8.jpg" />
+        </a>
+    </p>
+<h1 id="跨数据拼装过程">跨数据拼装过程</h1>
+<h2 id="背景">背景</h2>
+<p>假设有一个跨数据源的<code>SQL</code>查询：</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-sql" data-lang="sql"><span style="display:flex;"><span><span style="color:#ff79c6">SELECT</span> t1.name,t2.name <span style="color:#ff79c6">FROM</span> MySQL.test1 <span style="color:#ff79c6">AS</span> t1 <span style="color:#ff79c6">JOIN</span> Oracle.test_2 <span style="color:#ff79c6">AS</span> t2 <span style="color:#ff79c6">WHERE</span> t2.id <span style="color:#ff79c6">&gt;</span> <span style="color:#bd93f9">10</span> <span style="color:#ff79c6">ON</span> t1.id <span style="color:#ff79c6">=</span> t2.id
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>想要完成跨数据源查询，就得把<code>SQL</code>做拆分，将查询<strong>mysql</strong>的部分剥离出来，同时将查询<strong>oracle</strong>的部分也剥离出来。<br>
+查询完<strong>mysql</strong>之后，将结果写到一个地方，记作<code>a</code><br>
+查询完<strong>oracle</strong>之后，也将结果写到一个地方，记作<code>b</code>   <br>
+再用<strong>join</strong>查询，执行<code>a JOIN b</code>这样的操作</p>
+<p>假设我们已经把<code>SQL</code>拆分好了，将各个拆分后的查询拼接成一个单链表结构：</p>
+<pre tabindex="0"><code>链表头结点(查询mysql相关配置信息) -&gt; 链表节点(查询oracle相关配置信息) -&gt; 链表节点(a join b信息)
+</code></pre><p>之后，我们拿到这个<strong>单链表</strong>结构，再拼装出具体的<strong>可执行代码</strong>，并执行这个<strong>拼装后的代码</strong>。   <br>
+本文主要介绍<strong>如何拼装代码</strong>、<strong>如何动态编译</strong>的过程。</p>
+<h2 id="整体结构">整体结构</h2>
+<p>相关类图如下：
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2021/12/quick_sql/9.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2021/12/quick_sql/9.jpg" />
+        </a>
+    </p>
+<p>上图就是<strong>codegen</strong>包下的几乎所有类了，这个包的作用是将拆分后的<code>sql</code>拼装成具体的代码。<br>
+<code>BlockLink</code>这个类表示的是，需要拼装哪个部分的代码，他有好几个实现类：</p>
+<ul>
+<li><code>ImportsLink</code>这个实现类表示专门处理代码的<code>import</code>部分</li>
+<li><code>ClassLink</code>这个表示专门处理代码的整体</li>
+<li><code>InnerClassLink</code>处理拼装内部类</li>
+<li><code>MethodLink</code>处理函数拼装</li>
+<li><code>SentencesLink</code>处理一行代码，对一行代码做拼装用的</li>
+</ul>
+<p>其他核心类：</p>
+<ul>
+<li><code>QueryProcedure</code>，这个类是<code>sql</code>拆分后的调用链最高层抽象类。也就是把<code> a JOIN b</code>这样的查询语句拆分成<code>a</code>和<code>b</code>两个子语句。</li>
+<li><code>QueryProcedure</code>的子类<code>CsvExtractor</code>、<code>JdbcExtractor</code>则代表链表中一个具体的节点。</li>
+<li><code>ProcedureVisitor</code>是访问者模式的抽象类，专门用来访问查询链表中节点的。</li>
+<li><code>ClassBodyComposer</code>用来收集所有的代码片段，最终可以组装成一个完整的<code>Java</code>类</li>
+<li><code>ClassBodyWrapper</code>将<code>ClassBodyComposer</code>组装的完整类做编译</li>
+<li><code>QueryGenerator</code>这是一个抽象类，其实现类对应一个具体的数据源，比如<code>SparkCsvGenerator</code>专门生成<strong>CSV</strong>相关的代码片段。</li>
+</ul>
+<h2 id="组装过程">组装过程</h2>
+<p><code>QueryProcedure</code>是拆分<strong>sql</strong>后，生成的一个单链表，每个链表节点都代表一个具体数据源的查询。<br>
+<code>ImportLink</code>、<code>SparkClassLink</code>、<code>InnerClassLink</code>、<code>MethodLink</code>这些是具体的实现类，用来处理代码片段的。<br>
+不同的代码片段需要放到不同的地方，比如<code>import</code>是由<code>ImportLink</code>处理的；一条语句是由<code>SparkSentencesLink</code>处理的。<br>
+<code>ClassBodyComposer</code>关联了<code>ImportLink</code>，当有代码片段交给<code>ClassBodyComposer</code>处理时，它就将这个代码片段交给<code>ImportLink</code>。<br>
+如果<code>ImportLink</code>能处理，就自己处理，否则继续往后传递。</p>
+<p>
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2021/12/quick_sql/10.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2021/12/quick_sql/10.jpg" />
+        </a>
+    </p>
+<p>下面是处理各个数据源的核心代码：</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">8
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">9
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-java" data-lang="java"><span style="display:flex;"><span>    <span style="color:#8be9fd;font-style:italic">public</span> <span style="color:#8be9fd">void</span> <span style="color:#50fa7b">visit</span><span style="color:#ff79c6">(</span>ExtractProcedure extractProcedure<span style="color:#ff79c6">)</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>        composer<span style="color:#ff79c6">.</span><span style="color:#50fa7b">handleComposition</span><span style="color:#ff79c6">(</span>CodeCategory<span style="color:#ff79c6">.</span><span style="color:#50fa7b">SENTENCE</span><span style="color:#ff79c6">,</span> <span style="color:#f1fa8c">&#34;{&#34;</span><span style="color:#ff79c6">);</span>
+</span></span><span style="display:flex;"><span>        QueryGenerator queryBuilder <span style="color:#ff79c6">=</span> QueryGenerator<span style="color:#ff79c6">.</span><span style="color:#50fa7b">getQueryGenerator</span><span style="color:#ff79c6">(</span>
+</span></span><span style="display:flex;"><span>            extractProcedure<span style="color:#ff79c6">,</span> composer<span style="color:#ff79c6">,</span> <span style="color:#ff79c6">true</span><span style="color:#ff79c6">);</span>
+</span></span><span style="display:flex;"><span>        queryBuilder<span style="color:#ff79c6">.</span><span style="color:#50fa7b">execute</span><span style="color:#ff79c6">();</span>
+</span></span><span style="display:flex;"><span>        queryBuilder<span style="color:#ff79c6">.</span><span style="color:#50fa7b">saveToTempTable</span><span style="color:#ff79c6">();</span>
+</span></span><span style="display:flex;"><span>        composer<span style="color:#ff79c6">.</span><span style="color:#50fa7b">handleComposition</span><span style="color:#ff79c6">(</span>CodeCategory<span style="color:#ff79c6">.</span><span style="color:#50fa7b">SENTENCE</span><span style="color:#ff79c6">,</span> <span style="color:#f1fa8c">&#34;}&#34;</span><span style="color:#ff79c6">);</span>
+</span></span><span style="display:flex;"><span>        visitNext<span style="color:#ff79c6">(</span>extractProcedure<span style="color:#ff79c6">);</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">}</span>
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p><code>composer.handleComposition(CodeCategory.SENTENCE, &quot;{&quot;);</code>这句定义了需要将<code>{</code>由哪个<code>BlockLink</code>处理。这里定义的是<code>SENTENCE</code>，所以是由<code>SentencesLink</code>处理的。<br>
+之后由<code>QueryGenerator.getQueryGenerator</code>生成一个具体的实现类，比如<code>SparkCsvGenerator</code>。<br>
+<strong>CSV</strong>代码片段实现类，负责生成<strong>CSV</strong>相关的代码片段：</p>
+<pre tabindex="0"><code>{
+	spark.read()
+            .option(&#34;header&#34;, &#34;true&#34;)
+            .option(&#34;inferSchema&#34;, &#34;true&#34;)
+            .option(&#34;timestampFormat&#34;, &#34;yyyy/MM/dd HH:mm:ss ZZ&#34;)
+            .option(&#34;delimiter&#34;, &#34;,&#34;)
+            .csv(&#34;D:\\code\\Quicksql\\data\\sales\\DEPTS.csv&#34;)
+            .toDF()
+            .createOrReplaceTempView(&#34;custom_name_depts&#34;);
+			tmp = spark.sql(&#34;SELECT deptno, name FROM custom_name_depts&#34;);
+			tmp.createOrReplaceTempView(&#34;custom_name_depts_0&#34;);
+}
+</code></pre><p>最后调用<code>visitNext(extractProcedure)</code>处理下一个链表节点。</p>
+<p><strong>importlink</strong>组装后的样子：<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2021/12/quick_sql/11.png">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2021/12/quick_sql/11.png" />
+        </a>
+    </p>
+<p><strong>sentenceslink</strong>组装后的样子：<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2021/12/quick_sql/12.png">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2021/12/quick_sql/12.png" />
+        </a>
+    </p>
+<h2 id="编译过程">编译过程</h2>
+<h3 id="依赖">依赖</h3>
+<p>编译是在内存中进行的，需要依赖：</p>
+<ul>
+<li><code>picadoh</code>，这是一个开源工具，com.github.picadoh.imc.compiler</li>
+<li><code>javax.tools</code>包下的编译类</li>
+</ul>
+<p>有了完整的类，就可以直接编译了:</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-java" data-lang="java"><span style="display:flex;"><span>    <span style="color:#8be9fd;font-style:italic">protected</span> Requirement <span style="color:#50fa7b">compileRequirement</span><span style="color:#ff79c6">(</span>IntegratedQueryWrapper wrapper<span style="color:#ff79c6">,</span> Object argument<span style="color:#ff79c6">,</span> Class clazz<span style="color:#ff79c6">)</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>        Class requirementClass <span style="color:#ff79c6">=</span> wrapper<span style="color:#ff79c6">.</span><span style="color:#50fa7b">compile</span><span style="color:#ff79c6">();</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">try</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>            <span style="color:#8be9fd;font-style:italic">final</span> Constructor<span style="color:#ff79c6">&lt;</span>Requirement<span style="color:#ff79c6">&gt;</span> constructor <span style="color:#ff79c6">=</span> requirementClass<span style="color:#ff79c6">.</span><span style="color:#50fa7b">getConstructor</span><span style="color:#ff79c6">(</span>clazz<span style="color:#ff79c6">);</span>
+</span></span><span style="display:flex;"><span>            <span style="color:#ff79c6">return</span> constructor<span style="color:#ff79c6">.</span><span style="color:#50fa7b">newInstance</span><span style="color:#ff79c6">(</span>argument<span style="color:#ff79c6">);</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">}</span> <span style="color:#ff79c6">catch</span> <span style="color:#ff79c6">(</span>NoSuchMethodException <span style="color:#ff79c6">|</span> IllegalAccessException
+</span></span><span style="display:flex;"><span>            <span style="color:#ff79c6">|</span> InvocationTargetException <span style="color:#ff79c6">|</span> InstantiationException ex<span style="color:#ff79c6">)</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>            ex<span style="color:#ff79c6">.</span><span style="color:#50fa7b">printStackTrace</span><span style="color:#ff79c6">();</span>
+</span></span><span style="display:flex;"><span>            <span style="color:#ff79c6">throw</span> <span style="color:#ff79c6">new</span> RuntimeException<span style="color:#ff79c6">(</span>ex<span style="color:#ff79c6">);</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">}</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">}</span>
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>下面是<code>wrapper.compile()</code>内部细节，大致过程就是编译源文件并返回<code>Class</code>对象。</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-java" data-lang="java"><span style="display:flex;"><span>    <span style="color:#8be9fd;font-style:italic">public</span> <span style="color:#8be9fd;font-style:italic">static</span> Class <span style="color:#50fa7b">compileSourceAndLoadClass</span><span style="color:#ff79c6">(</span>String source<span style="color:#ff79c6">,</span> String name<span style="color:#ff79c6">,</span> String extraJars<span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#8be9fd;font-style:italic">throws</span> InMemoryCompiler<span style="color:#ff79c6">.</span><span style="color:#50fa7b">CompilerException</span><span style="color:#ff79c6">,</span>
+</span></span><span style="display:flex;"><span>        ClassNotFoundException <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>        WithClassPathInMemoryCompiler compiler <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">new</span> WithClassPathInMemoryCompiler<span style="color:#ff79c6">();</span>
+</span></span><span style="display:flex;"><span>        CompilationPackage compilationPackage <span style="color:#ff79c6">=</span> compiler<span style="color:#ff79c6">.</span><span style="color:#50fa7b">singleCompile</span><span style="color:#ff79c6">(</span>name<span style="color:#ff79c6">,</span> source<span style="color:#ff79c6">,</span> extraJars<span style="color:#ff79c6">);</span>
+</span></span><span style="display:flex;"><span>        CompilationPackageLoader loader <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">new</span> CompilationPackageLoader<span style="color:#ff79c6">();</span>
+</span></span><span style="display:flex;"><span>        Map<span style="color:#ff79c6">&lt;</span>String<span style="color:#ff79c6">,</span> Class<span style="color:#ff79c6">&lt;?&gt;&gt;</span> classes <span style="color:#ff79c6">=</span> loader<span style="color:#ff79c6">.</span><span style="color:#50fa7b">loadAsMap</span><span style="color:#ff79c6">(</span>compilationPackage<span style="color:#ff79c6">);</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">if</span> <span style="color:#ff79c6">(!</span> classes<span style="color:#ff79c6">.</span><span style="color:#50fa7b">containsKey</span><span style="color:#ff79c6">(</span>name<span style="color:#ff79c6">))</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>            <span style="color:#ff79c6">throw</span> <span style="color:#ff79c6">new</span> RuntimeException<span style="color:#ff79c6">(</span><span style="color:#f1fa8c">&#34;Compile or load class failed!!&#34;</span><span style="color:#ff79c6">);</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">}</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">return</span> classes<span style="color:#ff79c6">.</span><span style="color:#50fa7b">get</span><span style="color:#ff79c6">(</span>name<span style="color:#ff79c6">);</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">}</span>
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>编译之前需要拿相关环境变量，和依赖：</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-java" data-lang="java"><span style="display:flex;"><span>            String belongingJarPath <span style="color:#ff79c6">=</span> ClassBodyWrapper<span style="color:#ff79c6">.</span><span style="color:#50fa7b">class</span><span style="color:#ff79c6">.</span><span style="color:#50fa7b">getProtectionDomain</span><span style="color:#ff79c6">().</span><span style="color:#50fa7b">getCodeSource</span><span style="color:#ff79c6">()</span>
+</span></span><span style="display:flex;"><span>                <span style="color:#ff79c6">.</span><span style="color:#50fa7b">getLocation</span><span style="color:#ff79c6">()</span>
+</span></span><span style="display:flex;"><span>                <span style="color:#ff79c6">.</span><span style="color:#50fa7b">getPath</span><span style="color:#ff79c6">();</span>
+</span></span><span style="display:flex;"><span>            List<span style="color:#ff79c6">&lt;</span>String<span style="color:#ff79c6">&gt;</span> options <span style="color:#ff79c6">=</span> Arrays
+</span></span><span style="display:flex;"><span>                <span style="color:#ff79c6">.</span><span style="color:#50fa7b">asList</span><span style="color:#ff79c6">(</span><span style="color:#f1fa8c">&#34;-classpath&#34;</span><span style="color:#ff79c6">,</span> extraJars
+</span></span><span style="display:flex;"><span>                    <span style="color:#ff79c6">+</span> System<span style="color:#ff79c6">.</span><span style="color:#50fa7b">getProperty</span><span style="color:#ff79c6">(</span><span style="color:#f1fa8c">&#34;path.separator&#34;</span><span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>                    <span style="color:#ff79c6">+</span> System<span style="color:#ff79c6">.</span><span style="color:#50fa7b">getProperty</span><span style="color:#ff79c6">(</span><span style="color:#f1fa8c">&#34;java.class.path&#34;</span><span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>                    <span style="color:#ff79c6">+</span> System<span style="color:#ff79c6">.</span><span style="color:#50fa7b">getProperty</span><span style="color:#ff79c6">(</span><span style="color:#f1fa8c">&#34;path.separator&#34;</span><span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>                    <span style="color:#ff79c6">+</span> belongingJarPath
+</span></span><span style="display:flex;"><span>                <span style="color:#ff79c6">);</span>
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>通过<code>java.class.path</code>会把所有的依赖包全部引入。   <br>
+真正负责编译的类是<code>com.sun.tools.javac.api.JavacTool</code><br>
+动态编译的类是<code>Requirement</code>的子类，拿到类的<code>Class</code>后，就通过反射创建一个实例，并返回。<br>
+最后是调用动态类的<code>execute()</code>函数。</p>
+<h2 id="问题">问题</h2>
+<p>1、ClassBodyWrapper类在编译时，源码中有个注释，是说当前动态编译器有bug，加载多个级别的内部类时会触发。<br>
+2、内部类是什么时候生成的？<br>
+3、Javac编译时需要引入各种依赖包，会不会出现包冲突问题？<br>
+4、因为是动态生成的类，调试可能是一个麻烦<br>
+5、负责真正编译的是 javac.aip.JavacTool，如果更换了 JDK 是否还能正常编译？<br>
+6、大量编译、频繁会不会有性能问题，如果类非常大会不会出现OOM？<br>
+7、Calcite和QuickSql在编译的时候，本质都是动态拼接代码片段，这里要非常小心，一旦拼错了代码就无法编译</p>
+<h2 id="拼装的跨数据源代码">拼装的跨数据源代码</h2>
+<p>查询的<code>SQL</code>如下：</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-sql" data-lang="sql"><span style="display:flex;"><span><span style="color:#ff79c6">SELECT</span> a.id,b.id <span style="color:#ff79c6">FROM</span> db_1.a <span style="color:#ff79c6">JOIN</span> db_2.b <span style="color:#ff79c6">ON</span> a.id <span style="color:#ff79c6">=</span> b.id <span style="color:#ff79c6">WHERE</span> b.id <span style="color:#ff79c6">&gt;</span> <span style="color:#bd93f9">10</span> <span style="color:#ff79c6">AND</span> a.id <span style="color:#ff79c6">&lt;</span> <span style="color:#bd93f9">10</span>
+</span></span></code></pre></td></tr></table>
+</div>
+</div><h3 id="生成的代码">生成的代码</h3>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">  1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">  2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">  3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">  4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">  5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">  6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">  7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">  8
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">  9
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 10
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 11
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 12
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 13
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 14
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 15
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 16
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 17
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 18
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 19
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 20
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 21
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 22
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 23
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 24
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 25
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 26
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 27
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 28
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 29
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 30
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 31
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 32
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 33
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 34
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 35
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 36
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 37
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 38
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 39
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 40
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 41
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 42
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 43
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 44
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 45
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 46
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 47
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 48
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 49
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 50
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 51
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 52
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 53
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 54
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 55
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 56
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 57
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 58
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 59
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 60
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 61
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 62
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 63
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 64
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 65
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 66
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 67
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 68
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 69
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 70
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 71
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 72
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 73
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 74
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 75
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 76
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 77
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 78
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 79
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 80
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 81
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 82
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 83
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 84
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 85
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 86
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 87
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 88
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 89
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 90
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 91
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 92
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 93
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 94
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 95
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 96
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 97
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 98
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 99
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">100
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">101
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">102
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">103
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">104
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">105
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">106
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">107
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">108
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">109
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">110
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">111
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">112
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">113
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">114
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">115
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">116
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">117
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">118
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">119
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">120
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">121
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">122
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">123
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">124
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">125
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">126
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">127
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">128
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">129
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">130
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">131
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">132
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">133
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">134
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">135
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">136
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">137
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">138
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">139
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">140
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">141
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">142
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">143
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">144
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">145
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">146
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">147
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">148
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">149
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">150
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">151
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">152
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">153
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">154
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">155
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">156
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">157
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">158
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">159
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">160
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">161
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">162
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">163
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">164
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">165
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">166
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">167
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">168
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">169
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">170
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">171
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">172
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">173
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">174
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">175
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">176
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">177
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">178
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">179
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">180
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">181
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">182
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">183
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">184
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">185
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">186
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">187
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">188
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">189
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">190
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">191
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">192
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">193
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">194
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">195
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">196
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">197
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">198
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">199
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">200
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">201
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">202
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">203
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">204
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">205
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">206
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">207
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">208
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">209
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">210
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">211
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">212
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">213
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">214
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">215
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">216
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">217
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">218
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">219
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">220
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">221
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">222
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">223
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">224
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">225
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">226
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">227
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">228
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">229
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">230
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">231
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">232
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">233
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">234
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">235
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">236
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">237
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">238
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">239
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">240
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">241
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">242
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">243
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">244
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">245
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">246
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">247
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">248
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">249
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">250
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">251
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">252
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">253
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">254
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">255
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">256
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">257
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">258
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">259
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">260
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">261
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">262
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">263
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">264
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">265
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">266
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">267
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">268
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">269
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">270
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">271
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">272
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">273
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">274
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">275
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">276
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">277
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">278
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">279
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">280
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">281
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">282
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">283
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">284
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">285
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">286
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">287
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-java" data-lang="java"><span style="display:flex;"><span><span style="color:#ff79c6">import</span> com.qihoo.qsql.exec.Requirement<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">import</span> org.apache.spark.sql.catalyst.expressions.Attribute<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">import</span> org.apache.spark.sql.types.StructType<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">import</span> org.apache.spark.sql.Row<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">import</span> org.apache.hadoop.fs.Path<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">import</span> java.util.stream.Collectors<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">import</span> org.apache.spark.sql.RowFactory<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">import</span> java.util.concurrent.ArrayBlockingQueue<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">import</span> org.apache.spark.sql.SparkSession<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">import</span> java.util.Collections<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">import</span> com.qihoo.qsql.codegen.spark.SparkJdbcGenerator.SpecificFunction<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">import</span> java.util.ArrayList<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">import</span> java.util.concurrent.ExecutorService<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">import</span> com.qihoo.qsql.codegen.spark.SparkJdbcGenerator.ResultSetWrapper<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">import</span> com.qihoo.qsql.codegen.spark.SparkJdbcGenerator.ResultsTransporter<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">import</span> com.qihoo.qsql.codegen.spark.SparkJdbcGenerator.ResultSetInMemoryWrapper<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">import</span> scala.collection.JavaConversions<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">import</span> java.util.AbstractMap.SimpleEntry<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">import</span> java.net.URI<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">import</span> java.math.BigInteger<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">import</span> org.apache.spark.api.java.JavaRDD<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">import</span> org.apache.hadoop.fs.FileSystem<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">import</span> org.apache.spark.sql.Dataset<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">import</span> java.util.Arrays<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">import</span> java.sql.*<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">import</span> org.apache.hadoop.conf.Configuration<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">import</span> java.util.Enumeration<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">import</span> org.apache.spark.sql.types.DataTypes<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">import</span> java.util.Queue<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">import</span> org.apache.spark.sql.types.StructField<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">import</span> java.sql.Driver<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">import</span> java.util.Map<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">import</span> java.util.concurrent.Executors<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">import</span> com.qihoo.qsql.exec.spark.SparkRequirement<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">import</span> java.io.IOException<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">import</span> org.apache.spark.sql.types.DataType<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">import</span> java.util.concurrent.BlockingQueue<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">import</span> com.qihoo.qsql.codegen.spark.SparkJdbcGenerator.ResultSetInFileSystemWrapper<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">import</span> java.sql.DriverManager<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">import</span> java.util.ArrayDeque<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">import</span> java.util.List<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#8be9fd;font-style:italic">public</span> <span style="color:#8be9fd;font-style:italic">class</span> <span style="color:#50fa7b">Requirement32420</span> <span style="color:#8be9fd;font-style:italic">extends</span> SparkRequirement <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#8be9fd;font-style:italic">public</span> <span style="color:#50fa7b">Requirement32420</span><span style="color:#ff79c6">(</span>SparkSession spark<span style="color:#ff79c6">){</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#8be9fd;font-style:italic">super</span><span style="color:#ff79c6">(</span>spark<span style="color:#ff79c6">);</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">}</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#8be9fd;font-style:italic">private</span> List<span style="color:#ff79c6">&lt;</span>StructField<span style="color:#ff79c6">&gt;</span> <span style="color:#50fa7b">getDataTypes</span><span style="color:#ff79c6">(</span>ResultSet resultSet<span style="color:#ff79c6">)</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>        List<span style="color:#ff79c6">&lt;</span>StructField<span style="color:#ff79c6">&gt;</span> columns<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">try</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>            <span style="color:#8be9fd">int</span> n <span style="color:#ff79c6">=</span> resultSet<span style="color:#ff79c6">.</span><span style="color:#50fa7b">getMetaData</span><span style="color:#ff79c6">().</span><span style="color:#50fa7b">getColumnCount</span><span style="color:#ff79c6">();</span>
+</span></span><span style="display:flex;"><span>            String labelName<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>            columns <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">new</span> ArrayList<span style="color:#ff79c6">&lt;</span>StructField<span style="color:#ff79c6">&gt;();</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>            <span style="color:#ff79c6">for</span> <span style="color:#ff79c6">(</span><span style="color:#8be9fd">int</span> index <span style="color:#ff79c6">=</span> 1<span style="color:#ff79c6">;</span> index <span style="color:#ff79c6">&lt;=</span> n<span style="color:#ff79c6">;</span> index<span style="color:#ff79c6">++)</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>                labelName <span style="color:#ff79c6">=</span> resultSet<span style="color:#ff79c6">.</span><span style="color:#50fa7b">getMetaData</span><span style="color:#ff79c6">().</span><span style="color:#50fa7b">getColumnLabel</span><span style="color:#ff79c6">(</span>index<span style="color:#ff79c6">);</span>
+</span></span><span style="display:flex;"><span>                columns<span style="color:#ff79c6">.</span><span style="color:#50fa7b">add</span><span style="color:#ff79c6">(</span>DataTypes<span style="color:#ff79c6">.</span><span style="color:#50fa7b">createStructField</span><span style="color:#ff79c6">(</span>labelName<span style="color:#ff79c6">,</span> getColumnType<span style="color:#ff79c6">(</span>resultSet<span style="color:#ff79c6">.</span><span style="color:#50fa7b">getMetaData</span><span style="color:#ff79c6">().</span><span style="color:#50fa7b">getColumnType</span><span style="color:#ff79c6">(</span>index<span style="color:#ff79c6">)),</span> <span style="color:#ff79c6">true</span><span style="color:#ff79c6">));</span>
+</span></span><span style="display:flex;"><span>            <span style="color:#ff79c6">}</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">}</span> <span style="color:#ff79c6">catch</span> <span style="color:#ff79c6">(</span>SQLException e<span style="color:#ff79c6">)</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>            <span style="color:#ff79c6">throw</span> <span style="color:#ff79c6">new</span> RuntimeException<span style="color:#ff79c6">(</span>e<span style="color:#ff79c6">.</span><span style="color:#50fa7b">getMessage</span><span style="color:#ff79c6">());</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">}</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">return</span> columns<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">}</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#8be9fd;font-style:italic">private</span> DataType <span style="color:#50fa7b">getColumnType</span><span style="color:#ff79c6">(</span><span style="color:#8be9fd">int</span> dataType<span style="color:#ff79c6">)</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">switch</span> <span style="color:#ff79c6">(</span>dataType<span style="color:#ff79c6">)</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>            <span style="color:#ff79c6">case</span> Types<span style="color:#ff79c6">.</span><span style="color:#50fa7b">BINARY</span><span style="color:#ff79c6">:</span>
+</span></span><span style="display:flex;"><span>                <span style="color:#ff79c6">return</span> DataTypes<span style="color:#ff79c6">.</span><span style="color:#50fa7b">BinaryType</span><span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span>            <span style="color:#ff79c6">case</span> Types<span style="color:#ff79c6">.</span><span style="color:#50fa7b">BIT</span><span style="color:#ff79c6">:</span>
+</span></span><span style="display:flex;"><span>            <span style="color:#ff79c6">case</span> Types<span style="color:#ff79c6">.</span><span style="color:#50fa7b">BOOLEAN</span><span style="color:#ff79c6">:</span>
+</span></span><span style="display:flex;"><span>                <span style="color:#ff79c6">return</span> DataTypes<span style="color:#ff79c6">.</span><span style="color:#50fa7b">BooleanType</span><span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span>            <span style="color:#ff79c6">case</span> Types<span style="color:#ff79c6">.</span><span style="color:#50fa7b">DATE</span><span style="color:#ff79c6">:</span>
+</span></span><span style="display:flex;"><span>                <span style="color:#ff79c6">return</span> DataTypes<span style="color:#ff79c6">.</span><span style="color:#50fa7b">DateType</span><span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span>            <span style="color:#ff79c6">case</span> Types<span style="color:#ff79c6">.</span><span style="color:#50fa7b">TIMESTAMP</span><span style="color:#ff79c6">:</span>
+</span></span><span style="display:flex;"><span>                <span style="color:#ff79c6">return</span> DataTypes<span style="color:#ff79c6">.</span><span style="color:#50fa7b">TimestampType</span><span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span>            <span style="color:#ff79c6">case</span> Types<span style="color:#ff79c6">.</span><span style="color:#50fa7b">DECIMAL</span><span style="color:#ff79c6">:</span>
+</span></span><span style="display:flex;"><span>            <span style="color:#ff79c6">case</span> Types<span style="color:#ff79c6">.</span><span style="color:#50fa7b">NUMERIC</span><span style="color:#ff79c6">:</span>
+</span></span><span style="display:flex;"><span>                <span style="color:#ff79c6">return</span> DataTypes<span style="color:#ff79c6">.</span><span style="color:#50fa7b">createDecimalType</span><span style="color:#ff79c6">();</span>
+</span></span><span style="display:flex;"><span>            <span style="color:#ff79c6">case</span> Types<span style="color:#ff79c6">.</span><span style="color:#50fa7b">DOUBLE</span><span style="color:#ff79c6">:</span>
+</span></span><span style="display:flex;"><span>                <span style="color:#ff79c6">return</span> DataTypes<span style="color:#ff79c6">.</span><span style="color:#50fa7b">DoubleType</span><span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span>            <span style="color:#ff79c6">case</span> Types<span style="color:#ff79c6">.</span><span style="color:#50fa7b">FLOAT</span><span style="color:#ff79c6">:</span>
+</span></span><span style="display:flex;"><span>            <span style="color:#ff79c6">case</span> Types<span style="color:#ff79c6">.</span><span style="color:#50fa7b">REAL</span><span style="color:#ff79c6">:</span>
+</span></span><span style="display:flex;"><span>                <span style="color:#ff79c6">return</span> DataTypes<span style="color:#ff79c6">.</span><span style="color:#50fa7b">FloatType</span><span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span>            <span style="color:#ff79c6">case</span> Types<span style="color:#ff79c6">.</span><span style="color:#50fa7b">BIGINT</span><span style="color:#ff79c6">:</span>
+</span></span><span style="display:flex;"><span>                <span style="color:#ff79c6">return</span> DataTypes<span style="color:#ff79c6">.</span><span style="color:#50fa7b">LongType</span><span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span>            <span style="color:#ff79c6">case</span> Types<span style="color:#ff79c6">.</span><span style="color:#50fa7b">INTEGER</span><span style="color:#ff79c6">:</span>
+</span></span><span style="display:flex;"><span>                <span style="color:#ff79c6">return</span> DataTypes<span style="color:#ff79c6">.</span><span style="color:#50fa7b">IntegerType</span><span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span>            <span style="color:#ff79c6">case</span> Types<span style="color:#ff79c6">.</span><span style="color:#50fa7b">SMALLINT</span><span style="color:#ff79c6">:</span>
+</span></span><span style="display:flex;"><span>                <span style="color:#ff79c6">return</span> DataTypes<span style="color:#ff79c6">.</span><span style="color:#50fa7b">ShortType</span><span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span>            <span style="color:#ff79c6">case</span> Types<span style="color:#ff79c6">.</span><span style="color:#50fa7b">TINYINT</span><span style="color:#ff79c6">:</span>
+</span></span><span style="display:flex;"><span>                <span style="color:#ff79c6">return</span> DataTypes<span style="color:#ff79c6">.</span><span style="color:#50fa7b">IntegerType</span><span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span>            <span style="color:#ff79c6">case</span> Types<span style="color:#ff79c6">.</span><span style="color:#50fa7b">NULL</span><span style="color:#ff79c6">:</span>
+</span></span><span style="display:flex;"><span>                <span style="color:#ff79c6">return</span> DataTypes<span style="color:#ff79c6">.</span><span style="color:#50fa7b">NullType</span><span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span>            <span style="color:#ff79c6">case</span> Types<span style="color:#ff79c6">.</span><span style="color:#50fa7b">VARCHAR</span><span style="color:#ff79c6">:</span>
+</span></span><span style="display:flex;"><span>            <span style="color:#ff79c6">case</span> Types<span style="color:#ff79c6">.</span><span style="color:#50fa7b">NVARCHAR</span><span style="color:#ff79c6">:</span>
+</span></span><span style="display:flex;"><span>            <span style="color:#ff79c6">case</span> Types<span style="color:#ff79c6">.</span><span style="color:#50fa7b">CHAR</span><span style="color:#ff79c6">:</span>
+</span></span><span style="display:flex;"><span>            <span style="color:#ff79c6">case</span> Types<span style="color:#ff79c6">.</span><span style="color:#50fa7b">NCHAR</span><span style="color:#ff79c6">:</span>
+</span></span><span style="display:flex;"><span>            <span style="color:#ff79c6">default</span><span style="color:#ff79c6">:</span>
+</span></span><span style="display:flex;"><span>                <span style="color:#ff79c6">return</span> DataTypes<span style="color:#ff79c6">.</span><span style="color:#50fa7b">StringType</span><span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">}</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">}</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#8be9fd;font-style:italic">private</span> ResultSetWrapper <span style="color:#50fa7b">persist</span><span style="color:#ff79c6">(</span>String url<span style="color:#ff79c6">,</span> String user<span style="color:#ff79c6">,</span> String password<span style="color:#ff79c6">,</span>String driver<span style="color:#ff79c6">,</span> String sql<span style="color:#ff79c6">)</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>        String baseURI <span style="color:#ff79c6">=</span> <span style="color:#f1fa8c">&#34;nullnull&#34;</span><span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span>        Connection connection <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">null</span><span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span>        Statement statement <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">null</span><span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span>        ResultSet resultSet <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">null</span><span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>        StructType schema<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>        <span style="color:#8be9fd;font-style:italic">final</span> <span style="color:#8be9fd">int</span> THRESHOLD <span style="color:#ff79c6">=</span> 0x400000<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#8be9fd;font-style:italic">final</span> <span style="color:#8be9fd">int</span> BUFFER_SIZE <span style="color:#ff79c6">=</span> 0x40000<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#8be9fd;font-style:italic">final</span> <span style="color:#8be9fd">int</span> CONCURRENT_PACKAGE_NUM <span style="color:#ff79c6">=</span> 8<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>        <span style="color:#8be9fd">int</span> rowCount <span style="color:#ff79c6">=</span> 0<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#8be9fd">int</span> rowPartition <span style="color:#ff79c6">=</span> 0<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>        <span style="color:#8be9fd">long</span> partitionStamp <span style="color:#ff79c6">=</span> System<span style="color:#ff79c6">.</span><span style="color:#50fa7b">currentTimeMillis</span><span style="color:#ff79c6">();</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>        BlockingQueue<span style="color:#ff79c6">&lt;</span>List<span style="color:#ff79c6">&lt;</span>Object<span style="color:#ff79c6">[]&gt;&gt;</span> queue <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">new</span> ArrayBlockingQueue<span style="color:#ff79c6">&lt;</span>List<span style="color:#ff79c6">&lt;</span>Object<span style="color:#ff79c6">[]&gt;&gt;(</span>CONCURRENT_PACKAGE_NUM<span style="color:#ff79c6">);</span>
+</span></span><span style="display:flex;"><span>        Queue<span style="color:#ff79c6">&lt;</span>String<span style="color:#ff79c6">&gt;</span> partitionQueue <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">new</span> ArrayDeque<span style="color:#ff79c6">&lt;</span>String<span style="color:#ff79c6">&gt;();</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>        ExecutorService executor <span style="color:#ff79c6">=</span> Executors<span style="color:#ff79c6">.</span><span style="color:#50fa7b">newFixedThreadPool</span><span style="color:#ff79c6">(</span>CONCURRENT_PACKAGE_NUM<span style="color:#ff79c6">);</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">try</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>            Class<span style="color:#ff79c6">.</span><span style="color:#50fa7b">forName</span><span style="color:#ff79c6">(</span>driver<span style="color:#ff79c6">);</span>
+</span></span><span style="display:flex;"><span>            connection <span style="color:#ff79c6">=</span> DriverManager<span style="color:#ff79c6">.</span><span style="color:#50fa7b">getConnection</span><span style="color:#ff79c6">(</span>url<span style="color:#ff79c6">,</span> user<span style="color:#ff79c6">,</span> password<span style="color:#ff79c6">);</span>
+</span></span><span style="display:flex;"><span>            statement <span style="color:#ff79c6">=</span> connection<span style="color:#ff79c6">.</span><span style="color:#50fa7b">prepareStatement</span><span style="color:#ff79c6">(</span>sql<span style="color:#ff79c6">);</span>
+</span></span><span style="display:flex;"><span>            resultSet <span style="color:#ff79c6">=</span> statement<span style="color:#ff79c6">.</span><span style="color:#50fa7b">executeQuery</span><span style="color:#ff79c6">(</span>sql<span style="color:#ff79c6">);</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>            schema <span style="color:#ff79c6">=</span> DataTypes<span style="color:#ff79c6">.</span><span style="color:#50fa7b">createStructType</span><span style="color:#ff79c6">(</span>getDataTypes<span style="color:#ff79c6">(</span>resultSet<span style="color:#ff79c6">));</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>            List<span style="color:#ff79c6">&lt;</span>Object<span style="color:#ff79c6">[]&gt;</span> rows <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">new</span> ArrayList<span style="color:#ff79c6">&lt;</span>Object<span style="color:#ff79c6">[]&gt;();</span>
+</span></span><span style="display:flex;"><span>            <span style="color:#8be9fd">int</span> n <span style="color:#ff79c6">=</span> resultSet<span style="color:#ff79c6">.</span><span style="color:#50fa7b">getMetaData</span><span style="color:#ff79c6">().</span><span style="color:#50fa7b">getColumnCount</span><span style="color:#ff79c6">();</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>            <span style="color:#ff79c6">while</span> <span style="color:#ff79c6">(</span>resultSet<span style="color:#ff79c6">.</span><span style="color:#50fa7b">next</span><span style="color:#ff79c6">())</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>                Object<span style="color:#ff79c6">[]</span> rowValue <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">new</span> Object<span style="color:#ff79c6">[</span>n<span style="color:#ff79c6">];</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>                <span style="color:#ff79c6">for</span> <span style="color:#ff79c6">(</span><span style="color:#8be9fd">int</span> index <span style="color:#ff79c6">=</span> 1<span style="color:#ff79c6">;</span> index <span style="color:#ff79c6">&lt;=</span> n<span style="color:#ff79c6">;</span> index<span style="color:#ff79c6">++){</span>
+</span></span><span style="display:flex;"><span>                    Object value <span style="color:#ff79c6">=</span> resultSet<span style="color:#ff79c6">.</span><span style="color:#50fa7b">getObject</span><span style="color:#ff79c6">(</span>index<span style="color:#ff79c6">);</span>
+</span></span><span style="display:flex;"><span>                    <span style="color:#ff79c6">if</span> <span style="color:#ff79c6">(</span>value <span style="color:#ff79c6">instanceof</span> BigInteger<span style="color:#ff79c6">)</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>                        rowValue<span style="color:#ff79c6">[</span>index <span style="color:#ff79c6">-</span> 1<span style="color:#ff79c6">]</span> <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">((</span>BigInteger<span style="color:#ff79c6">)</span> value<span style="color:#ff79c6">).</span><span style="color:#50fa7b">longValue</span><span style="color:#ff79c6">();</span>
+</span></span><span style="display:flex;"><span>                    <span style="color:#ff79c6">}</span> <span style="color:#ff79c6">else</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>                        rowValue<span style="color:#ff79c6">[</span>index <span style="color:#ff79c6">-</span> 1<span style="color:#ff79c6">]</span> <span style="color:#ff79c6">=</span> value<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span>                    <span style="color:#ff79c6">}</span>
+</span></span><span style="display:flex;"><span>                <span style="color:#ff79c6">}</span>
+</span></span><span style="display:flex;"><span>                rows<span style="color:#ff79c6">.</span><span style="color:#50fa7b">add</span><span style="color:#ff79c6">(</span>rowValue<span style="color:#ff79c6">);</span>
+</span></span><span style="display:flex;"><span>                rowCount<span style="color:#ff79c6">++;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>                <span style="color:#ff79c6">if</span> <span style="color:#ff79c6">(</span>rowCount <span style="color:#ff79c6">&gt;</span> BUFFER_SIZE<span style="color:#ff79c6">)</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>                    queue<span style="color:#ff79c6">.</span><span style="color:#50fa7b">offer</span><span style="color:#ff79c6">(</span>rows<span style="color:#ff79c6">);</span>
+</span></span><span style="display:flex;"><span>                    <span style="color:#6272a4">//magic value &#39;#&#39;
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>                    partitionQueue<span style="color:#ff79c6">.</span><span style="color:#50fa7b">offer</span><span style="color:#ff79c6">(</span>baseURI <span style="color:#ff79c6">+</span> <span style="color:#f1fa8c">&#34;/&#34;</span> <span style="color:#ff79c6">+</span> partitionStamp <span style="color:#ff79c6">+</span>
+</span></span><span style="display:flex;"><span>                            <span style="color:#f1fa8c">&#34;/partition#&#34;</span> <span style="color:#ff79c6">+</span> rowPartition<span style="color:#ff79c6">);</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>                    <span style="color:#ff79c6">if</span> <span style="color:#ff79c6">(</span>rowPartition <span style="color:#ff79c6">*</span> BUFFER_SIZE <span style="color:#ff79c6">&gt;</span> THRESHOLD<span style="color:#ff79c6">)</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>                        <span style="color:#ff79c6">while</span> <span style="color:#ff79c6">(!</span>queue<span style="color:#ff79c6">.</span><span style="color:#50fa7b">isEmpty</span><span style="color:#ff79c6">())</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>                            transferContents<span style="color:#ff79c6">((</span>List<span style="color:#ff79c6">&lt;</span>Object<span style="color:#ff79c6">[]&gt;)</span> queue<span style="color:#ff79c6">.</span><span style="color:#50fa7b">poll</span><span style="color:#ff79c6">(),</span> <span style="color:#ff79c6">(</span>String<span style="color:#ff79c6">)</span> partitionQueue<span style="color:#ff79c6">.</span><span style="color:#50fa7b">poll</span><span style="color:#ff79c6">(),</span> executor<span style="color:#ff79c6">);</span>
+</span></span><span style="display:flex;"><span>                        <span style="color:#ff79c6">}</span>
+</span></span><span style="display:flex;"><span>                    <span style="color:#ff79c6">}</span>
+</span></span><span style="display:flex;"><span>                    rows <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">new</span> ArrayList<span style="color:#ff79c6">&lt;</span>Object<span style="color:#ff79c6">[]&gt;();</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>                    rowCount <span style="color:#ff79c6">=</span> 0<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span>                    rowPartition<span style="color:#ff79c6">++;</span>
+</span></span><span style="display:flex;"><span>                <span style="color:#ff79c6">}</span>
+</span></span><span style="display:flex;"><span>            <span style="color:#ff79c6">}</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>            <span style="color:#ff79c6">if</span> <span style="color:#ff79c6">(!</span>rows<span style="color:#ff79c6">.</span><span style="color:#50fa7b">isEmpty</span><span style="color:#ff79c6">())</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>                queue<span style="color:#ff79c6">.</span><span style="color:#50fa7b">offer</span><span style="color:#ff79c6">(</span>rows<span style="color:#ff79c6">);</span>
+</span></span><span style="display:flex;"><span>                partitionQueue<span style="color:#ff79c6">.</span><span style="color:#50fa7b">offer</span><span style="color:#ff79c6">(</span>baseURI <span style="color:#ff79c6">+</span> <span style="color:#f1fa8c">&#34;/&#34;</span> <span style="color:#ff79c6">+</span> partitionStamp <span style="color:#ff79c6">+</span>
+</span></span><span style="display:flex;"><span>                        <span style="color:#f1fa8c">&#34;/partition#&#34;</span> <span style="color:#ff79c6">+</span> rowPartition<span style="color:#ff79c6">);</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>                <span style="color:#ff79c6">if</span> <span style="color:#ff79c6">(</span>rowPartition <span style="color:#ff79c6">*</span> BUFFER_SIZE <span style="color:#ff79c6">&gt;</span> THRESHOLD<span style="color:#ff79c6">)</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>                    <span style="color:#ff79c6">while</span> <span style="color:#ff79c6">(!</span>queue<span style="color:#ff79c6">.</span><span style="color:#50fa7b">isEmpty</span><span style="color:#ff79c6">())</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>                        <span style="color:#ff79c6">try</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>                            transferContents<span style="color:#ff79c6">((</span>List<span style="color:#ff79c6">&lt;</span>Object<span style="color:#ff79c6">[]&gt;)</span> queue<span style="color:#ff79c6">.</span><span style="color:#50fa7b">take</span><span style="color:#ff79c6">(),</span> <span style="color:#ff79c6">(</span>String<span style="color:#ff79c6">)</span> partitionQueue<span style="color:#ff79c6">.</span><span style="color:#50fa7b">poll</span><span style="color:#ff79c6">(),</span> executor<span style="color:#ff79c6">);</span>
+</span></span><span style="display:flex;"><span>                        <span style="color:#ff79c6">}</span> <span style="color:#ff79c6">catch</span> <span style="color:#ff79c6">(</span>InterruptedException e<span style="color:#ff79c6">)</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>                            e<span style="color:#ff79c6">.</span><span style="color:#50fa7b">printStackTrace</span><span style="color:#ff79c6">();</span>
+</span></span><span style="display:flex;"><span>                        <span style="color:#ff79c6">}</span>
+</span></span><span style="display:flex;"><span>                    <span style="color:#ff79c6">}</span>
+</span></span><span style="display:flex;"><span>                <span style="color:#ff79c6">}</span>
+</span></span><span style="display:flex;"><span>            <span style="color:#ff79c6">}</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4">//            Row row = RowFactory.create(rowValue.toArray());
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>        <span style="color:#ff79c6">}</span> <span style="color:#ff79c6">catch</span> <span style="color:#ff79c6">(</span>Exception e<span style="color:#ff79c6">)</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>            <span style="color:#ff79c6">throw</span> <span style="color:#ff79c6">new</span> RuntimeException<span style="color:#ff79c6">(</span>e<span style="color:#ff79c6">);</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">}</span> <span style="color:#ff79c6">finally</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>            <span style="color:#ff79c6">try</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>                <span style="color:#ff79c6">if</span> <span style="color:#ff79c6">(</span>resultSet <span style="color:#ff79c6">!=</span> <span style="color:#ff79c6">null</span><span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>                    resultSet<span style="color:#ff79c6">.</span><span style="color:#50fa7b">close</span><span style="color:#ff79c6">();</span>
+</span></span><span style="display:flex;"><span>                <span style="color:#ff79c6">if</span> <span style="color:#ff79c6">(</span>statement <span style="color:#ff79c6">!=</span> <span style="color:#ff79c6">null</span><span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>                    statement<span style="color:#ff79c6">.</span><span style="color:#50fa7b">close</span><span style="color:#ff79c6">();</span>
+</span></span><span style="display:flex;"><span>                <span style="color:#ff79c6">if</span> <span style="color:#ff79c6">(</span>connection <span style="color:#ff79c6">!=</span> <span style="color:#ff79c6">null</span><span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>                    connection<span style="color:#ff79c6">.</span><span style="color:#50fa7b">close</span><span style="color:#ff79c6">();</span>
+</span></span><span style="display:flex;"><span>            <span style="color:#ff79c6">}</span> <span style="color:#ff79c6">catch</span> <span style="color:#ff79c6">(</span>SQLException ignored<span style="color:#ff79c6">)</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>            <span style="color:#ff79c6">}</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">}</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">if</span> <span style="color:#ff79c6">(!</span>queue<span style="color:#ff79c6">.</span><span style="color:#50fa7b">isEmpty</span><span style="color:#ff79c6">())</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>            List<span style="color:#ff79c6">&lt;</span>Row<span style="color:#ff79c6">&gt;</span> rows <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">new</span> ArrayList<span style="color:#ff79c6">&lt;</span>Row<span style="color:#ff79c6">&gt;(</span>queue<span style="color:#ff79c6">.</span><span style="color:#50fa7b">size</span><span style="color:#ff79c6">()</span> <span style="color:#ff79c6">*</span> rowPartition<span style="color:#ff79c6">);</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>            <span style="color:#ff79c6">for</span> <span style="color:#ff79c6">(</span>List<span style="color:#ff79c6">&lt;</span>Object<span style="color:#ff79c6">[]&gt;</span> rowSet <span style="color:#ff79c6">:</span> queue<span style="color:#ff79c6">)</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>                <span style="color:#ff79c6">for</span> <span style="color:#ff79c6">(</span>Object<span style="color:#ff79c6">[]</span> rowFields <span style="color:#ff79c6">:</span> rowSet<span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>                    rows<span style="color:#ff79c6">.</span><span style="color:#50fa7b">add</span><span style="color:#ff79c6">(</span>RowFactory<span style="color:#ff79c6">.</span><span style="color:#50fa7b">create</span><span style="color:#ff79c6">((</span>Object<span style="color:#ff79c6">[])</span> rowFields<span style="color:#ff79c6">));</span>
+</span></span><span style="display:flex;"><span>                rowSet<span style="color:#ff79c6">.</span><span style="color:#50fa7b">clear</span><span style="color:#ff79c6">();</span>
+</span></span><span style="display:flex;"><span>            <span style="color:#ff79c6">}</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>            <span style="color:#ff79c6">return</span> <span style="color:#ff79c6">new</span> ResultSetInMemoryWrapper<span style="color:#ff79c6">(</span>rows<span style="color:#ff79c6">,</span> schema<span style="color:#ff79c6">);</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">}</span> <span style="color:#ff79c6">else</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>            executor<span style="color:#ff79c6">.</span><span style="color:#50fa7b">shutdown</span><span style="color:#ff79c6">();</span>
+</span></span><span style="display:flex;"><span>            <span style="color:#ff79c6">try</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>                <span style="color:#ff79c6">while</span> <span style="color:#ff79c6">(!</span>executor<span style="color:#ff79c6">.</span><span style="color:#50fa7b">isTerminated</span><span style="color:#ff79c6">())</span>
+</span></span><span style="display:flex;"><span>                    Thread<span style="color:#ff79c6">.</span><span style="color:#50fa7b">sleep</span><span style="color:#ff79c6">(</span>500<span style="color:#ff79c6">);</span>
+</span></span><span style="display:flex;"><span>            <span style="color:#ff79c6">}</span> <span style="color:#ff79c6">catch</span> <span style="color:#ff79c6">(</span>InterruptedException e<span style="color:#ff79c6">)</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>                <span style="color:#ff79c6">throw</span> <span style="color:#ff79c6">new</span> RuntimeException<span style="color:#ff79c6">(</span>e<span style="color:#ff79c6">);</span>
+</span></span><span style="display:flex;"><span>            <span style="color:#ff79c6">}</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>            <span style="color:#ff79c6">return</span> <span style="color:#ff79c6">new</span> ResultSetInFileSystemWrapper<span style="color:#ff79c6">(</span>baseURI<span style="color:#ff79c6">,</span> schema<span style="color:#ff79c6">);</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">}</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">}</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#8be9fd;font-style:italic">private</span> <span style="color:#8be9fd">void</span> <span style="color:#50fa7b">transferContents</span><span style="color:#ff79c6">(</span>List<span style="color:#ff79c6">&lt;</span>Object<span style="color:#ff79c6">[]&gt;</span> rows<span style="color:#ff79c6">,</span>
+</span></span><span style="display:flex;"><span>                                  String url<span style="color:#ff79c6">,</span>
+</span></span><span style="display:flex;"><span>                                  ExecutorService executor<span style="color:#ff79c6">)</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>        Configuration conf <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">new</span> Configuration<span style="color:#ff79c6">();</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>        String hadoopConfDir <span style="color:#ff79c6">=</span> System<span style="color:#ff79c6">.</span><span style="color:#50fa7b">getenv</span><span style="color:#ff79c6">(</span><span style="color:#f1fa8c">&#34;SPARK_HOME&#34;</span><span style="color:#ff79c6">)</span> <span style="color:#ff79c6">+</span> <span style="color:#f1fa8c">&#34;/hadoopconf/&#34;</span><span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span>        conf<span style="color:#ff79c6">.</span><span style="color:#50fa7b">addResource</span><span style="color:#ff79c6">(</span><span style="color:#ff79c6">new</span> Path<span style="color:#ff79c6">(</span>hadoopConfDir <span style="color:#ff79c6">+</span> <span style="color:#f1fa8c">&#34;core-site.xml&#34;</span><span style="color:#ff79c6">));</span>
+</span></span><span style="display:flex;"><span>        conf<span style="color:#ff79c6">.</span><span style="color:#50fa7b">addResource</span><span style="color:#ff79c6">(</span><span style="color:#ff79c6">new</span> Path<span style="color:#ff79c6">(</span>hadoopConfDir <span style="color:#ff79c6">+</span> <span style="color:#f1fa8c">&#34;hdfs-site.xml&#34;</span><span style="color:#ff79c6">));</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>        FileSystem fs <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">null</span><span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">try</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>            fs <span style="color:#ff79c6">=</span> FileSystem<span style="color:#ff79c6">.</span><span style="color:#50fa7b">get</span><span style="color:#ff79c6">(</span>URI<span style="color:#ff79c6">.</span><span style="color:#50fa7b">create</span><span style="color:#ff79c6">(</span><span style="color:#f1fa8c">&#34;null&#34;</span><span style="color:#ff79c6">),</span> conf<span style="color:#ff79c6">);</span>
+</span></span><span style="display:flex;"><span>            Path path <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">new</span> Path<span style="color:#ff79c6">(</span>url<span style="color:#ff79c6">.</span><span style="color:#50fa7b">substring</span><span style="color:#ff79c6">(</span>0<span style="color:#ff79c6">,</span> url<span style="color:#ff79c6">.</span><span style="color:#50fa7b">lastIndexOf</span><span style="color:#ff79c6">(</span><span style="color:#f1fa8c">&#39;/&#39;</span><span style="color:#ff79c6">)));</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>            <span style="color:#ff79c6">if</span> <span style="color:#ff79c6">(!</span>fs<span style="color:#ff79c6">.</span><span style="color:#50fa7b">exists</span><span style="color:#ff79c6">(</span>path<span style="color:#ff79c6">))</span>
+</span></span><span style="display:flex;"><span>                fs<span style="color:#ff79c6">.</span><span style="color:#50fa7b">mkdirs</span><span style="color:#ff79c6">(</span>path<span style="color:#ff79c6">);</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">}</span> <span style="color:#ff79c6">catch</span> <span style="color:#ff79c6">(</span>IOException e<span style="color:#ff79c6">)</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>            e<span style="color:#ff79c6">.</span><span style="color:#50fa7b">printStackTrace</span><span style="color:#ff79c6">();</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">}</span> <span style="color:#ff79c6">finally</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>            <span style="color:#ff79c6">if</span> <span style="color:#ff79c6">(</span>fs <span style="color:#ff79c6">!=</span> <span style="color:#ff79c6">null</span><span style="color:#ff79c6">)</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>                <span style="color:#ff79c6">try</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>                    fs<span style="color:#ff79c6">.</span><span style="color:#50fa7b">close</span><span style="color:#ff79c6">();</span>
+</span></span><span style="display:flex;"><span>                <span style="color:#ff79c6">}</span> <span style="color:#ff79c6">catch</span> <span style="color:#ff79c6">(</span>IOException ignored<span style="color:#ff79c6">)</span> <span style="color:#ff79c6">{}</span>
+</span></span><span style="display:flex;"><span>            <span style="color:#ff79c6">}</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">}</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>        executor<span style="color:#ff79c6">.</span><span style="color:#50fa7b">execute</span><span style="color:#ff79c6">(</span><span style="color:#ff79c6">new</span> ResultsTransporter<span style="color:#ff79c6">(</span>url<span style="color:#ff79c6">,</span> rows<span style="color:#ff79c6">,</span> conf<span style="color:#ff79c6">));</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">}</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#8be9fd;font-style:italic">public</span> Object <span style="color:#50fa7b">execute</span><span style="color:#ff79c6">()</span> <span style="color:#8be9fd;font-style:italic">throws</span> Exception <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>        Dataset<span style="color:#ff79c6">&lt;</span>Row<span style="color:#ff79c6">&gt;</span> tmp<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>            ResultSetWrapper wrapper_tmp <span style="color:#ff79c6">=</span> persist<span style="color:#ff79c6">(</span><span style="color:#f1fa8c">&#34;jdbc:mysql://10.200.64.11:3306/db_1?useSSL=false&#34;</span><span style="color:#ff79c6">,</span> <span style="color:#f1fa8c">&#34;name&#34;</span><span style="color:#ff79c6">,</span> <span style="color:#f1fa8c">&#34;password&#34;</span><span style="color:#ff79c6">,</span>
+</span></span><span style="display:flex;"><span>			<span style="color:#f1fa8c">&#34;com.mysql.jdbc.Driver&#34;</span><span style="color:#ff79c6">,</span> <span style="color:#f1fa8c">&#34;SELECT `a`.`id`, `b`.`id` FROM `db_1`.`a` AS `a` INNER JOIN `db_2`.`b` AS `b` ON `a`.`id`
+</span></span></span><span style="display:flex;"><span><span style="color:#f1fa8c">			= `b`.`id` WHERE `b`.`id` &gt; 10 AND `a`.`id` &lt; 10&#34;</span><span style="color:#ff79c6">);</span>
+</span></span><span style="display:flex;"><span>            <span style="color:#ff79c6">if</span><span style="color:#ff79c6">(</span>wrapper_tmp <span style="color:#ff79c6">instanceof</span> ResultSetInMemoryWrapper<span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>                tmp <span style="color:#ff79c6">=</span> spark<span style="color:#ff79c6">.</span><span style="color:#50fa7b">createDataFrame</span><span style="color:#ff79c6">(((</span>ResultSetInMemoryWrapper<span style="color:#ff79c6">)</span> wrapper_tmp<span style="color:#ff79c6">).</span><span style="color:#50fa7b">getRows</span><span style="color:#ff79c6">(),</span> wrapper_tmp<span style="color:#ff79c6">.</span><span style="color:#50fa7b">getType</span><span style="color:#ff79c6">());</span>
+</span></span><span style="display:flex;"><span>            <span style="color:#ff79c6">else</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>                JavaRDD<span style="color:#ff79c6">&lt;</span>String<span style="color:#ff79c6">&gt;</span> lines <span style="color:#ff79c6">=</span> spark<span style="color:#ff79c6">.</span><span style="color:#50fa7b">sparkContext</span><span style="color:#ff79c6">()</span>
+</span></span><span style="display:flex;"><span>                        <span style="color:#ff79c6">.</span><span style="color:#50fa7b">textFile</span><span style="color:#ff79c6">(((</span>ResultSetInFileSystemWrapper<span style="color:#ff79c6">)</span> wrapper_tmp<span style="color:#ff79c6">).</span><span style="color:#50fa7b">getPath</span><span style="color:#ff79c6">(),</span> 100<span style="color:#ff79c6">).</span><span style="color:#50fa7b">toJavaRDD</span><span style="color:#ff79c6">();</span>
+</span></span><span style="display:flex;"><span>                JavaRDD<span style="color:#ff79c6">&lt;</span>Row<span style="color:#ff79c6">&gt;</span> rows <span style="color:#ff79c6">=</span> lines<span style="color:#ff79c6">.</span><span style="color:#50fa7b">map</span><span style="color:#ff79c6">(</span><span style="color:#ff79c6">new</span> SpecificFunction<span style="color:#ff79c6">());</span>
+</span></span><span style="display:flex;"><span>                tmp <span style="color:#ff79c6">=</span> spark<span style="color:#ff79c6">.</span><span style="color:#50fa7b">createDataFrame</span><span style="color:#ff79c6">(</span>rows<span style="color:#ff79c6">,</span> wrapper_tmp<span style="color:#ff79c6">.</span><span style="color:#50fa7b">getType</span><span style="color:#ff79c6">());</span>
+</span></span><span style="display:flex;"><span>            <span style="color:#ff79c6">}</span>
+</span></span><span style="display:flex;"><span>            tmp<span style="color:#ff79c6">.</span><span style="color:#50fa7b">createOrReplaceTempView</span><span style="color:#ff79c6">(</span><span style="color:#f1fa8c">&#34;db_1_a_0&#34;</span><span style="color:#ff79c6">);</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">}</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>            ResultSetWrapper wrapper_tmp <span style="color:#ff79c6">=</span> persist<span style="color:#ff79c6">(</span><span style="color:#f1fa8c">&#34;jdbc:mysql://10.200.64.11:3306/db_2?useSSL=false&#34;</span><span style="color:#ff79c6">,</span> <span style="color:#f1fa8c">&#34;name&#34;</span><span style="color:#ff79c6">,</span> <span style="color:#f1fa8c">&#34;password&#34;</span><span style="color:#ff79c6">,</span>
+</span></span><span style="display:flex;"><span>			<span style="color:#f1fa8c">&#34;com.mysql.jdbc.Driver&#34;</span><span style="color:#ff79c6">,</span> <span style="color:#f1fa8c">&#34;SELECT `a`.`id`, `b`.`id` FROM `db_1`.`a` AS `a` INNER JOIN `db_2`.`b` AS `b` ON `a`.`id`
+</span></span></span><span style="display:flex;"><span><span style="color:#f1fa8c">			= `b`.`id` WHERE `b`.`id` &gt; 10 AND `a`.`id` &lt; 10&#34;</span><span style="color:#ff79c6">);</span>
+</span></span><span style="display:flex;"><span>            <span style="color:#ff79c6">if</span><span style="color:#ff79c6">(</span>wrapper_tmp <span style="color:#ff79c6">instanceof</span> ResultSetInMemoryWrapper<span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>                tmp <span style="color:#ff79c6">=</span> spark<span style="color:#ff79c6">.</span><span style="color:#50fa7b">createDataFrame</span><span style="color:#ff79c6">(((</span>ResultSetInMemoryWrapper<span style="color:#ff79c6">)</span> wrapper_tmp<span style="color:#ff79c6">).</span><span style="color:#50fa7b">getRows</span><span style="color:#ff79c6">(),</span> wrapper_tmp<span style="color:#ff79c6">.</span><span style="color:#50fa7b">getType</span><span style="color:#ff79c6">());</span>
+</span></span><span style="display:flex;"><span>            <span style="color:#ff79c6">else</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>                JavaRDD<span style="color:#ff79c6">&lt;</span>String<span style="color:#ff79c6">&gt;</span> lines <span style="color:#ff79c6">=</span> spark<span style="color:#ff79c6">.</span><span style="color:#50fa7b">sparkContext</span><span style="color:#ff79c6">()</span>
+</span></span><span style="display:flex;"><span>                        <span style="color:#ff79c6">.</span><span style="color:#50fa7b">textFile</span><span style="color:#ff79c6">(((</span>ResultSetInFileSystemWrapper<span style="color:#ff79c6">)</span> wrapper_tmp<span style="color:#ff79c6">).</span><span style="color:#50fa7b">getPath</span><span style="color:#ff79c6">(),</span> 100<span style="color:#ff79c6">).</span><span style="color:#50fa7b">toJavaRDD</span><span style="color:#ff79c6">();</span>
+</span></span><span style="display:flex;"><span>                JavaRDD<span style="color:#ff79c6">&lt;</span>Row<span style="color:#ff79c6">&gt;</span> rows <span style="color:#ff79c6">=</span> lines<span style="color:#ff79c6">.</span><span style="color:#50fa7b">map</span><span style="color:#ff79c6">(</span><span style="color:#ff79c6">new</span> SpecificFunction<span style="color:#ff79c6">());</span>
+</span></span><span style="display:flex;"><span>                tmp <span style="color:#ff79c6">=</span> spark<span style="color:#ff79c6">.</span><span style="color:#50fa7b">createDataFrame</span><span style="color:#ff79c6">(</span>rows<span style="color:#ff79c6">,</span> wrapper_tmp<span style="color:#ff79c6">.</span><span style="color:#50fa7b">getType</span><span style="color:#ff79c6">());</span>
+</span></span><span style="display:flex;"><span>            <span style="color:#ff79c6">}</span>
+</span></span><span style="display:flex;"><span>            tmp<span style="color:#ff79c6">.</span><span style="color:#50fa7b">createOrReplaceTempView</span><span style="color:#ff79c6">(</span><span style="color:#f1fa8c">&#34;db_2_b_1&#34;</span><span style="color:#ff79c6">);</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">}</span>
+</span></span><span style="display:flex;"><span>        String sql <span style="color:#ff79c6">=</span> <span style="color:#f1fa8c">&#34;SELECT a.id, b.id id0 FROM db_1.a INNER JOIN db_2.b ON a.id = b.id WHERE b.id &gt; 10 AND a.id &lt; 10&#34;</span><span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span>        tmp <span style="color:#ff79c6">=</span> spark<span style="color:#ff79c6">.</span><span style="color:#50fa7b">sql</span><span style="color:#ff79c6">(</span>sql<span style="color:#ff79c6">);</span>
+</span></span><span style="display:flex;"><span>        tmp<span style="color:#ff79c6">.</span><span style="color:#50fa7b">show</span><span style="color:#ff79c6">(</span>200<span style="color:#ff79c6">);</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">return</span> <span style="color:#ff79c6">null</span><span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">}</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">}</span>
+</span></span></code></pre></td></tr></table>
+</div>
+</div>
+			<script type="text/javascript"
+        async
+        src="https://cdn.bootcss.com/mathjax/2.7.3/MathJax.js?config=TeX-AMS-MML_HTMLorMML">
+MathJax.Hub.Config({
+  tex2jax: {
+    inlineMath: [['$','$'], ['\\(','\\)']],
+    displayMath: [['$$','$$'], ['\[\[','\]\]']],
+    processEscapes: true,
+    processEnvironments: true,
+    skipTags: ['script', 'noscript', 'style', 'textarea', 'pre'],
+    TeX: { equationNumbers: { autoNumber: "AMS" },
+         extensions: ["AMSmath.js", "AMSsymbols.js"] }
+  }
+});
+
+MathJax.Hub.Queue(function() {
+    
+    
+    
+    var all = MathJax.Hub.getAllJax(), i;
+    for(i = 0; i < all.length; i += 1) {
+        all[i].SourceElement().parentNode.className += ' has-jax';
+    }
+});
+</script>
+
+<style>
+code.has-jax {
+    font: inherit;
+    font-size: 100%;
+    background: inherit;
+    border: inherit;
+    color: #515151;
+}
+</style>
+        </div>
+
+        
+
+
+        
+
+<div class="post-archive">
+    <h2>相关文章</h2>
+    <ul class="listing">
+        
+        <li><a href="/post/2021/11/hana%E5%92%8Cteradata%E6%95%B0%E6%8D%AE%E5%BA%93%E8%BF%81%E7%A7%BB%E8%B0%83%E7%A0%94/">HANA和TeraData数据库迁移调研</a></li>
+        
+    </ul>
+</div>
+
+
+        <div class="post-meta meta-tags">
+            
+            <ul class="clearfix">
+                
+                <li><a href='/tags/quick-sql'>quick-sql</a></li>
+                
+                <li><a href='/tags/%E5%B7%A5%E4%BD%9C%E8%AE%B0%E5%BD%95'>工作记录</a></li>
+                
+            </ul>
+            
+        </div>
+    </article>
+    
+    
+
+    
+    
+    <div class="post bg-white">
+      <script src="https://utteranc.es/client.js"
+            repo= "himichael/hugoblogtalks"
+            issue-term="pathname"
+            theme="github-light"
+            crossorigin="anonymous"
+            async>
+      </script>
+    </div>
+    
+</div>
+
+
+                </div>
+
+                <div id="secondary">
+    <section class="widget">
+        <form id="search" action='https://code0xff.org/search/' method="get" accept-charset="utf-8" target="_blank" _lpchecked="1">
+      
+      <input type="text" name="q" maxlength="20" placeholder="Search">
+      <input type="hidden" name="sitesearch" value="https://code0xff.org/">
+      <button type="submit" class="submit icon-search"></button>
+</form>
+    </section>
+    
+    <section class="widget">
+        <h3 class="widget-title">最近文章</h3>
+<ul class="widget-list">
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/06/bitweaving/" title="BitWeaving: Fast Scans for Main Memory Data Processing">BitWeaving: Fast Scans for Main Memory Data Processing</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/05/cache_conscious/" title="Cache Conscious Indexing for Decision-Support in Main Memory">Cache Conscious Indexing for Decision-Support in Main Memory</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/05/column_imprints/" title="Column Imprints: A Secondary Index Structure">Column Imprints: A Secondary Index Structure</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/05/sql_server_column_store_indexes/" title="SQL Server Column Store Indexes">SQL Server Column Store Indexes</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/05/bitmap_index/" title="Bitmap Index Design and Evaluation ">Bitmap Index Design and Evaluation </a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/05/advanced_database_systems-history_of_databases/" title="Advanced Database Systems: History of Databases">Advanced Database Systems: History of Databases</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/05/column_sketches/" title="Column Sketches: A Scan Accelerator for Rapid and Robust Predicate Evaluation">Column Sketches: A Scan Accelerator for Rapid and Robust Predicate Evaluation</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/06/%E8%B5%84%E6%BA%90%E9%9A%94%E7%A6%BB%E4%BF%AE%E6%94%B9%E9%85%8D%E7%BD%AE%E5%8A%A8%E6%80%81%E5%8A%A0%E8%BD%BD/" title="资源隔离修改配置动态加载">资源隔离修改配置动态加载</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/06/%E8%B5%84%E6%BA%90%E9%9A%94%E7%A6%BB%E8%AE%BE%E8%AE%A1/" title="资源隔离设计">资源隔离设计</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/05/optimal_column_layout_for_hybrid_workloads/" title="Optimal Column Layout for Hybrid Workloads">Optimal Column Layout for Hybrid Workloads</a>
+    </li>
+    
+</ul>
+    </section>
+
+    
+
+    <section class="widget">
+        <h3 class="widget-title"><a href='/categories/'>分类</a></h3>
+<ul class="widget-list">
+    
+    <li><a href="https://code0xff.org/categories/%E5%88%86%E5%B8%83%E5%BC%8F/">分布式 (6)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E5%8E%9F%E7%90%86%E5%88%86%E6%9E%90/">原理分析 (13)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E5%95%86%E4%B8%9A/">商业 (3)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E5%A4%A7%E6%95%B0%E6%8D%AE/">大数据 (28)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%95%B0%E6%8D%AE%E5%BA%93/">数据库 (32)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%96%87%E5%AD%A6%E5%92%8C%E8%89%BA%E6%9C%AF/">文学和艺术 (2)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%97%85%E8%A1%8C/">旅行 (10)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%9E%B6%E6%9E%84/">架构 (2)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E7%AE%97%E6%B3%95/">算法 (8)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E7%B3%BB%E7%BB%9F/">系统 (5)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E7%BC%96%E7%A8%8B%E8%AF%AD%E8%A8%80/">编程语言 (2)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E8%A1%8C%E4%B8%9A%E8%A7%82%E5%AF%9F/">行业观察 (1)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E8%AF%BB%E4%B9%A6%E7%AC%94%E8%AE%B0/">读书笔记 (12)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E9%9A%8F%E4%BE%BF%E5%86%99%E5%86%99/">随便写写 (3)</a></li>
+    
+</ul>
+    </section>
+
+    <section class="widget">
+        <h3 class="widget-title">归档</a></h3>
+<ul class="widget-list">
+    
+    <li><a href="https://code0xff.org/years/2021%E5%B9%B4/">2021年 (34)</a></li>
+    
+    <li><a href="https://code0xff.org/years/2022%E5%B9%B4/">2022年 (55)</a></li>
+    
+    <li><a href="https://code0xff.org/years/2023%E5%B9%B4/">2023年 (38)</a></li>
+    
+</ul>
+    </section>
+
+    <section class="widget">
+        <h3 class="widget-title"><a href='/tags/'>标签</a></h3>
+<div class="tagcloud">
+    
+    <a href="https://code0xff.org/tags/b%E6%A0%91/">B树 </a>
+    
+    <a href="https://code0xff.org/tags/calcite/">calcite </a>
+    
+    <a href="https://code0xff.org/tags/cmu-database/">CMU-Database </a>
+    
+    <a href="https://code0xff.org/tags/flink/">flink </a>
+    
+    <a href="https://code0xff.org/tags/hive/">Hive </a>
+    
+    <a href="https://code0xff.org/tags/k8s/">k8s </a>
+    
+    <a href="https://code0xff.org/tags/kudu/">kudu </a>
+    
+    <a href="https://code0xff.org/tags/kyuubi/">Kyuubi </a>
+    
+    <a href="https://code0xff.org/tags/lakehouse/">Lakehouse </a>
+    
+    <a href="https://code0xff.org/tags/leveldb/">LevelDB </a>
+    
+    <a href="https://code0xff.org/tags/llvm/">LLVM </a>
+    
+    <a href="https://code0xff.org/tags/manacher/">Manacher </a>
+    
+    <a href="https://code0xff.org/tags/mapreduce/">MapReduce </a>
+    
+    <a href="https://code0xff.org/tags/mysql/">MySQL </a>
+    
+    <a href="https://code0xff.org/tags/newsql/">NewSQL </a>
+    
+    <a href="https://code0xff.org/tags/oceanbase/">OceanBase </a>
+    
+    <a href="https://code0xff.org/tags/paxos/">paxos </a>
+    
+    <a href="https://code0xff.org/tags/quick-sql/">quick-sql </a>
+    
+    <a href="https://code0xff.org/tags/raft/">raft </a>
+    
+    <a href="https://code0xff.org/tags/scala/">scala </a>
+    
+    <a href="https://code0xff.org/tags/simd/">SIMD </a>
+    
+    <a href="https://code0xff.org/tags/snowflake/">snowflake </a>
+    
+    <a href="https://code0xff.org/tags/spark/">spark </a>
+    
+    <a href="https://code0xff.org/tags/unix/">unix </a>
+    
+    <a href="https://code0xff.org/tags/%E4%BA%8C%E5%88%86%E6%9F%A5%E6%89%BE/">二分查找 </a>
+    
+    <a href="https://code0xff.org/tags/%E4%BA%8C%E5%8F%89%E6%A0%91%E9%81%8D%E5%8E%86/">二叉树遍历 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%88%86%E5%B8%83%E5%BC%8F/">分布式 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%88%97%E5%AD%98/">列存 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%8A%A8%E6%80%81%E6%B3%A8%E5%85%A5/">动态注入 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%8E%86%E5%8F%B2/">历史 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%90%91%E9%87%8F%E5%8C%96/">向量化 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%9B%9E%E6%BA%AF/">回溯 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%9B%BD%E5%86%85%E6%97%85%E8%A1%8C/">国内旅行 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%9B%BD%E5%A4%96%E6%97%85%E8%A1%8C/">国外旅行 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%A4%9A%E7%A7%9F%E6%88%B7/">多租户 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%A4%A7%E6%95%B0%E6%8D%AE/">大数据 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%AD%98%E5%82%A8/">存储 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%B7%A5%E4%BD%9C%E8%AE%B0%E5%BD%95/">工作记录 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%BE%AE%E6%9C%8D%E5%8A%A1/">微服务 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%95%B0%E6%8D%AE%E5%BA%93/">数据库 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%95%B0%E6%8D%AE%E6%A8%A1%E5%9E%8B/">数据模型 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%9F%A5%E8%AF%A2%E4%BC%98%E5%8C%96/">查询优化 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%9F%A5%E8%AF%A2%E7%BC%96%E8%AF%91/">查询编译 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%B1%87%E7%BC%96/">汇编 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%B5%8B%E8%AF%95/">测试 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%B9%96%E4%BB%93%E4%B8%80%E4%BD%93/">湖仓一体 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%94%9F%E6%B4%BB/">生活 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%94%B5%E5%BD%B1/">电影 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%AE%97%E6%B3%95/">算法 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%B4%A2%E5%BC%95/">索引 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BB%8F%E6%B5%8E/">经济 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BC%93%E5%AD%98/">缓存 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BC%96%E8%AF%91%E5%8E%9F%E7%90%86/">编译原理 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BD%91%E7%BB%9C/">网络 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AE%A1%E7%AE%97%E6%A1%86%E6%9E%B6/">计算框架 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AE%BA%E6%96%87/">论文 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AF%BB%E4%B9%A6/">读书 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AF%BB%E4%B9%A6%E7%AC%94%E8%AE%B0/">读书笔记 </a>
+    
+</div>
+    </section>
+
+    
+
+    <section class="widget">
+        <h3 class="widget-title">RSS</h3>
+        <ul class="widget-list">
+            <li><a href="https://code0xff.org/index.xml">文章 RSS</a></li>
+        </ul>
+    </section>
+</div>
+            </div>
+        </div>
+    </div>
+    <footer id="footer">
+    <div>
+        &copy; 2023 <a href="https://code0xff.org/">记录每个瞬间 By 老王</a>
+        
+    </div>
+    <br />
+    <div>
+        <div class="github-badge">
+            <a href="https://gohugo.io/" target="_black" rel="nofollow"><span class="badge-subject">Powered by</span><span class="badge-value bg-blue">Hugo</span></a>
+        </div>
+        <div class="github-badge">
+            <a href="https://github.com/flysnow-org/maupassant-hugo" target="_black"><span class="badge-subject">Theme</span><span class="badge-value bg-yellowgreen">Maupassant</span></a>
+        </div>
+    </div>
+</footer>
+
+
+    
+    <script type="text/javascript">
+        window.MathJax = {
+            tex2jax: {
+                inlineMath: [['$', '$']],
+                processEscapes: true
+                }
+            };
+    </script>
+    <script src='https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.5/MathJax.js?config=TeX-MML-AM_CHTML' async></script><script src="https://cdn.bootcdn.net/ajax/libs/fancybox/3.5.7/jquery.fancybox.min.js"></script>
+
+<a id="rocket" href="#top"></a>
+<script type="text/javascript" src='/js/totop.js?v=0.0.0' async=""></script>
+
+<script type="application/javascript">
+var doNotTrack = false;
+if (!doNotTrack) {
+	window.ga=window.ga||function(){(ga.q=ga.q||[]).push(arguments)};ga.l=+new Date;
+	ga('create', 'GA ID', 'auto');
+	
+	ga('send', 'pageview');
+}
+</script>
+<script async src='https://www.google-analytics.com/analytics.js'></script>
+
+
+
+    <script type="text/javascript" src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js" async></script>
+
+
+
+
+</body>
+
+</html>
