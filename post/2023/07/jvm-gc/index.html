@@ -1,0 +1,763 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    
+    <meta name="referrer" content="no-referrer-when-downgrade">
+    
+
+    <title>JVM GC 介绍 | 记录每个瞬间</title>
+    <meta property="og:title" content="JVM GC 介绍 - 记录每个瞬间">
+    <meta property="og:type" content="article">
+        
+    <meta property="article:published_time" content='2023-07-22T09:13:07&#43;08:00'>
+        
+        
+    <meta property="article:modified_time" content='2023-07-22T09:13:07&#43;08:00'>
+        
+    <meta name="Keywords" content="">
+    <meta name="description" content="JVM GC 介绍">
+        <meta name="author" content="隔壁老王">
+        
+    <meta property="og:url" content="https://code0xff.org/post/2023/07/jvm-gc/">
+    <link rel="shortcut icon" href='/favicon.ico'  type="image/x-icon">
+
+    <link rel="stylesheet" href='/css/normalize.css'>
+    <link rel="stylesheet" href='/css/style.css'>
+    <script type="text/javascript" src="//cdn.bootcdn.net/ajax/libs/jquery/3.4.1/jquery.min.js"></script>
+
+    
+    
+    
+        <link href="https://cdn.bootcdn.net/ajax/libs/fancybox/3.5.7/jquery.fancybox.min.css" rel="stylesheet">
+    
+    
+    
+    
+</head>
+
+
+<body>
+    <header id="header" class="clearfix">
+    <div class="container">
+        <div class="col-group">
+            <div class="site-name ">
+                
+                    <a id="logo" href="https://code0xff.org/">
+                        记录每个瞬间
+                    </a>
+                
+                
+            </div>
+            <div>
+                <nav id="nav-menu" class="clearfix">
+                    <a class="current" href="https://code0xff.org/">首页</a>
+                    
+                    <a  href="https://code0xff.org/linked/" title="链接">链接</a>
+                    
+                    <a  href="https://code0xff.org/archives/" title="归档">归档</a>
+                    
+                    <a  href="https://code0xff.org/about/" title="关于">关于</a>
+                    
+                </nav>
+            </div>
+        </div>
+    </div>
+</header>
+
+    <div id="body">
+        <div class="container">
+            <div class="col-group">
+
+                <div class="col-8" id="main">
+                    
+<div class="res-cons">
+    
+    <article class="post">
+        <header>
+            <h1 class="post-title">JVM GC 介绍</h1>
+        </header>
+        <date class="post-meta meta-date">
+            2023年7月22日
+        </date>
+<nav id="TableOfContents">
+  <ul>
+    <li>
+      <ul>
+        <li><a href="#gc-种类介绍">GC 种类介绍</a></li>
+        <li><a href="#老一代-gc">老一代 GC</a>
+          <ul>
+            <li><a href="#cms">CMS</a></li>
+            <li><a href="#安全点">安全点</a></li>
+          </ul>
+        </li>
+        <li><a href="#g1">G1</a></li>
+        <li><a href="#zgc">ZGC</a></li>
+        <li><a href="#shenandoahgc">ShenandoahGC</a></li>
+        <li><a href="#参考">参考</a></li>
+      </ul>
+    </li>
+  </ul>
+</nav>
+        
+        <div class="post-meta">
+            
+            <span class="post-meta meta-tags">
+                <ul class="clearfix">
+                    <a href='/categories/%E7%BC%96%E7%A8%8B%E8%AF%AD%E8%A8%80'>编程语言</a>
+                </ul>
+            </span>
+            
+        </div>
+        
+        
+        <div class="post-meta">
+            <span id="busuanzi_container_page_pv">|<span id="busuanzi_value_page_pv"></span><span>
+                    阅读</span></span>
+        </div>
+        
+        
+        <div class="post-content">
+            <h2 id="gc-种类介绍">GC 种类介绍</h2>
+<p>两个收集器间有连线，表明它们可以搭配使用</p>
+<ul>
+<li>Serial/Serial Old</li>
+<li>Serial/CMS</li>
+<li>ParNew/Serial Old</li>
+<li>ParNew/CMS</li>
+<li>Parallel Scavenge/Serial Old</li>
+<li>Parallel Scavenge/Parallel Old</li>
+<li>Serial Old作为CMS出现&quot;Concurrent Mode Failure&quot;失败的后备预案
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/07/GC/gc_1.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/07/GC/gc_1.jpg" />
+        </a>
+    </li>
+</ul>
+<h2 id="老一代-gc">老一代 GC</h2>
+<h3 id="cms">CMS</h3>
+<h3 id="安全点">安全点</h3>
+<p>各种线程进入安全点的示意图
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/07/GC/safe_1.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/07/GC/safe_1.jpg" />
+        </a>
+    </p>
+<table>
+<thead>
+<tr>
+<th></th>
+<th>线程分类</th>
+<th>描述</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1</td>
+<td>G1线程，如refine线程，并发标记线程</td>
+<td>在进入安全点时他们会暂停，但是每个线程暂停的时间并不确定，依赖于每个线程join和leave的时间</td>
+</tr>
+<tr>
+<td>2</td>
+<td>Java线程，执行解释代码</td>
+<td>在进入安全点时会暂停，但每个线程暂停的时间不一定，依赖于每个线程正在执行的字节码</td>
+</tr>
+<tr>
+<td>3</td>
+<td>Java线程，执行编译代码</td>
+<td>在进入安全点时会暂停，但每个线程暂停的时间不一定，只有线程执行了return或者安全点指令才能进入</td>
+</tr>
+<tr>
+<td>4</td>
+<td>一直运行的本地代码线程</td>
+<td>在进入安全点时不会暂停</td>
+</tr>
+<tr>
+<td>5</td>
+<td>从本地代码返回执行Java代码的线程</td>
+<td>在进入安全点时不会暂停，而是在返回的时进行暂停，通过这个时GC正在执行VM操作</td>
+</tr>
+</tbody>
+</table>
+<p>参考</p>
+<ul>
+<li><a href="https://www.zhihu.com/question/29268019/answer/43762165">现代JVM中的Safe Region和Safe Point到底是如何定义和划分的?</a></li>
+<li><a href="https://blog.csdn.net/yangshangwei/article/details/107119177">JVM - 解读GC中的 Safe Point &amp; Safe Region</a></li>
+</ul>
+<h2 id="g1">G1</h2>
+<p>String.intern()，以及 G1 的字符串去重功能对比</p>
+<p>
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/07/GC/g1_1.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/07/GC/g1_1.jpg" />
+        </a>
+    </p>
+<h2 id="zgc">ZGC</h2>
+<p>GC 分为 6 个步骤</p>
+<ul>
+<li>初始标记，STW</li>
+<li>并发标记</li>
+<li>再标记(重新标记)，STW</li>
+<li>并发准备转移</li>
+<li>初始转移，STW</li>
+<li>并发转移
+
+        <a data-fancybox="gallery" href="https://p0.meituan.net/travelcube/40838f01e4c29cfe5423171f08771ef8156393.png@1812w_940h_80q">
+            <img class="mx-auto" alt="" src="https://p0.meituan.net/travelcube/40838f01e4c29cfe5423171f08771ef8156393.png@1812w_940h_80q" />
+        </a>
+    </li>
+</ul>
+<p>另一个视角，其中有三个 STW</p>
+<ul>
+<li>pause mark start，也就是初始标记</li>
+<li>pause mark end，重新标记</li>
+<li>pause relocate start，初始转移
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/07/GC/zgc_1.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/07/GC/zgc_1.jpg" />
+        </a>
+    </li>
+</ul>
+<p>使用 mmap，将多个虚拟内存地址，指向同一个物理地址</p>
+<ul>
+<li>[0~4TB) 对应Java堆</li>
+<li>[4TB ~ 8TB) 称为M0地址空间</li>
+<li>[8TB ~ 12TB) 称为M1地址空间</li>
+<li>[12TB ~ 16TB) 预留未使用，[16TB ~ 20TB) 称为Remapped空间 
+
+        <a data-fancybox="gallery" href="https://p0.meituan.net/travelcube/f620aa44eb0a756467889e64e13ee86338446.png@1568w_322h_80q">
+            <img class="mx-auto" alt="" src="https://p0.meituan.net/travelcube/f620aa44eb0a756467889e64e13ee86338446.png@1568w_322h_80q" />
+        </a>
+    </li>
+</ul>
+<p>ZGC同时会为该对象在M0、M1和Remapped地址空间分别申请一个虚拟地址，且这三个虚拟地址对应同一个物理地址，但这三个空间在同一时间有且只有一个空间有效</p>
+<p>ZGC实际仅使用64位地址空间的第0~41位，而第42~45位存储元数据，第47~63位固定为0。<br>
+
+        <a data-fancybox="gallery" href="https://p0.meituan.net/travelcube/507f599016eafffa0b98de7585a1c80b338346.png@2080w_624h_80q">
+            <img class="mx-auto" alt="" src="https://p0.meituan.net/travelcube/507f599016eafffa0b98de7585a1c80b338346.png@2080w_624h_80q" />
+        </a>
+    </p>
+<blockquote>
+<p>读屏障是JVM向应用代码插入一小段代码的技术。当应用线程从堆中读取对象引用时，就会执行这段代码。需要注意的是，仅“从堆中读取对象引用”才会触发这段代码</p>
+</blockquote>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">5
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-java" data-lang="java"><span style="display:flex;"><span>Object o <span style="color:#ff79c6">=</span> obj<span style="color:#ff79c6">.</span><span style="color:#50fa7b">FieldA</span>   <span style="color:#6272a4">// 从堆中读取引用，需要加入屏障
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span><span style="color:#ff79c6">&lt;</span>Load barrier<span style="color:#ff79c6">&gt;</span>
+</span></span><span style="display:flex;"><span>Object p <span style="color:#ff79c6">=</span> o  <span style="color:#6272a4">// 无需加入屏障，因为不是从堆中读取引用
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>o<span style="color:#ff79c6">.</span><span style="color:#50fa7b">dosomething</span><span style="color:#ff79c6">()</span> <span style="color:#6272a4">// 无需加入屏障，因为不是从堆中读取引用
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span><span style="color:#8be9fd">int</span> i <span style="color:#ff79c6">=</span>  obj<span style="color:#ff79c6">.</span><span style="color:#50fa7b">FieldB</span>  <span style="color:#6272a4">//无需加入屏障，因为不是对象引用
+</span></span></span></code></pre></td></tr></table>
+</div>
+</div><p>分代回收</p>
+<ul>
+<li>网上找的一些中文资料，将 ZGC分为 三种region，小于 2M，小于 32M，以及 &gt; 32M</li>
+<li>但根据 youtub 上的介绍(他们是在Oracle工作就是搞Java虚拟机的，肯定更权威)，实际是分代的</li>
+<li>分为 minor GC，以及 major GC，前者是收集年轻代，后者是收集整个 heap</li>
+<li>这个分代可能是出现在更高版本的 JDK 中</li>
+<li>对比 cassandra，可以提供 4倍吞吐量，只需要 1/4 内存使用</li>
+<li>暂停时间 小于 1ms</li>
+<li>分代 GC 的颜色指针 不再是 4个，可以扩展到 12个，支持更复杂的算法</li>
+<li>可以去掉年轻代、老年代大小，可以自动调整；可以去掉并行线程，可以自动调整
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/07/GC/zgc_2.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/07/GC/zgc_2.jpg" />
+        </a>
+    </li>
+</ul>
+<p>分代 ZGC 的读写屏障<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/07/GC/zgc_3.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/07/GC/zgc_3.jpg" />
+        </a>
+     <br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/07/GC/zgc_4.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/07/GC/zgc_4.jpg" />
+        </a>
+    </p>
+<p>一次垃圾收集过程中 地址视图的切换过程</p>
+<ul>
+<li><strong>初始化</strong>：ZGC初始化之后，整个内存空间的地址视图被设置为Remapped。程序正常运行，在内存中分配对象，满足一定条件后垃圾回收启动，此时进入标记阶段</li>
+<li><strong>并发标记阶段</strong>：第一次进入标记阶段时视图为M0，如果对象被GC标记线程或者应用线程访问过，那么就将对象的地址视图从Remapped调整为M0。所以，在标记阶段结束之后，对象的地址要么是M0视图，要么是Remapped。如果对象的地址是M0视图，那么说明对象是活跃的；如果对象的地址是Remapped视图，说明对象是不活跃的。</li>
+<li><strong>并发转移阶段</strong>：标记结束后就进入转移阶段，此时地址视图再次被设置为Remapped。如果对象被GC转移线程或者应用线程访问过，那么就将对象的地址视图从M0调整为Remapped
+
+        <a data-fancybox="gallery" href="https://p0.meituan.net/travelcube/a621733099b8fda2a0f38a8859e6a114213563.png@2070w_806h_80q">
+            <img class="mx-auto" alt="" src="https://p0.meituan.net/travelcube/a621733099b8fda2a0f38a8859e6a114213563.png@2070w_806h_80q" />
+        </a>
+    </li>
+</ul>
+<p>之所以设计成两个，是为了区别前一次标记和当前标记。也即，第二次进入并发标记阶段后，地址视图调整为M1，而非M0</p>
+<p>着色指针和读屏障技术不仅应用在并发转移阶段，还应用在并发标记阶段</p>
+<ul>
+<li>将对象设置为已标记，传统的垃圾回收器需要进行一次内存访问，并将对象存活信息放在对象头中</li>
+<li>而在ZGC中，只需要设置指针地址的第42~45位即可，并且因为是寄存器访问，所以速度比访问内存更快</li>
+</ul>
+<p>ZGC 中的暂停场景</p>
+<ul>
+<li>GC时，初始标记：日志中Pause Mark Start。</li>
+<li>GC时，再标记：日志中Pause Mark End。</li>
+<li>GC时，初始转移：日志中Pause Relocate Start。</li>
+<li>内存分配阻塞：当内存不足时线程会阻塞等待GC完成，关键字是”Allocation Stall”。</li>
+<li>安全点：所有线程进入到安全点后才能进行GC，ZGC定期进入安全点判断是否需要GC。先进入安全点的线程需要等待后进入安全点的线程直到所有线程挂起。</li>
+<li>dump线程、内存：比如jstack、jmap命令。</li>
+</ul>
+<p>参考链接</p>
+<ul>
+<li><a href="https://wiki.openjdk.org/display/zgc">ZGC 官网</a></li>
+<li><a href="https://www.youtube.com/watch?v=bLJJ3CY1aE8">youtub ZGC: The Future of Low-Latency Garbage Collection Is Here</a></li>
+<li><a href="https://www.youtube.com/watch?v=OcfvBoyTvA8&amp;t=1253s&amp;pp=ygUDemdj">youtub，跟上面的类似，oracle 的</a></li>
+<li><a href="https://www.youtube.com/watch?v=OnodHoNYE1Y&amp;t=101s">Z Garbage Collector: The Next Generation</a></li>
+</ul>
+<h2 id="shenandoahgc">ShenandoahGC</h2>
+<p>这种 GC 分为好几个阶段</p>
+<ul>
+<li><strong>初始标记</strong>，STW</li>
+<li><strong>并发标记</strong>，跟 ZGC类似</li>
+<li><strong>最终标记</strong>，STW，也就是重新标记，这里要扫描引用队列和root set</li>
+<li><strong>并发清理</strong>，对于整个region都标记为垃圾的，可以立刻清理掉</li>
+<li><strong>并发疏散</strong>，将存活的对象拷贝到其他region，这点是跟其他 GC 不同的地方，这里需要拷贝存活对象会很多，但可以并行</li>
+<li><strong>初始化更新引用</strong>， STW，确认所有的 GC 和应用线程都完成了疏散，最短的 STW</li>
+<li><strong>并发更新引用</strong>，更新引用的对象，这些对象在并非疏散的时候已经被转移走了，这也是跟其他 GC 不同的地方</li>
+<li><strong>最终更新引用</strong>，STW，重新扫描 root set</li>
+<li><strong>并发清理</strong>，回收所有没有引用的region
+
+        <a data-fancybox="gallery" href="https://cr.openjdk.org/~shade/shenandoah/shenandoah-gc-cycle.svg">
+            <img class="mx-auto" alt="" src="https://cr.openjdk.org/~shade/shenandoah/shenandoah-gc-cycle.svg" />
+        </a>
+    <br>
+所以 Shenandoah 会有 4个 STW</li>
+<li>初始标记</li>
+<li>重新标记</li>
+<li>初始化更新引用</li>
+<li>最终更新引用</li>
+</ul>
+<p>这里每次 STW 基本都跟 root set大小有关，跟 对象大小无关<br>
+所以只要保证 root set 不要太大，STW 的时间就是可控的</p>
+<p>并发标记，采用了 brooks points 方式</p>
+<ul>
+<li>将原对象拷贝一份，到目的地，brooks points也被拷贝了</li>
+<li>这个 brooks points 指向了对象头，当拷贝完后 老的brooks指向老的头，新的brooks指向新的头</li>
+<li>然后使用 CAS，将老的brooks指针，指向新的对象头</li>
+<li>后面如果有应用访问老的对象，就会通过brooks指针，指向新对象了
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/07/GC/s_1.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/07/GC/s_1.jpg" />
+        </a>
+    </li>
+</ul>
+<p>屏障</p>
+<ul>
+<li>通过新引用更新直接使用新的brooks指针访问即可</li>
+<li>通过老引用更新，需要判断写操作是否来自回收线程，这里需要加上写屏障</li>
+<li>读屏障，通过新内存地址的brooks指针访问即可</li>
+<li>比较屏障，因为这两个对象实际是相等的，只是在不同的region，所以比较的时候要将老的 brooks指针，定位到新的brooks指针，然后重新比较</li>
+</ul>
+<p>参考链接</p>
+<ul>
+<li><a href="https://wiki.openjdk.org/display/shenandoah/Main">官网</a></li>
+<li><a href="https://javakk.com/2232.html">JDK新垃圾收集器-Shenandoah GC</a></li>
+<li><a href="https://cloud.tencent.com/developer/article/2145139">深入解析java虚拟机：垃圾回收，ShenandoahGC及并发垃圾 回收器</a></li>
+</ul>
+<h2 id="参考">参考</h2>
+<ul>
+<li><a href="https://zhuanlan.zhihu.com/p/631788471">JVM常见问题总结</a></li>
+<li><a href="https://zhuanlan.zhihu.com/p/624386102">G1、ZGC、ShenandoahGC高性能收集器深入剖析</a></li>
+<li><a href="https://tech.meituan.com/2017/12/29/jvm-optimize.html">从实际案例聊聊Java应用的GC优化</a></li>
+<li><a href="https://tech.meituan.com/2016/09/23/g1.html">Java Hotspot G1 GC的一些关键技术</a></li>
+<li><a href="https://tech.meituan.com/2020/08/06/new-zgc-practice-in-meituan.html">新一代垃圾回收器ZGC的探索与实践</a></li>
+<li><a href="https://shipilev.net/jvm/anatomy-quarks/">JVM Anatomy Quarks</a></li>
+<li><a href="http://xiao-feng.blogspot.com/">JVM 李晓峰博客</a></li>
+<li><a href="https://zhuanlan.zhihu.com/p/59370428">多线程的10个问题</a></li>
+</ul>
+
+			<script type="text/javascript"
+        async
+        src="https://cdn.bootcss.com/mathjax/2.7.3/MathJax.js?config=TeX-AMS-MML_HTMLorMML">
+MathJax.Hub.Config({
+  tex2jax: {
+    inlineMath: [['$','$'], ['\\(','\\)']],
+    displayMath: [['$$','$$'], ['\[\[','\]\]']],
+    processEscapes: true,
+    processEnvironments: true,
+    skipTags: ['script', 'noscript', 'style', 'textarea', 'pre'],
+    TeX: { equationNumbers: { autoNumber: "AMS" },
+         extensions: ["AMSmath.js", "AMSsymbols.js"] }
+  }
+});
+
+MathJax.Hub.Queue(function() {
+    
+    
+    
+    var all = MathJax.Hub.getAllJax(), i;
+    for(i = 0; i < all.length; i += 1) {
+        all[i].SourceElement().parentNode.className += ' has-jax';
+    }
+});
+</script>
+
+<style>
+code.has-jax {
+    font: inherit;
+    font-size: 100%;
+    background: inherit;
+    border: inherit;
+    color: #515151;
+}
+</style>
+        </div>
+
+        
+
+
+        
+
+
+        <div class="post-meta meta-tags">
+            
+            <ul class="clearfix">
+                
+                <li><a href='/tags/gc'>GC</a></li>
+                
+            </ul>
+            
+        </div>
+    </article>
+    
+    
+
+    
+    
+    <div class="post bg-white">
+      <script src="https://utteranc.es/client.js"
+            repo= "himichael/hugoblogtalks"
+            issue-term="pathname"
+            theme="github-light"
+            crossorigin="anonymous"
+            async>
+      </script>
+    </div>
+    
+</div>
+
+
+                </div>
+
+                <div id="secondary">
+    <section class="widget">
+        <form id="search" action='https://code0xff.org/search/' method="get" accept-charset="utf-8" target="_blank" _lpchecked="1">
+      
+      <input type="text" name="q" maxlength="20" placeholder="Search">
+      <input type="hidden" name="sitesearch" value="https://code0xff.org/">
+      <button type="submit" class="submit icon-search"></button>
+</form>
+    </section>
+    
+    <section class="widget">
+        <h3 class="widget-title">最近文章</h3>
+<ul class="widget-list">
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/08/gluten%E5%92%8C%E7%9B%B8%E5%85%B3%E4%BE%9D%E8%B5%96/" title="Gluten和相关依赖">Gluten和相关依赖</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/07/%E6%95%B0%E6%8D%AE%E9%87%87%E9%9B%86/" title="大数据采集">大数据采集</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/07/jvm-gc/" title="JVM GC 介绍">JVM GC 介绍</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/07/presto%E5%9C%A8%E5%90%84%E5%A4%A7%E5%85%AC%E5%8F%B8%E7%9A%84%E5%BA%94%E7%94%A8/" title="Presto在各大公司的应用">Presto在各大公司的应用</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/06/bitweaving/" title="BitWeaving: Fast Scans for Main Memory Data Processing">BitWeaving: Fast Scans for Main Memory Data Processing</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/05/cache_conscious/" title="Cache Conscious Indexing for Decision-Support in Main Memory">Cache Conscious Indexing for Decision-Support in Main Memory</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/05/column_imprints/" title="Column Imprints: A Secondary Index Structure">Column Imprints: A Secondary Index Structure</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/05/sql_server_column_store_indexes/" title="SQL Server Column Store Indexes">SQL Server Column Store Indexes</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/05/bitmap_index/" title="Bitmap Index Design and Evaluation ">Bitmap Index Design and Evaluation </a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/05/advanced_database_systems-history_of_databases/" title="Advanced Database Systems: History of Databases">Advanced Database Systems: History of Databases</a>
+    </li>
+    
+</ul>
+    </section>
+
+    
+
+    <section class="widget">
+        <h3 class="widget-title"><a href='/categories/'>分类</a></h3>
+<ul class="widget-list">
+    
+    <li><a href="https://code0xff.org/categories/%E5%88%86%E5%B8%83%E5%BC%8F/">分布式 (6)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E5%8E%9F%E7%90%86%E5%88%86%E6%9E%90/">原理分析 (13)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E5%95%86%E4%B8%9A/">商业 (3)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E5%A4%A7%E6%95%B0%E6%8D%AE/">大数据 (31)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%95%B0%E6%8D%AE%E5%BA%93/">数据库 (38)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%96%87%E5%AD%A6%E5%92%8C%E8%89%BA%E6%9C%AF/">文学和艺术 (2)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%97%85%E8%A1%8C/">旅行 (10)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%9E%B6%E6%9E%84/">架构 (2)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E7%AE%97%E6%B3%95/">算法 (8)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E7%B3%BB%E7%BB%9F/">系统 (5)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E7%BC%96%E7%A8%8B%E8%AF%AD%E8%A8%80/">编程语言 (3)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E8%A1%8C%E4%B8%9A%E8%A7%82%E5%AF%9F/">行业观察 (1)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E8%AF%BB%E4%B9%A6%E7%AC%94%E8%AE%B0/">读书笔记 (12)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E9%9A%8F%E4%BE%BF%E5%86%99%E5%86%99/">随便写写 (3)</a></li>
+    
+</ul>
+    </section>
+
+    <section class="widget">
+        <h3 class="widget-title">归档</a></h3>
+<ul class="widget-list">
+    
+    <li><a href="https://code0xff.org/years/2021%E5%B9%B4/">2021年 (37)</a></li>
+    
+    <li><a href="https://code0xff.org/years/2022%E5%B9%B4/">2022年 (55)</a></li>
+    
+    <li><a href="https://code0xff.org/years/2023%E5%B9%B4/">2023年 (45)</a></li>
+    
+</ul>
+    </section>
+
+    <section class="widget">
+        <h3 class="widget-title"><a href='/tags/'>标签</a></h3>
+<div class="tagcloud">
+    
+    <a href="https://code0xff.org/tags/b%E6%A0%91/">B树 </a>
+    
+    <a href="https://code0xff.org/tags/calcite/">calcite </a>
+    
+    <a href="https://code0xff.org/tags/cmu-database/">CMU-Database </a>
+    
+    <a href="https://code0xff.org/tags/flink/">flink </a>
+    
+    <a href="https://code0xff.org/tags/flume/">flume </a>
+    
+    <a href="https://code0xff.org/tags/gc/">GC </a>
+    
+    <a href="https://code0xff.org/tags/gluten/">Gluten </a>
+    
+    <a href="https://code0xff.org/tags/hana/">HANA </a>
+    
+    <a href="https://code0xff.org/tags/hive/">Hive </a>
+    
+    <a href="https://code0xff.org/tags/k8s/">k8s </a>
+    
+    <a href="https://code0xff.org/tags/kudu/">kudu </a>
+    
+    <a href="https://code0xff.org/tags/kyuubi/">Kyuubi </a>
+    
+    <a href="https://code0xff.org/tags/lakehouse/">Lakehouse </a>
+    
+    <a href="https://code0xff.org/tags/leveldb/">LevelDB </a>
+    
+    <a href="https://code0xff.org/tags/llvm/">LLVM </a>
+    
+    <a href="https://code0xff.org/tags/manacher/">Manacher </a>
+    
+    <a href="https://code0xff.org/tags/mapreduce/">MapReduce </a>
+    
+    <a href="https://code0xff.org/tags/mysql/">MySQL </a>
+    
+    <a href="https://code0xff.org/tags/newsql/">NewSQL </a>
+    
+    <a href="https://code0xff.org/tags/oceanbase/">OceanBase </a>
+    
+    <a href="https://code0xff.org/tags/paxos/">paxos </a>
+    
+    <a href="https://code0xff.org/tags/presto/">Presto </a>
+    
+    <a href="https://code0xff.org/tags/quick-sql/">quick-sql </a>
+    
+    <a href="https://code0xff.org/tags/raft/">raft </a>
+    
+    <a href="https://code0xff.org/tags/scala/">scala </a>
+    
+    <a href="https://code0xff.org/tags/simd/">SIMD </a>
+    
+    <a href="https://code0xff.org/tags/snowflake/">snowflake </a>
+    
+    <a href="https://code0xff.org/tags/spark/">spark </a>
+    
+    <a href="https://code0xff.org/tags/teradata/">TeraData </a>
+    
+    <a href="https://code0xff.org/tags/unix/">unix </a>
+    
+    <a href="https://code0xff.org/tags/%E4%BA%8C%E5%88%86%E6%9F%A5%E6%89%BE/">二分查找 </a>
+    
+    <a href="https://code0xff.org/tags/%E4%BA%8C%E5%8F%89%E6%A0%91%E9%81%8D%E5%8E%86/">二叉树遍历 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%88%86%E5%B8%83%E5%BC%8F/">分布式 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%88%97%E5%AD%98/">列存 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%8A%A8%E6%80%81%E6%B3%A8%E5%85%A5/">动态注入 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%8E%86%E5%8F%B2/">历史 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%90%91%E9%87%8F%E5%8C%96/">向量化 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%9B%9E%E6%BA%AF/">回溯 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%9B%BD%E5%86%85%E6%97%85%E8%A1%8C/">国内旅行 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%9B%BD%E5%A4%96%E6%97%85%E8%A1%8C/">国外旅行 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%A4%9A%E7%A7%9F%E6%88%B7/">多租户 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%A4%A7%E6%95%B0%E6%8D%AE/">大数据 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%AD%98%E5%82%A8/">存储 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%B7%A5%E4%BD%9C%E8%AE%B0%E5%BD%95/">工作记录 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%BE%AE%E6%9C%8D%E5%8A%A1/">微服务 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%95%B0%E6%8D%AE%E5%BA%93/">数据库 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%95%B0%E6%8D%AE%E6%A8%A1%E5%9E%8B/">数据模型 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%95%B0%E6%8D%AE%E8%BF%81%E7%A7%BB/">数据迁移 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%9F%A5%E8%AF%A2%E4%BC%98%E5%8C%96/">查询优化 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%9F%A5%E8%AF%A2%E7%BC%96%E8%AF%91/">查询编译 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%B1%87%E7%BC%96/">汇编 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%B5%8B%E8%AF%95/">测试 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%B9%96%E4%BB%93%E4%B8%80%E4%BD%93/">湖仓一体 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%94%9F%E6%B4%BB/">生活 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%94%B5%E5%BD%B1/">电影 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%AE%97%E6%B3%95/">算法 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%B4%A2%E5%BC%95/">索引 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BB%8F%E6%B5%8E/">经济 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BC%93%E5%AD%98/">缓存 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BC%96%E8%AF%91%E5%8E%9F%E7%90%86/">编译原理 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BD%91%E7%BB%9C/">网络 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AE%A1%E7%AE%97%E6%A1%86%E6%9E%B6/">计算框架 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AE%BA%E6%96%87/">论文 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AF%BB%E4%B9%A6/">读书 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AF%BB%E4%B9%A6%E7%AC%94%E8%AE%B0/">读书笔记 </a>
+    
+</div>
+    </section>
+
+    
+
+    <section class="widget">
+        <h3 class="widget-title">RSS</h3>
+        <ul class="widget-list">
+            <li><a href="https://code0xff.org/index.xml">文章 RSS</a></li>
+        </ul>
+    </section>
+</div>
+            </div>
+        </div>
+    </div>
+    <footer id="footer">
+    <div>
+        &copy; 2023 <a href="https://code0xff.org/">记录每个瞬间 By 老王</a>
+        
+    </div>
+    <br />
+    <div>
+        <div class="github-badge">
+            <a href="https://gohugo.io/" target="_black" rel="nofollow"><span class="badge-subject">Powered by</span><span class="badge-value bg-blue">Hugo</span></a>
+        </div>
+        <div class="github-badge">
+            <a href="https://github.com/flysnow-org/maupassant-hugo" target="_black"><span class="badge-subject">Theme</span><span class="badge-value bg-yellowgreen">Maupassant</span></a>
+        </div>
+    </div>
+</footer>
+
+
+    
+    <script type="text/javascript">
+        window.MathJax = {
+            tex2jax: {
+                inlineMath: [['$', '$']],
+                processEscapes: true
+                }
+            };
+    </script>
+    <script src='https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.5/MathJax.js?config=TeX-MML-AM_CHTML' async></script><script src="https://cdn.bootcdn.net/ajax/libs/fancybox/3.5.7/jquery.fancybox.min.js"></script>
+
+<a id="rocket" href="#top"></a>
+<script type="text/javascript" src='/js/totop.js?v=0.0.0' async=""></script>
+
+<script type="application/javascript">
+var doNotTrack = false;
+if (!doNotTrack) {
+	window.ga=window.ga||function(){(ga.q=ga.q||[]).push(arguments)};ga.l=+new Date;
+	ga('create', 'GA ID', 'auto');
+	
+	ga('send', 'pageview');
+}
+</script>
+<script async src='https://www.google-analytics.com/analytics.js'></script>
+
+
+
+    <script type="text/javascript" src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js" async></script>
+
+
+
+
+</body>
+
+</html>
