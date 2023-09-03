@@ -1,0 +1,719 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    
+    <meta name="referrer" content="no-referrer-when-downgrade">
+    
+
+    <title>Ambari架构 | 记录每个瞬间</title>
+    <meta property="og:title" content="Ambari架构 - 记录每个瞬间">
+    <meta property="og:type" content="article">
+        
+    <meta property="article:published_time" content='2023-09-02T09:13:07&#43;08:00'>
+        
+        
+    <meta property="article:modified_time" content='2023-09-02T09:13:07&#43;08:00'>
+        
+    <meta name="Keywords" content="">
+    <meta name="description" content="Ambari架构">
+        <meta name="author" content="隔壁老王">
+        
+    <meta property="og:url" content="https://code0xff.org/post/2023/09/ambari/">
+    <link rel="shortcut icon" href='/favicon.ico'  type="image/x-icon">
+
+    <link rel="stylesheet" href='/css/normalize.css'>
+    <link rel="stylesheet" href='/css/style.css'>
+    <script type="text/javascript" src="//cdn.bootcdn.net/ajax/libs/jquery/3.4.1/jquery.min.js"></script>
+
+    
+    
+    
+        <link href="https://cdn.bootcdn.net/ajax/libs/fancybox/3.5.7/jquery.fancybox.min.css" rel="stylesheet">
+    
+    
+    
+    
+</head>
+
+
+<body>
+    <header id="header" class="clearfix">
+    <div class="container">
+        <div class="col-group">
+            <div class="site-name ">
+                
+                    <a id="logo" href="https://code0xff.org/">
+                        记录每个瞬间
+                    </a>
+                
+                
+            </div>
+            <div>
+                <nav id="nav-menu" class="clearfix">
+                    <a class="current" href="https://code0xff.org/">首页</a>
+                    
+                    <a  href="https://code0xff.org/linked/" title="链接">链接</a>
+                    
+                    <a  href="https://code0xff.org/archives/" title="归档">归档</a>
+                    
+                    <a  href="https://code0xff.org/about/" title="关于">关于</a>
+                    
+                </nav>
+            </div>
+        </div>
+    </div>
+</header>
+
+    <div id="body">
+        <div class="container">
+            <div class="col-group">
+
+                <div class="col-8" id="main">
+                    
+<div class="res-cons">
+    
+    <article class="post">
+        <header>
+            <h1 class="post-title">Ambari架构</h1>
+        </header>
+        <date class="post-meta meta-date">
+            2023年9月2日
+        </date>
+<nav id="TableOfContents">
+  <ul>
+    <li>
+      <ul>
+        <li><a href="#总体概述">总体概述</a></li>
+        <li><a href="#ambari-server">Ambari-Server</a></li>
+        <li><a href="#ambari-agent">Ambari-Agent</a></li>
+        <li><a href="#ambari-web">Ambari-Web</a></li>
+        <li><a href="#ambari-metrics">Ambari-Metrics</a></li>
+        <li><a href="#参考">参考</a></li>
+      </ul>
+    </li>
+  </ul>
+</nav>
+        
+        <div class="post-meta">
+            
+            <span class="post-meta meta-tags">
+                <ul class="clearfix">
+                    <a href='/categories/%E5%A4%A7%E6%95%B0%E6%8D%AE'>大数据</a>
+                </ul>
+            </span>
+            
+        </div>
+        
+        
+        <div class="post-meta">
+            <span id="busuanzi_container_page_pv">|<span id="busuanzi_value_page_pv"></span><span>
+                    阅读</span></span>
+        </div>
+        
+        
+        <div class="post-content">
+            <h2 id="总体概述">总体概述</h2>
+<p>官网: <a href="https://ambari.apache.org/">https://ambari.apache.org/</a></p>
+<p>官方定义</p>
+<blockquote>
+<p>Apache Ambari is a tool for provisioning, managing, and monitoring Apache Hadoop clusters. Ambari consists of a set of RESTful APIs and a browser-based management interface.</p>
+</blockquote>
+<p>github</p>
+<ul>
+<li><a href="https://github.com/apache/ambari">主项目</a></li>
+<li><a href="https://github.com/apache/ambari-metrics">Apache Ambari Metrics</a></li>
+<li><a href="https://github.com/apache/ambari-logsearch">Apache Ambari Log Search</a></li>
+<li><a href="https://github.com/apache/ambari-infra">Apache Ambari Infra</a></li>
+</ul>
+<p>基本组件</p>
+<ul>
+<li>server，核心模块，提供 web方式管理，REST API 方式管理，用来控制 agent</li>
+<li>agent，安装在每个 host 上，接收 server 的命令，做对应的操作</li>
+<li>web，展示用户前端信息</li>
+<li>metrics，包含 收集器 collector，采集器 metrics(采集系统指标)，以及各种 hadoop 组件的监控</li>
+</ul>
+<p>依赖的其他开源项目</p>
+<ul>
+<li>agent端，采用了puppet管理节点。</li>
+<li>web端，采用ember.js作为前端MVC框架和NodeJS相关工具，用handlebars.js作为页面渲染引擎，在CSS/HTML方面还用了Bootstrap框架</li>
+<li>Server端，采用了Jetty、Spring、JAX-RS等。</li>
+<li>同时利用了Ganglia、Nagios的分布式监控能力。</li>
+</ul>
+<h2 id="ambari-server">Ambari-Server</h2>
+<p>server 是一个核心的组件，定期跟 agent 做心跳<br>
+agent 接收 server 的命令，安装组件<br>
+可以通过 web控制台，或者 shell，或者 REST API 的方式连接 server，操作集群<br>
+监控系统也会读取 server 的api，展示信息<br>
+操作的信息回保存在内部的数据库中<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/09/Ambari/server_1.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/09/Ambari/server_1.jpg" />
+        </a>
+    </p>
+<p>Ambari Server 技术栈</p>
+<ul>
+<li>Server code: Java 1.7 / 1.8</li>
+<li>Agent scripts: Python</li>
+<li>Database: Postgres, Oracle, MySQL</li>
+<li>ORM: EclipseLink</li>
+<li>Security: Spring Security with remote LDAP integration and local database</li>
+<li>REST server: Jersey (JAX-RS)</li>
+<li>Dependency Injection: Guice</li>
+<li>Unit Testing: JUnit</li>
+<li>Mocks: EasyMock</li>
+<li>Configuration management: Python</li>
+</ul>
+<p>Ambari-Server是一个WEB Server，提供统一的REST API接口，同时向web和agent开放了两个不同的端口</p>
+<ul>
+<li>默认前者是8080</li>
+<li>后者是8440或者8441</li>
+</ul>
+<p>它是由Jetty Server容器构建起来的，通过Spring Framework构建出来的WEB服务器<br>
+其中大量采用了google提供的Guice注解完成spring框架所需要的注入功能<br>
+REST框架由JAX-RS标准来构建<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/09/Ambari/server_2.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/09/Ambari/server_2.jpg" />
+        </a>
+    </p>
+<p>如下图所示，server端主要维护三类状态：</p>
+<ol>
+<li>Live Cluster State：集群现有状态，各个节点汇报上来的状态信息会更改该状态</li>
+<li>Desired State：用户希望该节点所处状态，是用户在页面进行了一系列的操作，需要更改某些服务的状态，这些状态还没有在节点上产生作用;</li>
+<li>Action State：操作状态，是状态改变时<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/09/Ambari/server_3.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/09/Ambari/server_3.jpg" />
+        </a>
+    </li>
+</ol>
+<p>Ambari-server的Heartbeat Handler模块用于接收各个agent的心跳请求<br>
+心跳请求里面主要包含两类信息</p>
+<ul>
+<li>节点状态信息</li>
+<li>返回的操作结果</li>
+</ul>
+<p>把节点状态信息传递给FSM状态机去维护着该节点的状态，并且把返回的操作结果信息返回给Action Manager去做进一步的处理<br>
+Coordinator模块又可以称为API handler，主要在接收WEB端操作请求后，会检查它是否符合要求，stage planner分解成一组操作，最后提供给Action Manager去完成执行操作<br>
+Ambari-Server的所有状态信息的维护和变更都会记录在数据库中，用户做一些更改服务的操作都会在数据库上做一些相应的记录，同时，agent通过心跳来获得数据库的变更历史</p>
+<h2 id="ambari-agent">Ambari-Agent</h2>
+<p>ambari-agent是一个无状态的。其功能主要分两部分：</p>
+<ul>
+<li>采集所在节点的信息并且汇总发心跳汇报给ambari-server;</li>
+<li>处理ambari-server的执行请求</li>
+</ul>
+<p>它有两种队列</p>
+<ul>
+<li>消息队列MessageQueue，或为ResultQueue。包括节点状态信息（包括注册信息）和执行结果信息，并且汇总后通过心跳发送给ambari-server</li>
+<li>操作队列ActionQueue。用于接收ambari-server返回过来的状态操作，然后能过执行器按序调用puppet或python脚本等模块完成任务
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/09/Ambari/agent_1.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/09/Ambari/agent_1.jpg" />
+        </a>
+    </li>
+</ul>
+<p>ambari-agent 的引导流程包括</p>
+<ul>
+<li>SSH</li>
+<li>人工手动的非 SSH</li>
+</ul>
+<p>这里只记录 SSH 方式</p>
+<ol>
+<li>Ambari Server通过调用bootstrap.py来初始化整个bootstrap进程</li>
+<li>Server端通过SSH Keys在Agent上配置Ambari Repo：利用Ambari Server上的ambari.repo文件，并且scp到Agent Host上。</li>
+<li>复制Ambari Agent Setup script：利用scp命令将setupAgent.py脚本复制到Agent host上。</li>
+<li>在各个Agent上执行Ambari Agent Setup script：SSH到各个Agent Host上然后执行setupAgent.py。</li>
+<li>在Agent上安装epel-release：用apt-get/yum/zypper工具来安装epel-release包</li>
+<li>在Agent上安装Ambari-agent：用apt-get/yum/zypper工具来安装Ambari-Agent包</li>
+<li>配置Ambari-agent.ini：修改/etc/ambari-agent/conf/ambari-agent.ini，并设置agent host上的hostname</li>
+<li>启动Ambari-agent:启动Ambari-agent进程</li>
+<li>开始Ambari Agent注册：agent开始registration进程
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/09/Ambari/agent_2.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/09/Ambari/agent_2.jpg" />
+        </a>
+    <br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/09/Ambari/agent_3.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/09/Ambari/agent_3.jpg" />
+        </a>
+    </li>
+</ol>
+<p>agent 向 server 的注册流程<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/09/Ambari/agent_4.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/09/Ambari/agent_4.jpg" />
+        </a>
+    </p>
+<h2 id="ambari-web">Ambari-Web</h2>
+<p>Ambari-web使用了一个流行的前端Embar.js MVC框架实现</p>
+<ul>
+<li>Embar.js是一个TodoMVC框架，它涵盖了现今典型的单页面应用（single page application）几乎所有的行为</li>
+<li>使用brunch 作为项目的构建管理工具，是一个超快的HTML5构建工具。它有如下功能
+<ul>
+<li>编译你的脚本、模板、样式、链接它们。</li>
+<li>将脚本和模板封装进common.js/AMD模块里，链接脚本和样式。</li>
+<li>为链接文件生成源地图，复制资源和静态文件。</li>
+<li>通过缩减代码和优化图片来收缩输出，看管你的文件更改。</li>
+<li>并通过控制台和系统提示通知你错误。</li>
+</ul>
+</li>
+<li>使用了 NodeJS</li>
+</ul>
+<p>Nodejs 是一个基于Chrome JavaScript运行时建立的一个平台，用来方便的搭建快速的易于扩展的网络应用，NodeJS借助事件驱动，非阻塞I/O模型变得轻量和高效，非常适合运行在分布式设备的数据密集型的实时应用</p>
+<p>Ambari Web</p>
+<ul>
+<li>Frontend code: JavaScript</li>
+<li>Client-side MVC framework: Ember.js / AngularJS</li>
+<li>Templating: Handlebars.js (integrated with Ember.js)</li>
+<li>DOM manipulation: jQuery</li>
+<li>Look and feel: Bootstrap 2</li>
+<li>CSS preprocessor: LESS</li>
+<li>Unit Testing: Mocha</li>
+<li>Mocks: Sinon.js</li>
+<li>Application assembler/tester: Brunch / Grunt / Gulp</li>
+</ul>
+<h2 id="ambari-metrics">Ambari-Metrics</h2>
+<p>官方定义:</p>
+<blockquote>
+<p>Ambari Metrics System (&ldquo;AMS&rdquo;) is a system for collecting, aggregating, serving and visualizing daemon and system metrics in Ambari-managed clusters.</p>
+</blockquote>
+<p>术语</p>
+<table>
+<thead>
+<tr>
+<th>Term</th>
+<th>Definition</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Metrics Collector</td>
+<td>The standalone server that collects metrics, aggregates metrics, serves metrics from the Hadoop service sinks and the Metrics Monitor.</td>
+</tr>
+<tr>
+<td>Metrics Monitor</td>
+<td>Installed on each host in the cluster to collect system-level metrics and forward to the Metrics Collector.</td>
+</tr>
+<tr>
+<td>Metrics Hadoop Sinks</td>
+<td>Plug-ins into the various Hadoop components sinks to send Hadoop metrics to the Metrics Collector.</td>
+</tr>
+</tbody>
+</table>
+<p>架构如下</p>
+<ul>
+<li>Metrics Collector 是后台进程，用于收集 monitor、sinks 发过来的数据</li>
+<li>sinks 包含了各种 hadoop的监控插件，可以收集 各种组件的监控指标</li>
+<li>collector 可以将数据存储到本地文件系统中、或者 分布式文件系统中</li>
+<li>ambari-server收集到这些指标后，通过 API 暴露出去，web-ui 用来展示这些结果</li>
+<li>整个系统可以被 ambari 安装和管理
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2023/09/Ambari/ams_1.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2023/09/Ambari/ams_1.jpg" />
+        </a>
+    </li>
+</ul>
+<h2 id="参考">参考</h2>
+<ul>
+<li><a href="https://github.com/apache/ambari">github</a></li>
+<li><a href="https://ambari.apache.org/">apache官网</a></li>
+<li><a href="https://cwiki.apache.org/confluence/display/AMBARI/Ambari">官网 confluence 文档</a></li>
+<li><a href="https://issues.apache.org/jira/secure/attachment/12559939/Ambari_Architecture.pdf">Ambari Architecture</a></li>
+<li><a href="https://cwiki.apache.org/confluence/display/AMBARI/Technology+Stack">Technology Stack</a></li>
+<li><a href="https://github.com/apache/ambari/blob/trunk/ambari-server/docs/api/v1/index.md">Ambari API Reference v1</a></li>
+<li><a href="https://www.slideshare.net/hortonworks/ambari-agentregistrationflow-17041261">Ambari: Agent Registration Flow</a></li>
+<li><a href="https://cwiki.apache.org/confluence/display/AMBARI/Metrics">Ambari metrics</a></li>
+<li><a href="https://blog.csdn.net/chengyuqiang/article/details/60963480">Ambari架构源码解析</a></li>
+<li><a href="https://blog.csdn.net/chengyuqiang/category_6796422.html">Ambari运维</a></li>
+<li><a href="https://www.slideshare.net/hortonworks/ambari-using-a-local-repository">Ambari: Using a Local Repository</a></li>
+<li><a href="https://www.slideshare.net/Hadoop_Summit/managing-2000-node-cluster-with-ambari">Managing 2000 Node Cluster with Ambari</a></li>
+</ul>
+
+			<script type="text/javascript"
+        async
+        src="https://cdn.bootcss.com/mathjax/2.7.3/MathJax.js?config=TeX-AMS-MML_HTMLorMML">
+MathJax.Hub.Config({
+  tex2jax: {
+    inlineMath: [['$','$'], ['\\(','\\)']],
+    displayMath: [['$$','$$'], ['\[\[','\]\]']],
+    processEscapes: true,
+    processEnvironments: true,
+    skipTags: ['script', 'noscript', 'style', 'textarea', 'pre'],
+    TeX: { equationNumbers: { autoNumber: "AMS" },
+         extensions: ["AMSmath.js", "AMSsymbols.js"] }
+  }
+});
+
+MathJax.Hub.Queue(function() {
+    
+    
+    
+    var all = MathJax.Hub.getAllJax(), i;
+    for(i = 0; i < all.length; i += 1) {
+        all[i].SourceElement().parentNode.className += ' has-jax';
+    }
+});
+</script>
+
+<style>
+code.has-jax {
+    font: inherit;
+    font-size: 100%;
+    background: inherit;
+    border: inherit;
+    color: #515151;
+}
+</style>
+        </div>
+
+        
+
+
+        
+
+
+        <div class="post-meta meta-tags">
+            
+            <ul class="clearfix">
+                
+                <li><a href='/tags/ambari'>Ambari</a></li>
+                
+            </ul>
+            
+        </div>
+    </article>
+    
+    
+
+    
+    
+    <div class="post bg-white">
+      <script src="https://utteranc.es/client.js"
+            repo= "himichael/hugoblogtalks"
+            issue-term="pathname"
+            theme="github-light"
+            crossorigin="anonymous"
+            async>
+      </script>
+    </div>
+    
+</div>
+
+
+                </div>
+
+                <div id="secondary">
+    <section class="widget">
+        <form id="search" action='https://code0xff.org/search/' method="get" accept-charset="utf-8" target="_blank" _lpchecked="1">
+      
+      <input type="text" name="q" maxlength="20" placeholder="Search">
+      <input type="hidden" name="sitesearch" value="https://code0xff.org/">
+      <button type="submit" class="submit icon-search"></button>
+</form>
+    </section>
+    
+    <section class="widget">
+        <h3 class="widget-title">最近文章</h3>
+<ul class="widget-list">
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/09/ambari/" title="Ambari架构">Ambari架构</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/08/gluten%E5%92%8C%E7%9B%B8%E5%85%B3%E4%BE%9D%E8%B5%96/" title="Gluten和相关依赖">Gluten和相关依赖</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/07/%E6%95%B0%E6%8D%AE%E9%87%87%E9%9B%86/" title="大数据采集">大数据采集</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/07/jvm-gc/" title="JVM GC 介绍">JVM GC 介绍</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/07/presto%E5%9C%A8%E5%90%84%E5%A4%A7%E5%85%AC%E5%8F%B8%E7%9A%84%E5%BA%94%E7%94%A8/" title="Presto在各大公司的应用">Presto在各大公司的应用</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/06/bitweaving/" title="BitWeaving: Fast Scans for Main Memory Data Processing">BitWeaving: Fast Scans for Main Memory Data Processing</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/05/cache_conscious/" title="Cache Conscious Indexing for Decision-Support in Main Memory">Cache Conscious Indexing for Decision-Support in Main Memory</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/05/column_imprints/" title="Column Imprints: A Secondary Index Structure">Column Imprints: A Secondary Index Structure</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/05/sql_server_column_store_indexes/" title="SQL Server Column Store Indexes">SQL Server Column Store Indexes</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/05/bitmap_index/" title="Bitmap Index Design and Evaluation ">Bitmap Index Design and Evaluation </a>
+    </li>
+    
+</ul>
+    </section>
+
+    
+
+    <section class="widget">
+        <h3 class="widget-title"><a href='/categories/'>分类</a></h3>
+<ul class="widget-list">
+    
+    <li><a href="https://code0xff.org/categories/%E5%88%86%E5%B8%83%E5%BC%8F/">分布式 (6)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E5%8E%9F%E7%90%86%E5%88%86%E6%9E%90/">原理分析 (13)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E5%95%86%E4%B8%9A/">商业 (3)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E5%A4%A7%E6%95%B0%E6%8D%AE/">大数据 (32)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%95%B0%E6%8D%AE%E5%BA%93/">数据库 (38)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%96%87%E5%AD%A6%E5%92%8C%E8%89%BA%E6%9C%AF/">文学和艺术 (2)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%97%85%E8%A1%8C/">旅行 (10)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%9E%B6%E6%9E%84/">架构 (2)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E7%AE%97%E6%B3%95/">算法 (8)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E7%B3%BB%E7%BB%9F/">系统 (5)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E7%BC%96%E7%A8%8B%E8%AF%AD%E8%A8%80/">编程语言 (3)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E8%A1%8C%E4%B8%9A%E8%A7%82%E5%AF%9F/">行业观察 (1)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E8%AF%BB%E4%B9%A6%E7%AC%94%E8%AE%B0/">读书笔记 (12)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E9%9A%8F%E4%BE%BF%E5%86%99%E5%86%99/">随便写写 (3)</a></li>
+    
+</ul>
+    </section>
+
+    <section class="widget">
+        <h3 class="widget-title">归档</a></h3>
+<ul class="widget-list">
+    
+    <li><a href="https://code0xff.org/years/2021%E5%B9%B4/">2021年 (37)</a></li>
+    
+    <li><a href="https://code0xff.org/years/2022%E5%B9%B4/">2022年 (55)</a></li>
+    
+    <li><a href="https://code0xff.org/years/2023%E5%B9%B4/">2023年 (46)</a></li>
+    
+</ul>
+    </section>
+
+    <section class="widget">
+        <h3 class="widget-title"><a href='/tags/'>标签</a></h3>
+<div class="tagcloud">
+    
+    <a href="https://code0xff.org/tags/ambari/">Ambari </a>
+    
+    <a href="https://code0xff.org/tags/b%E6%A0%91/">B树 </a>
+    
+    <a href="https://code0xff.org/tags/calcite/">calcite </a>
+    
+    <a href="https://code0xff.org/tags/cmu-database/">CMU-Database </a>
+    
+    <a href="https://code0xff.org/tags/flink/">flink </a>
+    
+    <a href="https://code0xff.org/tags/flume/">flume </a>
+    
+    <a href="https://code0xff.org/tags/gc/">GC </a>
+    
+    <a href="https://code0xff.org/tags/gluten/">Gluten </a>
+    
+    <a href="https://code0xff.org/tags/hana/">HANA </a>
+    
+    <a href="https://code0xff.org/tags/hive/">Hive </a>
+    
+    <a href="https://code0xff.org/tags/k8s/">k8s </a>
+    
+    <a href="https://code0xff.org/tags/kudu/">kudu </a>
+    
+    <a href="https://code0xff.org/tags/kyuubi/">Kyuubi </a>
+    
+    <a href="https://code0xff.org/tags/lakehouse/">Lakehouse </a>
+    
+    <a href="https://code0xff.org/tags/leveldb/">LevelDB </a>
+    
+    <a href="https://code0xff.org/tags/llvm/">LLVM </a>
+    
+    <a href="https://code0xff.org/tags/manacher/">Manacher </a>
+    
+    <a href="https://code0xff.org/tags/mapreduce/">MapReduce </a>
+    
+    <a href="https://code0xff.org/tags/mysql/">MySQL </a>
+    
+    <a href="https://code0xff.org/tags/newsql/">NewSQL </a>
+    
+    <a href="https://code0xff.org/tags/oceanbase/">OceanBase </a>
+    
+    <a href="https://code0xff.org/tags/paxos/">paxos </a>
+    
+    <a href="https://code0xff.org/tags/presto/">Presto </a>
+    
+    <a href="https://code0xff.org/tags/quick-sql/">quick-sql </a>
+    
+    <a href="https://code0xff.org/tags/raft/">raft </a>
+    
+    <a href="https://code0xff.org/tags/scala/">scala </a>
+    
+    <a href="https://code0xff.org/tags/simd/">SIMD </a>
+    
+    <a href="https://code0xff.org/tags/snowflake/">snowflake </a>
+    
+    <a href="https://code0xff.org/tags/spark/">spark </a>
+    
+    <a href="https://code0xff.org/tags/teradata/">TeraData </a>
+    
+    <a href="https://code0xff.org/tags/unix/">unix </a>
+    
+    <a href="https://code0xff.org/tags/%E4%BA%8C%E5%88%86%E6%9F%A5%E6%89%BE/">二分查找 </a>
+    
+    <a href="https://code0xff.org/tags/%E4%BA%8C%E5%8F%89%E6%A0%91%E9%81%8D%E5%8E%86/">二叉树遍历 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%88%86%E5%B8%83%E5%BC%8F/">分布式 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%88%97%E5%AD%98/">列存 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%8A%A8%E6%80%81%E6%B3%A8%E5%85%A5/">动态注入 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%8E%86%E5%8F%B2/">历史 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%90%91%E9%87%8F%E5%8C%96/">向量化 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%9B%9E%E6%BA%AF/">回溯 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%9B%BD%E5%86%85%E6%97%85%E8%A1%8C/">国内旅行 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%9B%BD%E5%A4%96%E6%97%85%E8%A1%8C/">国外旅行 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%A4%9A%E7%A7%9F%E6%88%B7/">多租户 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%A4%A7%E6%95%B0%E6%8D%AE/">大数据 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%AD%98%E5%82%A8/">存储 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%B7%A5%E4%BD%9C%E8%AE%B0%E5%BD%95/">工作记录 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%BE%AE%E6%9C%8D%E5%8A%A1/">微服务 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%95%B0%E6%8D%AE%E5%BA%93/">数据库 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%95%B0%E6%8D%AE%E6%A8%A1%E5%9E%8B/">数据模型 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%95%B0%E6%8D%AE%E8%BF%81%E7%A7%BB/">数据迁移 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%9F%A5%E8%AF%A2%E4%BC%98%E5%8C%96/">查询优化 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%9F%A5%E8%AF%A2%E7%BC%96%E8%AF%91/">查询编译 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%B1%87%E7%BC%96/">汇编 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%B5%8B%E8%AF%95/">测试 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%B9%96%E4%BB%93%E4%B8%80%E4%BD%93/">湖仓一体 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%94%9F%E6%B4%BB/">生活 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%94%B5%E5%BD%B1/">电影 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%AE%97%E6%B3%95/">算法 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%B4%A2%E5%BC%95/">索引 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BB%8F%E6%B5%8E/">经济 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BC%93%E5%AD%98/">缓存 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BC%96%E8%AF%91%E5%8E%9F%E7%90%86/">编译原理 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BD%91%E7%BB%9C/">网络 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AE%A1%E7%AE%97%E6%A1%86%E6%9E%B6/">计算框架 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AE%BA%E6%96%87/">论文 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AF%BB%E4%B9%A6/">读书 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AF%BB%E4%B9%A6%E7%AC%94%E8%AE%B0/">读书笔记 </a>
+    
+</div>
+    </section>
+
+    
+
+    <section class="widget">
+        <h3 class="widget-title">RSS</h3>
+        <ul class="widget-list">
+            <li><a href="https://code0xff.org/index.xml">文章 RSS</a></li>
+        </ul>
+    </section>
+</div>
+            </div>
+        </div>
+    </div>
+    <footer id="footer">
+    <div>
+        &copy; 2023 <a href="https://code0xff.org/">记录每个瞬间 By 老王</a>
+        
+    </div>
+    <br />
+    <div>
+        <div class="github-badge">
+            <a href="https://gohugo.io/" target="_black" rel="nofollow"><span class="badge-subject">Powered by</span><span class="badge-value bg-blue">Hugo</span></a>
+        </div>
+        <div class="github-badge">
+            <a href="https://github.com/flysnow-org/maupassant-hugo" target="_black"><span class="badge-subject">Theme</span><span class="badge-value bg-yellowgreen">Maupassant</span></a>
+        </div>
+    </div>
+</footer>
+
+
+    
+    <script type="text/javascript">
+        window.MathJax = {
+            tex2jax: {
+                inlineMath: [['$', '$']],
+                processEscapes: true
+                }
+            };
+    </script>
+    <script src='https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.5/MathJax.js?config=TeX-MML-AM_CHTML' async></script><script src="https://cdn.bootcdn.net/ajax/libs/fancybox/3.5.7/jquery.fancybox.min.js"></script>
+
+<a id="rocket" href="#top"></a>
+<script type="text/javascript" src='/js/totop.js?v=0.0.0' async=""></script>
+
+<script type="application/javascript">
+var doNotTrack = false;
+if (!doNotTrack) {
+	window.ga=window.ga||function(){(ga.q=ga.q||[]).push(arguments)};ga.l=+new Date;
+	ga('create', 'GA ID', 'auto');
+	
+	ga('send', 'pageview');
+}
+</script>
+<script async src='https://www.google-analytics.com/analytics.js'></script>
+
+
+
+    <script type="text/javascript" src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js" async></script>
+
+
+
+
+</body>
+
+</html>
