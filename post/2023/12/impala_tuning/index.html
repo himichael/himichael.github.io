@@ -1,0 +1,1863 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    
+    <meta name="referrer" content="no-referrer-when-downgrade">
+    
+
+    <title>Impala Tuning Summary | 记录每个瞬间</title>
+    <meta property="og:title" content="Impala Tuning Summary - 记录每个瞬间">
+    <meta property="og:type" content="article">
+        
+    <meta property="article:published_time" content='2023-12-01T09:13:07&#43;08:00'>
+        
+        
+    <meta property="article:modified_time" content='2023-12-01T09:13:07&#43;08:00'>
+        
+    <meta name="Keywords" content="">
+    <meta name="description" content="Impala Tuning Summary">
+        <meta name="author" content="隔壁老王">
+        
+    <meta property="og:url" content="https://code0xff.org/post/2023/12/impala_tuning/">
+    <link rel="shortcut icon" href='/favicon.ico'  type="image/x-icon">
+
+    <link rel="stylesheet" href='/css/normalize.css'>
+    <link rel="stylesheet" href='/css/style.css'>
+    <script type="text/javascript" src="//cdn.bootcdn.net/ajax/libs/jquery/3.4.1/jquery.min.js"></script>
+
+    
+    
+    
+        <link href="https://cdn.bootcdn.net/ajax/libs/fancybox/3.5.7/jquery.fancybox.min.css" rel="stylesheet">
+    
+    
+    
+    
+</head>
+
+
+<body>
+    <header id="header" class="clearfix">
+    <div class="container">
+        <div class="col-group">
+            <div class="site-name ">
+                
+                    <a id="logo" href="https://code0xff.org/">
+                        记录每个瞬间
+                    </a>
+                
+                
+            </div>
+            <div>
+                <nav id="nav-menu" class="clearfix">
+                    <a class="current" href="https://code0xff.org/">首页</a>
+                    
+                    <a  href="https://code0xff.org/linked/" title="链接">链接</a>
+                    
+                    <a  href="https://code0xff.org/archives/" title="归档">归档</a>
+                    
+                    <a  href="https://code0xff.org/about/" title="关于">关于</a>
+                    
+                </nav>
+            </div>
+        </div>
+    </div>
+</header>
+
+    <div id="body">
+        <div class="container">
+            <div class="col-group">
+
+                <div class="col-8" id="main">
+                    
+<div class="res-cons">
+    
+    <article class="post">
+        <header>
+            <h1 class="post-title">Impala Tuning Summary</h1>
+        </header>
+        <date class="post-meta meta-date">
+            2023年12月1日
+        </date>
+<nav id="TableOfContents">
+  <ul>
+    <li>
+      <ul>
+        <li><a href="#architecture">Architecture</a></li>
+        <li><a href="#performance-tuning">Performance Tuning</a>
+          <ul>
+            <li><a href="#best-practices">Best Practices</a></li>
+            <li><a href="#join-tuning">Join Tuning</a></li>
+            <li><a href="#statistics">Statistics</a></li>
+            <li><a href="#cache">Cache</a></li>
+            <li><a href="#troubleshooting">Troubleshooting</a></li>
+            <li><a href="#dedicated-coordinators">Dedicated Coordinators</a></li>
+            <li><a href="#web-ui">WEB UI</a></li>
+          </ul>
+        </li>
+        <li><a href="#administration">Administration</a>
+          <ul>
+            <li><a href="#configuration">configuration</a></li>
+            <li><a href="#security">Security</a></li>
+            <li><a href="#admission-control">Admission Control</a></li>
+          </ul>
+        </li>
+        <li><a href="#sql">SQL</a>
+          <ul>
+            <li><a href="#statements-and-data-type">Statements and Data Type</a></li>
+            <li><a href="#functions">Functions</a></li>
+            <li><a href="#compatibility-with-hive">Compatibility with Hive</a></li>
+            <li><a href="#expalin">Expalin</a></li>
+            <li><a href="#file-formats">File Formats</a></li>
+          </ul>
+        </li>
+        <li><a href="#reference">Reference</a></li>
+      </ul>
+    </li>
+  </ul>
+</nav>
+        
+        <div class="post-meta">
+            
+            <span class="post-meta meta-tags">
+                <ul class="clearfix">
+                    <a href='/categories/%E5%A4%A7%E6%95%B0%E6%8D%AE'>大数据</a>
+                </ul>
+            </span>
+            
+        </div>
+        
+        
+        <div class="post-meta">
+            <span id="busuanzi_container_page_pv">|<span id="busuanzi_value_page_pv"></span><span>
+                    阅读</span></span>
+        </div>
+        
+        
+        <div class="post-content">
+            <h2 id="architecture">Architecture</h2>
+<p>
+        <a data-fancybox="gallery" href="https://impala.apache.org/img/impala.png">
+            <img class="mx-auto" alt="" src="https://impala.apache.org/img/impala.png" />
+        </a>
+    </p>
+<table>
+<thead>
+<tr>
+<th>componet</th>
+<th>description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Impala Daemon</td>
+<td>core Impala component,Plans and executes queries against HDFS, HBase, and Amazon S3 data</td>
+</tr>
+<tr>
+<td>Statestore</td>
+<td>checks on the health of all Impala daemons in a cluster, and continuously relays its findings to each of those daemons</td>
+</tr>
+<tr>
+<td>Catalog Service</td>
+<td>relays the metadata changes from Impala SQL statements to all the Impala daemons in a cluster</td>
+</tr>
+</tbody>
+</table>
+<h2 id="performance-tuning">Performance Tuning</h2>
+<h3 id="best-practices">Best Practices</h3>
+<ul>
+<li>Choose the <strong>appropriate file format</strong> for the data</li>
+<li>Avoid data ingestion processes that produce <strong>many small files</strong></li>
+<li>Choose <strong>partitioning granularity</strong> based on actual data volume</li>
+<li>Use <strong>smallest appropriate integer types</strong> for partition key columns</li>
+<li>Choose an appropriate Parquet block size, <strong>256 MB block size</strong> for parquet</li>
+<li><strong>Gather statistics</strong> for all tables used in performance-critical or high-volume join queries</li>
+<li>Minimize the <strong>overhead of transmitting results</strong> back to the client</li>
+<li>Verify that your <strong>queries</strong> are planned in an efficient logical manner</li>
+<li>Verify <strong>performance characteristics</strong> of queries</li>
+<li>Use <strong>appropriate</strong> operating system settings</li>
+</ul>
+<h3 id="join-tuning">Join Tuning</h3>
+<p>Join order example</p>
+<ul>
+<li>assume 4 tables: BIG, MEDIUM, SMALL, and TINY</li>
+<li>join order: BIG, TINY, SMALL, MEDIUM</li>
+</ul>
+<p>distributed join type</p>
+<table>
+<thead>
+<tr>
+<th>type</th>
+<th>description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>BROADCAST</td>
+<td>The smaller table is broadcast to all nodes containing the larger table. It&rsquo;s effective when one table is significantly smaller and can fit in memory across all nodes</td>
+</tr>
+<tr>
+<td>PARTITIONED</td>
+<td>Both tables are partitioned on the join key, ensuring that rows with the same key values end up on the same node. It&rsquo;s used when joining two large tables</td>
+</tr>
+<tr>
+<td>SHUFFLE</td>
+<td>A shuffle join is performed when there&rsquo;s no clear advantage to broadcasting or partitioning, or when it&rsquo;s challenging to determine which table should be broadcasted. It involves redistributing the rows across nodes based on the join key</td>
+</tr>
+</tbody>
+</table>
+<p>STRAIGHT_JOIN</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-sql" data-lang="sql"><span style="display:flex;"><span><span style="color:#ff79c6">select</span> straight_join x <span style="color:#ff79c6">from</span> medium <span style="color:#ff79c6">join</span> small <span style="color:#ff79c6">join</span> (<span style="color:#ff79c6">select</span> <span style="color:#ff79c6">*</span> <span style="color:#ff79c6">from</span> big 
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">where</span> c1 <span style="color:#ff79c6">&lt;</span> <span style="color:#bd93f9">10</span>) <span style="color:#ff79c6">as</span> big
+</span></span><span style="display:flex;"><span>       <span style="color:#ff79c6">where</span> medium.id <span style="color:#ff79c6">=</span> small.id <span style="color:#ff79c6">and</span> small.id <span style="color:#ff79c6">=</span> big.id;
+</span></span></code></pre></td></tr></table>
+</div>
+</div><h3 id="statistics">Statistics</h3>
+<p>Table and Column Statistics</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">8
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">9
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-sql" data-lang="sql"><span style="display:flex;"><span><span style="color:#ff79c6">SHOW</span> <span style="color:#ff79c6">TABLE</span> STATS <span style="color:#ff79c6">table_name</span>;
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">SHOW</span> <span style="color:#ff79c6">COLUMN</span> STATS <span style="color:#ff79c6">table_name</span>;
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">show</span> partitions <span style="color:#ff79c6">table_name</span>;
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4">-- hive
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span><span style="color:#ff79c6">ANALYZE</span> <span style="color:#ff79c6">TABLE</span> COMPUTE <span style="color:#ff79c6">STATISTICS</span> <span style="color:#ff79c6">FOR</span> COLUMNS;
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4">-- optimize
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>COMPUTE STATS <span style="color:#ff79c6">table_name</span>;
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>limit for COMPUTE STATS</p>
+<ul>
+<li>Limit the number of columns</li>
+<li>more threads: MT_DOP</li>
+<li>if 30% of the rows have changed then it is recommended to recompute statistics</li>
+<li>COMPUTE STATS test_table TABLESAMPLE SYSTEM(10), 10% sample</li>
+<li>COMPUTE INCREMENTAL STATS</li>
+<li>COMPUTE INCREMENTAL STATS takes more time than COMPUTE STATS for the same volume of data</li>
+<li>DROP INCREMENTAL STATS</li>
+</ul>
+<p>Runtime Filtering</p>
+<ul>
+<li><strong>Build Phase</strong>:  identifies candidate values from a large table (build side) for the join key,then constructs a bloom filter or hash table containing these values.</li>
+<li><strong>Probe Phase</strong>: sends the smaller table (probe side) to the nodes where the build side data resides, then filtered using the previously constructed bloom filter or hash table,ensures that only relevant rows are processed for the join operation</li>
+<li><strong>Dynamic Nature</strong>: runtime filters are dynamic and get applied during query execution.</li>
+<li>best for parquet</li>
+<li>wait intervals for runtime filter: RUNTIME_FILTER_WAIT_TIME_MS</li>
+</ul>
+<p>other options</p>
+<ul>
+<li>RUNTIME_FILTER_MODE</li>
+<li>MAX_NUM_RUNTIME_FILTERS</li>
+<li>DISABLE_ROW_RUNTIME_FILTERING</li>
+<li>RUNTIME_FILTER_MAX_SIZE</li>
+<li>RUNTIME_FILTER_MIN_SIZE</li>
+<li>RUNTIME_BLOOM_FILTER_SIZE</li>
+</ul>
+<h3 id="cache">Cache</h3>
+<p>HDFS cache</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-cpp" data-lang="cpp"><span style="display:flex;"><span>hdfs cacheadmin <span style="color:#ff79c6">-</span>addPool four_gig_pool <span style="color:#ff79c6">-</span>owner impala <span style="color:#ff79c6">-</span>limit <span style="color:#bd93f9">4000000000</span>
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>impala SQL</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">15
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">16
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">17
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">18
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">19
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">20
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">21
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">22
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">23
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">24
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">25
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">26
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">27
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">28
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">29
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">30
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-sql" data-lang="sql"><span style="display:flex;"><span><span style="color:#6272a4">-- Cache the entire table (all partitions).
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span><span style="color:#ff79c6">alter</span> <span style="color:#ff79c6">table</span> census <span style="color:#ff79c6">set</span> cached <span style="color:#ff79c6">in</span> <span style="color:#f1fa8c">&#39;pool_name&#39;</span>;
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4">-- Remove the entire table from the cache.
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span><span style="color:#ff79c6">alter</span> <span style="color:#ff79c6">table</span> census <span style="color:#ff79c6">set</span> uncached;
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4">-- Cache a portion of the table (a single partition).
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">-- If the table is partitioned by multiple columns (such as year, month, day),
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">-- the ALTER TABLE command must specify values for all those columns.
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span><span style="color:#ff79c6">alter</span> <span style="color:#ff79c6">table</span> census partition (<span style="color:#ff79c6">year</span><span style="color:#ff79c6">=</span><span style="color:#bd93f9">1960</span>) <span style="color:#ff79c6">set</span> cached <span style="color:#ff79c6">in</span> <span style="color:#f1fa8c">&#39;pool_name&#39;</span>;
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4">-- Cache the data from one partition on up to 4 hosts, to minimize CPU load on any
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">-- single host when the same data block is processed multiple times.
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span><span style="color:#ff79c6">alter</span> <span style="color:#ff79c6">table</span> census partition (<span style="color:#ff79c6">year</span><span style="color:#ff79c6">=</span><span style="color:#bd93f9">1970</span>)
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">set</span> cached <span style="color:#ff79c6">in</span> <span style="color:#f1fa8c">&#39;pool_name&#39;</span> <span style="color:#ff79c6">with</span> replication <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">4</span>;
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4">-- At each stage, check the volume of cached data.
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">-- For large tables or partitions, the background loading might take some time,
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">-- so you might have to wait and reissue the statement until all the data
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">-- has finished being loaded into the cache.
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span><span style="color:#ff79c6">show</span> <span style="color:#ff79c6">table</span> stats census;
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">+</span><span style="color:#6272a4">-------+-------+--------+------+--------------+--------+
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span><span style="color:#ff79c6">|</span> <span style="color:#ff79c6">year</span>  <span style="color:#ff79c6">|</span> <span style="color:#ff79c6">#</span><span style="color:#ff79c6">Rows</span> <span style="color:#ff79c6">|</span> <span style="color:#ff79c6">#</span>Files <span style="color:#ff79c6">|</span> <span style="color:#ff79c6">Size</span> <span style="color:#ff79c6">|</span> Bytes Cached <span style="color:#ff79c6">|</span> Format <span style="color:#ff79c6">|</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">+</span><span style="color:#6272a4">-------+-------+--------+------+--------------+--------+
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span><span style="color:#ff79c6">|</span> <span style="color:#bd93f9">1900</span>  <span style="color:#ff79c6">|</span> <span style="color:#ff79c6">-</span><span style="color:#bd93f9">1</span>    <span style="color:#ff79c6">|</span> <span style="color:#bd93f9">1</span>      <span style="color:#ff79c6">|</span> <span style="color:#bd93f9">11</span>B  <span style="color:#ff79c6">|</span> <span style="color:#ff79c6">NOT</span> CACHED   <span style="color:#ff79c6">|</span> <span style="color:#8be9fd;font-style:italic">TEXT</span>   <span style="color:#ff79c6">|</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">|</span> <span style="color:#bd93f9">1940</span>  <span style="color:#ff79c6">|</span> <span style="color:#ff79c6">-</span><span style="color:#bd93f9">1</span>    <span style="color:#ff79c6">|</span> <span style="color:#bd93f9">1</span>      <span style="color:#ff79c6">|</span> <span style="color:#bd93f9">11</span>B  <span style="color:#ff79c6">|</span> <span style="color:#ff79c6">NOT</span> CACHED   <span style="color:#ff79c6">|</span> <span style="color:#8be9fd;font-style:italic">TEXT</span>   <span style="color:#ff79c6">|</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">|</span> <span style="color:#bd93f9">1960</span>  <span style="color:#ff79c6">|</span> <span style="color:#ff79c6">-</span><span style="color:#bd93f9">1</span>    <span style="color:#ff79c6">|</span> <span style="color:#bd93f9">1</span>      <span style="color:#ff79c6">|</span> <span style="color:#bd93f9">11</span>B  <span style="color:#ff79c6">|</span> <span style="color:#bd93f9">11</span>B          <span style="color:#ff79c6">|</span> <span style="color:#8be9fd;font-style:italic">TEXT</span>   <span style="color:#ff79c6">|</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">|</span> <span style="color:#bd93f9">1970</span>  <span style="color:#ff79c6">|</span> <span style="color:#ff79c6">-</span><span style="color:#bd93f9">1</span>    <span style="color:#ff79c6">|</span> <span style="color:#bd93f9">1</span>      <span style="color:#ff79c6">|</span> <span style="color:#bd93f9">11</span>B  <span style="color:#ff79c6">|</span> <span style="color:#ff79c6">NOT</span> CACHED   <span style="color:#ff79c6">|</span> <span style="color:#8be9fd;font-style:italic">TEXT</span>   <span style="color:#ff79c6">|</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">|</span> Total <span style="color:#ff79c6">|</span> <span style="color:#ff79c6">-</span><span style="color:#bd93f9">1</span>    <span style="color:#ff79c6">|</span> <span style="color:#bd93f9">4</span>      <span style="color:#ff79c6">|</span> <span style="color:#bd93f9">44</span>B  <span style="color:#ff79c6">|</span> <span style="color:#bd93f9">11</span>B          <span style="color:#ff79c6">|</span>        <span style="color:#ff79c6">|</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">+</span><span style="color:#6272a4">-------+-------+--------+------+--------------+--------+
+</span></span></span></code></pre></td></tr></table>
+</div>
+</div><p>Detecting and Correcting HDFS Block Skew Conditions</p>
+<ul>
+<li>use <strong>SUMMARY</strong>, <strong>PROFILE</strong>, Impala debug web U</li>
+<li>find any <strong>Avg Time</strong> and a <strong>Max Time</strong> value in summary output</li>
+<li>adjust the <strong>PARQUET_FILE_SIZE</strong> reducing the block size</li>
+<li>use <strong>COMPRESSION_CODEC=NONE</strong></li>
+</ul>
+<p>Data Cache for Remote Reads<br>
+When Impala compute nodes and its storage are not co-located</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">5
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-shell" data-lang="shell"><span style="display:flex;"><span>--data_cache<span style="color:#ff79c6">=</span>/data/0,/data/1:500GB
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>LRU <span style="color:#ff79c6">(</span>Least Recently Used--the default<span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>LIRS <span style="color:#ff79c6">(</span>Inter-referenece Recency Set<span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>--data_cache_eviction_policy<span style="color:#ff79c6">=</span>policy
+</span></span></code></pre></td></tr></table>
+</div>
+</div><h3 id="troubleshooting">Troubleshooting</h3>
+<p>Fault Tolerance</p>
+<ul>
+<li>RETRY_FAILED_QUERIES</li>
+<li>Node Blacklisting</li>
+</ul>
+<p>test I/O</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">5
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-shell" data-lang="shell"><span style="display:flex;"><span>sudo sysctl -w vm.drop_caches<span style="color:#ff79c6">=</span><span style="color:#bd93f9">3</span> vm.drop_caches<span style="color:#ff79c6">=</span><span style="color:#bd93f9">0</span>
+</span></span><span style="display:flex;"><span>vm.drop_caches <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">3</span>
+</span></span><span style="display:flex;"><span>vm.drop_caches <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">0</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>sudo dd <span style="color:#ff79c6">if</span><span style="color:#ff79c6">=</span>/dev/sda <span style="color:#8be9fd;font-style:italic">bs</span><span style="color:#ff79c6">=</span>1M <span style="color:#8be9fd;font-style:italic">of</span><span style="color:#ff79c6">=</span>/dev/null <span style="color:#8be9fd;font-style:italic">count</span><span style="color:#ff79c6">=</span>1k
+</span></span></code></pre></td></tr></table>
+</div>
+</div><table>
+<thead>
+<tr>
+<th>Symptom</th>
+<th>Explanation</th>
+<th>Recommendation</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Impala takes a long time to start</td>
+<td>Impala instances with large numbers of tables, partitions, or data files take longer to start because the metadata for these objects is broadcast to all impalad nodes and cached</td>
+<td>Adjust timeout and synchronicity settings</td>
+</tr>
+<tr>
+<td>Joins fail to complete</td>
+<td>There may be insufficient memory. During a join, data from the second, third, and so on sets to be joined is loaded into memory. If Impala chooses an inefficient join order or join mechanism, the query could exceed the total memory available</td>
+<td>Start by gathering statistics with the COMPUTE STATS statement for each table involved in the join. Consider specifying the [SHUFFLE] hint so that data from the joined tables is split up between nodes rather than broadcast to each node. If tuning at the SQL level is not sufficient, add more memory to your system or join smaller data sets</td>
+</tr>
+<tr>
+<td>Queries return incorrect results</td>
+<td>Impala metadata may be outdated after changes are performed in Hive</td>
+<td>Where possible, use the appropriate Impala statement (INSERT, LOAD DATA, CREATE TABLE, ALTER TABLE, COMPUTE STATS, and so on) rather than switching back and forth between Impala and Hive. Impala automatically broadcasts the results of DDL and DML operations to all Impala nodes in the cluster, but does not automatically recognize when such changes are made through Hive. After inserting data, adding a partition, or other operation in Hive</td>
+</tr>
+<tr>
+<td>Queries are slow to return results</td>
+<td>Some impalad instances may not have started. Using a browser, connect to the host running the Impala state store</td>
+<td>Ensure Impala is installed on all DataNodes. Start any impalad instances that are not running</td>
+</tr>
+</tbody>
+</table>
+<p><a href="https://chromium.googlesource.com/breakpad/breakpad/">Breakpad Minidumps</a></p>
+<h3 id="dedicated-coordinators">Dedicated Coordinators</h3>
+<p>1 coordinator for every 50 executors.<br>
+including CPU, the number of threads, the number of connections, and RPCs, under 80%.<br>
+Consider the following factors to determine the right number of coordinators in your cluster:</p>
+<ul>
+<li>What is the number of concurrent queries?</li>
+<li>What percentage of the workload is DDL?</li>
+<li>What is the average query resource usage at the various stages (merge, runtime filter, result set size, etc.)?</li>
+<li>How many Impala Daemons (impalad) is in the cluster?</li>
+<li>Is there a high availability requirement?</li>
+<li>Compute/storage capacity reduction factor</li>
+</ul>
+<h3 id="web-ui">WEB UI</h3>
+<p>impalad, http://IP:25000</p>
+<ul>
+<li>main page: version, hardware info, OS, process, cgroup</li>
+<li>admission</li>
+<li>backend</li>
+<li>catalog,all database all tables</li>
+<li>hadoop-varz</li>
+<li>jmx</li>
+<li>log_level</li>
+<li>logs</li>
+<li>memz</li>
+<li>metrics</li>
+<li>profile_docs</li>
+<li><strong>queries</strong></li>
+<li>rpcz</li>
+<li>sessions</li>
+<li>thredz</li>
+<li>varz</li>
+</ul>
+<p>statstored, http://IP:25010/</p>
+<ul>
+<li>main page: version, hardware info, OS, process, cgroup</li>
+<li>log_level</li>
+<li>logs</li>
+<li>memz</li>
+<li>metrics</li>
+<li>profile_docs</li>
+<li>rpcz</li>
+<li>subscribers</li>
+<li>thredz</li>
+<li>topics</li>
+<li>varz</li>
+</ul>
+<p>catalogd, http://IP:25020/</p>
+<ul>
+<li>main page: version, hardware info, OS, process, cgroup</li>
+<li>catalog, all database, all tables</li>
+<li>jmx</li>
+<li>log_level</li>
+<li>logs</li>
+<li>memz</li>
+<li>metrics</li>
+<li>operations</li>
+<li>profile_docs</li>
+<li>rpcz</li>
+<li>thredz</li>
+<li>varz</li>
+</ul>
+<h2 id="administration">Administration</h2>
+<h3 id="configuration">configuration</h3>
+<p>Setting Timeout</p>
+<ul>
+<li>Increasing the Statestore Timeout</li>
+<li>Setting the Idle Query and Idle Session Timeouts for impalad</li>
+<li>Setting Timeout and Retries for Thrift Connections to the Backend Client</li>
+<li>Cancelling a Query</li>
+<li>Setting a Time Limit on Query Execution</li>
+<li>Interactively Cancelling a Query</li>
+</ul>
+<p>Proxy</p>
+<ul>
+<li>Choosing the Load-Balancing Algorithm</li>
+<li>Using Kerberos</li>
+<li>TLS/SSL Enabled</li>
+</ul>
+<p>shell</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-sql" data-lang="sql"><span style="display:flex;"><span>impala<span style="color:#ff79c6">-</span>shell <span style="color:#ff79c6">-</span>i impalad<span style="color:#ff79c6">-</span><span style="color:#bd93f9">1</span>.mydomain.com <span style="color:#ff79c6">-</span>k <span style="color:#ff79c6">-</span>b loadbalancer<span style="color:#ff79c6">-</span><span style="color:#bd93f9">1</span>.mydomain.com
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>Deployment Limits</p>
+<ul>
+<li>150 nodes in Impala 2.12 and higher</li>
+<li>Number of Impalad Coordinators: 1 coordinator for at most every 50 executors</li>
+<li>Number of roles: 10,000 for Ranger</li>
+<li>Maximum number of columns in a query, included in a SELECT list, INSERT, and in an expression: no limit</li>
+<li>Number of tables referenced: no limit</li>
+<li>Number of plan nodes: no limit</li>
+<li>Number of plan fragments: no limit</li>
+<li>Depth of expression tree: 1000 hard limit</li>
+<li>Width of expression tree: 10,000 hard limit</li>
+<li>Codegen，Very deeply nested expressions within queries can exceed internal Impala limits</li>
+</ul>
+<p>Spilling Data</p>
+<ul>
+<li>to Disk</li>
+<li>to HDFS</li>
+<li>to Ozone</li>
+</ul>
+<p>example</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">5
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-shell" data-lang="shell"><span style="display:flex;"><span>--scratch_dirs<span style="color:#ff79c6">=</span><span style="color:#f1fa8c">&#34;/dir1:200GB:0, /dir2:1024GB:1, /dir3:1024GB:1, /dir4:1024GB:1&#34;</span>
+</span></span><span style="display:flex;"><span>--disk_spill_compression_codec<span style="color:#ff79c6">=</span>LZ4
+</span></span><span style="display:flex;"><span>--disk_spill_punch_holes<span style="color:#ff79c6">=</span><span style="color:#8be9fd;font-style:italic">true</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>--scratch_dirs<span style="color:#ff79c6">=</span>hdfs://hdfsnn/tmp:300G,/local_buffer_dir:512M,/local_dir:10G
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>Metadata Management</p>
+<ul>
+<li>Metadata on-demand mode</li>
+<li>Mixed mode</li>
+<li>Automatic Invalidation of Metadata Cache</li>
+<li>Automatic Invalidation/Refresh of Metadata</li>
+<li>Configure HMS for Event Based Automatic Metadata Sync</li>
+</ul>
+<h3 id="security">Security</h3>
+<p>Data and Log Files <br>
+Hive Metastore Database<br>
+Impala Web User Interface<br>
+TLS/SSL for Impala<br>
+Apache Ranger</p>
+<p>Authorization,Privilege Model</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">5
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-shell" data-lang="shell"><span style="display:flex;"><span>Server
+</span></span><span style="display:flex;"><span>    URI
+</span></span><span style="display:flex;"><span>    Database
+</span></span><span style="display:flex;"><span>        Table
+</span></span><span style="display:flex;"><span>            Column
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>Authentication</p>
+<ul>
+<li>Kerberos Authentication</li>
+<li>LDAP Authentication</li>
+<li>Multiple Authentication Methods</li>
+<li>Impala Delegation for Clients</li>
+</ul>
+<p>Format of the Audit Log Files</p>
+<ul>
+<li>Client session state:
+<ul>
+<li>Session ID</li>
+<li>User name</li>
+<li>Network address of the client connection</li>
+</ul>
+</li>
+<li>SQL statement details:
+<ul>
+<li>Query ID</li>
+<li>Statement Type - DML, DDL, and so on</li>
+<li>SQL statement text</li>
+<li>Execution start time, in local time</li>
+<li>Execution Status - Details on any errors that were encountered</li>
+<li>Target Catalog Objects:
+<ul>
+<li>Object Type - Table, View, or Database</li>
+<li>Fully qualified object name</li>
+<li>Privilege</li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+<p>Lineage Information</p>
+<ul>
+<li>Column Lineage</li>
+<li>Lineage Data for Impala</li>
+<li>-lineage_event_log_dir for impalad</li>
+</ul>
+<h3 id="admission-control">Admission Control</h3>
+<table>
+<thead>
+<tr>
+<th>parameters</th>
+<th>desc</th>
+<th>in config files</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>max memory</td>
+<td>The maximum memory capacity of the resource pool is cluster-wide</td>
+<td>fair-scheduler.xml, &lt;queue&gt; -&gt; &lt;maxResources&gt;</td>
+</tr>
+<tr>
+<td>maximum query memory</td>
+<td>Maximum memory of a single node</td>
+<td>impala.admission-control.max-query-mem-limit.root.default.regularPool</td>
+</tr>
+<tr>
+<td>minimum query memory</td>
+<td>Minimum memory for a single node</td>
+<td>impala.admission-control.min-query-mem-limit.root.default.regularPool</td>
+</tr>
+<tr>
+<td>max running queries</td>
+<td>the maximum number of concurrent queries allowed by the resource pool</td>
+<td>llama.am.throttling.maximum.placed.reservations.#QUEUE#</td>
+</tr>
+<tr>
+<td>max queued queries</td>
+<td>The maximum length of the queue, which is placed in the queue when the maximum parallelism is exceeded</td>
+<td>llama.am.throttling.maximum.queued.reservations.#QUEUE#</td>
+</tr>
+<tr>
+<td>queue timeout</td>
+<td>The maximum waiting time in the queue</td>
+<td>impala.admission-control.pool-queue-timeout-ms</td>
+</tr>
+</tbody>
+</table>
+<p>fair-scheduler.xml</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">15
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">16
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">17
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">18
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">19
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">20
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-xml" data-lang="xml"><span style="display:flex;"><span><span style="color:#ff79c6">&lt;allocations&gt;</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">&lt;queue</span> <span style="color:#50fa7b">name=</span><span style="color:#f1fa8c">&#34;root&#34;</span><span style="color:#ff79c6">&gt;</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">&lt;aclSubmitApps&gt;</span> <span style="color:#ff79c6">&lt;/aclSubmitApps&gt;</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">&lt;queue</span> <span style="color:#50fa7b">name=</span><span style="color:#f1fa8c">&#34;default&#34;</span><span style="color:#ff79c6">&gt;</span>
+</span></span><span style="display:flex;"><span>                       <span style="color:#6272a4">&lt;!-- Equivalent to the &#34;max memory&#34; parameter, which defines the maximum memory for the cluster scope --&gt;</span>
+</span></span><span style="display:flex;"><span>            <span style="color:#ff79c6">&lt;maxResources&gt;</span>40000 mb, 0 vcores, 0 disks<span style="color:#ff79c6">&lt;/maxResources&gt;</span>
+</span></span><span style="display:flex;"><span>            <span style="color:#ff79c6">&lt;aclSubmitApps&gt;</span>*<span style="color:#ff79c6">&lt;/aclSubmitApps&gt;</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">&lt;/queue&gt;</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">&lt;queue</span> <span style="color:#50fa7b">name=</span><span style="color:#f1fa8c">&#34;dev&#34;</span><span style="color:#ff79c6">&gt;</span>
+</span></span><span style="display:flex;"><span>                      <span style="color:#6272a4">&lt;!-- Defines the maximum memory of a cluster-wide resource pool 80G --&gt;</span>
+</span></span><span style="display:flex;"><span>                      <span style="color:#6272a4">&lt;!-- The user mapping relationship is also specified --&gt;</span>
+</span></span><span style="display:flex;"><span>            <span style="color:#ff79c6">&lt;maxResources&gt;</span>80000 mb, 0 vcores, 0 disks<span style="color:#ff79c6">&lt;/maxResources&gt;</span>
+</span></span><span style="display:flex;"><span>            <span style="color:#ff79c6">&lt;aclSubmitApps&gt;</span>user1,user2 dev,tech,admin<span style="color:#ff79c6">&lt;/aclSubmitApps&gt;</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">&lt;/queue&gt;</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">&lt;/queue&gt;</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">&lt;queuePlacementPolicy&gt;</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">&lt;rule</span> <span style="color:#50fa7b">name=</span><span style="color:#f1fa8c">&#34;specified&#34;</span> <span style="color:#50fa7b">create=</span><span style="color:#f1fa8c">&#34;false&#34;</span><span style="color:#ff79c6">/&gt;</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">&lt;rule</span> <span style="color:#50fa7b">name=</span><span style="color:#f1fa8c">&#34;default&#34;</span> <span style="color:#ff79c6">/&gt;</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">&lt;/queuePlacementPolicy&gt;</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">&lt;/allocations&gt;</span>
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>llama-site.xml</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">15
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">16
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">17
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">18
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">19
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">20
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">21
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">22
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">23
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">24
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">25
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">26
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">27
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">28
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">29
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">30
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">31
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">32
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">33
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">34
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">35
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">36
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">37
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">38
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">39
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">40
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">41
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">42
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">43
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-xml" data-lang="xml"><span style="display:flex;"><span><span style="color:#ff79c6">&lt;?xml version=&#34;1.0&#34; encoding=&#34;UTF-8&#34;?&gt;</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">&lt;configuration&gt;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4">&lt;!--  Configuration of the first queue --&gt;</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">&lt;property&gt;</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">&lt;name&gt;</span>llama.am.throttling.maximum.placed.reservations.root.default<span style="color:#ff79c6">&lt;/name&gt;</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">&lt;value&gt;</span>100<span style="color:#ff79c6">&lt;/value&gt;</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">&lt;/property&gt;</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">&lt;property&gt;</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">&lt;name&gt;</span>llama.am.throttling.maximum.queued.reservations.root.default<span style="color:#ff79c6">&lt;/name&gt;</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">&lt;value&gt;</span>100<span style="color:#ff79c6">&lt;/value&gt;</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">&lt;/property&gt;</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">&lt;property&gt;</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">&lt;name&gt;</span>impala.admission-control.pool-queue-timeout-ms.root.default<span style="color:#ff79c6">&lt;/name&gt;</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">&lt;value&gt;</span>5000<span style="color:#ff79c6">&lt;/value&gt;</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">&lt;/property&gt;</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">&lt;property&gt;</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">&lt;name&gt;</span>impala.admission-control.pool-default-query-options.root.default<span style="color:#ff79c6">&lt;/name&gt;</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">&lt;value&gt;</span>mem_limit=2000m,query_timeout_s=20<span style="color:#ff79c6">&lt;/value&gt;</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">&lt;/property&gt;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4">&lt;!-- The configuration of another queue --&gt;</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">&lt;property&gt;</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">&lt;name&gt;</span>llama.am.throttling.maximum.placed.reservations.root.dev<span style="color:#ff79c6">&lt;/name&gt;</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">&lt;value&gt;</span>50<span style="color:#ff79c6">&lt;/value&gt;</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">&lt;/property&gt;</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">&lt;property&gt;</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">&lt;name&gt;</span>llama.am.throttling.maximum.queued.reservations.root.dev<span style="color:#ff79c6">&lt;/name&gt;</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">&lt;value&gt;</span>50<span style="color:#ff79c6">&lt;/value&gt;</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">&lt;/property&gt;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4">&lt;!-- Set the timeout period of the queue --&gt;</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">&lt;property&gt;</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">&lt;name&gt;</span>impala.admission-control.pool-queue-timeout-ms.root.dev<span style="color:#ff79c6">&lt;/name&gt;</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">&lt;value&gt;</span>5000<span style="color:#ff79c6">&lt;/value&gt;</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">&lt;/property&gt;</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">&lt;property&gt;</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">&lt;name&gt;</span>impala.admission-control.pool-default-query-options.root.dev<span style="color:#ff79c6">&lt;/name&gt;</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">&lt;value&gt;</span>mem_limit=4000m, query_timeout_s=40<span style="color:#ff79c6">&lt;/value&gt;</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">&lt;/property&gt;</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">&lt;/configuration&gt;</span>
+</span></span></code></pre></td></tr></table>
+</div>
+</div><h2 id="sql">SQL</h2>
+<h3 id="statements-and-data-type">Statements and Data Type</h3>
+<ul>
+<li>ARRAY Complex Type</li>
+<li>BIGINT Data Type</li>
+<li>BOOLEAN Data Type</li>
+<li>CHAR Data Type</li>
+<li>DATE Data Type</li>
+<li>DECIMAL Data Type</li>
+<li>DOUBLE Data Type</li>
+<li>FLOAT Data Type</li>
+<li>INT Data Type</li>
+<li>MAP Complex Type</li>
+<li>REAL Data Type</li>
+<li>SMALLINT Data Type</li>
+<li>STRING Data Type</li>
+<li>STRUCT Complex Type</li>
+<li>TIMESTAMP Data Type</li>
+<li>TINYINT Data Type</li>
+<li>VARCHAR Data Type</li>
+</ul>
+<p>DDL Statements</p>
+<ul>
+<li>ALTER TABLE</li>
+<li>ALTER VIEW</li>
+<li>COMPUTE STATS</li>
+<li>CREATE DATABASE</li>
+<li>CREATE FUNCTION</li>
+<li>CREATE ROLE</li>
+<li>CREATE TABLE</li>
+<li>CREATE VIEW</li>
+<li>DROP DATABASE</li>
+<li>DROP FUNCTION</li>
+<li>DROP ROLE</li>
+<li>DROP TABLE</li>
+<li>DROP VIEW</li>
+<li>GRANT</li>
+<li>REVOKE</li>
+<li>TRUNCATE TABLE</li>
+<li>SHUTDOWN</li>
+</ul>
+<p>DML Statements</p>
+<ul>
+<li>DELETE</li>
+<li>INSERT</li>
+<li>LOAD DATA</li>
+<li>UPDATE</li>
+<li>UPSERT</li>
+<li>SHOW</li>
+<li>SELECT</li>
+<li>REFRESH</li>
+<li>REFRESH AUTHORIZATION</li>
+<li>REFRESH FUNCTIONS</li>
+</ul>
+<p>complex or nested types</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">15
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">16
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">17
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">18
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">19
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">20
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">21
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">22
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">23
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">24
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">25
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">26
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">27
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">28
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">29
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">30
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">31
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">32
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">33
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">34
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">35
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">36
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">37
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-sql" data-lang="sql"><span style="display:flex;"><span><span style="color:#6272a4">-- What goes inside the &lt; &gt; for an ARRAY is a single type, either a scalar or another
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">-- complex type (ARRAY, STRUCT, or MAP).
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span><span style="color:#ff79c6">CREATE</span> <span style="color:#ff79c6">TABLE</span> array_t
+</span></span><span style="display:flex;"><span>(
+</span></span><span style="display:flex;"><span>  id <span style="color:#8be9fd;font-style:italic">BIGINT</span>,
+</span></span><span style="display:flex;"><span>  a1 <span style="color:#8be9fd;font-style:italic">ARRAY</span> <span style="color:#ff79c6">&lt;</span>STRING<span style="color:#ff79c6">&gt;</span>,
+</span></span><span style="display:flex;"><span>  a2 <span style="color:#8be9fd;font-style:italic">ARRAY</span> <span style="color:#ff79c6">&lt;</span><span style="color:#8be9fd;font-style:italic">BIGINT</span><span style="color:#ff79c6">&gt;</span>,
+</span></span><span style="display:flex;"><span>  a3 <span style="color:#8be9fd;font-style:italic">ARRAY</span> <span style="color:#ff79c6">&lt;</span><span style="color:#ff79c6">TIMESTAMP</span><span style="color:#ff79c6">&gt;</span>,
+</span></span><span style="display:flex;"><span>  a4 <span style="color:#8be9fd;font-style:italic">ARRAY</span> <span style="color:#ff79c6">&lt;</span>STRUCT <span style="color:#ff79c6">&lt;</span>f1: STRING, f2: <span style="color:#8be9fd;font-style:italic">INT</span>, f3: <span style="color:#8be9fd;font-style:italic">BOOLEAN</span><span style="color:#ff79c6">&gt;&gt;</span>
+</span></span><span style="display:flex;"><span>)
+</span></span><span style="display:flex;"><span>STORED <span style="color:#ff79c6">AS</span> PARQUET;
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4">-- What goes inside the &lt; &gt; for a MAP is two comma-separated types specifying the types of the key-value pair:
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">-- a scalar type representing the key, and a scalar or complex type representing the value.
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span><span style="color:#ff79c6">CREATE</span> <span style="color:#ff79c6">TABLE</span> map_t
+</span></span><span style="display:flex;"><span>(
+</span></span><span style="display:flex;"><span>  id <span style="color:#8be9fd;font-style:italic">BIGINT</span>,
+</span></span><span style="display:flex;"><span>  m1 <span style="color:#ff79c6">MAP</span> <span style="color:#ff79c6">&lt;</span>STRING, STRING<span style="color:#ff79c6">&gt;</span>,
+</span></span><span style="display:flex;"><span>  m2 <span style="color:#ff79c6">MAP</span> <span style="color:#ff79c6">&lt;</span>STRING, <span style="color:#8be9fd;font-style:italic">BIGINT</span><span style="color:#ff79c6">&gt;</span>,
+</span></span><span style="display:flex;"><span>  m3 <span style="color:#ff79c6">MAP</span> <span style="color:#ff79c6">&lt;</span><span style="color:#8be9fd;font-style:italic">BIGINT</span>, STRING<span style="color:#ff79c6">&gt;</span>,
+</span></span><span style="display:flex;"><span>  m4 <span style="color:#ff79c6">MAP</span> <span style="color:#ff79c6">&lt;</span><span style="color:#8be9fd;font-style:italic">BIGINT</span>, <span style="color:#8be9fd;font-style:italic">BIGINT</span><span style="color:#ff79c6">&gt;</span>,
+</span></span><span style="display:flex;"><span>  m5 <span style="color:#ff79c6">MAP</span> <span style="color:#ff79c6">&lt;</span>STRING, <span style="color:#8be9fd;font-style:italic">ARRAY</span> <span style="color:#ff79c6">&lt;</span>STRING<span style="color:#ff79c6">&gt;&gt;</span>
+</span></span><span style="display:flex;"><span>)
+</span></span><span style="display:flex;"><span>STORED <span style="color:#ff79c6">AS</span> PARQUET;
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4">-- What goes inside the &lt; &gt; for a STRUCT is a comma-separated list of fields, each field defined as
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">-- name:type. The type can be a scalar or a complex type. The field names for each STRUCT do not clash
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">-- with the names of table columns or fields in other STRUCTs. A STRUCT is most often used inside
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">-- an ARRAY or a MAP rather than as a top-level column.
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span><span style="color:#ff79c6">CREATE</span> <span style="color:#ff79c6">TABLE</span> struct_t
+</span></span><span style="display:flex;"><span>(
+</span></span><span style="display:flex;"><span>  id <span style="color:#8be9fd;font-style:italic">BIGINT</span>,
+</span></span><span style="display:flex;"><span>  s1 STRUCT <span style="color:#ff79c6">&lt;</span>f1: STRING, f2: <span style="color:#8be9fd;font-style:italic">BIGINT</span><span style="color:#ff79c6">&gt;</span>,
+</span></span><span style="display:flex;"><span>  s2 <span style="color:#8be9fd;font-style:italic">ARRAY</span> <span style="color:#ff79c6">&lt;</span>STRUCT <span style="color:#ff79c6">&lt;</span>f1: <span style="color:#8be9fd;font-style:italic">INT</span>, f2: <span style="color:#ff79c6">TIMESTAMP</span><span style="color:#ff79c6">&gt;&gt;</span>,
+</span></span><span style="display:flex;"><span>  s3 <span style="color:#ff79c6">MAP</span> <span style="color:#ff79c6">&lt;</span><span style="color:#8be9fd;font-style:italic">BIGINT</span>, STRUCT <span style="color:#ff79c6">&lt;</span>name: STRING, birthday: <span style="color:#ff79c6">TIMESTAMP</span><span style="color:#ff79c6">&gt;&gt;</span>
+</span></span><span style="display:flex;"><span>)
+</span></span><span style="display:flex;"><span>STORED <span style="color:#ff79c6">AS</span> PARQUET;
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>desc complex type</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">15
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">16
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">17
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">18
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">19
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">20
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">21
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">22
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">23
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">24
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">25
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">26
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">27
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">28
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">29
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">30
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">31
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">32
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">33
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">34
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">35
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">36
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">37
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">38
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">39
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">40
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">41
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">42
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">43
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">44
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">45
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">46
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">47
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">48
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-sql" data-lang="sql"><span style="display:flex;"><span><span style="color:#ff79c6">desc</span> array_t;
+</span></span><span style="display:flex;"><span>Query: <span style="color:#ff79c6">describe</span> array_t
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">+</span><span style="color:#6272a4">------+------------------+---------+
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span><span style="color:#ff79c6">|</span> name <span style="color:#ff79c6">|</span> <span style="color:#ff79c6">type</span>             <span style="color:#ff79c6">|</span> <span style="color:#ff79c6">comment</span> <span style="color:#ff79c6">|</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">+</span><span style="color:#6272a4">------+------------------+---------+
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span><span style="color:#ff79c6">|</span> id   <span style="color:#ff79c6">|</span> <span style="color:#8be9fd;font-style:italic">bigint</span>           <span style="color:#ff79c6">|</span>         <span style="color:#ff79c6">|</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">|</span> a1   <span style="color:#ff79c6">|</span> <span style="color:#8be9fd;font-style:italic">array</span><span style="color:#ff79c6">&lt;</span>string<span style="color:#ff79c6">&gt;</span>    <span style="color:#ff79c6">|</span>         <span style="color:#ff79c6">|</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">|</span> a2   <span style="color:#ff79c6">|</span> <span style="color:#8be9fd;font-style:italic">array</span><span style="color:#ff79c6">&lt;</span><span style="color:#8be9fd;font-style:italic">bigint</span><span style="color:#ff79c6">&gt;</span>    <span style="color:#ff79c6">|</span>         <span style="color:#ff79c6">|</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">|</span> a3   <span style="color:#ff79c6">|</span> <span style="color:#8be9fd;font-style:italic">array</span><span style="color:#ff79c6">&lt;</span><span style="color:#ff79c6">timestamp</span><span style="color:#ff79c6">&gt;</span> <span style="color:#ff79c6">|</span>         <span style="color:#ff79c6">|</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">|</span> a4   <span style="color:#ff79c6">|</span> <span style="color:#8be9fd;font-style:italic">array</span><span style="color:#ff79c6">&lt;</span>struct<span style="color:#ff79c6">&lt;</span>    <span style="color:#ff79c6">|</span>         <span style="color:#ff79c6">|</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">|</span>      <span style="color:#ff79c6">|</span>   f1:string,     <span style="color:#ff79c6">|</span>         <span style="color:#ff79c6">|</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">|</span>      <span style="color:#ff79c6">|</span>   f2:<span style="color:#8be9fd;font-style:italic">int</span>,        <span style="color:#ff79c6">|</span>         <span style="color:#ff79c6">|</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">|</span>      <span style="color:#ff79c6">|</span>   f3:<span style="color:#8be9fd;font-style:italic">boolean</span>     <span style="color:#ff79c6">|</span>         <span style="color:#ff79c6">|</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">|</span>      <span style="color:#ff79c6">|</span> <span style="color:#ff79c6">&gt;&gt;</span>               <span style="color:#ff79c6">|</span>         <span style="color:#ff79c6">|</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">+</span><span style="color:#6272a4">------+------------------+---------+
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">desc</span> map_t;
+</span></span><span style="display:flex;"><span>Query: <span style="color:#ff79c6">describe</span> map_t
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">+</span><span style="color:#6272a4">------+---------------------------+---------+
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span><span style="color:#ff79c6">|</span> name <span style="color:#ff79c6">|</span> <span style="color:#ff79c6">type</span>                      <span style="color:#ff79c6">|</span> <span style="color:#ff79c6">comment</span> <span style="color:#ff79c6">|</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">+</span><span style="color:#6272a4">------+---------------------------+---------+
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span><span style="color:#ff79c6">|</span> id   <span style="color:#ff79c6">|</span> <span style="color:#8be9fd;font-style:italic">bigint</span>                    <span style="color:#ff79c6">|</span>         <span style="color:#ff79c6">|</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">|</span> m1   <span style="color:#ff79c6">|</span> <span style="color:#ff79c6">map</span><span style="color:#ff79c6">&lt;</span>string,string<span style="color:#ff79c6">&gt;</span>        <span style="color:#ff79c6">|</span>         <span style="color:#ff79c6">|</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">|</span> m2   <span style="color:#ff79c6">|</span> <span style="color:#ff79c6">map</span><span style="color:#ff79c6">&lt;</span>string,<span style="color:#8be9fd;font-style:italic">bigint</span><span style="color:#ff79c6">&gt;</span>        <span style="color:#ff79c6">|</span>         <span style="color:#ff79c6">|</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">|</span> m3   <span style="color:#ff79c6">|</span> <span style="color:#ff79c6">map</span><span style="color:#ff79c6">&lt;</span><span style="color:#8be9fd;font-style:italic">bigint</span>,string<span style="color:#ff79c6">&gt;</span>        <span style="color:#ff79c6">|</span>         <span style="color:#ff79c6">|</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">|</span> m4   <span style="color:#ff79c6">|</span> <span style="color:#ff79c6">map</span><span style="color:#ff79c6">&lt;</span><span style="color:#8be9fd;font-style:italic">bigint</span>,<span style="color:#8be9fd;font-style:italic">bigint</span><span style="color:#ff79c6">&gt;</span>        <span style="color:#ff79c6">|</span>         <span style="color:#ff79c6">|</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">|</span> m5   <span style="color:#ff79c6">|</span> <span style="color:#ff79c6">map</span><span style="color:#ff79c6">&lt;</span>string,<span style="color:#8be9fd;font-style:italic">array</span><span style="color:#ff79c6">&lt;</span>string<span style="color:#ff79c6">&gt;&gt;</span> <span style="color:#ff79c6">|</span>         <span style="color:#ff79c6">|</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">+</span><span style="color:#6272a4">------+---------------------------+---------+
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">desc</span> struct_t;
+</span></span><span style="display:flex;"><span>Query: <span style="color:#ff79c6">describe</span> struct_t
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">+</span><span style="color:#6272a4">------+----------------------+---------+
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span><span style="color:#ff79c6">|</span> name <span style="color:#ff79c6">|</span> <span style="color:#ff79c6">type</span>                 <span style="color:#ff79c6">|</span> <span style="color:#ff79c6">comment</span> <span style="color:#ff79c6">|</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">+</span><span style="color:#6272a4">------+----------------------+---------+
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span><span style="color:#ff79c6">|</span> id   <span style="color:#ff79c6">|</span> <span style="color:#8be9fd;font-style:italic">bigint</span>               <span style="color:#ff79c6">|</span>         <span style="color:#ff79c6">|</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">|</span> s1   <span style="color:#ff79c6">|</span> struct<span style="color:#ff79c6">&lt;</span>              <span style="color:#ff79c6">|</span>         <span style="color:#ff79c6">|</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">|</span>      <span style="color:#ff79c6">|</span>   f1:string,         <span style="color:#ff79c6">|</span>         <span style="color:#ff79c6">|</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">|</span>      <span style="color:#ff79c6">|</span>   f2:<span style="color:#8be9fd;font-style:italic">bigint</span>          <span style="color:#ff79c6">|</span>         <span style="color:#ff79c6">|</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">|</span>      <span style="color:#ff79c6">|</span> <span style="color:#ff79c6">&gt;</span>                    <span style="color:#ff79c6">|</span>         <span style="color:#ff79c6">|</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">|</span> s2   <span style="color:#ff79c6">|</span> <span style="color:#8be9fd;font-style:italic">array</span><span style="color:#ff79c6">&lt;</span>struct<span style="color:#ff79c6">&lt;</span>        <span style="color:#ff79c6">|</span>         <span style="color:#ff79c6">|</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">|</span>      <span style="color:#ff79c6">|</span>   f1:<span style="color:#8be9fd;font-style:italic">int</span>,            <span style="color:#ff79c6">|</span>         <span style="color:#ff79c6">|</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">|</span>      <span style="color:#ff79c6">|</span>   f2:<span style="color:#ff79c6">timestamp</span>       <span style="color:#ff79c6">|</span>         <span style="color:#ff79c6">|</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">|</span>      <span style="color:#ff79c6">|</span> <span style="color:#ff79c6">&gt;&gt;</span>                   <span style="color:#ff79c6">|</span>         <span style="color:#ff79c6">|</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">|</span> s3   <span style="color:#ff79c6">|</span> <span style="color:#ff79c6">map</span><span style="color:#ff79c6">&lt;</span><span style="color:#8be9fd;font-style:italic">bigint</span>,struct<span style="color:#ff79c6">&lt;</span>   <span style="color:#ff79c6">|</span>         <span style="color:#ff79c6">|</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">|</span>      <span style="color:#ff79c6">|</span>   name:string,       <span style="color:#ff79c6">|</span>         <span style="color:#ff79c6">|</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">|</span>      <span style="color:#ff79c6">|</span>   birthday:<span style="color:#ff79c6">timestamp</span> <span style="color:#ff79c6">|</span>         <span style="color:#ff79c6">|</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">|</span>      <span style="color:#ff79c6">|</span> <span style="color:#ff79c6">&gt;&gt;</span>                   <span style="color:#ff79c6">|</span>         <span style="color:#ff79c6">|</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">+</span><span style="color:#6272a4">------+----------------------+---------+
+</span></span></span></code></pre></td></tr></table>
+</div>
+</div><p>query complex type:</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-sql" data-lang="sql"><span style="display:flex;"><span><span style="color:#ff79c6">SELECT</span> s1.f1, s1.f2, s2.f1, s2.f2, s3.<span style="color:#ff79c6">key</span>, 
+</span></span><span style="display:flex;"><span>    s3.value.name, s3.value.birthday     
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">FROM</span> struct_t, struct_t.s2, struct_t.s3
+</span></span></code></pre></td></tr></table>
+</div>
+</div><h3 id="functions">Functions</h3>
+<p>Built-In Functions</p>
+<ul>
+<li>Mathematical Functions</li>
+<li>Type Conversion Functions</li>
+<li>Date and Time Functions</li>
+<li>Conditional Functions</li>
+<li>String Functions</li>
+<li>Window  Functions</li>
+<li>Analytic Functions</li>
+<li>Bit Functions</li>
+<li>Miscellaneous Functions</li>
+</ul>
+<p>User-Defined Functions (UDFs)</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">8
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-sql" data-lang="sql"><span style="display:flex;"><span><span style="color:#ff79c6">create</span> <span style="color:#ff79c6">function</span> my_lower(string) <span style="color:#ff79c6">returns</span> string <span style="color:#ff79c6">location</span> <span style="color:#f1fa8c">&#39;/user/hive/udfs/hive.jar&#39;</span> symbol<span style="color:#ff79c6">=</span><span style="color:#f1fa8c">&#39;org.apache.hadoop.hive.ql.udf.UDFLower&#39;</span>;
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">select</span> my_lower(<span style="color:#f1fa8c">&#39;Some String NOT ALREADY LOWERCASE&#39;</span>);
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">+</span><span style="color:#6272a4">----------------------------------------------------+
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span><span style="color:#ff79c6">|</span> udfs.my_lower(<span style="color:#f1fa8c">&#39;some string not already lowercase&#39;</span>) <span style="color:#ff79c6">|</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">+</span><span style="color:#6272a4">----------------------------------------------------+
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span><span style="color:#ff79c6">|</span> <span style="color:#ff79c6">some</span> string <span style="color:#ff79c6">not</span> already lowercase                  <span style="color:#ff79c6">|</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">+</span><span style="color:#6272a4">----------------------------------------------------+
+</span></span></span></code></pre></td></tr></table>
+</div>
+</div><p>c++ code</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-cpp" data-lang="cpp"><span style="display:flex;"><span><span style="color:#ff79c6">#ifndef IMPALA_UDF_SAMPLE_UDF_H
+</span></span></span><span style="display:flex;"><span><span style="color:#ff79c6">#define IMPALA_UDF_SAMPLE_UDF_H
+</span></span></span><span style="display:flex;"><span><span style="color:#ff79c6"></span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">#include</span> <span style="color:#ff79c6">&lt;impala_udf/udf.h&gt;</span><span style="color:#ff79c6">
+</span></span></span><span style="display:flex;"><span><span style="color:#ff79c6"></span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">using</span> <span style="color:#ff79c6">namespace</span> impala_udf;
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>IntVal <span style="color:#50fa7b">AddUdf</span>(FunctionContext<span style="color:#ff79c6">*</span> context, <span style="color:#ff79c6">const</span> IntVal<span style="color:#ff79c6">&amp;</span> arg1, <span style="color:#ff79c6">const</span> IntVal<span style="color:#ff79c6">&amp;</span> arg2);
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">#endif
+</span></span></span></code></pre></td></tr></table>
+</div>
+</div><p>c++ code</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">8
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">9
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-cpp" data-lang="cpp"><span style="display:flex;"><span><span style="color:#ff79c6">#include</span> <span style="color:#ff79c6">&#34;udf-sample.h&#34;</span><span style="color:#ff79c6">
+</span></span></span><span style="display:flex;"><span><span style="color:#ff79c6"></span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4">// In this sample we are declaring a UDF that adds two ints and returns an int.
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>IntVal <span style="color:#50fa7b">AddUdf</span>(FunctionContext<span style="color:#ff79c6">*</span> context, <span style="color:#ff79c6">const</span> IntVal<span style="color:#ff79c6">&amp;</span> arg1, <span style="color:#ff79c6">const</span> IntVal<span style="color:#ff79c6">&amp;</span> arg2) {
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">if</span> (arg1.is_null <span style="color:#ff79c6">||</span> arg2.is_null) <span style="color:#ff79c6">return</span> IntVal<span style="color:#ff79c6">::</span>null();
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">return</span> IntVal(arg1.val <span style="color:#ff79c6">+</span> arg2.val);
+</span></span><span style="display:flex;"><span>}
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4">// Multiple UDFs can be defined in the same file
+</span></span></span></code></pre></td></tr></table>
+</div>
+</div><p>other c++ example, build:</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-shell" data-lang="shell"><span style="display:flex;"><span>$ hdfs dfs -put ./udf_samples/libudfsample.so /user/hive/udfs/libudfsample.so
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>sql:</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">8
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-sql" data-lang="sql"><span style="display:flex;"><span><span style="color:#ff79c6">create</span> <span style="color:#ff79c6">function</span> has_vowels (string) <span style="color:#ff79c6">returns</span> <span style="color:#8be9fd;font-style:italic">boolean</span> <span style="color:#ff79c6">location</span> <span style="color:#f1fa8c">&#39;/user/hive/udfs/libudfsample.so&#39;</span> symbol<span style="color:#ff79c6">=</span><span style="color:#f1fa8c">&#39;HasVowels&#39;</span>;
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">select</span> has_vowels(<span style="color:#f1fa8c">&#39;abc&#39;</span>);
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">+</span><span style="color:#6272a4">------------------------+
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span><span style="color:#ff79c6">|</span> udfs.has_vowels(<span style="color:#f1fa8c">&#39;abc&#39;</span>) <span style="color:#ff79c6">|</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">+</span><span style="color:#6272a4">------------------------+
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span><span style="color:#ff79c6">|</span> <span style="color:#ff79c6">true</span>                   <span style="color:#ff79c6">|</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">+</span><span style="color:#6272a4">------------------------+
+</span></span></span></code></pre></td></tr></table>
+</div>
+</div><p>UDAF</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-sql" data-lang="sql"><span style="display:flex;"><span><span style="color:#ff79c6">create</span> <span style="color:#ff79c6">aggregate</span> <span style="color:#ff79c6">function</span> sum_of_squares(<span style="color:#8be9fd;font-style:italic">bigint</span>) <span style="color:#ff79c6">returns</span> <span style="color:#8be9fd;font-style:italic">bigint</span>
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">&gt;</span> <span style="color:#ff79c6">location</span> <span style="color:#f1fa8c">&#39;/user/hive/udfs/libudasample.so&#39;</span>
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">&gt;</span> init_fn<span style="color:#ff79c6">=</span><span style="color:#f1fa8c">&#39;SumOfSquaresInit&#39;</span>
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">&gt;</span> update_fn<span style="color:#ff79c6">=</span><span style="color:#f1fa8c">&#39;SumOfSquaresUpdate&#39;</span>
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">&gt;</span> merge_fn<span style="color:#ff79c6">=</span><span style="color:#f1fa8c">&#39;SumOfSquaresMerge&#39;</span>
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">&gt;</span> finalize_fn<span style="color:#ff79c6">=</span><span style="color:#f1fa8c">&#39;SumOfSquaresFinalize&#39;</span>;
+</span></span><span style="display:flex;"><span>  
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">select</span> <span style="color:#bd93f9">1</span><span style="color:#ff79c6">*</span><span style="color:#bd93f9">1</span> <span style="color:#ff79c6">+</span> <span style="color:#bd93f9">2</span><span style="color:#ff79c6">*</span><span style="color:#bd93f9">2</span> <span style="color:#ff79c6">+</span> <span style="color:#bd93f9">3</span><span style="color:#ff79c6">*</span><span style="color:#bd93f9">3</span> <span style="color:#ff79c6">+</span> <span style="color:#bd93f9">4</span><span style="color:#ff79c6">*</span><span style="color:#bd93f9">4</span>;
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">+</span><span style="color:#6272a4">-------------------------------+
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span><span style="color:#ff79c6">|</span> <span style="color:#bd93f9">1</span> <span style="color:#ff79c6">*</span> <span style="color:#bd93f9">1</span> <span style="color:#ff79c6">+</span> <span style="color:#bd93f9">2</span> <span style="color:#ff79c6">*</span> <span style="color:#bd93f9">2</span> <span style="color:#ff79c6">+</span> <span style="color:#bd93f9">3</span> <span style="color:#ff79c6">*</span> <span style="color:#bd93f9">3</span> <span style="color:#ff79c6">+</span> <span style="color:#bd93f9">4</span> <span style="color:#ff79c6">*</span> <span style="color:#bd93f9">4</span> <span style="color:#ff79c6">|</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">+</span><span style="color:#6272a4">-------------------------------+
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span><span style="color:#ff79c6">|</span> <span style="color:#bd93f9">30</span>                            <span style="color:#ff79c6">|</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">+</span><span style="color:#6272a4">-------------------------------+  
+</span></span></span></code></pre></td></tr></table>
+</div>
+</div><h3 id="compatibility-with-hive">Compatibility with Hive</h3>
+<p>The current release of Impala does not support the following SQL features that you might be familiar with from HiveQL</p>
+<ul>
+<li>Extensibility mechanisms such as TRANSFORM, custom file formats, or custom SerDes.</li>
+<li>The DATE data type.</li>
+<li>XML functions.</li>
+<li>Certain aggregate functions from HiveQL: covar_pop, covar_samp, corr, percentile, percentile_approx, histogram_numeric, collect_set; Impala supports the set of aggregate functions listed in Impala Aggregate Functions and analytic functions listed in Impala Analytic Functions.</li>
+<li>Sampling</li>
+<li>Lateral views</li>
+</ul>
+<p>Impala does not currently support these HiveQL statements</p>
+<ul>
+<li>ANALYZE TABLE (the Impala equivalent is COMPUTE STATS)</li>
+<li>DESCRIBE COLUMN</li>
+<li>DESCRIBE DATABASE</li>
+<li>EXPORT TABLE</li>
+<li>IMPORT TABLE</li>
+<li>SHOW TABLE EXTENDED</li>
+<li>SHOW TBLPROPERTIES</li>
+<li>SHOW INDEXES</li>
+<li>SHOW COLUMNS</li>
+<li>INSERT OVERWRITE DIRECTORY;</li>
+</ul>
+<h3 id="expalin">Expalin</h3>
+<p>explain</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">15
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">16
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">17
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">18
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">19
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-sql" data-lang="sql"><span style="display:flex;"><span><span style="color:#ff79c6">explain</span> <span style="color:#ff79c6">select</span> <span style="color:#ff79c6">count</span>(<span style="color:#ff79c6">*</span>) <span style="color:#ff79c6">from</span> hudi01;
+</span></span><span style="display:flex;"><span>Query: <span style="color:#ff79c6">explain</span> <span style="color:#ff79c6">select</span> <span style="color:#ff79c6">count</span>(<span style="color:#ff79c6">*</span>) <span style="color:#ff79c6">from</span> hudi01
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">+</span><span style="color:#6272a4">------------------------------------------------------------+
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span><span style="color:#ff79c6">|</span> <span style="color:#ff79c6">Explain</span> String                                             <span style="color:#ff79c6">|</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">+</span><span style="color:#6272a4">------------------------------------------------------------+
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span><span style="color:#ff79c6">|</span> <span style="color:#ff79c6">Max</span> Per<span style="color:#ff79c6">-</span><span style="color:#ff79c6">Host</span> Resource Reservation: Memory<span style="color:#ff79c6">=</span><span style="color:#bd93f9">8</span>.<span style="color:#bd93f9">00</span>KB Threads<span style="color:#ff79c6">=</span><span style="color:#bd93f9">2</span> <span style="color:#ff79c6">|</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">|</span> Per<span style="color:#ff79c6">-</span><span style="color:#ff79c6">Host</span> Resource Estimates: Memory<span style="color:#ff79c6">=</span><span style="color:#bd93f9">10</span>MB                   <span style="color:#ff79c6">|</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">|</span> Codegen disabled <span style="color:#ff79c6">by</span> planner                                <span style="color:#ff79c6">|</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">|</span>                                                            <span style="color:#ff79c6">|</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">|</span> PLAN<span style="color:#ff79c6">-</span>ROOT SINK                                             <span style="color:#ff79c6">|</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">|</span> <span style="color:#ff79c6">|</span>                                                          <span style="color:#ff79c6">|</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">|</span> <span style="color:#bd93f9">01</span>:<span style="color:#ff79c6">AGGREGATE</span> [FINALIZE]                                    <span style="color:#ff79c6">|</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">|</span> <span style="color:#ff79c6">|</span>  <span style="color:#ff79c6">output</span>: sum_init_zero(hudi_test.hudi01.stats: num_rows) <span style="color:#ff79c6">|</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">|</span> <span style="color:#ff79c6">|</span>  <span style="color:#ff79c6">row</span><span style="color:#ff79c6">-</span><span style="color:#ff79c6">size</span><span style="color:#ff79c6">=</span><span style="color:#bd93f9">8</span>B <span style="color:#ff79c6">cardinality</span><span style="color:#ff79c6">=</span><span style="color:#bd93f9">1</span>                               <span style="color:#ff79c6">|</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">|</span> <span style="color:#ff79c6">|</span>                                                          <span style="color:#ff79c6">|</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">|</span> <span style="color:#bd93f9">00</span>:SCAN HDFS [hudi_test.hudi01]                            <span style="color:#ff79c6">|</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">|</span>    HDFS partitions<span style="color:#ff79c6">=</span><span style="color:#bd93f9">1</span><span style="color:#ff79c6">/</span><span style="color:#bd93f9">1</span> files<span style="color:#ff79c6">=</span><span style="color:#bd93f9">5</span> <span style="color:#ff79c6">size</span><span style="color:#ff79c6">=</span><span style="color:#bd93f9">2</span>.<span style="color:#bd93f9">24</span>KB                 <span style="color:#ff79c6">|</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">|</span>    <span style="color:#ff79c6">row</span><span style="color:#ff79c6">-</span><span style="color:#ff79c6">size</span><span style="color:#ff79c6">=</span><span style="color:#bd93f9">8</span>B <span style="color:#ff79c6">cardinality</span><span style="color:#ff79c6">=</span><span style="color:#bd93f9">5</span>                               <span style="color:#ff79c6">|</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">+</span><span style="color:#6272a4">------------------------------------------------------------+
+</span></span></span></code></pre></td></tr></table>
+</div>
+</div><p>summary</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">8
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-sql" data-lang="sql"><span style="display:flex;"><span>summary;
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">+</span><span style="color:#6272a4">--------------+--------+-------+----------+----------+-------+------------+----------+---------------+------------------+
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span><span style="color:#ff79c6">|</span> <span style="color:#ff79c6">Operator</span>     <span style="color:#ff79c6">|</span> <span style="color:#ff79c6">#</span>Hosts <span style="color:#ff79c6">|</span> <span style="color:#ff79c6">#</span>Inst <span style="color:#ff79c6">|</span> <span style="color:#ff79c6">Avg</span> Time <span style="color:#ff79c6">|</span> <span style="color:#ff79c6">Max</span> Time <span style="color:#ff79c6">|</span> <span style="color:#ff79c6">#</span><span style="color:#ff79c6">Rows</span> <span style="color:#ff79c6">|</span> Est. <span style="color:#ff79c6">#</span><span style="color:#ff79c6">Rows</span> <span style="color:#ff79c6">|</span> Peak Mem <span style="color:#ff79c6">|</span> Est. Peak Mem <span style="color:#ff79c6">|</span> Detail           <span style="color:#ff79c6">|</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">+</span><span style="color:#6272a4">--------------+--------+-------+----------+----------+-------+------------+----------+---------------+------------------+
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span><span style="color:#ff79c6">|</span> F00:ROOT     <span style="color:#ff79c6">|</span> <span style="color:#bd93f9">1</span>      <span style="color:#ff79c6">|</span> <span style="color:#bd93f9">1</span>     <span style="color:#ff79c6">|</span> <span style="color:#bd93f9">0</span>ns      <span style="color:#ff79c6">|</span> <span style="color:#bd93f9">0</span>ns      <span style="color:#ff79c6">|</span>       <span style="color:#ff79c6">|</span>            <span style="color:#ff79c6">|</span> <span style="color:#bd93f9">0</span> B      <span style="color:#ff79c6">|</span> <span style="color:#bd93f9">0</span> B           <span style="color:#ff79c6">|</span>                  <span style="color:#ff79c6">|</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">|</span> <span style="color:#bd93f9">01</span>:<span style="color:#ff79c6">AGGREGATE</span> <span style="color:#ff79c6">|</span> <span style="color:#bd93f9">1</span>      <span style="color:#ff79c6">|</span> <span style="color:#bd93f9">1</span>     <span style="color:#ff79c6">|</span> <span style="color:#bd93f9">1</span>.<span style="color:#bd93f9">00</span>ms   <span style="color:#ff79c6">|</span> <span style="color:#bd93f9">1</span>.<span style="color:#bd93f9">00</span>ms   <span style="color:#ff79c6">|</span> <span style="color:#bd93f9">1</span>     <span style="color:#ff79c6">|</span> <span style="color:#bd93f9">1</span>          <span style="color:#ff79c6">|</span> <span style="color:#bd93f9">20</span>.<span style="color:#bd93f9">00</span> KB <span style="color:#ff79c6">|</span> <span style="color:#bd93f9">16</span>.<span style="color:#bd93f9">00</span> KB      <span style="color:#ff79c6">|</span> FINALIZE         <span style="color:#ff79c6">|</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">|</span> <span style="color:#bd93f9">00</span>:SCAN HDFS <span style="color:#ff79c6">|</span> <span style="color:#bd93f9">1</span>      <span style="color:#ff79c6">|</span> <span style="color:#bd93f9">1</span>     <span style="color:#ff79c6">|</span> <span style="color:#bd93f9">29</span>.<span style="color:#bd93f9">00</span>ms  <span style="color:#ff79c6">|</span> <span style="color:#bd93f9">29</span>.<span style="color:#bd93f9">00</span>ms  <span style="color:#ff79c6">|</span> <span style="color:#bd93f9">5</span>     <span style="color:#ff79c6">|</span> <span style="color:#bd93f9">5</span>          <span style="color:#ff79c6">|</span> <span style="color:#bd93f9">28</span>.<span style="color:#bd93f9">00</span> KB <span style="color:#ff79c6">|</span> <span style="color:#bd93f9">1</span>.<span style="color:#bd93f9">00</span> MB       <span style="color:#ff79c6">|</span> hudi_test.hudi01 <span style="color:#ff79c6">|</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">+</span><span style="color:#6272a4">--------------+--------+-------+----------+----------+-------+------------+----------+---------------+------------------+
+</span></span></span></code></pre></td></tr></table>
+</div>
+</div><p>show table stats</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">7
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-sql" data-lang="sql"><span style="display:flex;"><span><span style="color:#ff79c6">SHOW</span> <span style="color:#ff79c6">TABLE</span> STATS hudi01;
+</span></span><span style="display:flex;"><span>Query: <span style="color:#ff79c6">SHOW</span> <span style="color:#ff79c6">TABLE</span> STATS hudi01
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">+</span><span style="color:#6272a4">-------+--------+--------+--------------+-------------------+---------+-------------------+-------------------------------------------------------------+-----------+
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span><span style="color:#ff79c6">|</span> <span style="color:#ff79c6">#</span><span style="color:#ff79c6">Rows</span> <span style="color:#ff79c6">|</span> <span style="color:#ff79c6">#</span>Files <span style="color:#ff79c6">|</span> <span style="color:#ff79c6">Size</span>   <span style="color:#ff79c6">|</span> Bytes Cached <span style="color:#ff79c6">|</span> <span style="color:#ff79c6">Cache</span> Replication <span style="color:#ff79c6">|</span> Format  <span style="color:#ff79c6">|</span> Incremental stats <span style="color:#ff79c6">|</span> <span style="color:#ff79c6">Location</span>                                                    <span style="color:#ff79c6">|</span> EC Policy <span style="color:#ff79c6">|</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">+</span><span style="color:#6272a4">-------+--------+--------+--------------+-------------------+---------+-------------------+-------------------------------------------------------------+-----------+
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span><span style="color:#ff79c6">|</span> <span style="color:#bd93f9">32</span>    <span style="color:#ff79c6">|</span> <span style="color:#bd93f9">5</span>      <span style="color:#ff79c6">|</span> <span style="color:#bd93f9">2</span>.<span style="color:#bd93f9">24</span>KB <span style="color:#ff79c6">|</span> <span style="color:#ff79c6">NOT</span> CACHED   <span style="color:#ff79c6">|</span> <span style="color:#ff79c6">NOT</span> CACHED        <span style="color:#ff79c6">|</span> PARQUET <span style="color:#ff79c6">|</span> <span style="color:#ff79c6">false</span>             <span style="color:#ff79c6">|</span> hdfs:<span style="color:#ff79c6">//</span>nameservice1<span style="color:#ff79c6">/</span>apps<span style="color:#ff79c6">/</span>hive<span style="color:#ff79c6">/</span>warehouse<span style="color:#ff79c6">/</span>hudi_test.db<span style="color:#ff79c6">/</span>hudi01 <span style="color:#ff79c6">|</span> <span style="color:#ff79c6">NONE</span>      <span style="color:#ff79c6">|</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">+</span><span style="color:#6272a4">-------+--------+----
+</span></span></span></code></pre></td></tr></table>
+</div>
+</div><p>show column</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">8
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-sql" data-lang="sql"><span style="display:flex;"><span><span style="color:#ff79c6">SHOW</span> <span style="color:#ff79c6">COLUMN</span> STATS hudi01;
+</span></span><span style="display:flex;"><span>Query: <span style="color:#ff79c6">SHOW</span> <span style="color:#ff79c6">COLUMN</span> STATS hudi01
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">+</span><span style="color:#6272a4">--------+--------+------------------+--------+----------+----------+--------+---------+
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span><span style="color:#ff79c6">|</span> <span style="color:#ff79c6">Column</span> <span style="color:#ff79c6">|</span> <span style="color:#ff79c6">Type</span>   <span style="color:#ff79c6">|</span> <span style="color:#ff79c6">#</span><span style="color:#ff79c6">Distinct</span> <span style="color:#ff79c6">Values</span> <span style="color:#ff79c6">|</span> <span style="color:#ff79c6">#</span>Nulls <span style="color:#ff79c6">|</span> <span style="color:#ff79c6">Max</span> <span style="color:#ff79c6">Size</span> <span style="color:#ff79c6">|</span> <span style="color:#ff79c6">Avg</span> <span style="color:#ff79c6">Size</span> <span style="color:#ff79c6">|</span> <span style="color:#ff79c6">#</span>Trues <span style="color:#ff79c6">|</span> <span style="color:#ff79c6">#</span>Falses <span style="color:#ff79c6">|</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">+</span><span style="color:#6272a4">--------+--------+------------------+--------+----------+----------+--------+---------+
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span><span style="color:#ff79c6">|</span> id     <span style="color:#ff79c6">|</span> <span style="color:#8be9fd;font-style:italic">INT</span>    <span style="color:#ff79c6">|</span> <span style="color:#ff79c6">-</span><span style="color:#bd93f9">1</span>               <span style="color:#ff79c6">|</span> <span style="color:#ff79c6">-</span><span style="color:#bd93f9">1</span>     <span style="color:#ff79c6">|</span> <span style="color:#bd93f9">4</span>        <span style="color:#ff79c6">|</span> <span style="color:#bd93f9">4</span>.<span style="color:#bd93f9">0</span>      <span style="color:#ff79c6">|</span> <span style="color:#ff79c6">-</span><span style="color:#bd93f9">1</span>     <span style="color:#ff79c6">|</span> <span style="color:#ff79c6">-</span><span style="color:#bd93f9">1</span>      <span style="color:#ff79c6">|</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">|</span> name   <span style="color:#ff79c6">|</span> STRING <span style="color:#ff79c6">|</span> <span style="color:#ff79c6">-</span><span style="color:#bd93f9">1</span>               <span style="color:#ff79c6">|</span> <span style="color:#ff79c6">-</span><span style="color:#bd93f9">1</span>     <span style="color:#ff79c6">|</span> <span style="color:#ff79c6">-</span><span style="color:#bd93f9">1</span>       <span style="color:#ff79c6">|</span> <span style="color:#ff79c6">-</span><span style="color:#bd93f9">1</span>.<span style="color:#bd93f9">0</span>     <span style="color:#ff79c6">|</span> <span style="color:#ff79c6">-</span><span style="color:#bd93f9">1</span>     <span style="color:#ff79c6">|</span> <span style="color:#ff79c6">-</span><span style="color:#bd93f9">1</span>      <span style="color:#ff79c6">|</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">+</span><span style="color:#6272a4">--------+--------+------------------+--------+----------+----------+--------+---------+
+</span></span></span></code></pre></td></tr></table>
+</div>
+</div><p>show partitions</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">6
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-sql" data-lang="sql"><span style="display:flex;"><span><span style="color:#ff79c6">SHOW</span> PARTITIONS sales_data
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">+</span><span style="color:#6272a4">-------+-------+-------+--------+------+--------------+-------------------+--------+-------------------+----------+-----------+
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span><span style="color:#ff79c6">|</span> <span style="color:#ff79c6">year</span>  <span style="color:#ff79c6">|</span> <span style="color:#ff79c6">month</span> <span style="color:#ff79c6">|</span> <span style="color:#ff79c6">#</span><span style="color:#ff79c6">Rows</span> <span style="color:#ff79c6">|</span> <span style="color:#ff79c6">#</span>Files <span style="color:#ff79c6">|</span> <span style="color:#ff79c6">Size</span> <span style="color:#ff79c6">|</span> Bytes Cached <span style="color:#ff79c6">|</span> <span style="color:#ff79c6">Cache</span> Replication <span style="color:#ff79c6">|</span> Format <span style="color:#ff79c6">|</span> Incremental stats <span style="color:#ff79c6">|</span> <span style="color:#ff79c6">Location</span> <span style="color:#ff79c6">|</span> EC Policy <span style="color:#ff79c6">|</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">+</span><span style="color:#6272a4">-------+-------+-------+--------+------+--------------+-------------------+--------+-------------------+----------+-----------+
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span><span style="color:#ff79c6">|</span> Total <span style="color:#ff79c6">|</span>       <span style="color:#ff79c6">|</span> <span style="color:#ff79c6">-</span><span style="color:#bd93f9">1</span>    <span style="color:#ff79c6">|</span> <span style="color:#bd93f9">0</span>      <span style="color:#ff79c6">|</span> <span style="color:#bd93f9">0</span>B   <span style="color:#ff79c6">|</span> <span style="color:#bd93f9">0</span>B           <span style="color:#ff79c6">|</span>                   <span style="color:#ff79c6">|</span>        <span style="color:#ff79c6">|</span>                   <span style="color:#ff79c6">|</span>          <span style="color:#ff79c6">|</span>           <span style="color:#ff79c6">|</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">+</span><span style="color:#6272a4">-------+-------+-------+--------+------+--------------+-------------------+--------+-------------------+----------+-----------+
+</span></span></span></code></pre></td></tr></table>
+</div>
+</div><h3 id="file-formats">File Formats</h3>
+<table>
+<thead>
+<tr>
+<th>File Type</th>
+<th>Format</th>
+<th>Compression Codecs</th>
+<th>Impala Can CREATE?</th>
+<th>Impala Can INSERT?</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Parquet</td>
+<td>Structured</td>
+<td>Snappy, gzip, zstd, lz4; currently Snappy by default</td>
+<td>Yes.</td>
+<td>Yes: CREATE TABLE, INSERT, LOAD DATA, and query</td>
+</tr>
+<tr>
+<td>ORC</td>
+<td>Structured</td>
+<td>gzip, Snappy, LZO, LZ4; currently gzip by default</td>
+<td>Yes, in Impala 2.12.0 and higher.By default, ORC reads are enabled in Impala 3.4.0 and higher</td>
+<td>No. Import data by using LOAD DATA on data files already in the right format, or use INSERT in Hive followed by REFRESH table_name in Impala.</td>
+</tr>
+<tr>
+<td>Text</td>
+<td>Unstructured</td>
+<td>bzip2, deflate, gzip, LZO, Snappy, zstd</td>
+<td>Yes. For CREATE TABLE with no STORED AS clause</td>
+<td>If LZO compression is used, you must create the table and load data in Hive.</td>
+</tr>
+<tr>
+<td>Avro</td>
+<td>Structured</td>
+<td>Snappy, gzip, deflate</td>
+<td>Yes, in Impala 1.4.0 and higher. In lower versions, create the table using Hive</td>
+<td>No. Import data by using LOAD DATA on data files already in the right format, or use INSERT in Hive followed by REFRESH table_name in Impala</td>
+</tr>
+<tr>
+<td>Hudi</td>
+<td>Structured</td>
+<td>Snappy, gzip, zstd, lz4; currently Snappy by default</td>
+<td>Yes, support for Read Optimized Queries is experimental</td>
+<td>No. Create an external table in Impala. Set the table location to the Hudi table directory. Alternatively, create the Hudi table in Hive</td>
+</tr>
+<tr>
+<td>RCFile</td>
+<td>Structured</td>
+<td>Snappy, gzip, deflate, bzip2</td>
+<td>Yes</td>
+<td>No. Import data by using LOAD DATA on data files already in the right format, or use INSERT in Hive followed by REFRESH table_name in Impala</td>
+</tr>
+<tr>
+<td>SequenceFile</td>
+<td>Structured</td>
+<td>Snappy, gzip, deflate, bzip2</td>
+<td>Yes</td>
+<td>No. Import data by using LOAD DATA on data files already in the right format, or use INSERT in Hive followed by REFRESH table_name in Impala</td>
+</tr>
+</tbody>
+</table>
+<p>Supported table and storage</p>
+<ul>
+<li>Kudu Tables</li>
+<li>HBase Tables</li>
+<li>Iceberg Tables</li>
+<li>S3 Tables</li>
+<li>Azure Data Lake Store</li>
+<li>Isilon Storage</li>
+<li>Ozone Storage</li>
+</ul>
+<p>for ice-berg</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">5
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-sql" data-lang="sql"><span style="display:flex;"><span><span style="color:#ff79c6">CREATE</span> <span style="color:#ff79c6">EXTERNAL</span> <span style="color:#ff79c6">TABLE</span> ice_hadoop_cat
+</span></span><span style="display:flex;"><span>STORED <span style="color:#ff79c6">AS</span> ICEBERG
+</span></span><span style="display:flex;"><span>TBLPROPERTIES(<span style="color:#f1fa8c">&#39;iceberg.catalog&#39;</span><span style="color:#ff79c6">=</span><span style="color:#f1fa8c">&#39;hadoop.catalog&#39;</span>,
+</span></span><span style="display:flex;"><span>              <span style="color:#f1fa8c">&#39;iceberg.catalog_location&#39;</span><span style="color:#ff79c6">=</span><span style="color:#f1fa8c">&#39;/path/to/catalog&#39;</span>,
+</span></span><span style="display:flex;"><span>              <span style="color:#f1fa8c">&#39;iceberg.table_identifier&#39;</span><span style="color:#ff79c6">=</span><span style="color:#f1fa8c">&#39;namespace.table&#39;</span>);
+</span></span></code></pre></td></tr></table>
+</div>
+</div><h2 id="reference">Reference</h2>
+<ul>
+<li><a href="https://impala.apache.org/docs/build/asf-site-html/topics/impala_performance.html">Tuning Impala for Performance</a></li>
+<li><a href="https://medium.com/@giuliosiracusano/apache-impala-data-scientist-fundamentals-part-i-c18252316df9">Apache Impala — Data Scientist Fundamentals Part I</a></li>
+<li><a href="https://docs.cloudera.com/cdw-runtime/cloud/impala-reference/topics/impala-perf-joins.html">Query Join Performance</a></li>
+<li><a href="https://medium.com/@Ratnark/5-performance-tuning-tips-for-bigdata-in-hql-impala-b219ef644376">Performance Tuning tips for Bigdata Tables in HQL/IMPALA</a></li>
+<li><a href="https://data-flair.training/blogs/impala-troubleshooting-performance-tuning/">What is Impala Troubleshooting &amp; Performance Tuning</a></li>
+<li><a href="https://blog.cloudera.com/keeping-small-queries-fast-short-query-optimizations-in-apache-impala/">Keeping Small Queries Fast – Short query optimizations in Apache Impala</a></li>
+<li><a href="http://huihui.couplecoders.tech/categories/Impala/">code source analyse</a></li>
+<li><a href="https://github.com/onefoursix/Cloudera-Impala-JDBC-Example">Cloudera-Impala-JDBC-Example</a></li>
+<li><a href="https://docs.cloudera.com/documentation/enterprise/latest/topics/impala_resource_management.html">Resource Management</a></li>
+<li><a href="https://cloudera.github.io/llama/llama-site.html">Llama Default Configuration</a>
+-<a href="https://cloudera.github.io/llama/">Llama github</a></li>
+</ul>
+
+			<script type="text/javascript"
+        async
+        src="https://cdn.bootcss.com/mathjax/2.7.3/MathJax.js?config=TeX-AMS-MML_HTMLorMML">
+MathJax.Hub.Config({
+  tex2jax: {
+    inlineMath: [['$','$'], ['\\(','\\)']],
+    displayMath: [['$$','$$'], ['\[\[','\]\]']],
+    processEscapes: true,
+    processEnvironments: true,
+    skipTags: ['script', 'noscript', 'style', 'textarea', 'pre'],
+    TeX: { equationNumbers: { autoNumber: "AMS" },
+         extensions: ["AMSmath.js", "AMSsymbols.js"] }
+  }
+});
+
+MathJax.Hub.Queue(function() {
+    
+    
+    
+    var all = MathJax.Hub.getAllJax(), i;
+    for(i = 0; i < all.length; i += 1) {
+        all[i].SourceElement().parentNode.className += ' has-jax';
+    }
+});
+</script>
+
+<style>
+code.has-jax {
+    font: inherit;
+    font-size: 100%;
+    background: inherit;
+    border: inherit;
+    color: #515151;
+}
+</style>
+        </div>
+
+        
+
+
+        
+
+
+        <div class="post-meta meta-tags">
+            
+            <ul class="clearfix">
+                
+                <li><a href='/tags/impala'>Impala</a></li>
+                
+            </ul>
+            
+        </div>
+    </article>
+    
+    
+
+    
+    
+    <div class="post bg-white">
+      <script src="https://utteranc.es/client.js"
+            repo= "himichael/hugoblogtalks"
+            issue-term="pathname"
+            theme="github-light"
+            crossorigin="anonymous"
+            async>
+      </script>
+    </div>
+    
+</div>
+
+
+                </div>
+
+                <div id="secondary">
+    <section class="widget">
+        <form id="search" action='https://code0xff.org/search/' method="get" accept-charset="utf-8" target="_blank" _lpchecked="1">
+      
+      <input type="text" name="q" maxlength="20" placeholder="Search">
+      <input type="hidden" name="sitesearch" value="https://code0xff.org/">
+      <button type="submit" class="submit icon-search"></button>
+</form>
+    </section>
+    
+    <section class="widget">
+        <h3 class="widget-title">最近文章</h3>
+<ul class="widget-list">
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/12/impala_tuning/" title="Impala Tuning Summary">Impala Tuning Summary</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/11/%E5%A4%A7%E6%95%B0%E6%8D%AE%E5%8E%86%E5%8F%B2/" title="The History of Big data">The History of Big data</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/11/tpcx-hs%E4%BC%98%E5%8C%96%E6%80%BB%E7%BB%93/" title="TPCx-HS优化总结">TPCx-HS优化总结</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/10/c&#43;&#43;%E6%A8%A1%E7%89%88%E7%9A%84%E4%B8%80%E4%BA%9B%E8%AE%B0%E5%BD%95/" title="C&#43;&#43;模版的一些记录">C&#43;&#43;模版的一些记录</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/10/%E7%83%AD%E5%B8%A6%E5%9F%8E%E5%B8%82-%E8%A5%BF%E5%8F%8C%E7%89%88%E7%BA%B3/" title="热带城市-西双版纳">热带城市-西双版纳</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/09/gluten%E6%BA%90%E7%A0%81%E7%BB%93%E6%9E%84/" title="Gluten源码结构">Gluten源码结构</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/09/lvalue_rvalue/" title="左值右值">左值右值</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/09/xsimd/" title="xsimd">xsimd</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/09/ambari/" title="Ambari架构">Ambari架构</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/08/gluten%E5%92%8C%E7%9B%B8%E5%85%B3%E4%BE%9D%E8%B5%96/" title="Gluten和相关依赖">Gluten和相关依赖</a>
+    </li>
+    
+</ul>
+    </section>
+
+    
+
+    <section class="widget">
+        <h3 class="widget-title"><a href='/categories/'>分类</a></h3>
+<ul class="widget-list">
+    
+    <li><a href="https://code0xff.org/categories/%E5%88%86%E5%B8%83%E5%BC%8F/">分布式 (6)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E5%8E%9F%E7%90%86%E5%88%86%E6%9E%90/">原理分析 (13)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E5%95%86%E4%B8%9A/">商业 (3)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E5%A4%A7%E6%95%B0%E6%8D%AE/">大数据 (36)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%95%B0%E6%8D%AE%E5%BA%93/">数据库 (38)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%96%87%E5%AD%A6%E5%92%8C%E8%89%BA%E6%9C%AF/">文学和艺术 (2)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%97%85%E8%A1%8C/">旅行 (11)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%9E%B6%E6%9E%84/">架构 (2)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E7%AE%97%E6%B3%95/">算法 (8)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E7%B3%BB%E7%BB%9F/">系统 (6)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E7%BC%96%E7%A8%8B%E8%AF%AD%E8%A8%80/">编程语言 (5)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E8%A1%8C%E4%B8%9A%E8%A7%82%E5%AF%9F/">行业观察 (1)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E8%AF%BB%E4%B9%A6%E7%AC%94%E8%AE%B0/">读书笔记 (12)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E9%9A%8F%E4%BE%BF%E5%86%99%E5%86%99/">随便写写 (3)</a></li>
+    
+</ul>
+    </section>
+
+    <section class="widget">
+        <h3 class="widget-title">归档</a></h3>
+<ul class="widget-list">
+    
+    <li><a href="https://code0xff.org/years/2021%E5%B9%B4/">2021年 (37)</a></li>
+    
+    <li><a href="https://code0xff.org/years/2022%E5%B9%B4/">2022年 (55)</a></li>
+    
+    <li><a href="https://code0xff.org/years/2023%E5%B9%B4/">2023年 (54)</a></li>
+    
+</ul>
+    </section>
+
+    <section class="widget">
+        <h3 class="widget-title"><a href='/tags/'>标签</a></h3>
+<div class="tagcloud">
+    
+    <a href="https://code0xff.org/tags/ambari/">Ambari </a>
+    
+    <a href="https://code0xff.org/tags/b%E6%A0%91/">B树 </a>
+    
+    <a href="https://code0xff.org/tags/c&#43;&#43;/">C&#43;&#43; </a>
+    
+    <a href="https://code0xff.org/tags/calcite/">calcite </a>
+    
+    <a href="https://code0xff.org/tags/cmu-database/">CMU-Database </a>
+    
+    <a href="https://code0xff.org/tags/flink/">flink </a>
+    
+    <a href="https://code0xff.org/tags/flume/">flume </a>
+    
+    <a href="https://code0xff.org/tags/gc/">GC </a>
+    
+    <a href="https://code0xff.org/tags/gluten/">Gluten </a>
+    
+    <a href="https://code0xff.org/tags/hana/">HANA </a>
+    
+    <a href="https://code0xff.org/tags/hive/">Hive </a>
+    
+    <a href="https://code0xff.org/tags/impala/">Impala </a>
+    
+    <a href="https://code0xff.org/tags/k8s/">k8s </a>
+    
+    <a href="https://code0xff.org/tags/kudu/">kudu </a>
+    
+    <a href="https://code0xff.org/tags/kyuubi/">Kyuubi </a>
+    
+    <a href="https://code0xff.org/tags/lakehouse/">Lakehouse </a>
+    
+    <a href="https://code0xff.org/tags/leveldb/">LevelDB </a>
+    
+    <a href="https://code0xff.org/tags/llvm/">LLVM </a>
+    
+    <a href="https://code0xff.org/tags/manacher/">Manacher </a>
+    
+    <a href="https://code0xff.org/tags/mapreduce/">MapReduce </a>
+    
+    <a href="https://code0xff.org/tags/mysql/">MySQL </a>
+    
+    <a href="https://code0xff.org/tags/newsql/">NewSQL </a>
+    
+    <a href="https://code0xff.org/tags/oceanbase/">OceanBase </a>
+    
+    <a href="https://code0xff.org/tags/paxos/">paxos </a>
+    
+    <a href="https://code0xff.org/tags/presto/">Presto </a>
+    
+    <a href="https://code0xff.org/tags/quick-sql/">quick-sql </a>
+    
+    <a href="https://code0xff.org/tags/raft/">raft </a>
+    
+    <a href="https://code0xff.org/tags/scala/">scala </a>
+    
+    <a href="https://code0xff.org/tags/simd/">SIMD </a>
+    
+    <a href="https://code0xff.org/tags/snowflake/">snowflake </a>
+    
+    <a href="https://code0xff.org/tags/spark/">spark </a>
+    
+    <a href="https://code0xff.org/tags/teradata/">TeraData </a>
+    
+    <a href="https://code0xff.org/tags/tpcx-hs/">TPCx-HS </a>
+    
+    <a href="https://code0xff.org/tags/unix/">unix </a>
+    
+    <a href="https://code0xff.org/tags/%E4%BA%8C%E5%88%86%E6%9F%A5%E6%89%BE/">二分查找 </a>
+    
+    <a href="https://code0xff.org/tags/%E4%BA%8C%E5%8F%89%E6%A0%91%E9%81%8D%E5%8E%86/">二叉树遍历 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%88%86%E5%B8%83%E5%BC%8F/">分布式 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%88%97%E5%AD%98/">列存 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%8A%A8%E6%80%81%E6%B3%A8%E5%85%A5/">动态注入 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%8E%86%E5%8F%B2/">历史 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%90%91%E9%87%8F%E5%8C%96/">向量化 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%9B%9E%E6%BA%AF/">回溯 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%9B%BD%E5%86%85%E6%97%85%E8%A1%8C/">国内旅行 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%9B%BD%E5%A4%96%E6%97%85%E8%A1%8C/">国外旅行 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%A4%9A%E7%A7%9F%E6%88%B7/">多租户 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%A4%A7%E6%95%B0%E6%8D%AE/">大数据 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%AD%98%E5%82%A8/">存储 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%B7%A5%E4%BD%9C%E8%AE%B0%E5%BD%95/">工作记录 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%BE%AE%E6%9C%8D%E5%8A%A1/">微服务 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%95%B0%E6%8D%AE%E5%BA%93/">数据库 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%95%B0%E6%8D%AE%E6%A8%A1%E5%9E%8B/">数据模型 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%95%B0%E6%8D%AE%E8%BF%81%E7%A7%BB/">数据迁移 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%9F%A5%E8%AF%A2%E4%BC%98%E5%8C%96/">查询优化 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%9F%A5%E8%AF%A2%E7%BC%96%E8%AF%91/">查询编译 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%B1%87%E7%BC%96/">汇编 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%B5%8B%E8%AF%95/">测试 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%B9%96%E4%BB%93%E4%B8%80%E4%BD%93/">湖仓一体 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%94%9F%E6%B4%BB/">生活 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%94%B5%E5%BD%B1/">电影 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%AE%97%E6%B3%95/">算法 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%B4%A2%E5%BC%95/">索引 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BB%8F%E6%B5%8E/">经济 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BC%93%E5%AD%98/">缓存 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BC%96%E8%AF%91%E5%8E%9F%E7%90%86/">编译原理 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BD%91%E7%BB%9C/">网络 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AE%A1%E7%AE%97%E6%A1%86%E6%9E%B6/">计算框架 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AE%BA%E6%96%87/">论文 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AF%BB%E4%B9%A6/">读书 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AF%BB%E4%B9%A6%E7%AC%94%E8%AE%B0/">读书笔记 </a>
+    
+</div>
+    </section>
+
+    
+
+    <section class="widget">
+        <h3 class="widget-title">RSS</h3>
+        <ul class="widget-list">
+            <li><a href="https://code0xff.org/index.xml">文章 RSS</a></li>
+        </ul>
+    </section>
+</div>
+            </div>
+        </div>
+    </div>
+    <footer id="footer">
+    <div>
+        &copy; 2023 <a href="https://code0xff.org/">记录每个瞬间 By 老王</a>
+        
+    </div>
+    <br />
+    <div>
+        <div class="github-badge">
+            <a href="https://gohugo.io/" target="_black" rel="nofollow"><span class="badge-subject">Powered by</span><span class="badge-value bg-blue">Hugo</span></a>
+        </div>
+        <div class="github-badge">
+            <a href="https://github.com/flysnow-org/maupassant-hugo" target="_black"><span class="badge-subject">Theme</span><span class="badge-value bg-yellowgreen">Maupassant</span></a>
+        </div>
+    </div>
+</footer>
+
+
+    
+    <script type="text/javascript">
+        window.MathJax = {
+            tex2jax: {
+                inlineMath: [['$', '$']],
+                processEscapes: true
+                }
+            };
+    </script>
+    <script src='https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.5/MathJax.js?config=TeX-MML-AM_CHTML' async></script><script src="https://cdn.bootcdn.net/ajax/libs/fancybox/3.5.7/jquery.fancybox.min.js"></script>
+
+<a id="rocket" href="#top"></a>
+<script type="text/javascript" src='/js/totop.js?v=0.0.0' async=""></script>
+
+<script type="application/javascript">
+var doNotTrack = false;
+if (!doNotTrack) {
+	window.ga=window.ga||function(){(ga.q=ga.q||[]).push(arguments)};ga.l=+new Date;
+	ga('create', 'GA ID', 'auto');
+	
+	ga('send', 'pageview');
+}
+</script>
+<script async src='https://www.google-analytics.com/analytics.js'></script>
+
+
+
+    <script type="text/javascript" src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js" async></script>
+
+
+
+
+</body>
+
+</html>
