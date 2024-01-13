@@ -1,0 +1,731 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    
+    <meta name="referrer" content="no-referrer-when-downgrade">
+    
+
+    <title>Analyzing and Comparing Lakehouse Storage Systems | 记录每个瞬间</title>
+    <meta property="og:title" content="Analyzing and Comparing Lakehouse Storage Systems - 记录每个瞬间">
+    <meta property="og:type" content="article">
+        
+    <meta property="article:published_time" content='2024-01-10T09:08:07&#43;08:00'>
+        
+        
+    <meta property="article:modified_time" content='2024-01-10T09:08:07&#43;08:00'>
+        
+    <meta name="Keywords" content="">
+    <meta name="description" content="Analyzing and Comparing Lakehouse Storage Systems">
+        <meta name="author" content="隔壁老王">
+        
+    <meta property="og:url" content="https://code0xff.org/post/2024/01/lakehouse_storage_systems/">
+    <link rel="shortcut icon" href='/favicon.ico'  type="image/x-icon">
+
+    <link rel="stylesheet" href='/css/normalize.css'>
+    <link rel="stylesheet" href='/css/style.css'>
+    <script type="text/javascript" src="//cdn.bootcdn.net/ajax/libs/jquery/3.4.1/jquery.min.js"></script>
+
+    
+    
+    
+        <link href="https://cdn.bootcdn.net/ajax/libs/fancybox/3.5.7/jquery.fancybox.min.css" rel="stylesheet">
+    
+    
+    
+    
+</head>
+
+
+<body>
+    <header id="header" class="clearfix">
+    <div class="container">
+        <div class="col-group">
+            <div class="site-name ">
+                
+                    <a id="logo" href="https://code0xff.org/">
+                        记录每个瞬间
+                    </a>
+                
+                
+            </div>
+            <div>
+                <nav id="nav-menu" class="clearfix">
+                    <a class="current" href="https://code0xff.org/">首页</a>
+                    
+                    <a  href="https://code0xff.org/linked/" title="链接">链接</a>
+                    
+                    <a  href="https://code0xff.org/archives/" title="归档">归档</a>
+                    
+                    <a  href="https://code0xff.org/about/" title="关于">关于</a>
+                    
+                </nav>
+            </div>
+        </div>
+    </div>
+</header>
+
+    <div id="body">
+        <div class="container">
+            <div class="col-group">
+
+                <div class="col-8" id="main">
+                    
+<div class="res-cons">
+    
+    <article class="post">
+        <header>
+            <h1 class="post-title">Analyzing and Comparing Lakehouse Storage Systems</h1>
+        </header>
+        <date class="post-meta meta-date">
+            2024年1月10日
+        </date>
+<nav id="TableOfContents">
+  <ul>
+    <li>
+      <ul>
+        <li><a href="#general-overview">General Overview</a></li>
+        <li><a href="#lakehouse-sysem">LakeHouse Sysem</a>
+          <ul>
+            <li><a href="#transaction-coordination">Transaction Coordination</a></li>
+            <li><a href="#metadata-management">Metadata Management</a></li>
+            <li><a href="#data-update-strategies">Data Update Strategies</a></li>
+          </ul>
+        </li>
+        <li><a href="#benchmark">Benchmark</a></li>
+        <li><a href="#open-questions">Open Questions</a></li>
+      </ul>
+    </li>
+  </ul>
+</nav>
+        
+        <div class="post-meta">
+            
+            <span class="post-meta meta-tags">
+                <ul class="clearfix">
+                    <a href='/categories/%E5%A4%A7%E6%95%B0%E6%8D%AE'>大数据</a>
+                </ul>
+            </span>
+            
+        </div>
+        
+        
+        <div class="post-meta">
+            <span id="busuanzi_container_page_pv">|<span id="busuanzi_value_page_pv"></span><span>
+                    阅读</span></span>
+        </div>
+        
+        
+        <div class="post-content">
+            <blockquote>
+<p>论文<br>
+<a href="https://15721.courses.cs.cmu.edu/spring2023/papers/20-databricks/p92-jain.pdf">https://15721.courses.cs.cmu.edu/spring2023/papers/20-databricks/p92-jain.pdf</a></p>
+</blockquote>
+<h2 id="general-overview">General Overview</h2>
+<p>提到了关于在对象存储之上，构建数据仓库的挑战</p>
+<ul>
+<li>首先延迟很高</li>
+<li>跟第一个类似，对象存储支持的范围很广，数据规模非常大，但是加载很慢</li>
+<li>湖仓系统能够访问各种开放计算引擎，所以接口是开放的，跟普通数据库就不痛，所以对事物和ACID的设计就很有挑战</li>
+</ul>
+<p>比如说有这么一些问题<br>
+How to coordinate transactions</p>
+<ul>
+<li>有些系统是直接构建在 对象存储之上的</li>
+<li>而有的是通过 hive-meastore构建的，这样延迟就降低了，但是扩展性也降低了</li>
+<li>三个存储系统的事物隔离级别也不同，这也是一个 trade-off</li>
+</ul>
+<p>Where to store metadata</p>
+<ul>
+<li>这三个都是用了 zone map 和其他一些辅助数据结构，用于加速访问</li>
+<li>这些信息放那里，三个存储则不一样</li>
+<li>有的放对象存储中，有的放 事务log中，有的放到额外的服务中</li>
+</ul>
+<p>How to query metadata</p>
+<ul>
+<li>delta-lake 和 hudi，用并行的job，也就是spark任务查询元数据</li>
+<li>可以查询非常大的表，但增加了延迟</li>
+<li>iceberg将元数据处理放到单个节点的客户端库中</li>
+</ul>
+<p>How to efficiently handle updates?</p>
+<ul>
+<li>要支持随机更新，以及快速查询，而且是在对象存储之上的</li>
+<li>不同的系统支持的优化策略不同</li>
+<li>copy-on-write，merge-on-write 两个策略</li>
+</ul>
+<table>
+<thead>
+<tr>
+<th>Table Metadata</th>
+<th>Transaction Atomicity</th>
+<th>Isolation Levels</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Delta Lake</td>
+<td>Transaction Log + Metadata Checkpoints</td>
+<td>Atomic Log Appends</td>
+</tr>
+<tr>
+<td>Hudi</td>
+<td>Transaction Log + Metadata Table</td>
+<td>Table-Level Lock</td>
+</tr>
+<tr>
+<td>Iceberg</td>
+<td>Hierarchical Files</td>
+<td>Table-Level</td>
+</tr>
+</tbody>
+</table>
+<p>lakehouse 系统跟传统的数仓不同之处</p>
+<ul>
+<li>前者基于开放的格式，提供开放的接口</li>
+<li>其他的引擎可以直接查询底层的数据，除了SQL，还可以支持机器学习等其他场景</li>
+</ul>
+<p>lakehouse对数仓做了分解</p>
+<ul>
+<li>存储管理</li>
+<li>表元数据</li>
+<li>事务管理，嵌入到多个引擎的客户端库中，每个引擎可以有他们自己的plan和执行方式</li>
+</ul>
+<h2 id="lakehouse-sysem">LakeHouse Sysem</h2>
+<h3 id="transaction-coordination">Transaction Coordination</h3>
+<p>三个 系统都支持事务，但只支持单表事务，不支持多表<br>
+另外每种的实现方式也不同<br>
+三个都使用<code>MVCC</code> 实现事务</p>
+<p>表中附带了一个元数据，当事务开始的时候会读这个元数据，获取这个表的快照<br>
+然后从快照中读取所需的数据，事务提交的时候会自动更新元数据</p>
+<p>Delta-lake依赖底层的存储系统提供的原子操作，<code>put-if-absent</code>，如果底层的不支持，则外接一个<code>DynamoDB</code><br>
+Hudi、iceberg 用 表锁来实现，依赖 Zookeeper、Hive MetaStore、DynamoDB<br>
+但是依赖 Hive MetaStore 也有问题，如果客户端和服务端的锁心跳超时了，可能会导致<strong>脏写</strong></p>
+<p>三者都用 OCC optimistic concurrency control 做隔离<br>
+通过不同的校验机制，通过实现不同的校验方式，来做到不同的隔离级别</p>
+<p>Hudi、Iceberg，在写的时候会校验这个写的文件，如果某些 事务在当前事务之后开始，那么快照中就没有了<br>
+但这些事务提交了，导致当前事务写文件冲突，这两个系统会确保这个冲突不发生  <br>
+这个是  OCC 的向前检查策略<br>
+Delta 也提供了类似的方式，对于其他事务的 Update、Merge、Delete 的读条件会检查，如果不在事务的快照中则无法提交<br>
+Dleta 提供了可选，对Select 条件也做检查，提供更高的隔离机制</p>
+<p>两个 可串行化</p>
+<ul>
+<li>serializability：事务的结果跟事务执行顺序一样</li>
+<li>strict serializability：跟事务日志中出现的顺序一致</li>
+</ul>
+<p>左边的是事务一致性，最高等级是：可串行化；右边是数据一致性，最高等级是：可线性化<br>
+
+        <a data-fancybox="gallery" href="https://woquhaha.gitee.io/pic_tech_1/post/2021/12/%E5%88%86%E5%B8%83%E5%BC%8F%E6%95%B0%E6%8D%AE%E5%BA%93%E8%AF%BE%E7%A8%8B%E4%B8%AD%E7%9A%84%E8%AE%BA%E6%96%87/a-1.jpg">
+            <img class="mx-auto" alt="" src="https://woquhaha.gitee.io/pic_tech_1/post/2021/12/%E5%88%86%E5%B8%83%E5%BC%8F%E6%95%B0%E6%8D%AE%E5%BA%93%E8%AF%BE%E7%A8%8B%E4%B8%AD%E7%9A%84%E8%AE%BA%E6%96%87/a-1.jpg" />
+        </a>
+    <br>
+事务相关的</p>
+<ul>
+<li>Strict Serializable，t1,t2,t3三个事务，执行结果跟提交顺序一致，而且真实执行也是一致的，保证 t2 开始前能看到 t1 的结果</li>
+<li>Serializable，内部可能是交错的，只是执行结果保证跟串行方式一致</li>
+<li>Snapshot Isolation，使用 MVCC 实现，读写不冲突，预防了 non-repeatable</li>
+<li>Repeatable Read，跟 快照隔离类似，但用 lock 实现，读写冲突，并发降低了</li>
+<li>Cursor Stability，游标稳定，在读取一行的时候会锁住，这样其他更新就会等待，当游标移动到下一行释放锁</li>
+<li>Read Committed，预防了脏读</li>
+<li>Read Uncommitted，最低隔离级别，并发度是最高的</li>
+</ul>
+<h3 id="metadata-management">Metadata Management</h3>
+<p>元数据的读取速度 限制了正常查询的速度<br>
+如果元数据获取太慢，则正常查询也不可能快<br>
+S3 限制了每次查询 1000个返回，如果要查询 百万的话，需要几分钟，这样就太慢了</p>
+<p>元数据存储格式</p>
+<ul>
+<li>表格式</li>
+<li>层次结构</li>
+</ul>
+<p>Delta Lake 和 Hudi 使用了 表格式</p>
+<ul>
+<li>Hudi 将元数据存储到一个特殊的 表中</li>
+<li>Delta Lake，存储在 事务log中(结合了Parquet 和 JSON 格式)</li>
+</ul>
+<p>事务不是直接写到表中的，而是写事务log，然后周期性的压缩 到这个表中（使用了 merge-on-read 策略）</p>
+<p>Ice berg 使用了层次结构，元数据存储在清单文件的层次结构中，最底层的每个文件 存储了一系列文件的元数据<br>
+而更上层的则包含了下层的 聚合元数据<br>
+这种方式更像一个表索引</p>
+<p>聚合查询所需的数据，使用了两个不同的策略</p>
+<ul>
+<li>Delta Lake，Hudi：batch job 方式扫描元数据表，找到查询计划中所匹配的所有文件</li>
+<li>Ice berg：使用了更上层文件作为索引，来最小化查询，使用了单节点方式</li>
+</ul>
+<p>单节点的方式对于小查询来说效果更好，但是对于大表的分布式查询其伸缩性就不行了<br>
+未来，查询计划是否可以根据 CBO 来动态的选择这些策略，也是一个开放话题</p>
+<h3 id="data-update-strategies">Data Update Strategies</h3>
+<p>两个不同的更新策略</p>
+<ul>
+<li>Copy-On-Write (CoW)，写入的数据 写到新文件中，带来<strong>写放大</strong>，但读没影响</li>
+<li>Merge-On-Read (MoR)，将写入的行级别信息写到其他地方，等到读的时候再重建，<strong>读放大</strong></li>
+</ul>
+<p>CoW 会导致写放大，读没影响，  更适合读场景，三个系统都支持      <br>
+MoR 会导致读放大，写影响很小，更适合写场景，Hudi、Ice Berg 也支持，Delta Lake 未来也会支持</p>
+<p>MoR 的实现方式</p>
+<ul>
+<li>Iceberg，以及Delta(还未实现)，采用墓碑的方式，用辅助的文件标记为墓碑，查询时通过辅助记录做过滤</li>
+<li>Hudi，将insert、update、delete的行格式写入Avro文件中，查询时再做重建</li>
+</ul>
+<h2 id="benchmark">Benchmark</h2>
+<p>LHBench<br>
+<a href="https://github.com/lhbench/lhbench">https://github.com/lhbench/lhbench</a></p>
+<hr>
+<p>load 和 查询，其中 load 来看的话， delta lake 跟 iceberg 差不多，但是hudi 要慢很多，几乎10倍<br>
+这是因为 hudi做了优化的 key upsert，但是对于 bulk load导入代价很高，因为有很耗时的 key 去重处理<br>
+查询速度 delta 是hudi 的 1.4倍，是 iceberg 的 1.7倍<br>
+
+        <a data-fancybox="gallery" href="http://localhost:9999/1.jpg">
+            <img class="mx-auto" alt="" src="http://localhost:9999/1.jpg" />
+        </a>
+    <br>
+spark 生成的查询计划都是一样的，差别是读取的数据读取时间<br>
+对于 Q90，delta 是 6.5分钟、hudi 是 18.8分钟，iceberg 是18.6分钟<br>
+比如 delta 存储一个 128M 文件，而 hudi则是存储了 22个 8.3M文件，hudi更偏向小文件小查询，而 delta 则是大查询</p>
+<blockquote>
+<p>for example, to read the Web Sales Table in Q90, <br>
+the executor must<br>
+read 2128 files (138 GB) in Delta Lake <br>
+but 18443 files (186 GB) in Hudi.</p>
+</blockquote>
+<p>iceberg 读取总量跟 delta 差不多，但是它对支持 column drops、renames这些，导致需要一些自定义的parquet读取操作者<br>
+而不是原生spark的，导致变慢了</p>
+<hr>
+<p>hudi 的 MoR 是 CoW 的 1.3倍，但是代价是 读取慢了 3.2倍<br>
+iceberg 的 MoR 是 CoW 的 1.4倍，但同样 读也变慢了<br>
+delta 只有CoW，但是做了一些优化，读取数据文件少，所以总体还不错 <br>
+
+        <a data-fancybox="gallery" href="http://localhost:9999/2.jpg">
+            <img class="mx-auto" alt="" src="http://localhost:9999/2.jpg" />
+        </a>
+    </p>
+<p>下面是 50%的insert + 50%的update 场景<br>
+iceberg 的 MoR 在不行数量增大的时候，MoR变化不大，但是 CoW 的开销，也就是写放大很严重，越来越慢<br>
+对于读取来说，MoR 性能下降的很厉害，比 CoW 超过10倍了<br>
+
+        <a data-fancybox="gallery" href="http://localhost:9999/3.jpg">
+            <img class="mx-auto" alt="" src="http://localhost:9999/3.jpg" />
+        </a>
+    </p>
+<p>对比元数据访问的性能，生成各种各样大小的文件，从1K - 200K，以及 10G - 2T 不等<br>
+小文件的时候 iceberg 单节点效率不错，但随着表数据量增大，iceberg的启动时间就增加了很多<br>
+
+        <a data-fancybox="gallery" href="http://localhost:9999/4.jpg">
+            <img class="mx-auto" alt="" src="http://localhost:9999/4.jpg" />
+        </a>
+    </p>
+<h2 id="open-questions">Open Questions</h2>
+<p>论文最后也提出了一些开放性问题<br>
+How can lakehouse systems best balance ingest latency and query latency</p>
+<ul>
+<li>比如是否可将合并操作移除，也就是 MoR 做成异步的，这样就不影响更新了</li>
+<li>另外系统是否可以基于此场景下，做自动的数据压缩策略</li>
+</ul>
+<p>Can we use a cost model to intelligently choose between query lanning strategies</p>
+<ul>
+<li>比如对于索引生成小的，高选择率的查询，使用单节点</li>
+<li>而分布式 元数据查询使用大查询？</li>
+</ul>
+<p>Can lakehouse systems efficiently support high write QPS under concurrency?</p>
+<ul>
+<li>每次更新操作，都需要写入到底层对象存储的元数据中</li>
+<li>对象存储延迟很高， &gt; 50 ms，这样就限制了 QPS</li>
+</ul>
+
+			<script type="text/javascript"
+        async
+        src="https://cdn.bootcss.com/mathjax/2.7.3/MathJax.js?config=TeX-AMS-MML_HTMLorMML">
+MathJax.Hub.Config({
+  tex2jax: {
+    inlineMath: [['$','$'], ['\\(','\\)']],
+    displayMath: [['$$','$$'], ['\[\[','\]\]']],
+    processEscapes: true,
+    processEnvironments: true,
+    skipTags: ['script', 'noscript', 'style', 'textarea', 'pre'],
+    TeX: { equationNumbers: { autoNumber: "AMS" },
+         extensions: ["AMSmath.js", "AMSsymbols.js"] }
+  }
+});
+
+MathJax.Hub.Queue(function() {
+    
+    
+    
+    var all = MathJax.Hub.getAllJax(), i;
+    for(i = 0; i < all.length; i += 1) {
+        all[i].SourceElement().parentNode.className += ' has-jax';
+    }
+});
+</script>
+
+<style>
+code.has-jax {
+    font: inherit;
+    font-size: 100%;
+    background: inherit;
+    border: inherit;
+    color: #515151;
+}
+</style>
+        </div>
+
+        
+
+
+        
+
+
+        <div class="post-meta meta-tags">
+            
+            <ul class="clearfix">
+                
+                <li><a href='/tags/lakehouse'>LakeHouse</a></li>
+                
+            </ul>
+            
+        </div>
+    </article>
+    
+    
+
+    
+    
+    <div class="post bg-white">
+      <script src="https://utteranc.es/client.js"
+            repo= "himichael/hugoblogtalks"
+            issue-term="pathname"
+            theme="github-light"
+            crossorigin="anonymous"
+            async>
+      </script>
+    </div>
+    
+</div>
+
+
+                </div>
+
+                <div id="secondary">
+    <section class="widget">
+        <form id="search" action='https://code0xff.org/search/' method="get" accept-charset="utf-8" target="_blank" _lpchecked="1">
+      
+      <input type="text" name="q" maxlength="20" placeholder="Search">
+      <input type="hidden" name="sitesearch" value="https://code0xff.org/">
+      <button type="submit" class="submit icon-search"></button>
+</form>
+    </section>
+    
+    <section class="widget">
+        <h3 class="widget-title">最近文章</h3>
+<ul class="widget-list">
+    
+    <li>
+        <a href="https://code0xff.org/post/2024/01/lakehouse_storage_systems/" title="Analyzing and Comparing Lakehouse Storage Systems">Analyzing and Comparing Lakehouse Storage Systems</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2024/01/system_tuning/" title="系统调优">系统调优</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2024/01/doris_advanced/" title="Doris Advanced">Doris Advanced</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2024/01/doris/" title="Doris Basic">Doris Basic</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/12/%E9%9A%BE%E5%BF%98%E7%9A%84%E7%9E%AC%E9%97%B4/" title="难忘的时刻(2023年)">难忘的时刻(2023年)</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/12/impala_in_netease/" title="网易对Impala的一些使用">网易对Impala的一些使用</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/12/impala_tuning/" title="Impala Tuning Summary">Impala Tuning Summary</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/11/%E5%A4%A7%E6%95%B0%E6%8D%AE%E5%8E%86%E5%8F%B2/" title="The History of Big data">The History of Big data</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/11/tpcx-hs%E4%BC%98%E5%8C%96%E6%80%BB%E7%BB%93/" title="TPCx-HS优化总结">TPCx-HS优化总结</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/10/c&#43;&#43;%E6%A8%A1%E7%89%88%E7%9A%84%E4%B8%80%E4%BA%9B%E8%AE%B0%E5%BD%95/" title="C&#43;&#43;模版的一些记录">C&#43;&#43;模版的一些记录</a>
+    </li>
+    
+</ul>
+    </section>
+
+    
+
+    <section class="widget">
+        <h3 class="widget-title"><a href='/categories/'>分类</a></h3>
+<ul class="widget-list">
+    
+    <li><a href="https://code0xff.org/categories/%E5%88%86%E5%B8%83%E5%BC%8F/">分布式 (6)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E5%8E%9F%E7%90%86%E5%88%86%E6%9E%90/">原理分析 (13)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E5%95%86%E4%B8%9A/">商业 (3)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E5%A4%A7%E6%95%B0%E6%8D%AE/">大数据 (40)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%95%B0%E6%8D%AE%E5%BA%93/">数据库 (38)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%96%87%E5%AD%A6%E5%92%8C%E8%89%BA%E6%9C%AF/">文学和艺术 (3)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%97%85%E8%A1%8C/">旅行 (12)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%9E%B6%E6%9E%84/">架构 (2)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E7%AE%97%E6%B3%95/">算法 (8)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E7%B3%BB%E7%BB%9F/">系统 (7)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E7%BC%96%E7%A8%8B%E8%AF%AD%E8%A8%80/">编程语言 (5)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E8%A1%8C%E4%B8%9A%E8%A7%82%E5%AF%9F/">行业观察 (2)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E8%AF%BB%E4%B9%A6%E7%AC%94%E8%AE%B0/">读书笔记 (12)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E9%9A%8F%E4%BE%BF%E5%86%99%E5%86%99/">随便写写 (3)</a></li>
+    
+</ul>
+    </section>
+
+    <section class="widget">
+        <h3 class="widget-title">归档</a></h3>
+<ul class="widget-list">
+    
+    <li><a href="https://code0xff.org/years/2021%E5%B9%B4/">2021年 (41)</a></li>
+    
+    <li><a href="https://code0xff.org/years/2022%E5%B9%B4/">2022年 (55)</a></li>
+    
+    <li><a href="https://code0xff.org/years/2023%E5%B9%B4/">2023年 (54)</a></li>
+    
+    <li><a href="https://code0xff.org/years/2024%E5%B9%B4/">2024年 (4)</a></li>
+    
+</ul>
+    </section>
+
+    <section class="widget">
+        <h3 class="widget-title"><a href='/tags/'>标签</a></h3>
+<div class="tagcloud">
+    
+    <a href="https://code0xff.org/tags/ambari/">Ambari </a>
+    
+    <a href="https://code0xff.org/tags/b%E6%A0%91/">B树 </a>
+    
+    <a href="https://code0xff.org/tags/c&#43;&#43;/">C&#43;&#43; </a>
+    
+    <a href="https://code0xff.org/tags/calcite/">calcite </a>
+    
+    <a href="https://code0xff.org/tags/cmu-database/">CMU-Database </a>
+    
+    <a href="https://code0xff.org/tags/doris/">Doris </a>
+    
+    <a href="https://code0xff.org/tags/flink/">flink </a>
+    
+    <a href="https://code0xff.org/tags/flume/">flume </a>
+    
+    <a href="https://code0xff.org/tags/gc/">GC </a>
+    
+    <a href="https://code0xff.org/tags/gluten/">Gluten </a>
+    
+    <a href="https://code0xff.org/tags/hana/">HANA </a>
+    
+    <a href="https://code0xff.org/tags/hive/">Hive </a>
+    
+    <a href="https://code0xff.org/tags/impala/">Impala </a>
+    
+    <a href="https://code0xff.org/tags/k8s/">k8s </a>
+    
+    <a href="https://code0xff.org/tags/kudu/">kudu </a>
+    
+    <a href="https://code0xff.org/tags/kyuubi/">Kyuubi </a>
+    
+    <a href="https://code0xff.org/tags/lakehouse/">Lakehouse </a>
+    
+    <a href="https://code0xff.org/tags/leveldb/">LevelDB </a>
+    
+    <a href="https://code0xff.org/tags/llvm/">LLVM </a>
+    
+    <a href="https://code0xff.org/tags/manacher/">Manacher </a>
+    
+    <a href="https://code0xff.org/tags/mapreduce/">MapReduce </a>
+    
+    <a href="https://code0xff.org/tags/mysql/">MySQL </a>
+    
+    <a href="https://code0xff.org/tags/newsql/">NewSQL </a>
+    
+    <a href="https://code0xff.org/tags/oceanbase/">OceanBase </a>
+    
+    <a href="https://code0xff.org/tags/paxos/">paxos </a>
+    
+    <a href="https://code0xff.org/tags/presto/">Presto </a>
+    
+    <a href="https://code0xff.org/tags/quick-sql/">quick-sql </a>
+    
+    <a href="https://code0xff.org/tags/raft/">raft </a>
+    
+    <a href="https://code0xff.org/tags/scala/">scala </a>
+    
+    <a href="https://code0xff.org/tags/simd/">SIMD </a>
+    
+    <a href="https://code0xff.org/tags/snowflake/">snowflake </a>
+    
+    <a href="https://code0xff.org/tags/spark/">spark </a>
+    
+    <a href="https://code0xff.org/tags/teradata/">TeraData </a>
+    
+    <a href="https://code0xff.org/tags/tpcx-hs/">TPCx-HS </a>
+    
+    <a href="https://code0xff.org/tags/tuning/">Tuning </a>
+    
+    <a href="https://code0xff.org/tags/unix/">unix </a>
+    
+    <a href="https://code0xff.org/tags/%E4%BA%8C%E5%88%86%E6%9F%A5%E6%89%BE/">二分查找 </a>
+    
+    <a href="https://code0xff.org/tags/%E4%BA%8C%E5%8F%89%E6%A0%91%E9%81%8D%E5%8E%86/">二叉树遍历 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%88%86%E5%B8%83%E5%BC%8F/">分布式 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%88%97%E5%AD%98/">列存 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%8A%A8%E6%80%81%E6%B3%A8%E5%85%A5/">动态注入 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%8E%86%E5%8F%B2/">历史 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%90%91%E9%87%8F%E5%8C%96/">向量化 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%9B%9E%E6%BA%AF/">回溯 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%9B%BD%E5%86%85%E6%97%85%E8%A1%8C/">国内旅行 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%9B%BD%E5%A4%96%E6%97%85%E8%A1%8C/">国外旅行 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%A4%9A%E7%A7%9F%E6%88%B7/">多租户 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%A4%A7%E6%95%B0%E6%8D%AE/">大数据 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%AD%98%E5%82%A8/">存储 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%B7%A5%E4%BD%9C%E8%AE%B0%E5%BD%95/">工作记录 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%BE%AE%E6%9C%8D%E5%8A%A1/">微服务 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%95%B0%E6%8D%AE%E5%BA%93/">数据库 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%95%B0%E6%8D%AE%E6%A8%A1%E5%9E%8B/">数据模型 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%95%B0%E6%8D%AE%E8%BF%81%E7%A7%BB/">数据迁移 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%9F%A5%E8%AF%A2%E4%BC%98%E5%8C%96/">查询优化 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%9F%A5%E8%AF%A2%E7%BC%96%E8%AF%91/">查询编译 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%B1%87%E7%BC%96/">汇编 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%B5%8B%E8%AF%95/">测试 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%B9%96%E4%BB%93%E4%B8%80%E4%BD%93/">湖仓一体 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%94%9F%E6%B4%BB/">生活 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%94%B5%E5%BD%B1/">电影 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%AE%97%E6%B3%95/">算法 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%B4%A2%E5%BC%95/">索引 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BB%8F%E6%B5%8E/">经济 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BC%93%E5%AD%98/">缓存 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BC%96%E8%AF%91%E5%8E%9F%E7%90%86/">编译原理 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BD%91%E7%BB%9C/">网络 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AE%A1%E7%AE%97%E6%A1%86%E6%9E%B6/">计算框架 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AE%BA%E6%96%87/">论文 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AF%BB%E4%B9%A6/">读书 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AF%BB%E4%B9%A6%E7%AC%94%E8%AE%B0/">读书笔记 </a>
+    
+</div>
+    </section>
+
+    
+
+    <section class="widget">
+        <h3 class="widget-title">RSS</h3>
+        <ul class="widget-list">
+            <li><a href="https://code0xff.org/index.xml">文章 RSS</a></li>
+        </ul>
+    </section>
+</div>
+            </div>
+        </div>
+    </div>
+    <footer id="footer">
+    <div>
+        &copy; 2024 <a href="https://code0xff.org/">记录每个瞬间 By 老王</a>
+        
+    </div>
+    <br />
+    <div>
+        <div class="github-badge">
+            <a href="https://gohugo.io/" target="_black" rel="nofollow"><span class="badge-subject">Powered by</span><span class="badge-value bg-blue">Hugo</span></a>
+        </div>
+        <div class="github-badge">
+            <a href="https://github.com/flysnow-org/maupassant-hugo" target="_black"><span class="badge-subject">Theme</span><span class="badge-value bg-yellowgreen">Maupassant</span></a>
+        </div>
+    </div>
+</footer>
+
+
+    
+    <script type="text/javascript">
+        window.MathJax = {
+            tex2jax: {
+                inlineMath: [['$', '$']],
+                processEscapes: true
+                }
+            };
+    </script>
+    <script src='https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.5/MathJax.js?config=TeX-MML-AM_CHTML' async></script><script src="https://cdn.bootcdn.net/ajax/libs/fancybox/3.5.7/jquery.fancybox.min.js"></script>
+
+<a id="rocket" href="#top"></a>
+<script type="text/javascript" src='/js/totop.js?v=0.0.0' async=""></script>
+
+<script type="application/javascript">
+var doNotTrack = false;
+if (!doNotTrack) {
+	window.ga=window.ga||function(){(ga.q=ga.q||[]).push(arguments)};ga.l=+new Date;
+	ga('create', 'GA ID', 'auto');
+	
+	ga('send', 'pageview');
+}
+</script>
+<script async src='https://www.google-analytics.com/analytics.js'></script>
+
+
+
+    <script type="text/javascript" src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js" async></script>
+
+
+
+
+</body>
+
+</html>
