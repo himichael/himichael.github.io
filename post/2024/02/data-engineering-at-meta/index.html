@@ -1,0 +1,711 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    
+    <meta name="referrer" content="no-referrer-when-downgrade">
+    
+
+    <title>Data engineering at Meta | 记录每个瞬间</title>
+    <meta property="og:title" content="Data engineering at Meta - 记录每个瞬间">
+    <meta property="og:type" content="article">
+        
+    <meta property="article:published_time" content='2024-02-02T09:08:07&#43;08:00'>
+        
+        
+    <meta property="article:modified_time" content='2024-02-02T09:08:07&#43;08:00'>
+        
+    <meta name="Keywords" content="">
+    <meta name="description" content="Data engineering at Meta">
+        <meta name="author" content="隔壁老王">
+        
+    <meta property="og:url" content="https://code0xff.org/post/2024/02/data-engineering-at-meta/">
+    <link rel="shortcut icon" href='/favicon.ico'  type="image/x-icon">
+
+    <link rel="stylesheet" href='/css/normalize.css'>
+    <link rel="stylesheet" href='/css/style.css'>
+    <script type="text/javascript" src="//cdn.bootcdn.net/ajax/libs/jquery/3.4.1/jquery.min.js"></script>
+
+    
+    
+    
+        <link href="https://cdn.bootcdn.net/ajax/libs/fancybox/3.5.7/jquery.fancybox.min.css" rel="stylesheet">
+    
+    
+    
+    
+</head>
+
+
+<body>
+    <header id="header" class="clearfix">
+    <div class="container">
+        <div class="col-group">
+            <div class="site-name ">
+                
+                    <a id="logo" href="https://code0xff.org/">
+                        记录每个瞬间
+                    </a>
+                
+                
+            </div>
+            <div>
+                <nav id="nav-menu" class="clearfix">
+                    <a class="current" href="https://code0xff.org/">首页</a>
+                    
+                    <a  href="https://code0xff.org/linked/" title="链接">链接</a>
+                    
+                    <a  href="https://code0xff.org/archives/" title="归档">归档</a>
+                    
+                    <a  href="https://code0xff.org/about/" title="关于">关于</a>
+                    
+                </nav>
+            </div>
+        </div>
+    </div>
+</header>
+
+    <div id="body">
+        <div class="container">
+            <div class="col-group">
+
+                <div class="col-8" id="main">
+                    
+<div class="res-cons">
+    
+    <article class="post">
+        <header>
+            <h1 class="post-title">Data engineering at Meta</h1>
+        </header>
+        <date class="post-meta meta-date">
+            2024年2月2日
+        </date>
+<nav id="TableOfContents">
+  <ul>
+    <li>
+      <ul>
+        <li><a href="#the-data-warehouse">The data warehouse</a></li>
+        <li><a href="#data-discovery-data-catalog">Data discovery, data catalog</a></li>
+        <li><a href="#presto-and-spark-querying-the-warehouse">Presto and Spark: Querying the warehouse</a></li>
+        <li><a href="#scuba-real-time-analytics">Scuba: Real-time analytics</a></li>
+        <li><a href="#daiquery--bento-query-and-analysis-notebooks">Daiquery &amp; Bento: Query and analysis notebooks</a></li>
+        <li><a href="#unidash-dashboarding">Unidash: Dashboarding</a></li>
+        <li><a href="#software-development">Software development</a></li>
+        <li><a href="#writing-pipelines">Writing pipelines</a></li>
+        <li><a href="#upm-advanced-pipeline-features">UPM: Advanced pipeline features</a></li>
+        <li><a href="#analytics-libraries">Analytics Libraries</a></li>
+        <li><a href="#monitoring--operations">Monitoring &amp; operations</a></li>
+        <li><a href="#conclusion">Conclusion</a></li>
+      </ul>
+    </li>
+  </ul>
+</nav>
+        
+        <div class="post-meta">
+            
+            <span class="post-meta meta-tags">
+                <ul class="clearfix">
+                    <a href='/categories/%E8%A1%8C%E4%B8%9A%E8%A7%82%E5%AF%9F'>行业观察</a>
+                </ul>
+            </span>
+            
+        </div>
+        
+        
+        <div class="post-meta">
+            <span id="busuanzi_container_page_pv">|<span id="busuanzi_value_page_pv"></span><span>
+                    阅读</span></span>
+        </div>
+        
+        
+        <div class="post-content">
+            <p>文章来源：</p>
+<blockquote>
+<p><a href="https://medium.com/@AnalyticsAtMeta/data-engineering-at-meta-high-level-overview-of-the-internal-tech-stack-a200460a44fe">https://medium.com/@AnalyticsAtMeta/data-engineering-at-meta-high-level-overview-of-the-internal-tech-stack-a200460a44fe</a></p>
+</blockquote>
+<p>从一个宽泛的视角，介绍了 facebook 的 data engineers 使用的一些技术工具和框架</p>
+<h2 id="the-data-warehouse">The data warehouse</h2>
+<p>内部使用了 ORC的一个fork，对读做了优化，<a href="https://engineering.fb.com/2015/03/17/core-infra/even-faster-data-at-the-speed-of-presto-orc/">链接</a><br>
+facebook 的数仓规模是 EB 级别的，所以一个数据中心放不下，需要跨几个机房存储<br>
+他们使用了 namespace 这个概念，混合了逻辑和物理位置<br>
+而一个表 就确定属于某个 namespace 的，这样一个 namespace 下的查询就不会跨机房了<br>
+但如果要跨 namespace 查询，就需要将 A 表拷贝，或者 B 表拷贝到对应的机房</p>
+<p>每个表都按照 ds 分区，也就是 YYYY-MM-DD 分区的，一般是数据产生的时间，也有其他方式分区的<br>
+数据一般保留 90天，超过了就 归档，或者删除</p>
+<p>数据如何写入数仓的</p>
+<ul>
+<li>通过 data workflows 和管道写入的，<a href="https://engineering.fb.com/2016/05/09/core-infra/introducing-fblearner-flow-facebook-s-ai-backbone/">data workflows</a></li>
+<li>服务端和客户端拿到日志</li>
+<li>生产环境图数据日的每日快照</li>
+</ul>
+<h2 id="data-discovery-data-catalog">Data discovery, data catalog</h2>
+<p>facebook 内部有一个叫 iData 的检查平台，是基于 web 的 <br>
+开发人员可以根据 table 等关键字做搜索，检查平台为基于多个指标，如</p>
+<ul>
+<li>数据新鲜度</li>
+<li>文档</li>
+<li>下游使用数量，ad hoc queries, other pipelines or dashboards</li>
+</ul>
+<p>可以查找表的列类型，表的所有者<br>
+其他一些数据资产维度，比如 上游、下游的依赖等等</p>
+<h2 id="presto-and-spark-querying-the-warehouse">Presto and Spark: Querying the warehouse</h2>
+<p>主要是用 presto、spark 做查询<br>
+内部维护了一个分支，做了一些定制化修改，也会定期合并开源分支，同时也会提交修改到开源</p>
+<p>所以内部使用主要就是基于spark、presto 方言写的 sql<br>
+一些复杂的逻辑会用 java、scala、python 来实现<br>
+data engineer, data scientist, software engineer</p>
+<p>presto 主要是做 adhoc 查询，spark主要是复杂的 join 查询<br>
+一般 presto 会查询 几十亿行的数据，大概几秒，如果有聚会、join 需要几分钟</p>
+<h2 id="scuba-real-time-analytics">Scuba: Real-time analytics</h2>
+<p>facebook 内部的一个实时分析框架，用来分析日志的趋势<br>
+facebook 每天会产生 几百P 的数据，用户行为，代码变更，这个框架就用来实时分析这种变化，并提供开发人员展示</p>
+<p>Scuba 的数据来自于客户端、或者服务端的 log   <br>
+Scuba 可以通过 web UI 查询，类似于 Kibana，这样就不用写程序了，一般是生成 过去 5分钟的趋势报告   <br>
+或者通过一种 SQL 方言查询 <br>
+最后数据会写入到 hive</p>
+<h2 id="daiquery--bento-query-and-analysis-notebooks">Daiquery &amp; Bento: Query and analysis notebooks</h2>
+<p>data engineers 每天都会使用的工具之一<br>
+基于 web 的方式，可以查询任何数据源</p>
+<ul>
+<li>warehouse (either through Presto or Spark)</li>
+<li>Scuba</li>
+<li>其他任何源</li>
+</ul>
+<p>查询结果会以表格的方式展示，当然也可以 用其他形式展示<br>
+Daiquery  不支持其他复杂的查询<br>
+对此可以使用 Bento，这是 Jupyter 的内部实现，可以用 python 或者 R 做查询<br>
+很多 data scientists 用这个做机器学习、或者数据分析</p>
+<h2 id="unidash-dashboarding">Unidash: Dashboarding</h2>
+<p>类似于 Apache Superset、Tableau<br>
+比如工程师可以在 Daiquery 写查询，创建图表，然后导入 dashboard 中<br>
+而每次查询，再加载这个效率太低了</p>
+<p>这里可以用 预聚会来加速，facebook 内部维护了一个 presto 改进的实现 RaptorX，有 10倍加速<br>
+这是通过缓存了通用的数据来加速的</p>
+<p><a href="https://prestodb.io/blog/2021/02/04/raptorx/">RaptorX: Building a 10X Faster Presto</a><br>
+dashboard 可以通过 web 接口创建，也可以通过 python 来创建 <br>
+
+        <a data-fancybox="gallery" href="https://miro.medium.com/v2/resize:fit:1100/format:webp/0*cynm6UG1F4_GmEXK">
+            <img class="mx-auto" alt="" src="https://miro.medium.com/v2/resize:fit:1100/format:webp/0*cynm6UG1F4_GmEXK" />
+        </a>
+    </p>
+<h2 id="software-development">Software development</h2>
+<p>内部使用了 高度定制化的  Visual Studio Code 作为 IDE，包括了一堆内置的插件，由专门的 team 维护<br>
+内部使用  Mercurial 的 fork版本作为源码控制，现在已经将其开源了
+<a href="https://engineering.fb.com/2022/11/15/open-source/sapling-source-control-scalable/">Sapling: Source control that’s user-friendly and scalable</a><br>
+采用的是 monorepo 代码管理方式</p>
+<ul>
+<li>所有的 pipelines 和内部工具 都在一个仓库</li>
+<li>日志定义，配置对象 在其他两个仓库</li>
+</ul>
+<p>工程师会开发 pipelines，用来创建重要的数据集，之后通过分析工具或者 dashboard 来做查询，提供决策支撑<br>
+这些内部的基础设置工具，也会提交到 公司基础设置部门</p>
+<h2 id="writing-pipelines">Writing pipelines</h2>
+<p>数据流水线基本都是用 sql 写的，然后包装进 python 代码里面，再编排和调度<br>
+内部使用的调度框架是：Dataswarm，基于 AirFlow 做的修改</p>
+<p>流水线是基于算子的，也就是 DAG 图<br>
+Dataswarm 中的大多数子算包括</p>
+<ul>
+<li>WaitFor operators，等待某个其他操作</li>
+<li>Query operators，运行查询，基于 presto、或者spark</li>
+<li>Data quality operators，对插入的数据做自动校验</li>
+<li>Data transfer operators，数据转换</li>
+<li>Miscellaneous operators，如发送 email，聊天通知，调用 API，执行脚本等</li>
+</ul>
+<p>代码定义的流水线类似这样：
+
+        <a data-fancybox="gallery" href="https://miro.medium.com/v2/resize:fit:1100/format:webp/1*k0n_bmzBbdK3qH5mQdEJ_A.png">
+            <img class="mx-auto" alt="" src="https://miro.medium.com/v2/resize:fit:1100/format:webp/1*k0n_bmzBbdK3qH5mQdEJ_A.png" />
+        </a>
+    <br>
+
+        <a data-fancybox="gallery" href="https://miro.medium.com/v2/resize:fit:1100/format:webp/1*6EV3qKWhsr_duGiRDjfEUw.png">
+            <img class="mx-auto" alt="" src="https://miro.medium.com/v2/resize:fit:1100/format:webp/1*6EV3qKWhsr_duGiRDjfEUw.png" />
+        </a>
+    </p>
+<p>内部的 VSCode扩展，在保存或者计算 DAG 时，会执行这些 流水线逻辑
+
+        <a data-fancybox="gallery" href="https://miro.medium.com/v2/resize:fit:1100/format:webp/0*fbklzzJOpC8W9d_y">
+            <img class="mx-auto" alt="" src="https://miro.medium.com/v2/resize:fit:1100/format:webp/0*fbklzzJOpC8W9d_y" />
+        </a>
+    <br>
+如果 SQL 有问题，自定义的扩展会提示<br>
+也运行工程师 基于真实数据调度一个测试用例，并将结果写到临时表中</p>
+<h2 id="upm-advanced-pipeline-features">UPM: Advanced pipeline features</h2>
+<p>一个内部的 统一 sql 前端 <br>
+可以做的事情</p>
+<ul>
+<li>相当于是 spark + presto 方言</li>
+<li>语法分析，判断sql 是否合法</li>
+<li>做一些 sql 校验</li>
+<li>根据 select 中的列，可以检查出上下游的 血缘关系</li>
+</ul>
+<p>比如，可以自动推断 所有的 WaitFors 依赖<br>
+<a href="https://engineering.fb.com/2022/11/30/data-infrastructure/static-analysis-sql-queries/">Enabling static analysis of SQL queries at Meta</a><br>
+
+        <a data-fancybox="gallery" href="https://miro.medium.com/v2/resize:fit:1100/format:webp/1*wkWcNZ0irE2L6BmA0G_s2Q.png">
+            <img class="mx-auto" alt="" src="https://miro.medium.com/v2/resize:fit:1100/format:webp/1*wkWcNZ0irE2L6BmA0G_s2Q.png" />
+        </a>
+    </p>
+<p>工程师通过 DAG 来检查 UPM 推断的依赖是否正确</p>
+<h2 id="analytics-libraries">Analytics Libraries</h2>
+<p>除了 UPM，还有其他一些库，用来创建复杂的pipelines<br>
+这些管道手动创建比较难<br>
+<a href="https://medium.com/@AnalyticsAtMeta/analytics-and-product-market-fit-11efaea403cd">Analytics and Product-Market Fit</a></p>
+<p>产生的一个 摘要风格的表<br>
+
+        <a data-fancybox="gallery" href="https://miro.medium.com/v2/resize:fit:1100/format:webp/1*IdYvIlvZiehxeWer5tq9qg.png">
+            <img class="mx-auto" alt="" src="https://miro.medium.com/v2/resize:fit:1100/format:webp/1*IdYvIlvZiehxeWer5tq9qg.png" />
+        </a>
+       <br>
+这个表包含了三个维度列</p>
+<ul>
+<li>product</li>
+<li>country</li>
+<li>has_log_session</li>
+</ul>
+<p>以及两个聚合列</p>
+<ul>
+<li>total_session_time_minutes</li>
+<li>total_distinct_users_hll</li>
+</ul>
+<p><a href="https://engineering.fb.com/2018/12/13/data-infrastructure/hyperloglog/">HyperLogLog in Presto: A significantly faster way to handle cardinality estimation</a></p>
+<h2 id="monitoring--operations">Monitoring &amp; operations</h2>
+<p>相当于 Dataswarm UI，一个基于 web 的界面<br>
+用来监控 pipeline 的，这个工具叫：CDM (Central Data Manager)<br>
+
+        <a data-fancybox="gallery" href="https://miro.medium.com/v2/resize:fit:1100/format:webp/0*Om9tg17gzsW5v30U">
+            <img class="mx-auto" alt="" src="https://miro.medium.com/v2/resize:fit:1100/format:webp/0*Om9tg17gzsW5v30U" />
+        </a>
+    </p>
+<p>有点类似 Airflow 的 Tree View，除此之外还包括：</p>
+<ul>
+<li>快速识别失败的 task，并找到对应的 log</li>
+<li>定义和运行回填</li>
+<li>导航到上游依赖</li>
+<li>识别上游阻塞，递归的导航上游依赖，自动的找到 root，发现阻塞原因</li>
+<li>如果不满足 SLA，则启动通知报警</li>
+<li>设置监控数据质量检查</li>
+<li>监控动态任务和历史性能</li>
+</ul>
+<h2 id="conclusion">Conclusion</h2>
+<p>本文主要介绍了 数据工程师 所用的一些工具<br>
+一些 数据工程师主要工作是 创建 pipelines，创建 dashboards<br>
+另一些则专注于 日志、开发新的分析工具、专注于 ML 的 工作负载管理</p>
+<p>这里没有覆盖的 工具</p>
+<ul>
+<li>管理度量、试验方面的工具</li>
+<li>试验测试平台</li>
+<li>来用导出，展示试验的工具</li>
+<li>私有工具</li>
+<li>用来管理 ML 的特殊工具</li>
+<li>用来理解 度量变化的 工具</li>
+</ul>
+<p>未来的进一步工作包括</p>
+<ul>
+<li>扩大隐私感知基础设置</li>
+<li>减少查询的成本</li>
+<li>减少存储的数据量</li>
+<li>让 data engineers 管理大型管理更容易</li>
+<li>减少 data engineers 重复的工作，让他们更专注产品</li>
+</ul>
+
+			<script type="text/javascript"
+        async
+        src="https://cdn.bootcss.com/mathjax/2.7.3/MathJax.js?config=TeX-AMS-MML_HTMLorMML">
+MathJax.Hub.Config({
+  tex2jax: {
+    inlineMath: [['$','$'], ['\\(','\\)']],
+    displayMath: [['$$','$$'], ['\[\[','\]\]']],
+    processEscapes: true,
+    processEnvironments: true,
+    skipTags: ['script', 'noscript', 'style', 'textarea', 'pre'],
+    TeX: { equationNumbers: { autoNumber: "AMS" },
+         extensions: ["AMSmath.js", "AMSsymbols.js"] }
+  }
+});
+
+MathJax.Hub.Queue(function() {
+    
+    
+    
+    var all = MathJax.Hub.getAllJax(), i;
+    for(i = 0; i < all.length; i += 1) {
+        all[i].SourceElement().parentNode.className += ' has-jax';
+    }
+});
+</script>
+
+<style>
+code.has-jax {
+    font: inherit;
+    font-size: 100%;
+    background: inherit;
+    border: inherit;
+    color: #515151;
+}
+</style>
+        </div>
+
+        
+
+
+        
+
+
+        <div class="post-meta meta-tags">
+            
+            <ul class="clearfix">
+                
+                <li><a href='/tags/facebook'>Facebook</a></li>
+                
+            </ul>
+            
+        </div>
+    </article>
+    
+    
+
+    
+    
+    <div class="post bg-white">
+      <script src="https://utteranc.es/client.js"
+            repo= "himichael/hugoblogtalks"
+            issue-term="pathname"
+            theme="github-light"
+            crossorigin="anonymous"
+            async>
+      </script>
+    </div>
+    
+</div>
+
+
+                </div>
+
+                <div id="secondary">
+    <section class="widget">
+        <form id="search" action='https://code0xff.org/search/' method="get" accept-charset="utf-8" target="_blank" _lpchecked="1">
+      
+      <input type="text" name="q" maxlength="20" placeholder="Search">
+      <input type="hidden" name="sitesearch" value="https://code0xff.org/">
+      <button type="submit" class="submit icon-search"></button>
+</form>
+    </section>
+    
+    <section class="widget">
+        <h3 class="widget-title">最近文章</h3>
+<ul class="widget-list">
+    
+    <li>
+        <a href="https://code0xff.org/post/2024/02/data-engineering-at-meta/" title="Data engineering at Meta">Data engineering at Meta</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2024/01/hms/" title="Hive MetaStore的实现和优化">Hive MetaStore的实现和优化</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2024/01/lakehouse_storage_systems/" title="Analyzing and Comparing Lakehouse Storage Systems">Analyzing and Comparing Lakehouse Storage Systems</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2024/01/system_tuning/" title="系统调优">系统调优</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2024/01/doris_advanced/" title="Doris Advanced">Doris Advanced</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2024/01/doris/" title="Doris Basic">Doris Basic</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/12/%E9%9A%BE%E5%BF%98%E7%9A%84%E7%9E%AC%E9%97%B4/" title="难忘的时刻(2023年)">难忘的时刻(2023年)</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/12/impala_in_netease/" title="网易对Impala的一些使用">网易对Impala的一些使用</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/12/impala_tuning/" title="Impala Tuning Summary">Impala Tuning Summary</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/11/%E5%A4%A7%E6%95%B0%E6%8D%AE%E5%8E%86%E5%8F%B2/" title="The History of Big data">The History of Big data</a>
+    </li>
+    
+</ul>
+    </section>
+
+    
+
+    <section class="widget">
+        <h3 class="widget-title"><a href='/categories/'>分类</a></h3>
+<ul class="widget-list">
+    
+    <li><a href="https://code0xff.org/categories/%E5%88%86%E5%B8%83%E5%BC%8F/">分布式 (6)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E5%8E%9F%E7%90%86%E5%88%86%E6%9E%90/">原理分析 (13)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E5%95%86%E4%B8%9A/">商业 (3)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E5%A4%A7%E6%95%B0%E6%8D%AE/">大数据 (41)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%95%B0%E6%8D%AE%E5%BA%93/">数据库 (38)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%96%87%E5%AD%A6%E5%92%8C%E8%89%BA%E6%9C%AF/">文学和艺术 (3)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%97%85%E8%A1%8C/">旅行 (12)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%9E%B6%E6%9E%84/">架构 (2)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E7%AE%97%E6%B3%95/">算法 (8)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E7%B3%BB%E7%BB%9F/">系统 (7)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E7%BC%96%E7%A8%8B%E8%AF%AD%E8%A8%80/">编程语言 (5)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E8%A1%8C%E4%B8%9A%E8%A7%82%E5%AF%9F/">行业观察 (3)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E8%AF%BB%E4%B9%A6%E7%AC%94%E8%AE%B0/">读书笔记 (12)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E9%9A%8F%E4%BE%BF%E5%86%99%E5%86%99/">随便写写 (3)</a></li>
+    
+</ul>
+    </section>
+
+    <section class="widget">
+        <h3 class="widget-title">归档</a></h3>
+<ul class="widget-list">
+    
+    <li><a href="https://code0xff.org/years/2021%E5%B9%B4/">2021年 (41)</a></li>
+    
+    <li><a href="https://code0xff.org/years/2022%E5%B9%B4/">2022年 (55)</a></li>
+    
+    <li><a href="https://code0xff.org/years/2023%E5%B9%B4/">2023年 (54)</a></li>
+    
+    <li><a href="https://code0xff.org/years/2024%E5%B9%B4/">2024年 (6)</a></li>
+    
+</ul>
+    </section>
+
+    <section class="widget">
+        <h3 class="widget-title"><a href='/tags/'>标签</a></h3>
+<div class="tagcloud">
+    
+    <a href="https://code0xff.org/tags/ambari/">Ambari </a>
+    
+    <a href="https://code0xff.org/tags/b%E6%A0%91/">B树 </a>
+    
+    <a href="https://code0xff.org/tags/c&#43;&#43;/">C&#43;&#43; </a>
+    
+    <a href="https://code0xff.org/tags/calcite/">calcite </a>
+    
+    <a href="https://code0xff.org/tags/cmu-database/">CMU-Database </a>
+    
+    <a href="https://code0xff.org/tags/doris/">Doris </a>
+    
+    <a href="https://code0xff.org/tags/facebook/">Facebook </a>
+    
+    <a href="https://code0xff.org/tags/flink/">flink </a>
+    
+    <a href="https://code0xff.org/tags/flume/">flume </a>
+    
+    <a href="https://code0xff.org/tags/gc/">GC </a>
+    
+    <a href="https://code0xff.org/tags/gluten/">Gluten </a>
+    
+    <a href="https://code0xff.org/tags/hana/">HANA </a>
+    
+    <a href="https://code0xff.org/tags/hive/">Hive </a>
+    
+    <a href="https://code0xff.org/tags/impala/">Impala </a>
+    
+    <a href="https://code0xff.org/tags/k8s/">k8s </a>
+    
+    <a href="https://code0xff.org/tags/kudu/">kudu </a>
+    
+    <a href="https://code0xff.org/tags/kyuubi/">Kyuubi </a>
+    
+    <a href="https://code0xff.org/tags/lakehouse/">Lakehouse </a>
+    
+    <a href="https://code0xff.org/tags/leveldb/">LevelDB </a>
+    
+    <a href="https://code0xff.org/tags/llvm/">LLVM </a>
+    
+    <a href="https://code0xff.org/tags/manacher/">Manacher </a>
+    
+    <a href="https://code0xff.org/tags/mapreduce/">MapReduce </a>
+    
+    <a href="https://code0xff.org/tags/mysql/">MySQL </a>
+    
+    <a href="https://code0xff.org/tags/newsql/">NewSQL </a>
+    
+    <a href="https://code0xff.org/tags/oceanbase/">OceanBase </a>
+    
+    <a href="https://code0xff.org/tags/paxos/">paxos </a>
+    
+    <a href="https://code0xff.org/tags/presto/">Presto </a>
+    
+    <a href="https://code0xff.org/tags/quick-sql/">quick-sql </a>
+    
+    <a href="https://code0xff.org/tags/raft/">raft </a>
+    
+    <a href="https://code0xff.org/tags/scala/">scala </a>
+    
+    <a href="https://code0xff.org/tags/simd/">SIMD </a>
+    
+    <a href="https://code0xff.org/tags/snowflake/">snowflake </a>
+    
+    <a href="https://code0xff.org/tags/spark/">spark </a>
+    
+    <a href="https://code0xff.org/tags/teradata/">TeraData </a>
+    
+    <a href="https://code0xff.org/tags/tpcx-hs/">TPCx-HS </a>
+    
+    <a href="https://code0xff.org/tags/tuning/">Tuning </a>
+    
+    <a href="https://code0xff.org/tags/unix/">unix </a>
+    
+    <a href="https://code0xff.org/tags/%E4%BA%8C%E5%88%86%E6%9F%A5%E6%89%BE/">二分查找 </a>
+    
+    <a href="https://code0xff.org/tags/%E4%BA%8C%E5%8F%89%E6%A0%91%E9%81%8D%E5%8E%86/">二叉树遍历 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%88%86%E5%B8%83%E5%BC%8F/">分布式 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%88%97%E5%AD%98/">列存 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%8A%A8%E6%80%81%E6%B3%A8%E5%85%A5/">动态注入 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%8E%86%E5%8F%B2/">历史 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%90%91%E9%87%8F%E5%8C%96/">向量化 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%9B%9E%E6%BA%AF/">回溯 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%9B%BD%E5%86%85%E6%97%85%E8%A1%8C/">国内旅行 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%9B%BD%E5%A4%96%E6%97%85%E8%A1%8C/">国外旅行 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%A4%9A%E7%A7%9F%E6%88%B7/">多租户 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%A4%A7%E6%95%B0%E6%8D%AE/">大数据 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%AD%98%E5%82%A8/">存储 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%B7%A5%E4%BD%9C%E8%AE%B0%E5%BD%95/">工作记录 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%BE%AE%E6%9C%8D%E5%8A%A1/">微服务 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%95%B0%E6%8D%AE%E5%BA%93/">数据库 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%95%B0%E6%8D%AE%E6%A8%A1%E5%9E%8B/">数据模型 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%95%B0%E6%8D%AE%E8%BF%81%E7%A7%BB/">数据迁移 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%9F%A5%E8%AF%A2%E4%BC%98%E5%8C%96/">查询优化 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%9F%A5%E8%AF%A2%E7%BC%96%E8%AF%91/">查询编译 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%B1%87%E7%BC%96/">汇编 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%B5%8B%E8%AF%95/">测试 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%B9%96%E4%BB%93%E4%B8%80%E4%BD%93/">湖仓一体 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%94%9F%E6%B4%BB/">生活 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%94%B5%E5%BD%B1/">电影 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%AE%97%E6%B3%95/">算法 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%B4%A2%E5%BC%95/">索引 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BB%8F%E6%B5%8E/">经济 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BC%93%E5%AD%98/">缓存 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BC%96%E8%AF%91%E5%8E%9F%E7%90%86/">编译原理 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BD%91%E7%BB%9C/">网络 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AE%A1%E7%AE%97%E6%A1%86%E6%9E%B6/">计算框架 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AE%BA%E6%96%87/">论文 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AF%BB%E4%B9%A6/">读书 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AF%BB%E4%B9%A6%E7%AC%94%E8%AE%B0/">读书笔记 </a>
+    
+</div>
+    </section>
+
+    
+
+    <section class="widget">
+        <h3 class="widget-title">RSS</h3>
+        <ul class="widget-list">
+            <li><a href="https://code0xff.org/index.xml">文章 RSS</a></li>
+        </ul>
+    </section>
+</div>
+            </div>
+        </div>
+    </div>
+    <footer id="footer">
+    <div>
+        &copy; 2024 <a href="https://code0xff.org/">记录每个瞬间 By 老王</a>
+        
+    </div>
+    <br />
+    <div>
+        <div class="github-badge">
+            <a href="https://gohugo.io/" target="_black" rel="nofollow"><span class="badge-subject">Powered by</span><span class="badge-value bg-blue">Hugo</span></a>
+        </div>
+        <div class="github-badge">
+            <a href="https://github.com/flysnow-org/maupassant-hugo" target="_black"><span class="badge-subject">Theme</span><span class="badge-value bg-yellowgreen">Maupassant</span></a>
+        </div>
+    </div>
+</footer>
+
+
+    
+    <script type="text/javascript">
+        window.MathJax = {
+            tex2jax: {
+                inlineMath: [['$', '$']],
+                processEscapes: true
+                }
+            };
+    </script>
+    <script src='https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.5/MathJax.js?config=TeX-MML-AM_CHTML' async></script><script src="https://cdn.bootcdn.net/ajax/libs/fancybox/3.5.7/jquery.fancybox.min.js"></script>
+
+<a id="rocket" href="#top"></a>
+<script type="text/javascript" src='/js/totop.js?v=0.0.0' async=""></script>
+
+<script type="application/javascript">
+var doNotTrack = false;
+if (!doNotTrack) {
+	window.ga=window.ga||function(){(ga.q=ga.q||[]).push(arguments)};ga.l=+new Date;
+	ga('create', 'GA ID', 'auto');
+	
+	ga('send', 'pageview');
+}
+</script>
+<script async src='https://www.google-analytics.com/analytics.js'></script>
+
+
+
+    <script type="text/javascript" src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js" async></script>
+
+
+
+
+</body>
+
+</html>
