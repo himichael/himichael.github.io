@@ -1,0 +1,676 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    
+    <meta name="referrer" content="no-referrer-when-downgrade">
+    
+
+    <title>Data Ingestion: Architectural Patterns | 记录每个瞬间</title>
+    <meta property="og:title" content="Data Ingestion: Architectural Patterns - 记录每个瞬间">
+    <meta property="og:type" content="article">
+        
+    <meta property="article:published_time" content='2024-01-15T09:08:07&#43;08:00'>
+        
+        
+    <meta property="article:modified_time" content='2024-01-15T09:08:07&#43;08:00'>
+        
+    <meta name="Keywords" content="">
+    <meta name="description" content="Data Ingestion: Architectural Patterns">
+        <meta name="author" content="隔壁老王">
+        
+    <meta property="og:url" content="https://code0xff.org/post/2024/01/data_ingestion_architectural_patterns/">
+    <link rel="shortcut icon" href='/favicon.ico'  type="image/x-icon">
+
+    <link rel="stylesheet" href='/css/normalize.css'>
+    <link rel="stylesheet" href='/css/style.css'>
+    <script type="text/javascript" src="//cdn.bootcdn.net/ajax/libs/jquery/3.4.1/jquery.min.js"></script>
+
+    
+    
+    
+        <link href="https://cdn.bootcdn.net/ajax/libs/fancybox/3.5.7/jquery.fancybox.min.css" rel="stylesheet">
+    
+    
+    
+    
+</head>
+
+
+<body>
+    <header id="header" class="clearfix">
+    <div class="container">
+        <div class="col-group">
+            <div class="site-name ">
+                
+                    <a id="logo" href="https://code0xff.org/">
+                        记录每个瞬间
+                    </a>
+                
+                
+            </div>
+            <div>
+                <nav id="nav-menu" class="clearfix">
+                    <a class="current" href="https://code0xff.org/">首页</a>
+                    
+                    <a  href="https://code0xff.org/linked/" title="链接">链接</a>
+                    
+                    <a  href="https://code0xff.org/archives/" title="归档">归档</a>
+                    
+                    <a  href="https://code0xff.org/about/" title="关于">关于</a>
+                    
+                </nav>
+            </div>
+        </div>
+    </div>
+</header>
+
+    <div id="body">
+        <div class="container">
+            <div class="col-group">
+
+                <div class="col-8" id="main">
+                    
+<div class="res-cons">
+    
+    <article class="post">
+        <header>
+            <h1 class="post-title">Data Ingestion: Architectural Patterns</h1>
+        </header>
+        <date class="post-meta meta-date">
+            2024年1月15日
+        </date>
+<nav id="TableOfContents">
+  <ul>
+    <li>
+      <ul>
+        <li><a href="#overview">Overview</a></li>
+        <li><a href="#pattern">Pattern</a>
+          <ul>
+            <li><a href="#pattern-1-unified-data-repository">Pattern 1: Unified Data Repository</a></li>
+            <li><a href="#pattern-2-data-virtualization">Pattern 2: Data Virtualization</a></li>
+            <li><a href="#pattern-3-etl">Pattern 3: ETL</a></li>
+            <li><a href="#pattern-4-elt">Pattern 4: ELT</a></li>
+          </ul>
+        </li>
+        <li><a href="#emerging-patterns">Emerging Patterns</a>
+          <ul>
+            <li><a href="#push-vs-pull">Push (vs Pull)</a></li>
+            <li><a href="#stream-processing">Stream Processing</a></li>
+          </ul>
+        </li>
+        <li><a href="#conclusions">Conclusions</a></li>
+        <li><a href="#reference">Reference</a></li>
+      </ul>
+    </li>
+  </ul>
+</nav>
+        
+        <div class="post-meta">
+            
+            <span class="post-meta meta-tags">
+                <ul class="clearfix">
+                    <a href='/categories/%E5%A4%A7%E6%95%B0%E6%8D%AE'>大数据</a>
+                </ul>
+            </span>
+            
+        </div>
+        
+        
+        <div class="post-meta">
+            <span id="busuanzi_container_page_pv">|<span id="busuanzi_value_page_pv"></span><span>
+                    阅读</span></span>
+        </div>
+        
+        
+        <div class="post-content">
+            <blockquote>
+<p>原文<br>
+<a href="https://medium.com/the-modern-scientist/the-art-of-data-ingestion-powering-analytics-from-operational-sources-467552d6c9a2">https://medium.com/the-modern-scientist/the-art-of-data-ingestion-powering-analytics-from-operational-sources-467552d6c9a2</a></p>
+</blockquote>
+<h2 id="overview">Overview</h2>
+<p>本质上来说，data ingestion 就是把运营平面的数据，同步到 分析平面中，这样就可以解锁 分析平面的所有能力了<br>
+
+        <a data-fancybox="gallery" href="https://miro.medium.com/v2/resize:fit:720/format:webp/1*KgViPR7-lyNP5BH-m6z6nQ.png">
+            <img class="mx-auto" alt="" src="https://miro.medium.com/v2/resize:fit:720/format:webp/1*KgViPR7-lyNP5BH-m6z6nQ.png" />
+        </a>
+    </p>
+<p>企业的分析平台需要对 各种数据源做分析，因此选择合适的 data ingestion 策略就很重要<br>
+这个 data ingestion 必须覆盖各种场景</p>
+<ul>
+<li>比如标准的应用，CRM、ERP、金融系统等</li>
+<li>非结构的数据，如 IoT传感器</li>
+<li>还有 API，各种文档、图片、视频等</li>
+</ul>
+<p>
+        <a data-fancybox="gallery" href="https://miro.medium.com/v2/resize:fit:720/format:webp/1*NdgmV6-n7IFDtJkMhrXkLg.png">
+            <img class="mx-auto" alt="" src="https://miro.medium.com/v2/resize:fit:720/format:webp/1*NdgmV6-n7IFDtJkMhrXkLg.png" />
+        </a>
+    </p>
+<p>其中，数据平台由各种架构模式、各种工具组成，他们在其中扮演重要的功能、有效性的角色</p>
+<p>本文介绍架构范式，指导选择合适的数据摄取策略，并指出其背后的本质</p>
+<h2 id="pattern">Pattern</h2>
+<h3 id="pattern-1-unified-data-repository">Pattern 1: Unified Data Repository</h3>
+<p>这种模式就是 一个数据库，同时处理 OLTP、OLAP 数据<br>
+好处是简单，消除了数据同步的需要<br>
+
+        <a data-fancybox="gallery" href="https://miro.medium.com/v2/resize:fit:720/format:webp/1*CX3FnWK1O5LwuYDEmO-Vkg.png">
+            <img class="mx-auto" alt="" src="https://miro.medium.com/v2/resize:fit:720/format:webp/1*CX3FnWK1O5LwuYDEmO-Vkg.png" />
+        </a>
+    <br>
+这种方式又分为两种 子模式</p>
+<ul>
+<li>Virtualization，在 OLTP 表之上建立视图，为 OLAP 使用</li>
+<li>Duplication and Transformation，在原 OLTP 表之上，建立物化视图，或者复制一份表，供 OLAP 使用</li>
+</ul>
+<p>这种模式的限制</p>
+<ul>
+<li>Data Integration Challenges，因为是一个数据库来管理 OLAP、OLTP，如果数据源种类很多，就不好处理，需要跨数据源查询，带来复杂度</li>
+<li>Potential for System Interference，OLTP、OLAP 同时使用导致相关干扰</li>
+<li>Performance Trade-offs，OLTP 的场景跟 OLAP 复杂查询的场景不同，很难同时兼顾优化两个场景</li>
+<li>Tightly Coupled，导致 OLTP 和 OLAP 层的紧耦合，降低了灵活性</li>
+</ul>
+<p>这种模式，适合数据集不大的场景，或者数据源种类较少的场景</p>
+<h3 id="pattern-2-data-virtualization">Pattern 2: Data Virtualization</h3>
+<p>这种模式利用了特殊的软件，在多个底层的源之上，建立了数据虚拟层<br>
+也就是通过一个中间件整合底层的数据，做汇总后返回给 分析层<br>
+
+        <a data-fancybox="gallery" href="https://miro.medium.com/v2/resize:fit:720/format:webp/1*0dZuHmrvmsz3lan7Hn1zdA.png">
+            <img class="mx-auto" alt="" src="https://miro.medium.com/v2/resize:fit:720/format:webp/1*0dZuHmrvmsz3lan7Hn1zdA.png" />
+        </a>
+    </p>
+<p>这种模式的好处</p>
+<ul>
+<li>Near-Real-Time Data Access，因为没有物理数据，访问的都是原始数据集，所以能提供 近实时的查询</li>
+<li>Intelligent Caching，通过整合了 cache，可以对底层系统的影响最小，也能提升性能</li>
+</ul>
+<p>这种模式的限制</p>
+<ul>
+<li>Source System Limitations，如果底层系统对特定查询没有优化，则会影响到上层的访问</li>
+<li>Network Overhead，可能需要跨多个机房做跨数据源查询，有一定的延迟</li>
+<li>Historical Data Tracking，由于不存物理数据，没有做历史分离，也就是 time travel</li>
+</ul>
+<p>使用这种模式时，需要详细的测试 底层基础设置，了解其限制和能力，这样才能更好的整合、优化这种模式</p>
+<h3 id="pattern-3-etl">Pattern 3: ETL</h3>
+<p>这种就是标准的 ETL，Extract，Transform,Load 操作<br>
+
+        <a data-fancybox="gallery" href="https://miro.medium.com/v2/resize:fit:720/format:webp/1*g3y7yZvmVhfmC7chWiUV5Q.png">
+            <img class="mx-auto" alt="" src="https://miro.medium.com/v2/resize:fit:720/format:webp/1*g3y7yZvmVhfmC7chWiUV5Q.png" />
+        </a>
+    <br>
+现在有很多这种 ETL 工具，还有直观的图形界面，方便用户观察细节<br>
+用户还可以通过脚本、SQL 来直接操作</p>
+<p>这种管道方式的好处</p>
+<ul>
+<li>Centralized Logic，不光利用了数据摄取的能力，同时将数据塑造成满足 分析场景的模式</li>
+<li>User-Friendly Design，可视化的 ETL可以让不同技能的用户都能参与进来</li>
+</ul>
+<h3 id="pattern-4-elt">Pattern 4: ELT</h3>
+<p>类似于 ETL，但是有些不同</p>
+<ul>
+<li>EL，首先直接 提取、加载操作，而转换操作直接在目标数据平台上完成，但不是立即转换的</li>
+<li>T，随后才发生的操作，这个操作是独立的，可以跟 EL 操作隔离开
+
+        <a data-fancybox="gallery" href="https://miro.medium.com/v2/resize:fit:720/format:webp/1*Z0Fudfvo2Vy4suPiK4sHWw.png">
+            <img class="mx-auto" alt="" src="https://miro.medium.com/v2/resize:fit:720/format:webp/1*Z0Fudfvo2Vy4suPiK4sHWw.png" />
+        </a>
+    </li>
+</ul>
+<p>这种模式解决了 ETL 的几个问题</p>
+<ul>
+<li>Enhanced Flexibility，由于将 转换操作单独拿出来了，所以增强了灵活性，可以为不同的数据类型、转换标准选择不同的工具</li>
+<li>Aligned Performance，利用了数据平台的计算能力，可以做并行处理</li>
+<li>Improved Scalability，有助于选择自动化，可伸缩性方面的工具</li>
+</ul>
+<p>这个模式的缺点</p>
+<ul>
+<li>Governance of Multiple Tools，使用不同的工具做 EL、T，需要严格的治理来管理许可、定价、更新周期和支持结构</li>
+<li>Orchestration Challenges，需要一个更好的工具来支持编排，基于 DAG 来确保转换发生在 EL 之后</li>
+</ul>
+<h2 id="emerging-patterns">Emerging Patterns</h2>
+<h3 id="push-vs-pull">Push (vs Pull)</h3>
+<p>传统的模式是 pull 的方式，也就是 分析平台主动的从运营平台 拉取数据<br>
+而 push 模式，是运行平台将数据 push 到分析平台，只要源端发生了 create、read、update、delete CRUD 操作<br>
+
+        <a data-fancybox="gallery" href="https://miro.medium.com/v2/resize:fit:720/format:webp/1*NOdyt_qBq7qZXABLaEZZJQ.png">
+            <img class="mx-auto" alt="" src="https://miro.medium.com/v2/resize:fit:720/format:webp/1*NOdyt_qBq7qZXABLaEZZJQ.png" />
+        </a>
+    </p>
+<p>这种模式下主要用于流系统，但不止于此，运营平面需要额外的组件来扩展这个功能，或者在运营平板新增一些功能<br>
+这样就使得 分析平面只需要考虑 转换问题，而不需要考虑数据摄取管道相关的事情<br>
+这种方式的缺点</p>
+<ul>
+<li>Requirement for a dedicated application development team，需要额外的团队来完成这些任务</li>
+<li>Handling Push Failures，pull失败了只要重试即可，但是push失败了 分析平面感知不到，需要设计高可用，高并发的 push流系统</li>
+</ul>
+<p>这种模式下，需要组织有很高的软件开发成熟度，否则需要跟其他方案配合使用</p>
+<h3 id="stream-processing">Stream Processing</h3>
+<p>流处理系统，适合大数据量、低延迟的系统，如金融交易、实时分析和物联网监控<br>
+
+        <a data-fancybox="gallery" href="https://miro.medium.com/v2/resize:fit:720/format:webp/1*8gcz8vPwnDL524LM-e-iQg.png">
+            <img class="mx-auto" alt="" src="https://miro.medium.com/v2/resize:fit:720/format:webp/1*8gcz8vPwnDL524LM-e-iQg.png" />
+        </a>
+    <br>
+有两个好处</p>
+<ul>
+<li>Adapting ELT (or even ETL) for Streaming，可以提取实时的事件，并加载到分析平台</li>
+<li>Leveraging Streaming Caches，利用流cache作为一个数据源，相当于共享数据存储的变体，但要注意静态数据cache问题</li>
+</ul>
+<p>Kappa、Lambda 则是统一两个世界的架构</p>
+<h2 id="conclusions">Conclusions</h2>
+<p>提供了 5 种模式</p>
+<ul>
+<li>Unified Data Repository，最简单，但是限制了伸缩性</li>
+<li>Data Virtualization，提供了实时的能力，但限制了性能</li>
+<li>ETL，独立了两个平台的能力，但是也有性能瓶颈，僵化、不灵活</li>
+<li>ELT，很灵活，伸缩性很好，但是需要额外的编排</li>
+<li>新兴的流处理模式，提供了实时性，提供了动态的方式获取数据</li>
+</ul>
+<h2 id="reference">Reference</h2>
+<ul>
+<li><a href="https://www.confluent.io/learn/data-streaming/">Data Streaming: The Complete Introduction</a></li>
+<li><a href="https://nexocode.com/blog/posts/lambda-vs-kappa-architecture/">Lambda vs. Kappa</a></li>
+</ul>
+
+			<script type="text/javascript"
+        async
+        src="https://cdn.bootcss.com/mathjax/2.7.3/MathJax.js?config=TeX-AMS-MML_HTMLorMML">
+MathJax.Hub.Config({
+  tex2jax: {
+    inlineMath: [['$','$'], ['\\(','\\)']],
+    displayMath: [['$$','$$'], ['\[\[','\]\]']],
+    processEscapes: true,
+    processEnvironments: true,
+    skipTags: ['script', 'noscript', 'style', 'textarea', 'pre'],
+    TeX: { equationNumbers: { autoNumber: "AMS" },
+         extensions: ["AMSmath.js", "AMSsymbols.js"] }
+  }
+});
+
+MathJax.Hub.Queue(function() {
+    
+    
+    
+    var all = MathJax.Hub.getAllJax(), i;
+    for(i = 0; i < all.length; i += 1) {
+        all[i].SourceElement().parentNode.className += ' has-jax';
+    }
+});
+</script>
+
+<style>
+code.has-jax {
+    font: inherit;
+    font-size: 100%;
+    background: inherit;
+    border: inherit;
+    color: #515151;
+}
+</style>
+        </div>
+
+        
+
+
+        
+
+
+        <div class="post-meta meta-tags">
+            
+            <ul class="clearfix">
+                
+                <li><a href='/tags/data_ingestion'>Data_Ingestion</a></li>
+                
+            </ul>
+            
+        </div>
+    </article>
+    
+    
+
+    
+    
+    <div class="post bg-white">
+      <script src="https://utteranc.es/client.js"
+            repo= "himichael/hugoblogtalks"
+            issue-term="pathname"
+            theme="github-light"
+            crossorigin="anonymous"
+            async>
+      </script>
+    </div>
+    
+</div>
+
+
+                </div>
+
+                <div id="secondary">
+    <section class="widget">
+        <form id="search" action='https://code0xff.org/search/' method="get" accept-charset="utf-8" target="_blank" _lpchecked="1">
+      
+      <input type="text" name="q" maxlength="20" placeholder="Search">
+      <input type="hidden" name="sitesearch" value="https://code0xff.org/">
+      <button type="submit" class="submit icon-search"></button>
+</form>
+    </section>
+    
+    <section class="widget">
+        <h3 class="widget-title">最近文章</h3>
+<ul class="widget-list">
+    
+    <li>
+        <a href="https://code0xff.org/post/2024/02/data_ingestion_tool-selection-strategy/" title="Data Ingestion: Tool Selection Strategy">Data Ingestion: Tool Selection Strategy</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2024/02/data-engineering-at-meta/" title="Data engineering at Meta">Data engineering at Meta</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2024/01/data_ingestion_architectural_patterns/" title="Data Ingestion: Architectural Patterns">Data Ingestion: Architectural Patterns</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2024/01/hms/" title="Hive MetaStore的实现和优化">Hive MetaStore的实现和优化</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2024/01/lakehouse_storage_systems/" title="Analyzing and Comparing Lakehouse Storage Systems">Analyzing and Comparing Lakehouse Storage Systems</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2024/01/system_tuning/" title="系统调优">系统调优</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2024/01/doris_advanced/" title="Doris Advanced">Doris Advanced</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2024/01/doris/" title="Doris Basic">Doris Basic</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/12/%E9%9A%BE%E5%BF%98%E7%9A%84%E7%9E%AC%E9%97%B4/" title="难忘的时刻(2023年)">难忘的时刻(2023年)</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2023/12/impala_in_netease/" title="网易对Impala的一些使用">网易对Impala的一些使用</a>
+    </li>
+    
+</ul>
+    </section>
+
+    
+
+    <section class="widget">
+        <h3 class="widget-title"><a href='/categories/'>分类</a></h3>
+<ul class="widget-list">
+    
+    <li><a href="https://code0xff.org/categories/%E5%88%86%E5%B8%83%E5%BC%8F/">分布式 (6)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E5%8E%9F%E7%90%86%E5%88%86%E6%9E%90/">原理分析 (13)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E5%95%86%E4%B8%9A/">商业 (3)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E5%A4%A7%E6%95%B0%E6%8D%AE/">大数据 (43)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%95%B0%E6%8D%AE%E5%BA%93/">数据库 (38)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%96%87%E5%AD%A6%E5%92%8C%E8%89%BA%E6%9C%AF/">文学和艺术 (3)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%97%85%E8%A1%8C/">旅行 (12)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%9E%B6%E6%9E%84/">架构 (2)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E7%AE%97%E6%B3%95/">算法 (8)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E7%B3%BB%E7%BB%9F/">系统 (7)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E7%BC%96%E7%A8%8B%E8%AF%AD%E8%A8%80/">编程语言 (5)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E8%A1%8C%E4%B8%9A%E8%A7%82%E5%AF%9F/">行业观察 (3)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E8%AF%BB%E4%B9%A6%E7%AC%94%E8%AE%B0/">读书笔记 (12)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E9%9A%8F%E4%BE%BF%E5%86%99%E5%86%99/">随便写写 (3)</a></li>
+    
+</ul>
+    </section>
+
+    <section class="widget">
+        <h3 class="widget-title">归档</a></h3>
+<ul class="widget-list">
+    
+    <li><a href="https://code0xff.org/years/2021%E5%B9%B4/">2021年 (41)</a></li>
+    
+    <li><a href="https://code0xff.org/years/2022%E5%B9%B4/">2022年 (55)</a></li>
+    
+    <li><a href="https://code0xff.org/years/2023%E5%B9%B4/">2023年 (54)</a></li>
+    
+    <li><a href="https://code0xff.org/years/2024%E5%B9%B4/">2024年 (8)</a></li>
+    
+</ul>
+    </section>
+
+    <section class="widget">
+        <h3 class="widget-title"><a href='/tags/'>标签</a></h3>
+<div class="tagcloud">
+    
+    <a href="https://code0xff.org/tags/ambari/">Ambari </a>
+    
+    <a href="https://code0xff.org/tags/b%E6%A0%91/">B树 </a>
+    
+    <a href="https://code0xff.org/tags/c&#43;&#43;/">C&#43;&#43; </a>
+    
+    <a href="https://code0xff.org/tags/calcite/">calcite </a>
+    
+    <a href="https://code0xff.org/tags/cmu-database/">CMU-Database </a>
+    
+    <a href="https://code0xff.org/tags/data_ingestion/">Data_Ingestion </a>
+    
+    <a href="https://code0xff.org/tags/doris/">Doris </a>
+    
+    <a href="https://code0xff.org/tags/facebook/">Facebook </a>
+    
+    <a href="https://code0xff.org/tags/flink/">flink </a>
+    
+    <a href="https://code0xff.org/tags/flume/">flume </a>
+    
+    <a href="https://code0xff.org/tags/gc/">GC </a>
+    
+    <a href="https://code0xff.org/tags/gluten/">Gluten </a>
+    
+    <a href="https://code0xff.org/tags/hana/">HANA </a>
+    
+    <a href="https://code0xff.org/tags/hive/">Hive </a>
+    
+    <a href="https://code0xff.org/tags/impala/">Impala </a>
+    
+    <a href="https://code0xff.org/tags/k8s/">k8s </a>
+    
+    <a href="https://code0xff.org/tags/kudu/">kudu </a>
+    
+    <a href="https://code0xff.org/tags/kyuubi/">Kyuubi </a>
+    
+    <a href="https://code0xff.org/tags/lakehouse/">Lakehouse </a>
+    
+    <a href="https://code0xff.org/tags/leveldb/">LevelDB </a>
+    
+    <a href="https://code0xff.org/tags/llvm/">LLVM </a>
+    
+    <a href="https://code0xff.org/tags/manacher/">Manacher </a>
+    
+    <a href="https://code0xff.org/tags/mapreduce/">MapReduce </a>
+    
+    <a href="https://code0xff.org/tags/mysql/">MySQL </a>
+    
+    <a href="https://code0xff.org/tags/newsql/">NewSQL </a>
+    
+    <a href="https://code0xff.org/tags/oceanbase/">OceanBase </a>
+    
+    <a href="https://code0xff.org/tags/paxos/">paxos </a>
+    
+    <a href="https://code0xff.org/tags/presto/">Presto </a>
+    
+    <a href="https://code0xff.org/tags/quick-sql/">quick-sql </a>
+    
+    <a href="https://code0xff.org/tags/raft/">raft </a>
+    
+    <a href="https://code0xff.org/tags/scala/">scala </a>
+    
+    <a href="https://code0xff.org/tags/simd/">SIMD </a>
+    
+    <a href="https://code0xff.org/tags/snowflake/">snowflake </a>
+    
+    <a href="https://code0xff.org/tags/spark/">spark </a>
+    
+    <a href="https://code0xff.org/tags/teradata/">TeraData </a>
+    
+    <a href="https://code0xff.org/tags/tpcx-hs/">TPCx-HS </a>
+    
+    <a href="https://code0xff.org/tags/tuning/">Tuning </a>
+    
+    <a href="https://code0xff.org/tags/unix/">unix </a>
+    
+    <a href="https://code0xff.org/tags/%E4%BA%8C%E5%88%86%E6%9F%A5%E6%89%BE/">二分查找 </a>
+    
+    <a href="https://code0xff.org/tags/%E4%BA%8C%E5%8F%89%E6%A0%91%E9%81%8D%E5%8E%86/">二叉树遍历 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%88%86%E5%B8%83%E5%BC%8F/">分布式 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%88%97%E5%AD%98/">列存 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%8A%A8%E6%80%81%E6%B3%A8%E5%85%A5/">动态注入 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%8E%86%E5%8F%B2/">历史 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%90%91%E9%87%8F%E5%8C%96/">向量化 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%9B%9E%E6%BA%AF/">回溯 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%9B%BD%E5%86%85%E6%97%85%E8%A1%8C/">国内旅行 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%9B%BD%E5%A4%96%E6%97%85%E8%A1%8C/">国外旅行 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%A4%9A%E7%A7%9F%E6%88%B7/">多租户 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%A4%A7%E6%95%B0%E6%8D%AE/">大数据 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%AD%98%E5%82%A8/">存储 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%B7%A5%E4%BD%9C%E8%AE%B0%E5%BD%95/">工作记录 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%BE%AE%E6%9C%8D%E5%8A%A1/">微服务 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%95%B0%E6%8D%AE%E5%BA%93/">数据库 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%95%B0%E6%8D%AE%E6%A8%A1%E5%9E%8B/">数据模型 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%95%B0%E6%8D%AE%E8%BF%81%E7%A7%BB/">数据迁移 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%9F%A5%E8%AF%A2%E4%BC%98%E5%8C%96/">查询优化 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%9F%A5%E8%AF%A2%E7%BC%96%E8%AF%91/">查询编译 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%B1%87%E7%BC%96/">汇编 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%B5%8B%E8%AF%95/">测试 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%B9%96%E4%BB%93%E4%B8%80%E4%BD%93/">湖仓一体 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%94%9F%E6%B4%BB/">生活 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%94%B5%E5%BD%B1/">电影 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%AE%97%E6%B3%95/">算法 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%B4%A2%E5%BC%95/">索引 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BB%8F%E6%B5%8E/">经济 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BC%93%E5%AD%98/">缓存 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BC%96%E8%AF%91%E5%8E%9F%E7%90%86/">编译原理 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BD%91%E7%BB%9C/">网络 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AE%A1%E7%AE%97%E6%A1%86%E6%9E%B6/">计算框架 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AE%BA%E6%96%87/">论文 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AF%BB%E4%B9%A6/">读书 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AF%BB%E4%B9%A6%E7%AC%94%E8%AE%B0/">读书笔记 </a>
+    
+</div>
+    </section>
+
+    
+
+    <section class="widget">
+        <h3 class="widget-title">RSS</h3>
+        <ul class="widget-list">
+            <li><a href="https://code0xff.org/index.xml">文章 RSS</a></li>
+        </ul>
+    </section>
+</div>
+            </div>
+        </div>
+    </div>
+    <footer id="footer">
+    <div>
+        &copy; 2024 <a href="https://code0xff.org/">记录每个瞬间 By 老王</a>
+        
+    </div>
+    <br />
+    <div>
+        <div class="github-badge">
+            <a href="https://gohugo.io/" target="_black" rel="nofollow"><span class="badge-subject">Powered by</span><span class="badge-value bg-blue">Hugo</span></a>
+        </div>
+        <div class="github-badge">
+            <a href="https://github.com/flysnow-org/maupassant-hugo" target="_black"><span class="badge-subject">Theme</span><span class="badge-value bg-yellowgreen">Maupassant</span></a>
+        </div>
+    </div>
+</footer>
+
+
+    
+    <script type="text/javascript">
+        window.MathJax = {
+            tex2jax: {
+                inlineMath: [['$', '$']],
+                processEscapes: true
+                }
+            };
+    </script>
+    <script src='https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.5/MathJax.js?config=TeX-MML-AM_CHTML' async></script><script src="https://cdn.bootcdn.net/ajax/libs/fancybox/3.5.7/jquery.fancybox.min.js"></script>
+
+<a id="rocket" href="#top"></a>
+<script type="text/javascript" src='/js/totop.js?v=0.0.0' async=""></script>
+
+<script type="application/javascript">
+var doNotTrack = false;
+if (!doNotTrack) {
+	window.ga=window.ga||function(){(ga.q=ga.q||[]).push(arguments)};ga.l=+new Date;
+	ga('create', 'GA ID', 'auto');
+	
+	ga('send', 'pageview');
+}
+</script>
+<script async src='https://www.google-analytics.com/analytics.js'></script>
+
+
+
+    <script type="text/javascript" src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js" async></script>
+
+
+
+
+</body>
+
+</html>
