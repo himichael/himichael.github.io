@@ -1,0 +1,1333 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    
+    <meta name="referrer" content="no-referrer-when-downgrade">
+    
+
+    <title>Trino架构 | 记录每个瞬间</title>
+    <meta property="og:title" content="Trino架构 - 记录每个瞬间">
+    <meta property="og:type" content="article">
+        
+    <meta property="article:published_time" content='2024-04-07T09:08:07&#43;08:00'>
+        
+        
+    <meta property="article:modified_time" content='2024-04-07T09:08:07&#43;08:00'>
+        
+    <meta name="Keywords" content="">
+    <meta name="description" content="Trino架构">
+        <meta name="author" content="隔壁老王">
+        
+    <meta property="og:url" content="https://code0xff.org/post/2024/04/trino_architecture/">
+    <link rel="shortcut icon" href='/favicon.ico'  type="image/x-icon">
+
+    <link rel="stylesheet" href='/css/normalize.css'>
+    <link rel="stylesheet" href='/css/style.css'>
+    <script type="text/javascript" src="//cdn.bootcdn.net/ajax/libs/jquery/3.4.1/jquery.min.js"></script>
+
+    
+    
+    
+        <link href="https://cdn.bootcdn.net/ajax/libs/fancybox/3.5.7/jquery.fancybox.min.css" rel="stylesheet">
+    
+    
+    
+    
+</head>
+
+
+<body>
+    <header id="header" class="clearfix">
+    <div class="container">
+        <div class="col-group">
+            <div class="site-name ">
+                
+                    <a id="logo" href="https://code0xff.org/">
+                        记录每个瞬间
+                    </a>
+                
+                
+            </div>
+            <div>
+                <nav id="nav-menu" class="clearfix">
+                    <a class="current" href="https://code0xff.org/">首页</a>
+                    
+                    <a  href="https://code0xff.org/linked/" title="链接">链接</a>
+                    
+                    <a  href="https://code0xff.org/archives/" title="归档">归档</a>
+                    
+                    <a  href="https://code0xff.org/about/" title="关于">关于</a>
+                    
+                </nav>
+            </div>
+        </div>
+    </div>
+</header>
+
+    <div id="body">
+        <div class="container">
+            <div class="col-group">
+
+                <div class="col-8" id="main">
+                    
+<div class="res-cons">
+    
+    <article class="post">
+        <header>
+            <h1 class="post-title">Trino架构</h1>
+        </header>
+        <date class="post-meta meta-date">
+            2024年4月7日
+        </date>
+<nav id="TableOfContents">
+  <ul>
+    <li>
+      <ul>
+        <li><a href="#架构">架构</a>
+          <ul>
+            <li><a href="#连接器">连接器</a></li>
+            <li><a href="#查询计划">查询计划</a></li>
+            <li><a href="#物理执行和调度">物理执行和调度</a></li>
+          </ul>
+        </li>
+        <li><a href="#文档">文档</a>
+          <ul>
+            <li><a href="#优化">优化</a></li>
+            <li><a href="#query-optimizer">Query optimizer</a>
+              <ul>
+                <li><a href="#table-statistics">Table statistics</a></li>
+                <li><a href="#cbo">CBO</a></li>
+                <li><a href="#pushdown">Pushdown</a></li>
+              </ul>
+            </li>
+          </ul>
+        </li>
+        <li><a href="#sql">SQL</a>
+          <ul>
+            <li><a href="#sql-语法">SQL 语法</a></li>
+            <li><a href="#sql-routines">SQL routines</a></li>
+          </ul>
+        </li>
+        <li><a href="#参考">参考</a></li>
+      </ul>
+    </li>
+  </ul>
+</nav>
+        
+        <div class="post-meta">
+            
+            <span class="post-meta meta-tags">
+                <ul class="clearfix">
+                    <a href='/categories/%E5%A4%A7%E6%95%B0%E6%8D%AE'>大数据</a>
+                </ul>
+            </span>
+            
+        </div>
+        
+        
+        <div class="post-meta">
+            <span id="busuanzi_container_page_pv">|<span id="busuanzi_value_page_pv"></span><span>
+                    阅读</span></span>
+        </div>
+        
+        
+        <div class="post-content">
+            <h2 id="架构">架构</h2>
+<p>如下：<br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/05/20/7gl8mQ.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/05/20/7gl8mQ.png" />
+        </a>
+    <br>
+采用了 MPP 架构，coordinate 收到 SQL 后，语法解析，生成 plan，然后调度到 各个 worker 上执行<br>
+这里的 worker 跟 Spark 不同，它是常驻的进程<br>
+worker 会汇总数据，coordinate 收集汇总 workder 节点的数据并写到 buffer 中，然后返回给用户<br>
+实际上这里有三个角色</p>
+<ul>
+<li>discovery</li>
+<li>coordinate</li>
+<li>worker</li>
+</ul>
+<h3 id="连接器">连接器</h3>
+<p>使用这种连接器的架构，这样可以很方便的将外部数据源纳入进来<br>
+只要实现了相关的 API 接口，就可以扩展一个数据源<br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/05/20/7glGhf.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/05/20/7glGhf.png" />
+        </a>
+    <br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/05/20/7glxrc.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/05/20/7glxrc.png" />
+        </a>
+    </p>
+<p>接口信息</p>
+<ul>
+<li>在解析sql 时，需要 metadata 信息，获取表结构</li>
+<li>在做 CBO 时，需要有表的统计信息</li>
+<li>在调度时，需要有数据的位置信息，这也是对存算分离架构的一种优化</li>
+</ul>
+<h3 id="查询计划">查询计划</h3>
+<p>将逻辑计划转换 分布式计划<br>
+会将大的逻辑计划，拆分成多个 Stage<br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/05/20/7gl5e3.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/05/20/7gl5e3.png" />
+        </a>
+    </p>
+<h3 id="物理执行和调度">物理执行和调度</h3>
+<p>一个 Stage 会包含多个 Task<br>
+task就是计划段（plan fragment）分配给worker运行时的称呼 <br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/05/20/7glVwj.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/05/20/7glVwj.png" />
+        </a>
+    </p>
+<p>Split</p>
+<ul>
+<li>数据处理的单元被称为split</li>
+<li>split描述从底层读取和处理的一段数据</li>
+<li>split是并行计算的最小单元，是任务分配的单元</li>
+<li>连接器能够做的操作依赖于底层的数据源。
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/05/20/7glWS5.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/05/20/7glWS5.png" />
+        </a>
+    </li>
+</ul>
+<p>Page</p>
+<ul>
+<li>数据源阶段的task以page（页）这种格式生成数据</li>
+<li>page是以列式格式存储的多行数据集合</li>
+<li>page数据通过stage的依赖关系，流向下游的stage</li>
+<li>不同的stage之间通过exchange运算交换数据，这种运算符从上游的stage中读取数据</li>
+</ul>
+<p>Driver</p>
+<ul>
+<li>当一个task创建出来后，它为每一个split初始化一个driver</li>
+<li>每个driver初始化一个流水线的operator，然后处理一个split的数据</li>
+<li>一个task可能会使用多个driver，取决于Presto的配置</li>
+<li>一旦所有的driver都完成了，数据被传递到了下一层split，driver和任务结束了他们的工作，之后被销毁
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/05/20/7glcsm.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/05/20/7glcsm.png" />
+        </a>
+    </li>
+</ul>
+<h2 id="文档">文档</h2>
+<h3 id="优化">优化</h3>
+<p>Dynamic filtering，这个跟 spark、impala 的类似</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-SQL" data-lang="SQL"><span style="display:flex;"><span><span style="color:#ff79c6">SELECT</span> <span style="color:#ff79c6">count</span>(<span style="color:#ff79c6">*</span>) <span style="color:#ff79c6">FROM</span> store_sales <span style="color:#ff79c6">JOIN</span> date_dim 
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">ON</span> store_sales.ss_sold_date_sk <span style="color:#ff79c6">=</span> date_dim.d_date_sk 
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">WHERE</span> d_following_holiday<span style="color:#ff79c6">=</span>’Y’ <span style="color:#ff79c6">AND</span> d_year <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">2000</span>;
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>如果没有动态 filter，会全表扫描 事实表，加了 filter后，会将 维度表的 谓词 push 到 事实表，提升效率</p>
+<p>生成的查询计划如下：</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">15
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">16
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">17
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">18
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">19
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">20
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">21
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">22
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">23
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">24
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">25
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">26
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">27
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">28
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">29
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">30
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">31
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">32
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-SQL" data-lang="SQL"><span style="display:flex;"><span>Fragment <span style="color:#bd93f9">1</span> [<span style="color:#ff79c6">SOURCE</span>]
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">Output</span> layout: [count_3]
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">Output</span> partitioning: SINGLE []
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">Aggregate</span>(<span style="color:#ff79c6">PARTIAL</span>)
+</span></span><span style="display:flex;"><span>    │   Layout: [count_3:<span style="color:#8be9fd;font-style:italic">bigint</span>]
+</span></span><span style="display:flex;"><span>    │   count_3 :<span style="color:#ff79c6">=</span> <span style="color:#ff79c6">count</span>(<span style="color:#ff79c6">*</span>)
+</span></span><span style="display:flex;"><span>    └─ InnerJoin[(<span style="color:#f1fa8c">&#34;&#34;</span>ss_sold_date_sk<span style="color:#f1fa8c">&#34;&#34;</span> <span style="color:#ff79c6">=</span> <span style="color:#f1fa8c">&#34;&#34;</span>d_date_sk<span style="color:#f1fa8c">&#34;&#34;</span>)][$hashvalue, $hashvalue_4]
+</span></span><span style="display:flex;"><span>       │   Layout: []
+</span></span><span style="display:flex;"><span>       │   Estimates: {<span style="color:#ff79c6">rows</span>: <span style="color:#bd93f9">0</span> (<span style="color:#bd93f9">0</span>B), cpu: <span style="color:#bd93f9">0</span>, memory: <span style="color:#bd93f9">0</span>B, network: <span style="color:#bd93f9">0</span>B}
+</span></span><span style="display:flex;"><span>       │   Distribution: REPLICATED
+</span></span><span style="display:flex;"><span>       │   dynamicFilterAssignments <span style="color:#ff79c6">=</span> {d_date_sk <span style="color:#ff79c6">-&gt;</span> <span style="color:#ff79c6">#</span>df_370}
+</span></span><span style="display:flex;"><span>       ├─ ScanFilterProject[<span style="color:#ff79c6">table</span> <span style="color:#ff79c6">=</span> hive:<span style="color:#ff79c6">default</span>:store_sales, grouped <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">false</span>, filterPredicate <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">true</span>, dynamicFilters <span style="color:#ff79c6">=</span> {<span style="color:#f1fa8c">&#34;&#34;</span>ss_sold_date_sk<span style="color:#f1fa8c">&#34;&#34;</span> <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">#</span>df_370}]
+</span></span><span style="display:flex;"><span>       │      Layout: [ss_sold_date_sk:<span style="color:#8be9fd;font-style:italic">bigint</span>, $hashvalue:<span style="color:#8be9fd;font-style:italic">bigint</span>]
+</span></span><span style="display:flex;"><span>       │      Estimates: {<span style="color:#ff79c6">rows</span>: <span style="color:#bd93f9">0</span> (<span style="color:#bd93f9">0</span>B), cpu: <span style="color:#bd93f9">0</span>, memory: <span style="color:#bd93f9">0</span>B, network: <span style="color:#bd93f9">0</span>B}<span style="color:#ff79c6">/</span>{<span style="color:#ff79c6">rows</span>: <span style="color:#bd93f9">0</span> (<span style="color:#bd93f9">0</span>B), cpu: <span style="color:#bd93f9">0</span>, memory: <span style="color:#bd93f9">0</span>B, network: <span style="color:#bd93f9">0</span>B}<span style="color:#ff79c6">/</span>{<span style="color:#ff79c6">rows</span>: <span style="color:#bd93f9">0</span> (<span style="color:#bd93f9">0</span>B), cpu: <span style="color:#bd93f9">0</span>, memory: <span style="color:#bd93f9">0</span>B, network: <span style="color:#bd93f9">0</span>B}
+</span></span><span style="display:flex;"><span>       │      $hashvalue :<span style="color:#ff79c6">=</span> combine_hash(<span style="color:#8be9fd;font-style:italic">bigint</span> <span style="color:#f1fa8c">&#39;0&#39;</span>, COALESCE(<span style="color:#f1fa8c">&#34;&#34;</span>$<span style="color:#ff79c6">operator</span>$hash_code<span style="color:#f1fa8c">&#34;&#34;</span>(<span style="color:#f1fa8c">&#34;&#34;</span>ss_sold_date_sk<span style="color:#f1fa8c">&#34;&#34;</span>), <span style="color:#bd93f9">0</span>))
+</span></span><span style="display:flex;"><span>       │      ss_sold_date_sk :<span style="color:#ff79c6">=</span> ss_sold_date_sk:<span style="color:#8be9fd;font-style:italic">bigint</span>:REGULAR
+</span></span><span style="display:flex;"><span>       └─ LocalExchange[HASH][$hashvalue_4] (<span style="color:#f1fa8c">&#34;&#34;</span>d_date_sk<span style="color:#f1fa8c">&#34;&#34;</span>)
+</span></span><span style="display:flex;"><span>          │   Layout: [d_date_sk:<span style="color:#8be9fd;font-style:italic">bigint</span>, $hashvalue_4:<span style="color:#8be9fd;font-style:italic">bigint</span>]
+</span></span><span style="display:flex;"><span>          │   Estimates: {<span style="color:#ff79c6">rows</span>: <span style="color:#bd93f9">0</span> (<span style="color:#bd93f9">0</span>B), cpu: <span style="color:#bd93f9">0</span>, memory: <span style="color:#bd93f9">0</span>B, network: <span style="color:#bd93f9">0</span>B}
+</span></span><span style="display:flex;"><span>          └─ RemoteSource[<span style="color:#bd93f9">2</span>]
+</span></span><span style="display:flex;"><span>                 Layout: [d_date_sk:<span style="color:#8be9fd;font-style:italic">bigint</span>, $hashvalue_5:<span style="color:#8be9fd;font-style:italic">bigint</span>]
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>Fragment <span style="color:#bd93f9">2</span> [<span style="color:#ff79c6">SOURCE</span>]
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">Output</span> layout: [d_date_sk, $hashvalue_6]
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">Output</span> partitioning: BROADCAST []
+</span></span><span style="display:flex;"><span>    ScanFilterProject[<span style="color:#ff79c6">table</span> <span style="color:#ff79c6">=</span> hive:<span style="color:#ff79c6">default</span>:date_dim, grouped <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">false</span>, filterPredicate <span style="color:#ff79c6">=</span> ((<span style="color:#f1fa8c">&#34;&#34;</span>d_following_holiday<span style="color:#f1fa8c">&#34;&#34;</span> <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">CAST</span>(<span style="color:#f1fa8c">&#39;Y&#39;</span> <span style="color:#ff79c6">AS</span> <span style="color:#8be9fd;font-style:italic">char</span>(<span style="color:#bd93f9">1</span>))) <span style="color:#ff79c6">AND</span> (<span style="color:#f1fa8c">&#34;&#34;</span>d_year<span style="color:#f1fa8c">&#34;&#34;</span> <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">2000</span>))]
+</span></span><span style="display:flex;"><span>        Layout: [d_date_sk:<span style="color:#8be9fd;font-style:italic">bigint</span>, $hashvalue_6:<span style="color:#8be9fd;font-style:italic">bigint</span>]
+</span></span><span style="display:flex;"><span>        Estimates: {<span style="color:#ff79c6">rows</span>: <span style="color:#bd93f9">0</span> (<span style="color:#bd93f9">0</span>B), cpu: <span style="color:#bd93f9">0</span>, memory: <span style="color:#bd93f9">0</span>B, network: <span style="color:#bd93f9">0</span>B}<span style="color:#ff79c6">/</span>{<span style="color:#ff79c6">rows</span>: <span style="color:#bd93f9">0</span> (<span style="color:#bd93f9">0</span>B), cpu: <span style="color:#bd93f9">0</span>, memory: <span style="color:#bd93f9">0</span>B, network: <span style="color:#bd93f9">0</span>B}<span style="color:#ff79c6">/</span>{<span style="color:#ff79c6">rows</span>: <span style="color:#bd93f9">0</span> (<span style="color:#bd93f9">0</span>B), cpu: <span style="color:#bd93f9">0</span>, memory: <span style="color:#bd93f9">0</span>B, network: <span style="color:#bd93f9">0</span>B}
+</span></span><span style="display:flex;"><span>        $hashvalue_6 :<span style="color:#ff79c6">=</span> combine_hash(<span style="color:#8be9fd;font-style:italic">bigint</span> <span style="color:#f1fa8c">&#39;0&#39;</span>, COALESCE(<span style="color:#f1fa8c">&#34;&#34;</span>$<span style="color:#ff79c6">operator</span>$hash_code<span style="color:#f1fa8c">&#34;&#34;</span>(<span style="color:#f1fa8c">&#34;&#34;</span>d_date_sk<span style="color:#f1fa8c">&#34;&#34;</span>), <span style="color:#bd93f9">0</span>))
+</span></span><span style="display:flex;"><span>        d_following_holiday :<span style="color:#ff79c6">=</span> d_following_holiday:<span style="color:#8be9fd;font-style:italic">char</span>(<span style="color:#bd93f9">1</span>):REGULAR
+</span></span><span style="display:flex;"><span>        d_date_sk :<span style="color:#ff79c6">=</span> d_date_sk:<span style="color:#8be9fd;font-style:italic">bigint</span>:REGULAR
+</span></span><span style="display:flex;"><span>        d_year :<span style="color:#ff79c6">=</span> d_year:<span style="color:#8be9fd;font-style:italic">int</span>:REGULAR
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>dynamicFilterAssignments = {d_date_sk -&gt; #df_370}   这里就是 动态 filter</p>
+<p>Administration</p>
+<ul>
+<li>Observability with OpenTelemetry</li>
+<li>Spill to disk</li>
+<li>Resource groups，基于文件的方式、基于DB 的方式</li>
+<li>Graceful shutdown</li>
+<li>Distributed sort，多借点部分排序，但最后需要在单节点汇总</li>
+<li>Fault-tolerant execution，重试，或者其他组件来执行</li>
+<li>Event Listener，类似 spark 的 Event Listener</li>
+</ul>
+<p>支持的连接器</p>
+<ul>
+<li>Accumulo</li>
+<li>Atop</li>
+<li>BigQuery</li>
+<li>Black</li>
+<li>Cassandra</li>
+<li>ClickHouse</li>
+<li>Delta</li>
+<li>Druid</li>
+<li>Elasticsearch</li>
+<li>Google</li>
+<li>Hive</li>
+<li>Hudi</li>
+<li>Iceberg</li>
+<li>Ignite</li>
+<li>JMX</li>
+<li>Kafka</li>
+<li>Kinesis</li>
+<li>Kudu</li>
+<li>Local</li>
+<li>MariaDB</li>
+<li>Memory</li>
+<li>MongoDB</li>
+<li>MySQL</li>
+<li>OpenSearch</li>
+<li>Oracle</li>
+<li>Phoenix</li>
+<li>Pinot</li>
+<li>PostgreSQL</li>
+<li>Prometheus</li>
+<li>Redis</li>
+<li>Redshift</li>
+<li>SingleStore</li>
+<li>Snowflake</li>
+<li>SQL</li>
+<li>System</li>
+<li>Thrift</li>
+<li>TPCDS</li>
+<li>TPCH</li>
+</ul>
+<h3 id="query-optimizer">Query optimizer</h3>
+<h4 id="table-statistics">Table statistics</h4>
+<p><a href="https://trino.io/docs/current/admin/properties-optimizer.html">Optimizer Properties</a><br>
+这里有很多优化规则，举几个</p>
+<ul>
+<li>optimizer.push-aggregation-through-outer-join
+聚合函数，下推到 outer join</li>
+</ul>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-SQL" data-lang="SQL"><span style="display:flex;"><span><span style="color:#ff79c6">SELECT</span> <span style="color:#ff79c6">*</span> <span style="color:#ff79c6">FROM</span> item i
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">WHERE</span> i.i_current_price <span style="color:#ff79c6">&gt;</span> (
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">SELECT</span> <span style="color:#ff79c6">AVG</span>(j.i_current_price) <span style="color:#ff79c6">FROM</span> item j
+</span></span><span style="display:flex;"><span>            <span style="color:#ff79c6">WHERE</span> i.i_category <span style="color:#ff79c6">=</span> j.i_category);
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>JOIN 策略</p>
+<ul>
+<li>optimizer.join-reordering-strategy</li>
+<li>optimizer.max-reordered-joins</li>
+</ul>
+<p>并行读取表分区的 task</p>
+<ul>
+<li>optimizer.use-table-scan-node-partitioning</li>
+<li>optimizer.table-scan-node-partitioning-min-bucket-to-task-ratio</li>
+</ul>
+<p>colocated-join</p>
+<ul>
+<li>optimizer.colocated-joins-enabled</li>
+<li>这个 doris 也有，就是 join 两边的 join 条件，谓词条件都满足本地化，不用 exchange 了</li>
+</ul>
+<p>其他一些</p>
+<ul>
+<li>包括 task 输入大小的</li>
+<li>hash join 的build 端大小阈值</li>
+<li>对于 filter 谓词后 rows 数量的评估</li>
+</ul>
+<p>表统计信息输出的列</p>
+<table>
+<thead>
+<tr>
+<th>Column</th>
+<th>Description</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>column_name</td>
+<td>The name of the column</td>
+<td>NULL in the table summary row</td>
+</tr>
+<tr>
+<td>data_size</td>
+<td>The total size in bytes of all of the values in the column</td>
+<td>NULL in the table summary row. Available for columns of string data types with variable widths.</td>
+</tr>
+<tr>
+<td>distinct_values_count</td>
+<td>The estimated number of distinct values in the column</td>
+<td>NULL in the table summary row</td>
+</tr>
+<tr>
+<td>nulls_fractions</td>
+<td>The portion of the values in the column that are NULL</td>
+<td>NULL in the table summary row.</td>
+</tr>
+<tr>
+<td>row_count</td>
+<td>The estimated number of rows in the table</td>
+<td>NULL in column statistic rows</td>
+</tr>
+<tr>
+<td>low_value</td>
+<td>The lowest value found in this column</td>
+<td>NULL in the table summary row. Available for columns of DATE, integer, floating-point, and exact numeric data types.</td>
+</tr>
+<tr>
+<td>high_value</td>
+<td>The highest value found in this column</td>
+<td>NULL in the table summary row. Available for columns of DATE, integer, floating-point, and exact numeric data types.</td>
+</tr>
+</tbody>
+</table>
+<h4 id="cbo">CBO</h4>
+<p>普通 explain<br>
+EXPLAIN ANALYZE，统计运行时真正信息</p>
+<p>explain 的 fragment 类型</p>
+<ul>
+<li><strong>SINGLE</strong>，Fragment is executed on a single node.</li>
+<li><strong>HASH</strong>，Fragment is executed on a fixed number of nodes with the input data distributed using a hash function.</li>
+<li><strong>ROUND_ROBIN</strong>，Fragment is executed on a fixed number of nodes with the input data distributed in a round-robin fashion.</li>
+<li><strong>BROADCAST</strong>，Fragment is executed on a fixed number of nodes with the input data broadcasted to all nodes.</li>
+<li><strong>SOURCE</strong>，Fragment is executed on nodes where input splits are accessed.</li>
+</ul>
+<p>join enumeration 的属性</p>
+<ul>
+<li>AUTOMATIC (default) - enable full automatic join enumeration</li>
+<li>ELIMINATE_CROSS_JOINS - eliminate unnecessary cross joins</li>
+<li>NONE - purely syntactic join order</li>
+</ul>
+<p>join 类型：</p>
+<ul>
+<li>BROADCAST - broadcast join distribution is used for all joins</li>
+<li>PARTITIONED - partitioned join distribution is used for all join</li>
+</ul>
+<p>限制广播的参数</p>
+<ul>
+<li>join-max-broadcast-table-size，默认 100MB</li>
+<li>join_max_broadcast_table_size，session property</li>
+</ul>
+<p>join order</p>
+<ul>
+<li>默认是 最右边作为 build，但是多表时情况更复杂</li>
+<li>join策略是 largest tables to the smallest，最大 join 最小，跟 doris 类似</li>
+</ul>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">6
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-sql" data-lang="sql"><span style="display:flex;"><span><span style="color:#ff79c6">SELECT</span>
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">*</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">FROM</span>
+</span></span><span style="display:flex;"><span>  large_table l
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">LEFT</span> <span style="color:#ff79c6">JOIN</span> medium_table m <span style="color:#ff79c6">ON</span> l.user_id <span style="color:#ff79c6">=</span> m.user_id
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">LEFT</span> <span style="color:#ff79c6">JOIN</span> small_table s <span style="color:#ff79c6">ON</span> s.user_id <span style="color:#ff79c6">=</span> l.user_id
+</span></span></code></pre></td></tr></table>
+</div>
+</div><h4 id="pushdown">Pushdown</h4>
+<p>The results of this pushdown can include the following benefits:</p>
+<ul>
+<li>Improved overall query performance</li>
+<li>Reduced network traffic between Trino and the data source</li>
+<li>Reduced load on the remote data source</li>
+</ul>
+<p>支持的下推种类</p>
+<ul>
+<li>Predicate pushdown</li>
+<li>Projection pushdown</li>
+<li>Dereference pushdown，复杂类型时，下推读取内嵌的某个类型</li>
+<li>Aggregation pushdown</li>
+<li>Join pushdown</li>
+<li>Limit pushdown</li>
+<li>Top-N pushdown</li>
+</ul>
+<p>下推可能只是支持 PG，官网文档给出的例子是 基于 PG 的</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">15
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">16
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">17
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">18
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">19
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">20
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-sql" data-lang="sql"><span style="display:flex;"><span>Fragment <span style="color:#bd93f9">0</span> [SINGLE]
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">Output</span> layout: [custkey, orderkey]
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">Output</span> partitioning: SINGLE []
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">Output</span>[custkey, orderkey]
+</span></span><span style="display:flex;"><span>    │   Layout: [custkey:<span style="color:#8be9fd;font-style:italic">bigint</span>, orderkey:<span style="color:#8be9fd;font-style:italic">bigint</span>]
+</span></span><span style="display:flex;"><span>    │   Estimates: {<span style="color:#ff79c6">rows</span>: <span style="color:#ff79c6">?</span> (<span style="color:#ff79c6">?</span>), cpu: <span style="color:#ff79c6">?</span>, memory: <span style="color:#bd93f9">0</span>B, network: <span style="color:#ff79c6">?</span>}
+</span></span><span style="display:flex;"><span>    └─ RemoteSource[<span style="color:#bd93f9">1</span>]
+</span></span><span style="display:flex;"><span>           Layout: [orderkey:<span style="color:#8be9fd;font-style:italic">bigint</span>, custkey:<span style="color:#8be9fd;font-style:italic">bigint</span>]
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>Fragment <span style="color:#bd93f9">1</span> [<span style="color:#ff79c6">SOURCE</span>]
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">Output</span> layout: [orderkey, custkey]
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">Output</span> partitioning: SINGLE []
+</span></span><span style="display:flex;"><span>    TableScan[postgres:Query[
+</span></span><span style="display:flex;"><span>	<span style="color:#ff79c6">SELECT</span> l.<span style="color:#f1fa8c">&#34;orderkey&#34;</span> <span style="color:#ff79c6">AS</span> <span style="color:#f1fa8c">&#34;orderkey_0&#34;</span>, l.<span style="color:#f1fa8c">&#34;custkey&#34;</span> <span style="color:#ff79c6">AS</span> <span style="color:#f1fa8c">&#34;custkey_1&#34;</span>, r.<span style="color:#f1fa8c">&#34;custkey&#34;</span> <span style="color:#ff79c6">AS</span> 
+</span></span><span style="display:flex;"><span>	<span style="color:#f1fa8c">&#34;custkey_2&#34;</span> <span style="color:#ff79c6">FROM</span> (<span style="color:#ff79c6">SELECT</span> <span style="color:#f1fa8c">&#34;orderkey&#34;</span>, <span style="color:#f1fa8c">&#34;custkey&#34;</span> <span style="color:#ff79c6">FROM</span> <span style="color:#f1fa8c">&#34;tpch&#34;</span>.<span style="color:#f1fa8c">&#34;orders&#34;</span>) l <span style="color:#ff79c6">INNER</span> <span style="color:#ff79c6">JOIN</span> 
+</span></span><span style="display:flex;"><span>	(<span style="color:#ff79c6">SELECT</span> <span style="color:#f1fa8c">&#34;custkey&#34;</span> <span style="color:#ff79c6">FROM</span> <span style="color:#f1fa8c">&#34;tpch&#34;</span>.<span style="color:#f1fa8c">&#34;customer&#34;</span>) r O
+</span></span><span style="display:flex;"><span>        Layout: [orderkey:<span style="color:#8be9fd;font-style:italic">bigint</span>, custkey:<span style="color:#8be9fd;font-style:italic">bigint</span>]
+</span></span><span style="display:flex;"><span>        Estimates: {<span style="color:#ff79c6">rows</span>: <span style="color:#ff79c6">?</span> (<span style="color:#ff79c6">?</span>), cpu: <span style="color:#ff79c6">?</span>, memory: <span style="color:#bd93f9">0</span>B, network: <span style="color:#bd93f9">0</span>B}
+</span></span><span style="display:flex;"><span>        orderkey :<span style="color:#ff79c6">=</span> orderkey_0:<span style="color:#8be9fd;font-style:italic">bigint</span>:<span style="color:#8be9fd;font-style:italic">int8</span>
+</span></span><span style="display:flex;"><span>        custkey :<span style="color:#ff79c6">=</span> custkey_1:<span style="color:#8be9fd;font-style:italic">bigint</span>:<span style="color:#8be9fd;font-style:italic">int8</span>
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>scan table 的时候的 sql 为：</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-sql" data-lang="sql"><span style="display:flex;"><span><span style="color:#ff79c6">SELECT</span> l.<span style="color:#f1fa8c">&#34;orderkey&#34;</span> <span style="color:#ff79c6">AS</span> <span style="color:#f1fa8c">&#34;orderkey_0&#34;</span>, l.<span style="color:#f1fa8c">&#34;custkey&#34;</span> <span style="color:#ff79c6">AS</span> <span style="color:#f1fa8c">&#34;custkey_1&#34;</span>, r.<span style="color:#f1fa8c">&#34;custkey&#34;</span> <span style="color:#ff79c6">AS</span> 
+</span></span><span style="display:flex;"><span>	<span style="color:#f1fa8c">&#34;custkey_2&#34;</span> <span style="color:#ff79c6">FROM</span> (<span style="color:#ff79c6">SELECT</span> <span style="color:#f1fa8c">&#34;orderkey&#34;</span>, <span style="color:#f1fa8c">&#34;custkey&#34;</span> <span style="color:#ff79c6">FROM</span> <span style="color:#f1fa8c">&#34;tpch&#34;</span>.<span style="color:#f1fa8c">&#34;orders&#34;</span>) l <span style="color:#ff79c6">INNER</span> <span style="color:#ff79c6">JOIN</span> 
+</span></span><span style="display:flex;"><span>	(<span style="color:#ff79c6">SELECT</span> <span style="color:#f1fa8c">&#34;custkey&#34;</span> <span style="color:#ff79c6">FROM</span> <span style="color:#f1fa8c">&#34;tpch&#34;</span>.<span style="color:#f1fa8c">&#34;customer
+</span></span></span></code></pre></td></tr></table>
+</div>
+</div><p>也就是将 join 直接下推到数据源了</p>
+<p>但是测试了 mysql 则不行<br>
+sql为</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-sql" data-lang="sql"><span style="display:flex;"><span><span style="color:#ff79c6">explain</span> <span style="color:#ff79c6">select</span> <span style="color:#ff79c6">*</span> <span style="color:#ff79c6">from</span> mysql.hello.t1 <span style="color:#ff79c6">as</span> a <span style="color:#ff79c6">join</span> mysql.hello.t2 <span style="color:#ff79c6">as</span> b <span style="color:#ff79c6">on</span> a.id <span style="color:#ff79c6">=</span> b.id;
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>explain 后的查询计划，看起来是在 trino 端做了 join，没有下推成功</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">15
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">16
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">17
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">18
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">19
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">20
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">21
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">22
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">23
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">24
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">25
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">26
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">27
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">28
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">29
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">30
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">31
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">32
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">33
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-sql" data-lang="sql"><span style="display:flex;"><span> Fragment <span style="color:#bd93f9">0</span> [<span style="color:#ff79c6">SOURCE</span>]                                                                                                                            
+</span></span><span style="display:flex;"><span>     <span style="color:#ff79c6">Output</span> layout: [id, sname, id, sname_1]                                                                                                    
+</span></span><span style="display:flex;"><span>     <span style="color:#ff79c6">Output</span> partitioning: SINGLE []                                                                                                             
+</span></span><span style="display:flex;"><span>     <span style="color:#ff79c6">Output</span>[columnNames <span style="color:#ff79c6">=</span> [id, sname, id, sname]]                                                                                               
+</span></span><span style="display:flex;"><span>     │   Layout: [id:<span style="color:#8be9fd;font-style:italic">integer</span>, sname:<span style="color:#8be9fd;font-style:italic">varchar</span>(<span style="color:#bd93f9">200</span>), id:<span style="color:#8be9fd;font-style:italic">integer</span>, sname_1:<span style="color:#8be9fd;font-style:italic">varchar</span>(<span style="color:#bd93f9">200</span>)]                                                             
+</span></span><span style="display:flex;"><span>     │   Estimates: {<span style="color:#ff79c6">rows</span>: <span style="color:#ff79c6">?</span> (<span style="color:#ff79c6">?</span>), cpu: <span style="color:#bd93f9">0</span>, memory: <span style="color:#bd93f9">0</span>B, network: <span style="color:#bd93f9">0</span>B}                                                                              
+</span></span><span style="display:flex;"><span>     │   sname :<span style="color:#ff79c6">=</span> sname_1                                                                                                                       
+</span></span><span style="display:flex;"><span>     └─ InnerJoin[criteria <span style="color:#ff79c6">=</span> (<span style="color:#f1fa8c">&#34;id&#34;</span> <span style="color:#ff79c6">=</span> <span style="color:#f1fa8c">&#34;id_0&#34;</span>), hash <span style="color:#ff79c6">=</span> [$hashvalue, $hashvalue_2], distribution <span style="color:#ff79c6">=</span> REPLICATED]                                     
+</span></span><span style="display:flex;"><span>        │   Layout: [id:<span style="color:#8be9fd;font-style:italic">integer</span>, sname:<span style="color:#8be9fd;font-style:italic">varchar</span>(<span style="color:#bd93f9">200</span>), sname_1:<span style="color:#8be9fd;font-style:italic">varchar</span>(<span style="color:#bd93f9">200</span>)]                                                                      
+</span></span><span style="display:flex;"><span>        │   Estimates: {<span style="color:#ff79c6">rows</span>: <span style="color:#ff79c6">?</span> (<span style="color:#ff79c6">?</span>), cpu: <span style="color:#ff79c6">?</span>, memory: <span style="color:#bd93f9">207</span>B, network: <span style="color:#bd93f9">0</span>B}                                                                         
+</span></span><span style="display:flex;"><span>        │   Distribution: REPLICATED                                                                                                            
+</span></span><span style="display:flex;"><span>        │   dynamicFilterAssignments <span style="color:#ff79c6">=</span> {id_0 <span style="color:#ff79c6">-&gt;</span> <span style="color:#ff79c6">#</span>df_204}                                                                                        
+</span></span><span style="display:flex;"><span>        ├─ ScanFilterProject[<span style="color:#ff79c6">table</span> <span style="color:#ff79c6">=</span> mysql:hello.t1 hello.t1, dynamicFilters <span style="color:#ff79c6">=</span> {<span style="color:#f1fa8c">&#34;id&#34;</span> <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">#</span>df_204}]                                                
+</span></span><span style="display:flex;"><span>        │      Layout: [id:<span style="color:#8be9fd;font-style:italic">integer</span>, sname:<span style="color:#8be9fd;font-style:italic">varchar</span>(<span style="color:#bd93f9">200</span>), $hashvalue:<span style="color:#8be9fd;font-style:italic">bigint</span>]                                                                      
+</span></span><span style="display:flex;"><span>        │      Estimates: {<span style="color:#ff79c6">rows</span>: <span style="color:#bd93f9">8</span> (<span style="color:#bd93f9">552</span>B), cpu: <span style="color:#bd93f9">480</span>, memory: <span style="color:#bd93f9">0</span>B, network: <span style="color:#bd93f9">0</span>B}<span style="color:#ff79c6">/</span>{<span style="color:#ff79c6">rows</span>: <span style="color:#bd93f9">8</span> (<span style="color:#bd93f9">552</span>B), cpu: <span style="color:#bd93f9">480</span>, memory: <span style="color:#bd93f9">0</span>B, network: <span style="color:#bd93f9">0</span>B}<span style="color:#ff79c6">/</span>{<span style="color:#ff79c6">rows</span>: <span style="color:#bd93f9">8</span> (<span style="color:#bd93f9">552</span>B
+</span></span><span style="display:flex;"><span>        │      $hashvalue :<span style="color:#ff79c6">=</span> combine_hash(<span style="color:#8be9fd;font-style:italic">bigint</span> <span style="color:#f1fa8c">&#39;0&#39;</span>, COALESCE(<span style="color:#f1fa8c">&#34;$operator$hash_code&#34;</span>(<span style="color:#f1fa8c">&#34;id&#34;</span>), <span style="color:#bd93f9">0</span>))                                                 
+</span></span><span style="display:flex;"><span>        │      sname :<span style="color:#ff79c6">=</span> sname:<span style="color:#8be9fd;font-style:italic">varchar</span>(<span style="color:#bd93f9">200</span>):<span style="color:#8be9fd;font-style:italic">VARCHAR</span>                                                                                              
+</span></span><span style="display:flex;"><span>        │      id :<span style="color:#ff79c6">=</span> id:<span style="color:#8be9fd;font-style:italic">integer</span>:<span style="color:#8be9fd;font-style:italic">INT</span>                                                                                                             
+</span></span><span style="display:flex;"><span>        └─ LocalExchange[partitioning <span style="color:#ff79c6">=</span> SINGLE]                                                                                                 
+</span></span><span style="display:flex;"><span>           │   Layout: [id_0:<span style="color:#8be9fd;font-style:italic">integer</span>, sname_1:<span style="color:#8be9fd;font-style:italic">varchar</span>(<span style="color:#bd93f9">200</span>), $hashvalue_2:<span style="color:#8be9fd;font-style:italic">bigint</span>]                                                                
+</span></span><span style="display:flex;"><span>           │   Estimates: {<span style="color:#ff79c6">rows</span>: <span style="color:#bd93f9">3</span> (<span style="color:#bd93f9">207</span>B), cpu: <span style="color:#bd93f9">0</span>, memory: <span style="color:#bd93f9">0</span>B, network: <span style="color:#bd93f9">0</span>B}                                                                     
+</span></span><span style="display:flex;"><span>           └─ RemoteSource[sourceFragmentIds <span style="color:#ff79c6">=</span> [<span style="color:#bd93f9">1</span>]]                                                                                             
+</span></span><span style="display:flex;"><span>                  Layout: [id_0:<span style="color:#8be9fd;font-style:italic">integer</span>, sname_1:<span style="color:#8be9fd;font-style:italic">varchar</span>(<span style="color:#bd93f9">200</span>), $hashvalue_3:<span style="color:#8be9fd;font-style:italic">bigint</span>]                                                             
+</span></span><span style="display:flex;"><span>                                                                                                                                                
+</span></span><span style="display:flex;"><span> Fragment <span style="color:#bd93f9">1</span> [<span style="color:#ff79c6">SOURCE</span>]                                                                                                                            
+</span></span><span style="display:flex;"><span>     <span style="color:#ff79c6">Output</span> layout: [id_0, sname_1, $hashvalue_4]                                                                                               
+</span></span><span style="display:flex;"><span>     <span style="color:#ff79c6">Output</span> partitioning: BROADCAST []                                                                                                          
+</span></span><span style="display:flex;"><span>     ScanProject[<span style="color:#ff79c6">table</span> <span style="color:#ff79c6">=</span> mysql:hello.t2 hello.t2]                                                                                               
+</span></span><span style="display:flex;"><span>         Layout: [id_0:<span style="color:#8be9fd;font-style:italic">integer</span>, sname_1:<span style="color:#8be9fd;font-style:italic">varchar</span>(<span style="color:#bd93f9">200</span>), $hashvalue_4:<span style="color:#8be9fd;font-style:italic">bigint</span>]                                                                      
+</span></span><span style="display:flex;"><span>         Estimates: {<span style="color:#ff79c6">rows</span>: <span style="color:#bd93f9">3</span> (<span style="color:#bd93f9">207</span>B), cpu: <span style="color:#bd93f9">180</span>, memory: <span style="color:#bd93f9">0</span>B, network: <span style="color:#bd93f9">0</span>B}<span style="color:#ff79c6">/</span>{<span style="color:#ff79c6">rows</span>: <span style="color:#bd93f9">3</span> (<span style="color:#bd93f9">207</span>B), cpu: <span style="color:#bd93f9">207</span>, memory: <span style="color:#bd93f9">0</span>B, network: <span style="color:#bd93f9">0</span>B}                     
+</span></span><span style="display:flex;"><span>         $hashvalue_4 :<span style="color:#ff79c6">=</span> combine_hash(<span style="color:#8be9fd;font-style:italic">bigint</span> <span style="color:#f1fa8c">&#39;0&#39;</span>, COALESCE(<span style="color:#f1fa8c">&#34;$operator$hash_code&#34;</span>(<span style="color:#f1fa8c">&#34;id_0&#34;</span>), <span style="color:#bd93f9">0</span>))                                                   
+</span></span><span style="display:flex;"><span>         sname_1 :<span style="color:#ff79c6">=</span> sname:<span style="color:#8be9fd;font-style:italic">varchar</span>(<span style="color:#bd93f9">200</span>):<span style="color:#8be9fd;font-style:italic">VARCHAR</span>                                                                                                  
+</span></span><span style="display:flex;"><span>         id_0 :<span style="color:#ff79c6">=</span> id:<span style="color:#8be9fd;font-style:italic">integer</span>:<span style="color:#8be9fd;font-style:italic">INT</span>         
+</span></span></code></pre></td></tr></table>
+</div>
+</div><h2 id="sql">SQL</h2>
+<p>支持的对象存储</p>
+<ul>
+<li>Delta Lake connector</li>
+<li>Hive connector</li>
+<li>Hudi connector</li>
+<li>Iceberg connector</li>
+</ul>
+<h3 id="sql-语法">SQL 语法</h3>
+<p>支持的 函数类型</p>
+<ul>
+<li>Aggregate</li>
+<li>Array</li>
+<li>Binary</li>
+<li>Bitwise</li>
+<li>Color</li>
+<li>Comparison</li>
+<li>Conditional</li>
+<li>Conversion</li>
+<li>Date</li>
+<li>Decimal</li>
+<li>Geospatial</li>
+<li>HyperLogLog</li>
+<li>IP</li>
+<li>JSON</li>
+<li>Lambda</li>
+<li>Logical</li>
+<li>Machine</li>
+<li>Map</li>
+<li>Math</li>
+<li>Quantile</li>
+<li>Regular</li>
+<li>Session</li>
+<li>Set</li>
+<li>String</li>
+<li>System</li>
+<li>Table</li>
+<li>Teradata</li>
+<li>T-Digest</li>
+<li>URL</li>
+<li>UUID</li>
+<li>Window</li>
+</ul>
+<p>支持的 SQL 语法</p>
+<ul>
+<li>ALTER</li>
+<li>ALTER</li>
+<li>ALTER</li>
+<li>ALTER</li>
+<li>ANALYZE</li>
+<li>CALL</li>
+<li>COMMENT</li>
+<li>COMMIT</li>
+<li>CREATE</li>
+<li>CREATE</li>
+<li>CREATE</li>
+<li>CREATE</li>
+<li>CREATE</li>
+<li>CREATE</li>
+<li>CREATE</li>
+<li>CREATE</li>
+<li>DEALLOCATE</li>
+<li>DELETE</li>
+<li>DENY</li>
+<li>DESCRIBE</li>
+<li>DESCRIBE</li>
+<li>DESCRIBE</li>
+<li>DROP</li>
+<li>DROP</li>
+<li>DROP</li>
+<li>DROP</li>
+<li>DROP</li>
+<li>DROP</li>
+<li>DROP</li>
+<li>EXECUTE</li>
+<li>EXECUTE</li>
+<li>EXPLAIN</li>
+<li>EXPLAIN</li>
+<li>GRANT</li>
+<li>GRANT</li>
+<li>INSERT</li>
+<li>MATCH_RECOGNIZE</li>
+<li>MERGE</li>
+<li>PREPARE</li>
+<li>REFRESH</li>
+<li>RESET</li>
+<li>RESET</li>
+<li>REVOKE</li>
+<li>REVOKE</li>
+<li>ROLLBACK</li>
+<li>SELECT</li>
+<li>SET</li>
+<li>SET</li>
+<li>SET</li>
+<li>SET</li>
+<li>SET</li>
+<li>SHOW</li>
+<li>SHOW</li>
+<li>SHOW</li>
+<li>SHOW</li>
+<li>SHOW</li>
+<li>SHOW</li>
+<li>SHOW</li>
+<li>SHOW</li>
+<li>SHOW</li>
+<li>SHOW</li>
+<li>SHOW</li>
+<li>SHOW</li>
+<li>SHOW</li>
+<li>SHOW</li>
+<li>START</li>
+<li>TRUNCATE</li>
+<li>UPDATE</li>
+<li>USE</li>
+<li>VALUES</li>
+</ul>
+<h3 id="sql-routines">SQL routines</h3>
+<p>有点像存储过程</p>
+<ul>
+<li>内联方式</li>
+</ul>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">5
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-sql" data-lang="sql"><span style="display:flex;"><span><span style="color:#ff79c6">WITH</span>
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">FUNCTION</span> abc(x <span style="color:#8be9fd;font-style:italic">integer</span>)
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">RETURNS</span> <span style="color:#8be9fd;font-style:italic">integer</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">RETURN</span> x <span style="color:#ff79c6">*</span> <span style="color:#bd93f9">2</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">SELECT</span> abc(<span style="color:#bd93f9">21</span>);
+</span></span></code></pre></td></tr></table>
+</div>
+</div><ul>
+<li>A very simple routine that returns a static value without requiring any input:</li>
+</ul>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-sql" data-lang="sql"><span style="display:flex;"><span><span style="color:#ff79c6">FUNCTION</span> answer()
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">RETURNS</span> <span style="color:#8be9fd;font-style:italic">BIGINT</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">RETURN</span> <span style="color:#bd93f9">42</span>
+</span></span></code></pre></td></tr></table>
+</div>
+</div><ul>
+<li>string 的例子</li>
+</ul>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">5
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-sql" data-lang="sql"><span style="display:flex;"><span><span style="color:#ff79c6">FUNCTION</span> hello(fullname <span style="color:#8be9fd;font-style:italic">VARCHAR</span>)
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">RETURNS</span> <span style="color:#8be9fd;font-style:italic">VARCHAR</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">RETURN</span> <span style="color:#f1fa8c">&#39;Hello, &#39;</span> <span style="color:#ff79c6">||</span> fullname <span style="color:#ff79c6">||</span> <span style="color:#f1fa8c">&#39;
+</span></span></span><span style="display:flex;"><span><span style="color:#f1fa8c">
+</span></span></span><span style="display:flex;"><span><span style="color:#f1fa8c">SELECT hello(&#39;</span>Jane Doe<span style="color:#f1fa8c">&#39;); -- Hello, Jane Doe!
+</span></span></span></code></pre></td></tr></table>
+</div>
+</div><ul>
+<li>基于条件的</li>
+</ul>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">15
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">16
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">17
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">18
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">19
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">20
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">21
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-sql" data-lang="sql"><span style="display:flex;"><span><span style="color:#ff79c6">FUNCTION</span> simple_case(a <span style="color:#8be9fd;font-style:italic">bigint</span>)
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">RETURNS</span> <span style="color:#8be9fd;font-style:italic">varchar</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">BEGIN</span>
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">CASE</span> a
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">WHEN</span> <span style="color:#bd93f9">0</span> <span style="color:#ff79c6">THEN</span> <span style="color:#ff79c6">RETURN</span> <span style="color:#f1fa8c">&#39;zero&#39;</span>;
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">WHEN</span> <span style="color:#bd93f9">1</span> <span style="color:#ff79c6">THEN</span> <span style="color:#ff79c6">RETURN</span> <span style="color:#f1fa8c">&#39;one&#39;</span>;
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">WHEN</span> <span style="color:#bd93f9">10</span> <span style="color:#ff79c6">THEN</span> <span style="color:#ff79c6">RETURN</span> <span style="color:#f1fa8c">&#39;ten&#39;</span>;
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">WHEN</span> <span style="color:#bd93f9">20</span> <span style="color:#ff79c6">THEN</span> <span style="color:#ff79c6">RETURN</span> <span style="color:#f1fa8c">&#39;twenty&#39;</span>;
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">ELSE</span> <span style="color:#ff79c6">RETURN</span> <span style="color:#f1fa8c">&#39;other&#39;</span>;
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">END</span> <span style="color:#ff79c6">CASE</span>;
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">RETURN</span> <span style="color:#ff79c6">NULL</span>;
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">END</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">SELECT</span> simple_case(<span style="color:#bd93f9">0</span>); <span style="color:#6272a4">-- zero
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span><span style="color:#ff79c6">SELECT</span> simple_case(<span style="color:#bd93f9">1</span>); <span style="color:#6272a4">-- one
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span><span style="color:#ff79c6">SELECT</span> simple_case(<span style="color:#ff79c6">-</span><span style="color:#bd93f9">1</span>); <span style="color:#6272a4">-- other (from else clause)
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span><span style="color:#ff79c6">SELECT</span> simple_case(<span style="color:#bd93f9">10</span>); <span style="color:#6272a4">-- ten
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span><span style="color:#ff79c6">SELECT</span> simple_case(<span style="color:#bd93f9">11</span>); <span style="color:#6272a4">-- other (from else clause)
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span><span style="color:#ff79c6">SELECT</span> simple_case(<span style="color:#bd93f9">20</span>); <span style="color:#6272a4">-- twenty
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span><span style="color:#ff79c6">SELECT</span> simple_case(<span style="color:#bd93f9">100</span>); <span style="color:#6272a4">-- other (from else clause)
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span><span style="color:#ff79c6">SELECT</span> simple_case(<span style="color:#ff79c6">null</span>); <span style="color:#6272a4">-- null .. but really??
+</span></span></span></code></pre></td></tr></table>
+</div>
+</div><p><a href="https://trino.io/docs/current/routines/examples.html">官网给出的例子</a></p>
+<h2 id="参考">参考</h2>
+<ul>
+<li><a href="https://www.oreilly.com/library/view/trino-the-definitive/9781098107703/ch04.html">Chapter 4. Trino Architecture</a></li>
+<li><a href="https://blog.csdn.net/Happy_Sunshine_Boy/article/details/112967839">Trino学习总结</a></li>
+<li><a href="https://blog.csdn.net/zhanyuanlin/article/details/131343786">Presto(Trino)分布式(物理)执行计划的生成和调度</a></li>
+<li><a href="https://mayunlei.github.io/2024/03/03/OLAP%E8%AE%A1%E7%AE%97%E5%BC%95%E6%93%8E%E5%8E%9F%E7%90%86%E5%92%8C%E5%AE%9E%E7%8E%B0/">OLAP计算引擎原理和实现</a></li>
+<li><a href="https://blog.csdn.net/sjtuyunlei/article/details/108036945?spm=1001.2014.3001.5501">深入理解Presto,Presto的内部架构</a></li>
+<li><a href="https://trino.io/Presto_SQL_on_Everything.pdf">Paper: Presto SQL on Everything</a></li>
+<li><a href="https://trino.io/blog/2019/07/04/cbo-introduction.html">
+Introduction to Trino Cost-Based Optimizer</a></li>
+<li><a href="https://www.facebook.com/notes/10158791582857200/">Presto: Interacting with petabytes of data at Facebook</a></li>
+<li><a href="https://tech.meituan.com/2014/06/16/presto.html">Presto实现原理和美团的使用实践</a></li>
+<li><a href="https://strongduanmu.com/blog/cornerstone-of-cbo-optimization-apache-calcite-statistics-and-cost-model.html">CBO 优化的基石——Apache Calcite 统计信息和代价模型详解</a></li>
+</ul>
+
+			<script type="text/javascript"
+        async
+        src="https://cdn.bootcss.com/mathjax/2.7.3/MathJax.js?config=TeX-AMS-MML_HTMLorMML">
+MathJax.Hub.Config({
+  tex2jax: {
+    inlineMath: [['$','$'], ['\\(','\\)']],
+    displayMath: [['$$','$$'], ['\[\[','\]\]']],
+    processEscapes: true,
+    processEnvironments: true,
+    skipTags: ['script', 'noscript', 'style', 'textarea', 'pre'],
+    TeX: { equationNumbers: { autoNumber: "AMS" },
+         extensions: ["AMSmath.js", "AMSsymbols.js"] }
+  }
+});
+
+MathJax.Hub.Queue(function() {
+    
+    
+    
+    var all = MathJax.Hub.getAllJax(), i;
+    for(i = 0; i < all.length; i += 1) {
+        all[i].SourceElement().parentNode.className += ' has-jax';
+    }
+});
+</script>
+
+<style>
+code.has-jax {
+    font: inherit;
+    font-size: 100%;
+    background: inherit;
+    border: inherit;
+    color: #515151;
+}
+</style>
+        </div>
+
+        
+
+
+        
+
+
+        <div class="post-meta meta-tags">
+            
+            <ul class="clearfix">
+                
+                <li><a href='/tags/trino'>Trino</a></li>
+                
+            </ul>
+            
+        </div>
+    </article>
+    
+    
+
+    
+    
+    <div class="post bg-white">
+      <script src="https://utteranc.es/client.js"
+            repo= "himichael/hugoblogtalks"
+            issue-term="pathname"
+            theme="github-light"
+            crossorigin="anonymous"
+            async>
+      </script>
+    </div>
+    
+</div>
+
+
+                </div>
+
+                <div id="secondary">
+    <section class="widget">
+        <form id="search" action='https://code0xff.org/search/' method="get" accept-charset="utf-8" target="_blank" _lpchecked="1">
+      
+      <input type="text" name="q" maxlength="20" placeholder="Search">
+      <input type="hidden" name="sitesearch" value="https://code0xff.org/">
+      <button type="submit" class="submit icon-search"></button>
+</form>
+    </section>
+    
+    <section class="widget">
+        <h3 class="widget-title">最近文章</h3>
+<ul class="widget-list">
+    
+    <li>
+        <a href="https://code0xff.org/post/2025/01/spark_register_source/" title="Spark 注册数据源">Spark 注册数据源</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2025/01/spark_core_2/" title="Spark Core相关-2">Spark Core相关-2</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2024/12/llamafactory/" title="Llama Factory">Llama Factory</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2024/11/spark_core/" title="Spark Core相关-1">Spark Core相关-1</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2024/11/sae_tunnel/" title="sea tunnel">sea tunnel</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2024/11/k8s_networks/" title="k8s 网络">k8s 网络</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2024/11/ozone/" title="ozone">ozone</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2024/11/es/" title="ES的简单学习">ES的简单学习</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2025/02/ai/" title="AI的简单学习">AI的简单学习</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2024/11/big_data_investigation/" title="国内几个云厂商大数据平台">国内几个云厂商大数据平台</a>
+    </li>
+    
+</ul>
+    </section>
+
+    
+
+    <section class="widget">
+        <h3 class="widget-title"><a href='/categories/'>分类</a></h3>
+<ul class="widget-list">
+    
+    <li><a href="https://code0xff.org/categories/%E5%88%86%E5%B8%83%E5%BC%8F/">分布式 (6)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E5%8E%9F%E7%90%86%E5%88%86%E6%9E%90/">原理分析 (24)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E5%95%86%E4%B8%9A/">商业 (3)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E5%A4%A7%E6%95%B0%E6%8D%AE/">大数据 (56)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%95%B0%E6%8D%AE%E5%BA%93/">数据库 (41)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%96%87%E5%AD%A6%E5%92%8C%E8%89%BA%E6%9C%AF/">文学和艺术 (3)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%97%85%E8%A1%8C/">旅行 (12)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%9E%B6%E6%9E%84/">架构 (13)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E7%AE%97%E6%B3%95/">算法 (8)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E7%B3%BB%E7%BB%9F/">系统 (7)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E7%BC%96%E7%A8%8B%E8%AF%AD%E8%A8%80/">编程语言 (7)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E8%A1%8C%E4%B8%9A%E8%A7%82%E5%AF%9F/">行业观察 (3)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E8%AF%BB%E4%B9%A6%E7%AC%94%E8%AE%B0/">读书笔记 (14)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E9%9A%8F%E4%BE%BF%E5%86%99%E5%86%99/">随便写写 (3)</a></li>
+    
+</ul>
+    </section>
+
+    <section class="widget">
+        <h3 class="widget-title">归档</a></h3>
+<ul class="widget-list">
+    
+    <li><a href="https://code0xff.org/years/2021%E5%B9%B4/">2021年 (41)</a></li>
+    
+    <li><a href="https://code0xff.org/years/2022%E5%B9%B4/">2022年 (55)</a></li>
+    
+    <li><a href="https://code0xff.org/years/2023%E5%B9%B4/">2023年 (54)</a></li>
+    
+    <li><a href="https://code0xff.org/years/2024%E5%B9%B4/">2024年 (48)</a></li>
+    
+    <li><a href="https://code0xff.org/years/2025%E5%B9%B4/">2025年 (2)</a></li>
+    
+</ul>
+    </section>
+
+    <section class="widget">
+        <h3 class="widget-title"><a href='/tags/'>标签</a></h3>
+<div class="tagcloud">
+    
+    <a href="https://code0xff.org/tags/ai/">AI </a>
+    
+    <a href="https://code0xff.org/tags/ambari/">Ambari </a>
+    
+    <a href="https://code0xff.org/tags/architecture/">architecture </a>
+    
+    <a href="https://code0xff.org/tags/bigdata/">bigdata </a>
+    
+    <a href="https://code0xff.org/tags/b%E6%A0%91/">B树 </a>
+    
+    <a href="https://code0xff.org/tags/c&#43;&#43;/">C&#43;&#43; </a>
+    
+    <a href="https://code0xff.org/tags/calcite/">calcite </a>
+    
+    <a href="https://code0xff.org/tags/cmu-database/">CMU-Database </a>
+    
+    <a href="https://code0xff.org/tags/data_ingestion/">Data_Ingestion </a>
+    
+    <a href="https://code0xff.org/tags/deltalake/">DeltaLake </a>
+    
+    <a href="https://code0xff.org/tags/doris/">Doris </a>
+    
+    <a href="https://code0xff.org/tags/english/">English </a>
+    
+    <a href="https://code0xff.org/tags/es/">ES </a>
+    
+    <a href="https://code0xff.org/tags/facebook/">Facebook </a>
+    
+    <a href="https://code0xff.org/tags/flink/">flink </a>
+    
+    <a href="https://code0xff.org/tags/flume/">flume </a>
+    
+    <a href="https://code0xff.org/tags/gc/">GC </a>
+    
+    <a href="https://code0xff.org/tags/gluten/">Gluten </a>
+    
+    <a href="https://code0xff.org/tags/hana/">HANA </a>
+    
+    <a href="https://code0xff.org/tags/hive/">Hive </a>
+    
+    <a href="https://code0xff.org/tags/iceberg/">iceberg </a>
+    
+    <a href="https://code0xff.org/tags/impala/">Impala </a>
+    
+    <a href="https://code0xff.org/tags/janino/">janino </a>
+    
+    <a href="https://code0xff.org/tags/k8s/">k8s </a>
+    
+    <a href="https://code0xff.org/tags/kafka/">Kafka </a>
+    
+    <a href="https://code0xff.org/tags/kudu/">kudu </a>
+    
+    <a href="https://code0xff.org/tags/kyuubi/">Kyuubi </a>
+    
+    <a href="https://code0xff.org/tags/lakehouse/">Lakehouse </a>
+    
+    <a href="https://code0xff.org/tags/leveldb/">LevelDB </a>
+    
+    <a href="https://code0xff.org/tags/llamafactory/">LlamaFactory </a>
+    
+    <a href="https://code0xff.org/tags/llvm/">LLVM </a>
+    
+    <a href="https://code0xff.org/tags/manacher/">Manacher </a>
+    
+    <a href="https://code0xff.org/tags/mapreduce/">MapReduce </a>
+    
+    <a href="https://code0xff.org/tags/micro-service/">micro-service </a>
+    
+    <a href="https://code0xff.org/tags/mysql/">MySQL </a>
+    
+    <a href="https://code0xff.org/tags/newsql/">NewSQL </a>
+    
+    <a href="https://code0xff.org/tags/oceanbase/">OceanBase </a>
+    
+    <a href="https://code0xff.org/tags/openlogreplicator/">OpenLogReplicator </a>
+    
+    <a href="https://code0xff.org/tags/parquet/">parquet </a>
+    
+    <a href="https://code0xff.org/tags/paxos/">paxos </a>
+    
+    <a href="https://code0xff.org/tags/presto/">Presto </a>
+    
+    <a href="https://code0xff.org/tags/quick-sql/">quick-sql </a>
+    
+    <a href="https://code0xff.org/tags/raft/">raft </a>
+    
+    <a href="https://code0xff.org/tags/scala/">scala </a>
+    
+    <a href="https://code0xff.org/tags/simd/">SIMD </a>
+    
+    <a href="https://code0xff.org/tags/snowflake/">snowflake </a>
+    
+    <a href="https://code0xff.org/tags/spark/">spark </a>
+    
+    <a href="https://code0xff.org/tags/sre/">SRE </a>
+    
+    <a href="https://code0xff.org/tags/teradata/">TeraData </a>
+    
+    <a href="https://code0xff.org/tags/tpcx-hs/">TPCx-HS </a>
+    
+    <a href="https://code0xff.org/tags/trino/">Trino </a>
+    
+    <a href="https://code0xff.org/tags/tuning/">Tuning </a>
+    
+    <a href="https://code0xff.org/tags/unix/">unix </a>
+    
+    <a href="https://code0xff.org/tags/yarn/">YARN </a>
+    
+    <a href="https://code0xff.org/tags/%E4%BA%8C%E5%88%86%E6%9F%A5%E6%89%BE/">二分查找 </a>
+    
+    <a href="https://code0xff.org/tags/%E4%BA%8C%E5%8F%89%E6%A0%91%E9%81%8D%E5%8E%86/">二叉树遍历 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%88%86%E5%B8%83%E5%BC%8F/">分布式 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%88%97%E5%AD%98/">列存 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%8A%A8%E6%80%81%E6%B3%A8%E5%85%A5/">动态注入 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%8E%86%E5%8F%B2/">历史 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%90%91%E9%87%8F%E5%8C%96/">向量化 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%9B%9E%E6%BA%AF/">回溯 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%9B%BD%E5%86%85%E6%97%85%E8%A1%8C/">国内旅行 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%9B%BD%E5%A4%96%E6%97%85%E8%A1%8C/">国外旅行 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%A4%9A%E7%A7%9F%E6%88%B7/">多租户 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%A4%A7%E6%95%B0%E6%8D%AE/">大数据 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%AD%98%E5%82%A8/">存储 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%B7%A5%E4%BD%9C%E8%AE%B0%E5%BD%95/">工作记录 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%BE%AE%E6%9C%8D%E5%8A%A1/">微服务 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%95%B0%E6%8D%AE%E4%B8%AD%E5%8F%B0/">数据中台 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%95%B0%E6%8D%AE%E5%BA%93/">数据库 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%95%B0%E6%8D%AE%E6%A8%A1%E5%9E%8B/">数据模型 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%95%B0%E6%8D%AE%E8%BF%81%E7%A7%BB/">数据迁移 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%9F%A5%E8%AF%A2%E4%BC%98%E5%8C%96/">查询优化 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%9F%A5%E8%AF%A2%E7%BC%96%E8%AF%91/">查询编译 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%A6%82%E7%8E%87/">概率 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%B1%87%E7%BC%96/">汇编 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%B5%8B%E8%AF%95/">测试 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%94%9F%E6%B4%BB/">生活 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%94%B5%E5%BD%B1/">电影 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%AE%97%E6%B3%95/">算法 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%B4%A2%E5%BC%95/">索引 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BB%8F%E6%B5%8E/">经济 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BC%93%E5%AD%98/">缓存 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BC%96%E8%AF%91%E5%8E%9F%E7%90%86/">编译原理 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BD%91%E7%BB%9C/">网络 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AE%A1%E7%AE%97%E6%A1%86%E6%9E%B6/">计算框架 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AE%BA%E6%96%87/">论文 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AF%BB%E4%B9%A6/">读书 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AF%BB%E4%B9%A6%E7%AC%94%E8%AE%B0/">读书笔记 </a>
+    
+</div>
+    </section>
+
+    
+
+    <section class="widget">
+        <h3 class="widget-title">RSS</h3>
+        <ul class="widget-list">
+            <li><a href="https://code0xff.org/index.xml">文章 RSS</a></li>
+        </ul>
+    </section>
+</div>
+            </div>
+        </div>
+    </div>
+    <footer id="footer">
+    <div>
+        &copy; 2025 <a href="https://code0xff.org/">记录每个瞬间 By 老王</a>
+        
+    </div>
+    <br />
+    <div>
+        <div class="github-badge">
+            <a href="https://gohugo.io/" target="_black" rel="nofollow"><span class="badge-subject">Powered by</span><span class="badge-value bg-blue">Hugo</span></a>
+        </div>
+        <div class="github-badge">
+            <a href="https://github.com/flysnow-org/maupassant-hugo" target="_black"><span class="badge-subject">Theme</span><span class="badge-value bg-yellowgreen">Maupassant</span></a>
+        </div>
+    </div>
+</footer>
+
+
+    
+    <script type="text/javascript">
+        window.MathJax = {
+            tex2jax: {
+                inlineMath: [['$', '$']],
+                processEscapes: true
+                }
+            };
+    </script>
+    <script src='https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.5/MathJax.js?config=TeX-MML-AM_CHTML' async></script><script src="https://cdn.bootcdn.net/ajax/libs/fancybox/3.5.7/jquery.fancybox.min.js"></script>
+
+<a id="rocket" href="#top"></a>
+<script type="text/javascript" src='/js/totop.js?v=0.0.0' async=""></script>
+
+<script type="application/javascript">
+var doNotTrack = false;
+if (!doNotTrack) {
+	window.ga=window.ga||function(){(ga.q=ga.q||[]).push(arguments)};ga.l=+new Date;
+	ga('create', 'GA ID', 'auto');
+	
+	ga('send', 'pageview');
+}
+</script>
+<script async src='https://www.google-analytics.com/analytics.js'></script>
+
+
+
+    <script type="text/javascript" src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js" async></script>
+
+
+
+
+</body>
+
+</html>

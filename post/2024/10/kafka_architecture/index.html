@@ -1,0 +1,801 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    
+    <meta name="referrer" content="no-referrer-when-downgrade">
+    
+
+    <title>Kafka架构 | 记录每个瞬间</title>
+    <meta property="og:title" content="Kafka架构 - 记录每个瞬间">
+    <meta property="og:type" content="article">
+        
+    <meta property="article:published_time" content='2024-10-18T09:08:07&#43;08:00'>
+        
+        
+    <meta property="article:modified_time" content='2024-10-18T09:08:07&#43;08:00'>
+        
+    <meta name="Keywords" content="">
+    <meta name="description" content="Kafka架构">
+        <meta name="author" content="隔壁老王">
+        
+    <meta property="og:url" content="https://code0xff.org/post/2024/10/kafka_architecture/">
+    <link rel="shortcut icon" href='/favicon.ico'  type="image/x-icon">
+
+    <link rel="stylesheet" href='/css/normalize.css'>
+    <link rel="stylesheet" href='/css/style.css'>
+    <script type="text/javascript" src="//cdn.bootcdn.net/ajax/libs/jquery/3.4.1/jquery.min.js"></script>
+
+    
+    
+    
+        <link href="https://cdn.bootcdn.net/ajax/libs/fancybox/3.5.7/jquery.fancybox.min.css" rel="stylesheet">
+    
+    
+    
+    
+</head>
+
+
+<body>
+    <header id="header" class="clearfix">
+    <div class="container">
+        <div class="col-group">
+            <div class="site-name ">
+                
+                    <a id="logo" href="https://code0xff.org/">
+                        记录每个瞬间
+                    </a>
+                
+                
+            </div>
+            <div>
+                <nav id="nav-menu" class="clearfix">
+                    <a class="current" href="https://code0xff.org/">首页</a>
+                    
+                    <a  href="https://code0xff.org/linked/" title="链接">链接</a>
+                    
+                    <a  href="https://code0xff.org/archives/" title="归档">归档</a>
+                    
+                    <a  href="https://code0xff.org/about/" title="关于">关于</a>
+                    
+                </nav>
+            </div>
+        </div>
+    </div>
+</header>
+
+    <div id="body">
+        <div class="container">
+            <div class="col-group">
+
+                <div class="col-8" id="main">
+                    
+<div class="res-cons">
+    
+    <article class="post">
+        <header>
+            <h1 class="post-title">Kafka架构</h1>
+        </header>
+        <date class="post-meta meta-date">
+            2024年10月18日
+        </date>
+<nav id="TableOfContents">
+  <ul>
+    <li>
+      <ul>
+        <li><a href="#架构">架构</a>
+          <ul>
+            <li><a href="#log-segment">Log Segment</a></li>
+            <li><a href="#请求和响应格式">请求和响应格式</a></li>
+          </ul>
+        </li>
+        <li><a href="#一些优化">一些优化</a></li>
+        <li><a href="#辅助系统">辅助系统</a></li>
+        <li><a href="#参考">参考</a></li>
+      </ul>
+    </li>
+  </ul>
+</nav>
+        
+        <div class="post-meta">
+            
+            <span class="post-meta meta-tags">
+                <ul class="clearfix">
+                    <a href='/categories/%E5%A4%A7%E6%95%B0%E6%8D%AE'>大数据</a>
+                </ul>
+            </span>
+            
+        </div>
+        
+        
+        <div class="post-meta">
+            <span id="busuanzi_container_page_pv">|<span id="busuanzi_value_page_pv"></span><span>
+                    阅读</span></span>
+        </div>
+        
+        
+        <div class="post-content">
+            <p>LinkedIn 最早做这套系统，就是为了解决服务之间的耦合问题，有了 kafka 就变成松耦合了<br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/10/18/75BFKB.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/10/18/75BFKB.png" />
+        </a>
+    </p>
+<h2 id="架构">架构</h2>
+<p>架构</p>
+<ul>
+<li>producer，多个写入者</li>
+<li>broker，保存数据，内部分成多个 partition，partition 一主多从</li>
+<li>consumer，可以组成 cosumer group</li>
+<li>一些节点元数据信息，保存在 ZK 上
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/10/18/75T3Kc.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/10/18/75T3Kc.png" />
+        </a>
+    </li>
+</ul>
+<p>各个组件   <br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/10/19/75T8Fq.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/10/19/75T8Fq.png" />
+        </a>
+    </p>
+<p>采用 append 追加方式，所以数据是顺序写入<br>
+读的话，是 head 读，或者 tail 读，所以读的速度也很快<br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/10/18/75BZ1t.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/10/18/75BZ1t.png" />
+        </a>
+    </p>
+<p>Log Segment</p>
+<ul>
+<li>一个分区内，包含多个Log Segment</li>
+<li>日志内的数据，是单调递增的</li>
+<li>一个 segment 的数据会持续写入，当一个文件写满了(默认1G)，就会变成不活跃的</li>
+<li>默认只有一个活跃的，可以接受append写入，其他 不活跃的就变成只读的了</li>
+<li>当然kafka 会保留一段时间的数据，直到超时后，会删除掉这些数据
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/10/18/75TlP3.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/10/18/75TlP3.png" />
+        </a>
+    </li>
+</ul>
+<p>broker，partition，segment关系</p>
+<ul>
+<li>一个topic会跨多个 broker 存储</li>
+<li>一个 topic 会拆分成多个分区，每个分区都有一个活跃的 segment</li>
+<li>每个分区的数据存储到多个 segment 中，也就是存到磁盘上</li>
+<li>这些磁盘上的数据就是 log segment，按append 方式写入的</li>
+</ul>
+<p>分区的leader</p>
+<ul>
+<li>分区分区包含多个文件，序号递增</li>
+<li>有一个leader，从节点负责同步数据，但不负责接受请求
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/10/18/75T76j.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/10/18/75T76j.png" />
+        </a>
+    </li>
+</ul>
+<p>producer 写入到 brokder 的配置，根据 ack 来保证数据是否确定</p>
+<ul>
+<li>acks=0 - the producer won’t even wait for a response from the broker, it immediately considers the write successful</li>
+<li>acks=1 - a response is sent to the producer when the leader acknowledges the record (persists it to disk).</li>
+<li>acks=all (the default) - a response is sent to the producer only when all of the in-sync replicas persist the record.</li>
+</ul>
+<p>consumer</p>
+<ul>
+<li>一堆consumer 放在一起，变成 consumer groups</li>
+<li>这些消费者将自身的 offset 保存到内部的 topic：__consumer_offsets 中</li>
+<li>消费者组协议确保同一消费者组中的两个消费者不能从同一分区中读取数据</li>
+<li>可以有许多不同的消费者群体阅读同一主题</li>
+<li>跟传统的 消息队列不同，kafka 不会因为consumer 消费了就删除数据，会一直保留
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/10/19/75TH4Y.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/10/19/75TH4Y.png" />
+        </a>
+    </li>
+</ul>
+<p>AR、ISR和OSR</p>
+<ul>
+<li>AR（Assigned Replicas）：分区中的所有副本统称为AR。</li>
+<li>ISR（In-Sync Replicas）：所有与 leader 副本保持一定程度同步的副本（包括 leader 副本在内）组成ISR，ISR 集合是 AR 集合中的一个子集。</li>
+<li>OSR（Out-of-Sync Replicas）：与 leader 副本同步滞后过多的副本（不包括 leader 副本）组成 OSR。AR=ISR+OSR</li>
+<li>leader副本负责维护和跟踪 ISR 集合中所有follower副本的滞后状态</li>
+<li>当 follower 副本落后太多或失效时，leader 副本会把它从 ISR 集合中剔除</li>
+<li>如果 OSR 集合中有 follower 副本“追上”了 leader 副本，那么 leader 副本会把它从 OSR 集合转移至 ISR 集合</li>
+<li>分区ISR 集合中的每个副本都会维护自身的LEO，而ISR集合中最小的LEO 即为分区的HW，对消费者而言只能消费 HW 之前的消息
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/10/19/75TRae.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/10/19/75TRae.png" />
+        </a>
+    </li>
+</ul>
+<p>HW 和 LEO</p>
+<ul>
+<li>HW（High Watermark）：高水位，它标识了一个特定的消息偏移量（offset），消费者只能拉取到这个 offset 之前的消息</li>
+<li>LEO（Log End Offset）：它标识当前日志文件中下一条待写入消息的 offset，上图中 offset 为9的位置即为当前日志文件的 LEO，LEO 的大小相当于当前日志分区中最后一条消息的 offset 值加1<br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/10/19/75TYMP.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/10/19/75TYMP.png" />
+        </a>
+    </li>
+</ul>
+<h3 id="log-segment">Log Segment</h3>
+<p>整个主题、分区、副本、日志关系如下</p>
+<ul>
+<li>每个日志分段除了真实的数据日志文件(.log后缀)之外</li>
+<li>还有对应的2个索引文件：偏移量索引文件(.index)和时间戳索引文件(.timeindex)</li>
+<li>索引偏移量、时间戳索引 都是稀疏索引</li>
+<li>采用二分查找的方式定位，再指向真实的 物理地址
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/10/19/75Tt3w.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/10/19/75Tt3w.png" />
+        </a>
+    </li>
+</ul>
+<p>消息集格式</p>
+<ul>
+<li>Kafka从0.11.0版本开始使用v2版本消息格式</li>
+<li>首先是引入了变长整形(varinits)，做到了数值越小，占用的字节数就越少，从而大大节省了空间
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/10/19/75Tz56.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/10/19/75Tz56.png" />
+        </a>
+    </li>
+</ul>
+<h3 id="请求和响应格式">请求和响应格式</h3>
+<p>请求消息格式，基于 TCP 之上自定义的协议<br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/10/19/75T4CO.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/10/19/75T4CO.png" />
+        </a>
+    </p>
+<p>响应消息格式<br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/10/19/75TJBQ.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/10/19/75TJBQ.png" />
+        </a>
+    </p>
+<h2 id="一些优化">一些优化</h2>
+<p>读写优化</p>
+<ul>
+<li>预先读一批数据缓存到内存，这样下次读就直接从内存读</li>
+<li>写也是直接写到内存，然后异步刷新到磁盘</li>
+<li>读和写都是顺序的，相当于 机械盘的顺序读，或者 SSD的顺序读 和写</li>
+<li>最大限度的利用了磁盘 I/O</li>
+</ul>
+<p>系统级别优化</p>
+<ul>
+<li>使用了 page-cache 优化</li>
+<li>zero-copy 优化
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/10/18/75Bd6b.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/10/18/75Bd6b.png" />
+        </a>
+    </li>
+</ul>
+<p>Consensus</p>
+<ul>
+<li>之前用 ZK 做共识算法，brokder 等元数据存储在 ZK 上</li>
+<li>zk 上的 znode 叫：/controller</li>
+<li>现在改用 raft 替代 ZK，使用的是 raft 的方言：Kafka Raft</li>
+<li>新的方式也是要有 N controllers，然后选举一个主节点</li>
+<li>存储到特定的 topic 的元数据主题：__cluster_metadata</li>
+<li>这个主题有一个单独的分区，它的leader选举是由Raft管理的（而不是其他每个主题的Controller）</li>
+<li>分区的leader将成为当前活动的Controller，其他控制器充当热备用，在内存中存储最新的元数据</li>
+<li>KRaft 支持两种模式部署，brokder本身又做为 controller，或者单独一个controller
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/10/19/75TbkH.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/10/19/75TbkH.png" />
+        </a>
+    </li>
+</ul>
+<p>分层存储，现有的问题</p>
+<ul>
+<li>kafka 是用本地磁盘的，但是有副本问题，比如 1T 数据会变成 3T 数据</li>
+<li>当每个节点有 10T 的本地数据时，如果碰到某个 broker下线，那么同步数据需要非常多的时间</li>
+<li>或者 rebalance，也需要非常多的时间，取决于网络带宽，和磁盘 I/O</li>
+<li>或者一个新节点加入集群，也需要拷贝大量数据
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/10/19/75TgKZ.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/10/19/75TgKZ.png" />
+        </a>
+    </li>
+</ul>
+<p>分层存储架构</p>
+<ul>
+<li>活跃的数据存储在本地磁盘</li>
+<li>冷数据放到 S3 上</li>
+<li>当 brokder 挂掉，或者新的broker 需要读历史数据，直接从 S3 上读取
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/10/19/75ThPU.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/10/19/75ThPU.png" />
+        </a>
+    </li>
+</ul>
+<h2 id="辅助系统">辅助系统</h2>
+<p>kafka balance</p>
+<ul>
+<li>这实际是一个 NP 问题</li>
+<li>需要考虑 副本数量，读流量，写流量，网络带宽，CPU使用率等等</li>
+<li>开源项目 Cruise，会读取 kafka 的 metrics，然后统计最有效的方式</li>
+<li>再通过 API 触发 rebalance<br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/10/19/75TxNs.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/10/19/75TxNs.png" />
+        </a>
+    </li>
+</ul>
+<p>Kafka Connect</p>
+<ul>
+<li>Source Connector — used when sourcing data from another system (the source) and writing it to Kafka.</li>
+<li>Sink Connector — used when sourcing data from Kafka and writing it to another system (the sink).
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/10/19/75T5aa.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/10/19/75T5aa.png" />
+        </a>
+    </li>
+</ul>
+<p>Kafka Streams</p>
+<ul>
+<li>有点类似于 Flink，提供一个处理复杂事件的 API</li>
+</ul>
+<p>未来</p>
+<ul>
+<li>Kora: A Cloud-Native Event Streaming Platform For Kafka</li>
+<li>Keynote：用 C++ 重写的 kafka</li>
+<li>WarpStream：statefulness 架构，数据存储在 S3 上</li>
+</ul>
+<h2 id="参考">参考</h2>
+<ul>
+<li><a href="https://kafka.apache.org/documentation/#gettingStarted">官方文档</a></li>
+<li><a href="https://juejin.cn/post/7002062647684235301">kafka之深入理解日志存储</a></li>
+<li><a href="https://highscalability.com/untitled-2/">Kafka 101</a></li>
+<li><a href="https://highscalability.com/behind-aws-s3s-massive-scale/">Behind AWS S3’s Massive Scale</a></li>
+<li><a href="https://www.vldb.org/pvldb/vol16/p3822-povzner.pdf?ref=highscalability.com">Kora: A Cloud-Native Event Streaming Platform For Kafka</a></li>
+<li><a href="https://docs.warpstream.com/warpstream/overview/architecture?ref=highscalability.com">WarpStream</a></li>
+<li><a href="https://2minutestreaming.beehiiv.com/p/uber-big-data-architecture-uber-series">the requirements of: Uber&rsquo;s Exabyte-Scale Data Infrastructure (The Uber Series Part I)</a></li>
+<li><a href="https://2minutestreaming.beehiiv.com/p/uber-data-infrastructure-scale-numbers">The Numbers Behind Uber&rsquo;s Data Infrastructure (The Uber Series Part II)</a></li>
+<li><a href="https://mp.weixin.qq.com/s/j5Dn9Wuqa_8eqE7A1UNEXg">图解Kafka：架构设计、消息可靠、数据持久、高性能背后的底层原理</a></li>
+</ul>
+
+			<script type="text/javascript"
+        async
+        src="https://cdn.bootcss.com/mathjax/2.7.3/MathJax.js?config=TeX-AMS-MML_HTMLorMML">
+MathJax.Hub.Config({
+  tex2jax: {
+    inlineMath: [['$','$'], ['\\(','\\)']],
+    displayMath: [['$$','$$'], ['\[\[','\]\]']],
+    processEscapes: true,
+    processEnvironments: true,
+    skipTags: ['script', 'noscript', 'style', 'textarea', 'pre'],
+    TeX: { equationNumbers: { autoNumber: "AMS" },
+         extensions: ["AMSmath.js", "AMSsymbols.js"] }
+  }
+});
+
+MathJax.Hub.Queue(function() {
+    
+    
+    
+    var all = MathJax.Hub.getAllJax(), i;
+    for(i = 0; i < all.length; i += 1) {
+        all[i].SourceElement().parentNode.className += ' has-jax';
+    }
+});
+</script>
+
+<style>
+code.has-jax {
+    font: inherit;
+    font-size: 100%;
+    background: inherit;
+    border: inherit;
+    color: #515151;
+}
+</style>
+        </div>
+
+        
+
+
+        
+
+
+        <div class="post-meta meta-tags">
+            
+            <ul class="clearfix">
+                
+                <li><a href='/tags/kafka'>Kafka</a></li>
+                
+            </ul>
+            
+        </div>
+    </article>
+    
+    
+
+    
+    
+    <div class="post bg-white">
+      <script src="https://utteranc.es/client.js"
+            repo= "himichael/hugoblogtalks"
+            issue-term="pathname"
+            theme="github-light"
+            crossorigin="anonymous"
+            async>
+      </script>
+    </div>
+    
+</div>
+
+
+                </div>
+
+                <div id="secondary">
+    <section class="widget">
+        <form id="search" action='https://code0xff.org/search/' method="get" accept-charset="utf-8" target="_blank" _lpchecked="1">
+      
+      <input type="text" name="q" maxlength="20" placeholder="Search">
+      <input type="hidden" name="sitesearch" value="https://code0xff.org/">
+      <button type="submit" class="submit icon-search"></button>
+</form>
+    </section>
+    
+    <section class="widget">
+        <h3 class="widget-title">最近文章</h3>
+<ul class="widget-list">
+    
+    <li>
+        <a href="https://code0xff.org/post/2025/01/spark_register_source/" title="Spark 注册数据源">Spark 注册数据源</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2025/01/spark_core_2/" title="Spark Core相关-2">Spark Core相关-2</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2024/12/llamafactory/" title="Llama Factory">Llama Factory</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2024/11/spark_core/" title="Spark Core相关-1">Spark Core相关-1</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2024/11/sae_tunnel/" title="sea tunnel">sea tunnel</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2024/11/k8s_networks/" title="k8s 网络">k8s 网络</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2024/11/ozone/" title="ozone">ozone</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2024/11/es/" title="ES的简单学习">ES的简单学习</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2025/02/ai/" title="AI的简单学习">AI的简单学习</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2024/11/big_data_investigation/" title="国内几个云厂商大数据平台">国内几个云厂商大数据平台</a>
+    </li>
+    
+</ul>
+    </section>
+
+    
+
+    <section class="widget">
+        <h3 class="widget-title"><a href='/categories/'>分类</a></h3>
+<ul class="widget-list">
+    
+    <li><a href="https://code0xff.org/categories/%E5%88%86%E5%B8%83%E5%BC%8F/">分布式 (6)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E5%8E%9F%E7%90%86%E5%88%86%E6%9E%90/">原理分析 (24)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E5%95%86%E4%B8%9A/">商业 (3)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E5%A4%A7%E6%95%B0%E6%8D%AE/">大数据 (56)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%95%B0%E6%8D%AE%E5%BA%93/">数据库 (41)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%96%87%E5%AD%A6%E5%92%8C%E8%89%BA%E6%9C%AF/">文学和艺术 (3)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%97%85%E8%A1%8C/">旅行 (12)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%9E%B6%E6%9E%84/">架构 (13)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E7%AE%97%E6%B3%95/">算法 (8)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E7%B3%BB%E7%BB%9F/">系统 (7)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E7%BC%96%E7%A8%8B%E8%AF%AD%E8%A8%80/">编程语言 (7)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E8%A1%8C%E4%B8%9A%E8%A7%82%E5%AF%9F/">行业观察 (3)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E8%AF%BB%E4%B9%A6%E7%AC%94%E8%AE%B0/">读书笔记 (14)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E9%9A%8F%E4%BE%BF%E5%86%99%E5%86%99/">随便写写 (3)</a></li>
+    
+</ul>
+    </section>
+
+    <section class="widget">
+        <h3 class="widget-title">归档</a></h3>
+<ul class="widget-list">
+    
+    <li><a href="https://code0xff.org/years/2021%E5%B9%B4/">2021年 (41)</a></li>
+    
+    <li><a href="https://code0xff.org/years/2022%E5%B9%B4/">2022年 (55)</a></li>
+    
+    <li><a href="https://code0xff.org/years/2023%E5%B9%B4/">2023年 (54)</a></li>
+    
+    <li><a href="https://code0xff.org/years/2024%E5%B9%B4/">2024年 (48)</a></li>
+    
+    <li><a href="https://code0xff.org/years/2025%E5%B9%B4/">2025年 (2)</a></li>
+    
+</ul>
+    </section>
+
+    <section class="widget">
+        <h3 class="widget-title"><a href='/tags/'>标签</a></h3>
+<div class="tagcloud">
+    
+    <a href="https://code0xff.org/tags/ai/">AI </a>
+    
+    <a href="https://code0xff.org/tags/ambari/">Ambari </a>
+    
+    <a href="https://code0xff.org/tags/architecture/">architecture </a>
+    
+    <a href="https://code0xff.org/tags/bigdata/">bigdata </a>
+    
+    <a href="https://code0xff.org/tags/b%E6%A0%91/">B树 </a>
+    
+    <a href="https://code0xff.org/tags/c&#43;&#43;/">C&#43;&#43; </a>
+    
+    <a href="https://code0xff.org/tags/calcite/">calcite </a>
+    
+    <a href="https://code0xff.org/tags/cmu-database/">CMU-Database </a>
+    
+    <a href="https://code0xff.org/tags/data_ingestion/">Data_Ingestion </a>
+    
+    <a href="https://code0xff.org/tags/deltalake/">DeltaLake </a>
+    
+    <a href="https://code0xff.org/tags/doris/">Doris </a>
+    
+    <a href="https://code0xff.org/tags/english/">English </a>
+    
+    <a href="https://code0xff.org/tags/es/">ES </a>
+    
+    <a href="https://code0xff.org/tags/facebook/">Facebook </a>
+    
+    <a href="https://code0xff.org/tags/flink/">flink </a>
+    
+    <a href="https://code0xff.org/tags/flume/">flume </a>
+    
+    <a href="https://code0xff.org/tags/gc/">GC </a>
+    
+    <a href="https://code0xff.org/tags/gluten/">Gluten </a>
+    
+    <a href="https://code0xff.org/tags/hana/">HANA </a>
+    
+    <a href="https://code0xff.org/tags/hive/">Hive </a>
+    
+    <a href="https://code0xff.org/tags/iceberg/">iceberg </a>
+    
+    <a href="https://code0xff.org/tags/impala/">Impala </a>
+    
+    <a href="https://code0xff.org/tags/janino/">janino </a>
+    
+    <a href="https://code0xff.org/tags/k8s/">k8s </a>
+    
+    <a href="https://code0xff.org/tags/kafka/">Kafka </a>
+    
+    <a href="https://code0xff.org/tags/kudu/">kudu </a>
+    
+    <a href="https://code0xff.org/tags/kyuubi/">Kyuubi </a>
+    
+    <a href="https://code0xff.org/tags/lakehouse/">Lakehouse </a>
+    
+    <a href="https://code0xff.org/tags/leveldb/">LevelDB </a>
+    
+    <a href="https://code0xff.org/tags/llamafactory/">LlamaFactory </a>
+    
+    <a href="https://code0xff.org/tags/llvm/">LLVM </a>
+    
+    <a href="https://code0xff.org/tags/manacher/">Manacher </a>
+    
+    <a href="https://code0xff.org/tags/mapreduce/">MapReduce </a>
+    
+    <a href="https://code0xff.org/tags/micro-service/">micro-service </a>
+    
+    <a href="https://code0xff.org/tags/mysql/">MySQL </a>
+    
+    <a href="https://code0xff.org/tags/newsql/">NewSQL </a>
+    
+    <a href="https://code0xff.org/tags/oceanbase/">OceanBase </a>
+    
+    <a href="https://code0xff.org/tags/openlogreplicator/">OpenLogReplicator </a>
+    
+    <a href="https://code0xff.org/tags/parquet/">parquet </a>
+    
+    <a href="https://code0xff.org/tags/paxos/">paxos </a>
+    
+    <a href="https://code0xff.org/tags/presto/">Presto </a>
+    
+    <a href="https://code0xff.org/tags/quick-sql/">quick-sql </a>
+    
+    <a href="https://code0xff.org/tags/raft/">raft </a>
+    
+    <a href="https://code0xff.org/tags/scala/">scala </a>
+    
+    <a href="https://code0xff.org/tags/simd/">SIMD </a>
+    
+    <a href="https://code0xff.org/tags/snowflake/">snowflake </a>
+    
+    <a href="https://code0xff.org/tags/spark/">spark </a>
+    
+    <a href="https://code0xff.org/tags/sre/">SRE </a>
+    
+    <a href="https://code0xff.org/tags/teradata/">TeraData </a>
+    
+    <a href="https://code0xff.org/tags/tpcx-hs/">TPCx-HS </a>
+    
+    <a href="https://code0xff.org/tags/trino/">Trino </a>
+    
+    <a href="https://code0xff.org/tags/tuning/">Tuning </a>
+    
+    <a href="https://code0xff.org/tags/unix/">unix </a>
+    
+    <a href="https://code0xff.org/tags/yarn/">YARN </a>
+    
+    <a href="https://code0xff.org/tags/%E4%BA%8C%E5%88%86%E6%9F%A5%E6%89%BE/">二分查找 </a>
+    
+    <a href="https://code0xff.org/tags/%E4%BA%8C%E5%8F%89%E6%A0%91%E9%81%8D%E5%8E%86/">二叉树遍历 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%88%86%E5%B8%83%E5%BC%8F/">分布式 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%88%97%E5%AD%98/">列存 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%8A%A8%E6%80%81%E6%B3%A8%E5%85%A5/">动态注入 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%8E%86%E5%8F%B2/">历史 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%90%91%E9%87%8F%E5%8C%96/">向量化 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%9B%9E%E6%BA%AF/">回溯 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%9B%BD%E5%86%85%E6%97%85%E8%A1%8C/">国内旅行 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%9B%BD%E5%A4%96%E6%97%85%E8%A1%8C/">国外旅行 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%A4%9A%E7%A7%9F%E6%88%B7/">多租户 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%A4%A7%E6%95%B0%E6%8D%AE/">大数据 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%AD%98%E5%82%A8/">存储 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%B7%A5%E4%BD%9C%E8%AE%B0%E5%BD%95/">工作记录 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%BE%AE%E6%9C%8D%E5%8A%A1/">微服务 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%95%B0%E6%8D%AE%E4%B8%AD%E5%8F%B0/">数据中台 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%95%B0%E6%8D%AE%E5%BA%93/">数据库 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%95%B0%E6%8D%AE%E6%A8%A1%E5%9E%8B/">数据模型 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%95%B0%E6%8D%AE%E8%BF%81%E7%A7%BB/">数据迁移 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%9F%A5%E8%AF%A2%E4%BC%98%E5%8C%96/">查询优化 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%9F%A5%E8%AF%A2%E7%BC%96%E8%AF%91/">查询编译 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%A6%82%E7%8E%87/">概率 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%B1%87%E7%BC%96/">汇编 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%B5%8B%E8%AF%95/">测试 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%94%9F%E6%B4%BB/">生活 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%94%B5%E5%BD%B1/">电影 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%AE%97%E6%B3%95/">算法 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%B4%A2%E5%BC%95/">索引 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BB%8F%E6%B5%8E/">经济 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BC%93%E5%AD%98/">缓存 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BC%96%E8%AF%91%E5%8E%9F%E7%90%86/">编译原理 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BD%91%E7%BB%9C/">网络 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AE%A1%E7%AE%97%E6%A1%86%E6%9E%B6/">计算框架 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AE%BA%E6%96%87/">论文 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AF%BB%E4%B9%A6/">读书 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AF%BB%E4%B9%A6%E7%AC%94%E8%AE%B0/">读书笔记 </a>
+    
+</div>
+    </section>
+
+    
+
+    <section class="widget">
+        <h3 class="widget-title">RSS</h3>
+        <ul class="widget-list">
+            <li><a href="https://code0xff.org/index.xml">文章 RSS</a></li>
+        </ul>
+    </section>
+</div>
+            </div>
+        </div>
+    </div>
+    <footer id="footer">
+    <div>
+        &copy; 2025 <a href="https://code0xff.org/">记录每个瞬间 By 老王</a>
+        
+    </div>
+    <br />
+    <div>
+        <div class="github-badge">
+            <a href="https://gohugo.io/" target="_black" rel="nofollow"><span class="badge-subject">Powered by</span><span class="badge-value bg-blue">Hugo</span></a>
+        </div>
+        <div class="github-badge">
+            <a href="https://github.com/flysnow-org/maupassant-hugo" target="_black"><span class="badge-subject">Theme</span><span class="badge-value bg-yellowgreen">Maupassant</span></a>
+        </div>
+    </div>
+</footer>
+
+
+    
+    <script type="text/javascript">
+        window.MathJax = {
+            tex2jax: {
+                inlineMath: [['$', '$']],
+                processEscapes: true
+                }
+            };
+    </script>
+    <script src='https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.5/MathJax.js?config=TeX-MML-AM_CHTML' async></script><script src="https://cdn.bootcdn.net/ajax/libs/fancybox/3.5.7/jquery.fancybox.min.js"></script>
+
+<a id="rocket" href="#top"></a>
+<script type="text/javascript" src='/js/totop.js?v=0.0.0' async=""></script>
+
+<script type="application/javascript">
+var doNotTrack = false;
+if (!doNotTrack) {
+	window.ga=window.ga||function(){(ga.q=ga.q||[]).push(arguments)};ga.l=+new Date;
+	ga('create', 'GA ID', 'auto');
+	
+	ga('send', 'pageview');
+}
+</script>
+<script async src='https://www.google-analytics.com/analytics.js'></script>
+
+
+
+    <script type="text/javascript" src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js" async></script>
+
+
+
+
+</body>
+
+</html>

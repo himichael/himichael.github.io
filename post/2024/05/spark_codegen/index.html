@@ -1,0 +1,1572 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    
+    <meta name="referrer" content="no-referrer-when-downgrade">
+    
+
+    <title>code-gen | 记录每个瞬间</title>
+    <meta property="og:title" content="code-gen - 记录每个瞬间">
+    <meta property="og:type" content="article">
+        
+    <meta property="article:published_time" content='2024-05-06T09:08:07&#43;08:00'>
+        
+        
+    <meta property="article:modified_time" content='2024-05-06T09:08:07&#43;08:00'>
+        
+    <meta name="Keywords" content="">
+    <meta name="description" content="code-gen">
+        <meta name="author" content="隔壁老王">
+        
+    <meta property="og:url" content="https://code0xff.org/post/2024/05/spark_codegen/">
+    <link rel="shortcut icon" href='/favicon.ico'  type="image/x-icon">
+
+    <link rel="stylesheet" href='/css/normalize.css'>
+    <link rel="stylesheet" href='/css/style.css'>
+    <script type="text/javascript" src="//cdn.bootcdn.net/ajax/libs/jquery/3.4.1/jquery.min.js"></script>
+
+    
+    
+    
+        <link href="https://cdn.bootcdn.net/ajax/libs/fancybox/3.5.7/jquery.fancybox.min.css" rel="stylesheet">
+    
+    
+    
+    
+</head>
+
+
+<body>
+    <header id="header" class="clearfix">
+    <div class="container">
+        <div class="col-group">
+            <div class="site-name ">
+                
+                    <a id="logo" href="https://code0xff.org/">
+                        记录每个瞬间
+                    </a>
+                
+                
+            </div>
+            <div>
+                <nav id="nav-menu" class="clearfix">
+                    <a class="current" href="https://code0xff.org/">首页</a>
+                    
+                    <a  href="https://code0xff.org/linked/" title="链接">链接</a>
+                    
+                    <a  href="https://code0xff.org/archives/" title="归档">归档</a>
+                    
+                    <a  href="https://code0xff.org/about/" title="关于">关于</a>
+                    
+                </nav>
+            </div>
+        </div>
+    </div>
+</header>
+
+    <div id="body">
+        <div class="container">
+            <div class="col-group">
+
+                <div class="col-8" id="main">
+                    
+<div class="res-cons">
+    
+    <article class="post">
+        <header>
+            <h1 class="post-title">code-gen</h1>
+        </header>
+        <date class="post-meta meta-date">
+            2024年5月6日
+        </date>
+<nav id="TableOfContents">
+  <ul>
+    <li>
+      <ul>
+        <li><a href="#基本原理">基本原理</a>
+          <ul>
+            <li><a href="#预处理部分">预处理部分</a></li>
+            <li><a href="#模拟程序">模拟程序</a></li>
+            <li><a href="#代码生成骨架部分">代码生成骨架部分</a></li>
+          </ul>
+        </li>
+        <li><a href="#详细分析">详细分析</a>
+          <ul>
+            <li><a href="#简单查询执行过程">简单查询执行过程</a></li>
+            <li><a href="#join">JOIN</a>
+              <ul>
+                <li><a href="#broadcast-hash-join">Broadcast Hash Join</a></li>
+                <li><a href="#shuffle-hash-join">Shuffle Hash Join</a></li>
+                <li><a href="#shuffle-sort-merge-join">Shuffle Sort Merge Join</a></li>
+                <li><a href="#broadcastnestedloopjoin">BroadcastNestedLoopJoin</a></li>
+              </ul>
+            </li>
+          </ul>
+        </li>
+        <li><a href="#参考">参考</a></li>
+      </ul>
+    </li>
+  </ul>
+</nav>
+        
+        <div class="post-meta">
+            
+            <span class="post-meta meta-tags">
+                <ul class="clearfix">
+                    <a href='/categories/%E5%8E%9F%E7%90%86%E5%88%86%E6%9E%90'>原理分析</a>
+                </ul>
+            </span>
+            
+        </div>
+        
+        
+        <div class="post-meta">
+            <span id="busuanzi_container_page_pv">|<span id="busuanzi_value_page_pv"></span><span>
+                    阅读</span></span>
+        </div>
+        
+        
+        <div class="post-content">
+            <h2 id="基本原理">基本原理</h2>
+<p>全阶段代码生成，即WSCG。它指的是基于同一 Stage 内操作符之间的调用关系，把多个 RDD 的 compute 函数捏合成一个，生成一份“手写代码”<br>
+然后把这一个函数一次性地作用在输入数据上，真正把所有计算融合为一个统一的函数</p>
+<p>全阶段代码生成具有以下的优势：</p>
+<ul>
+<li>消除虚函数调度。</li>
+<li>将中间数据从内存移动到 CPU 寄存器。</li>
+<li>利用现代 CPU 功能循环展开和使用 SIMD。通过向量化技术，引擎将加快对复杂操作代码生成运行的速度。</li>
+</ul>
+<p>Catalyst全阶段代码生成的入口是CollapseCodegenStages规则，它的注入是在代码执行前的preparations阶段。</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">8
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">9
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-scala" data-lang="scala"><span style="display:flex;"><span>  <span style="color:#ff79c6">def</span> apply<span style="color:#ff79c6">(</span>plan<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">SparkPlan</span><span style="color:#ff79c6">)</span><span style="color:#ff79c6">:</span> <span style="color:#8be9fd">SparkPlan</span> <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">if</span> <span style="color:#ff79c6">(</span>conf<span style="color:#ff79c6">.</span>wholeStageEnabled <span style="color:#ff79c6">&amp;&amp;</span> <span style="color:#50fa7b">CodegenObjectFactoryMode</span><span style="color:#ff79c6">.</span>withName<span style="color:#ff79c6">(</span>conf<span style="color:#ff79c6">.</span>codegenFactoryMode<span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>      <span style="color:#ff79c6">!=</span> <span style="color:#50fa7b">CodegenObjectFactoryMode</span><span style="color:#ff79c6">.</span><span style="color:#50fa7b">NO_CODEGEN</span><span style="color:#ff79c6">)</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>      insertWholeStageCodegen<span style="color:#ff79c6">(</span>plan<span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">}</span> <span style="color:#ff79c6">else</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>      plan
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">}</span>
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">}</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">}</span>
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>如果开启了下面这个参数，才会生成代码</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-shell" data-lang="shell"><span style="display:flex;"><span>spark.sql.codegen.wholeStage
+</span></span></code></pre></td></tr></table>
+</div>
+</div><h3 id="预处理部分">预处理部分</h3>
+<p>插入WholeStageCodegenExec算子需要满足以下条件：</p>
+<ul>
+<li>算子的输出个数为1且数据类型为ObjectType，表明其不是unsafe row，跳过，迭代判断其孩子节点。</li>
+<li>plan为LocalTableScanExec的不进行处理。</li>
+<li>plan为CommandResultExec的不进行处理。</li>
+<li>plan为CodegenSupport的还需判断其所有表达式是否都支持Codegen， 当前plan和其孩子plan的schema的字段个数是否超过了conf.wholeStageMaxNumFields（默认100）。</li>
+<li>另外需要注意的是whole-stage-codegen是基于row的，如果plan支持columnar， 则不能同时支持全阶段代码生成。</li>
+</ul>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">15
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">16
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">17
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">18
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">19
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">20
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">21
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">22
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">23
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-scala" data-lang="scala"><span style="display:flex;"><span>  <span style="color:#ff79c6">private</span> <span style="color:#ff79c6">def</span> insertWholeStageCodegen<span style="color:#ff79c6">(</span>plan<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">SparkPlan</span><span style="color:#ff79c6">)</span><span style="color:#ff79c6">:</span> <span style="color:#8be9fd">SparkPlan</span> <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>    plan <span style="color:#ff79c6">match</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>      <span style="color:#6272a4">// For operators that will output domain object, do not insert WholeStageCodegen for it as
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>      <span style="color:#6272a4">// domain object can not be written into unsafe row.
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>      <span style="color:#ff79c6">case</span> plan <span style="color:#ff79c6">if</span> plan<span style="color:#ff79c6">.</span>output<span style="color:#ff79c6">.</span>length <span style="color:#ff79c6">==</span> <span style="color:#bd93f9">1</span> <span style="color:#ff79c6">&amp;&amp;</span> plan<span style="color:#ff79c6">.</span>output<span style="color:#ff79c6">.</span>head<span style="color:#ff79c6">.</span>dataType<span style="color:#ff79c6">.</span>isInstanceOf<span style="color:#ff79c6">[</span><span style="color:#8be9fd">ObjectType</span><span style="color:#ff79c6">]</span> <span style="color:#ff79c6">=&gt;</span>
+</span></span><span style="display:flex;"><span>        plan<span style="color:#ff79c6">.</span>withNewChildren<span style="color:#ff79c6">(</span>plan<span style="color:#ff79c6">.</span>children<span style="color:#ff79c6">.</span>map<span style="color:#ff79c6">(</span>insertWholeStageCodegen<span style="color:#ff79c6">))</span>
+</span></span><span style="display:flex;"><span>      <span style="color:#ff79c6">case</span> plan<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">LocalTableScanExec</span> <span style="color:#ff79c6">=&gt;</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#6272a4">// Do not make LogicalTableScanExec the root of WholeStageCodegen
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>        <span style="color:#6272a4">// to support the fast driver-local collect/take paths.
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>        plan
+</span></span><span style="display:flex;"><span>      <span style="color:#ff79c6">case</span> plan<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">CommandResultExec</span> <span style="color:#ff79c6">=&gt;</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#6272a4">// Do not make CommandResultExec the root of WholeStageCodegen
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>        <span style="color:#6272a4">// to support the fast driver-local collect/take paths.
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>        plan
+</span></span><span style="display:flex;"><span>      <span style="color:#ff79c6">case</span> plan<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">CodegenSupport</span> <span style="color:#8be9fd">if</span> <span style="color:#8be9fd">supportCodegen</span><span style="color:#ff79c6">(</span><span style="color:#8be9fd">plan</span><span style="color:#ff79c6">)</span> <span style="color:#ff79c6">=&gt;</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#6272a4">// The whole-stage-codegen framework is row-based. If a plan supports columnar execution,
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>        <span style="color:#6272a4">// it can&#39;t support whole-stage-codegen at the same time.
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>        assert<span style="color:#ff79c6">(!</span>plan<span style="color:#ff79c6">.</span>supportsColumnar<span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#50fa7b">WholeStageCodegenExec</span><span style="color:#ff79c6">(</span>insertInputAdapter<span style="color:#ff79c6">(</span>plan<span style="color:#ff79c6">))(</span>codegenStageCounter<span style="color:#ff79c6">.</span>incrementAndGet<span style="color:#ff79c6">())</span>
+</span></span><span style="display:flex;"><span>      <span style="color:#ff79c6">case</span> other <span style="color:#ff79c6">=&gt;</span>
+</span></span><span style="display:flex;"><span>        other<span style="color:#ff79c6">.</span>withNewChildren<span style="color:#ff79c6">(</span>other<span style="color:#ff79c6">.</span>children<span style="color:#ff79c6">.</span>map<span style="color:#ff79c6">(</span>insertWholeStageCodegen<span style="color:#ff79c6">))</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">}</span>
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">}</span>
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>对于不支持的，或者 SortMergeJoinExec、ShuffledHashJoinExec 会插入 InputAdapter<br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/05/10/7bvzGQ.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/05/10/7bvzGQ.png" />
+        </a>
+    </p>
+<p>InputAdapter 作用</p>
+<ul>
+<li>他们都可以看作一个codegen的分割点，可将整个物理计划拆分成多个代码段</li>
+<li>而 InputAdapter节点可以看作是对应 WholeStageCodegenExec所包含子树的叶 子节点，起到 InternalRow的数据输入作用</li>
+</ul>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">15
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">16
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-scala" data-lang="scala"><span style="display:flex;"><span>  <span style="color:#ff79c6">private</span> <span style="color:#ff79c6">def</span> insertInputAdapter<span style="color:#ff79c6">(</span>plan<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">SparkPlan</span><span style="color:#ff79c6">)</span><span style="color:#ff79c6">:</span> <span style="color:#8be9fd">SparkPlan</span> <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>    plan <span style="color:#ff79c6">match</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>      <span style="color:#ff79c6">case</span> p <span style="color:#ff79c6">if</span> <span style="color:#ff79c6">!</span>supportCodegen<span style="color:#ff79c6">(</span>p<span style="color:#ff79c6">)</span> <span style="color:#ff79c6">=&gt;</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#6272a4">// collapse them recursively
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>        <span style="color:#50fa7b">InputAdapter</span><span style="color:#ff79c6">(</span>insertWholeStageCodegen<span style="color:#ff79c6">(</span>p<span style="color:#ff79c6">))</span>
+</span></span><span style="display:flex;"><span>      <span style="color:#ff79c6">case</span> j<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">SortMergeJoinExec</span> <span style="color:#ff79c6">=&gt;</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#6272a4">// The children of SortMergeJoin should do codegen separately.
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>        j<span style="color:#ff79c6">.</span>withNewChildren<span style="color:#ff79c6">(</span>j<span style="color:#ff79c6">.</span>children<span style="color:#ff79c6">.</span>map<span style="color:#ff79c6">(</span>
+</span></span><span style="display:flex;"><span>          child <span style="color:#ff79c6">=&gt;</span> <span style="color:#50fa7b">InputAdapter</span><span style="color:#ff79c6">(</span>insertWholeStageCodegen<span style="color:#ff79c6">(</span>child<span style="color:#ff79c6">))))</span>
+</span></span><span style="display:flex;"><span>      <span style="color:#ff79c6">case</span> j<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">ShuffledHashJoinExec</span> <span style="color:#ff79c6">=&gt;</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#6272a4">// The children of ShuffledHashJoin should do codegen separately.
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>        j<span style="color:#ff79c6">.</span>withNewChildren<span style="color:#ff79c6">(</span>j<span style="color:#ff79c6">.</span>children<span style="color:#ff79c6">.</span>map<span style="color:#ff79c6">(</span>
+</span></span><span style="display:flex;"><span>          child <span style="color:#ff79c6">=&gt;</span> <span style="color:#50fa7b">InputAdapter</span><span style="color:#ff79c6">(</span>insertWholeStageCodegen<span style="color:#ff79c6">(</span>child<span style="color:#ff79c6">))))</span>
+</span></span><span style="display:flex;"><span>      <span style="color:#ff79c6">case</span> p <span style="color:#ff79c6">=&gt;</span> p<span style="color:#ff79c6">.</span>withNewChildren<span style="color:#ff79c6">(</span>p<span style="color:#ff79c6">.</span>children<span style="color:#ff79c6">.</span>map<span style="color:#ff79c6">(</span>insertInputAdapter<span style="color:#ff79c6">))</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">}</span>
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">}</span>
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/05/09/7b5PPm.png">
+            <img class="mx-auto" alt="3" src="https://v1.ax1x.com/2024/05/09/7b5PPm.png" />
+        </a>
+    </p>
+<h3 id="模拟程序">模拟程序</h3>
+<p>用来 模拟 code-gen 的代码</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">15
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">16
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">17
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">18
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">19
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-scala" data-lang="scala"><span style="display:flex;"><span>  test<span style="color:#ff79c6">(</span><span style="color:#f1fa8c">&#34;mock code-gen&#34;</span><span style="color:#ff79c6">)</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">import</span> org.apache.spark.sql.catalyst.expressions.<span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>      <span style="color:#50fa7b">And</span><span style="color:#ff79c6">,</span> <span style="color:#50fa7b">AttributeReference</span><span style="color:#ff79c6">,</span> <span style="color:#50fa7b">GreaterThan</span><span style="color:#ff79c6">,</span> <span style="color:#50fa7b">LessThan</span><span style="color:#ff79c6">,</span> <span style="color:#50fa7b">Literal</span><span style="color:#ff79c6">}</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">import</span> org.apache.spark.sql.execution.<span style="color:#ff79c6">{</span><span style="color:#50fa7b">CollapseCodegenStages</span><span style="color:#ff79c6">,</span> <span style="color:#50fa7b">FilterExec</span><span style="color:#ff79c6">,</span> <span style="color:#50fa7b">RangeExec</span><span style="color:#ff79c6">}</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">import</span> org.apache.spark.sql.types.LongType
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">val</span> ref <span style="color:#ff79c6">=</span> <span style="color:#50fa7b">AttributeReference</span><span style="color:#ff79c6">(</span><span style="color:#f1fa8c">&#34;id&#34;</span><span style="color:#ff79c6">,</span> <span style="color:#50fa7b">LongType</span><span style="color:#ff79c6">)()</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">val</span> and <span style="color:#ff79c6">=</span> <span style="color:#50fa7b">And</span><span style="color:#ff79c6">(</span>
+</span></span><span style="display:flex;"><span>      <span style="color:#50fa7b">GreaterThan</span><span style="color:#ff79c6">(</span>ref<span style="color:#ff79c6">,</span> <span style="color:#ff79c6">new</span> <span style="color:#50fa7b">Literal</span><span style="color:#ff79c6">(</span><span style="color:#bd93f9">0L</span><span style="color:#ff79c6">,</span> <span style="color:#50fa7b">LongType</span><span style="color:#ff79c6">)),</span>
+</span></span><span style="display:flex;"><span>      <span style="color:#50fa7b">LessThan</span><span style="color:#ff79c6">(</span>ref<span style="color:#ff79c6">,</span> <span style="color:#ff79c6">new</span> <span style="color:#50fa7b">Literal</span><span style="color:#ff79c6">(</span><span style="color:#bd93f9">10L</span><span style="color:#ff79c6">,</span> <span style="color:#50fa7b">LongType</span><span style="color:#ff79c6">))</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">val</span> range <span style="color:#ff79c6">=</span> <span style="color:#50fa7b">RangeExec</span><span style="color:#ff79c6">(</span>
+</span></span><span style="display:flex;"><span>      <span style="color:#ff79c6">new</span> org<span style="color:#ff79c6">.</span>apache<span style="color:#ff79c6">.</span>spark<span style="color:#ff79c6">.</span>sql<span style="color:#ff79c6">.</span>catalyst<span style="color:#ff79c6">.</span>plans<span style="color:#ff79c6">.</span>logical<span style="color:#ff79c6">.</span><span style="color:#50fa7b">Range</span><span style="color:#ff79c6">(</span><span style="color:#bd93f9">0</span><span style="color:#ff79c6">,</span> <span style="color:#bd93f9">10</span><span style="color:#ff79c6">,</span> <span style="color:#bd93f9">1</span><span style="color:#ff79c6">,</span> <span style="color:#50fa7b">None</span><span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">val</span> filter <span style="color:#ff79c6">=</span> <span style="color:#50fa7b">FilterExec</span><span style="color:#ff79c6">(</span>and<span style="color:#ff79c6">,</span> range<span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">val</span> c <span style="color:#ff79c6">=</span> <span style="color:#50fa7b">CollapseCodegenStages</span><span style="color:#ff79c6">()</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">val</span> p <span style="color:#ff79c6">=</span> c<span style="color:#ff79c6">.</span>apply<span style="color:#ff79c6">(</span>filter<span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>    println<span style="color:#ff79c6">(</span>p<span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">}</span>
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>打印结果：</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-shell" data-lang="shell"><span style="display:flex;"><span>*<span style="color:#ff79c6">(</span>1<span style="color:#ff79c6">)</span> !Filter <span style="color:#ff79c6">((</span>id#0L &gt; 0<span style="color:#ff79c6">)</span> AND <span style="color:#ff79c6">(</span>id#0L &lt; 10<span style="color:#ff79c6">))</span>
+</span></span><span style="display:flex;"><span>+- *<span style="color:#ff79c6">(</span>1<span style="color:#ff79c6">)</span> Range <span style="color:#ff79c6">(</span>0, 10, <span style="color:#8be9fd;font-style:italic">step</span><span style="color:#ff79c6">=</span>1, <span style="color:#8be9fd;font-style:italic">splits</span><span style="color:#ff79c6">=</span>16<span style="color:#ff79c6">)</span>
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>递归的从根节点一直遍历到子节点，如果有不合适的则插入 InputAdapter
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/05/09/7b5U9j.png">
+            <img class="mx-auto" alt="1" src="https://v1.ax1x.com/2024/05/09/7b5U9j.png" />
+        </a>
+    </p>
+<h3 id="代码生成骨架部分">代码生成骨架部分</h3>
+<p>各个算子的 doProduce()，只是简单的继续调用其子类的 produce()</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-scala" data-lang="scala"><span style="display:flex;"><span>  <span style="color:#ff79c6">protected</span> <span style="color:#ff79c6">override</span> <span style="color:#ff79c6">def</span> doProduce<span style="color:#ff79c6">(</span>ctx<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">CodegenContext</span><span style="color:#ff79c6">)</span><span style="color:#ff79c6">:</span> <span style="color:#8be9fd">String</span> <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>    child<span style="color:#ff79c6">.</span>asInstanceOf<span style="color:#ff79c6">[</span><span style="color:#8be9fd">CodegenSupport</span><span style="color:#ff79c6">].</span>produce<span style="color:#ff79c6">(</span>ctx<span style="color:#ff79c6">,</span> <span style="color:#ff79c6">this</span><span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">}</span>
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>CodegenSupport 的主要函数<br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/05/10/7bv4tf.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/05/10/7bv4tf.png" />
+        </a>
+    </p>
+<p>produce()是在父接口 CodegenSupport 中定义的，它会继续调用子节点的 doProduce<br>
+于是一层层的递归调用下去，直到子节点，或者 shuffle 边界</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">8
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-scala" data-lang="scala"><span style="display:flex;"><span>  <span style="color:#ff79c6">final</span> <span style="color:#ff79c6">def</span> produce<span style="color:#ff79c6">(</span>ctx<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">CodegenContext</span><span style="color:#ff79c6">,</span> parent<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">CodegenSupport</span><span style="color:#ff79c6">)</span><span style="color:#ff79c6">:</span> <span style="color:#8be9fd">String</span> <span style="color:#ff79c6">=</span> executeQuery <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">this</span><span style="color:#ff79c6">.</span>parent <span style="color:#ff79c6">=</span> parent
+</span></span><span style="display:flex;"><span>    ctx<span style="color:#ff79c6">.</span>freshNamePrefix <span style="color:#ff79c6">=</span> variablePrefix
+</span></span><span style="display:flex;"><span>    <span style="color:#f1fa8c">s&#34;&#34;&#34;
+</span></span></span><span style="display:flex;"><span><span style="color:#f1fa8c">       |</span><span style="color:#f1fa8c">${</span>ctx<span style="color:#ff79c6">.</span>registerComment<span style="color:#ff79c6">(</span><span style="color:#f1fa8c">s&#34;PRODUCE: </span><span style="color:#f1fa8c">${</span><span style="color:#ff79c6">this</span><span style="color:#ff79c6">.</span>simpleString<span style="color:#ff79c6">(</span>conf<span style="color:#ff79c6">.</span>maxToStringFields<span style="color:#ff79c6">)</span><span style="color:#f1fa8c">}</span><span style="color:#f1fa8c">&#34;</span><span style="color:#ff79c6">)</span><span style="color:#f1fa8c">}</span><span style="color:#f1fa8c">
+</span></span></span><span style="display:flex;"><span><span style="color:#f1fa8c">       |</span><span style="color:#f1fa8c">${</span>doProduce<span style="color:#ff79c6">(</span>ctx<span style="color:#ff79c6">)</span><span style="color:#f1fa8c">}</span><span style="color:#f1fa8c">
+</span></span></span><span style="display:flex;"><span><span style="color:#f1fa8c">     &#34;&#34;&#34;</span><span style="color:#ff79c6">.</span>stripMargin
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">}</span>
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>CodegenSupport#consume的逻辑：</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">15
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">16
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">17
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">18
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">19
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">20
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">21
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">22
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">23
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">24
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">25
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">26
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">27
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">28
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">29
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">30
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">31
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">32
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">33
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">34
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">35
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">36
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">37
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">38
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">39
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">40
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">41
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">42
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">43
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">44
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">45
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">46
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">47
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">48
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">49
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">50
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">51
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">52
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">53
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-scala" data-lang="scala"><span style="display:flex;"><span>  <span style="color:#ff79c6">final</span> <span style="color:#ff79c6">def</span> consume<span style="color:#ff79c6">(</span>ctx<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">CodegenContext</span><span style="color:#ff79c6">,</span> outputVars<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">Seq</span><span style="color:#ff79c6">[</span><span style="color:#8be9fd">ExprCode</span><span style="color:#ff79c6">],</span> row<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">String</span> <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">null</span><span style="color:#ff79c6">)</span><span style="color:#ff79c6">:</span> <span style="color:#8be9fd">String</span> <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">val</span> inputVarsCandidate <span style="color:#ff79c6">=</span>
+</span></span><span style="display:flex;"><span>      <span style="color:#ff79c6">if</span> <span style="color:#ff79c6">(</span>outputVars <span style="color:#ff79c6">!=</span> <span style="color:#ff79c6">null</span><span style="color:#ff79c6">)</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>        assert<span style="color:#ff79c6">(</span>outputVars<span style="color:#ff79c6">.</span>length <span style="color:#ff79c6">==</span> output<span style="color:#ff79c6">.</span>length<span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#6272a4">// outputVars will be used to generate the code for UnsafeRow, so we should copy them
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>        outputVars<span style="color:#ff79c6">.</span>map<span style="color:#ff79c6">(</span><span style="color:#ff79c6">_</span><span style="color:#ff79c6">.</span>copy<span style="color:#ff79c6">())</span>
+</span></span><span style="display:flex;"><span>      <span style="color:#ff79c6">}</span> <span style="color:#ff79c6">else</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>        assert<span style="color:#ff79c6">(</span>row <span style="color:#ff79c6">!=</span> <span style="color:#ff79c6">null</span><span style="color:#ff79c6">,</span> <span style="color:#f1fa8c">&#34;outputVars and row cannot both be null.&#34;</span><span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>        ctx<span style="color:#ff79c6">.</span>currentVars <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">null</span>
+</span></span><span style="display:flex;"><span>        ctx<span style="color:#ff79c6">.</span><span style="color:#50fa7b">INPUT_ROW</span> <span style="color:#ff79c6">=</span> row
+</span></span><span style="display:flex;"><span>        output<span style="color:#ff79c6">.</span>zipWithIndex<span style="color:#ff79c6">.</span>map <span style="color:#ff79c6">{</span> <span style="color:#ff79c6">case</span> <span style="color:#ff79c6">(</span>attr<span style="color:#ff79c6">,</span> i<span style="color:#ff79c6">)</span> <span style="color:#ff79c6">=&gt;</span>
+</span></span><span style="display:flex;"><span>          <span style="color:#50fa7b">BoundReference</span><span style="color:#ff79c6">(</span>i<span style="color:#ff79c6">,</span> attr<span style="color:#ff79c6">.</span>dataType<span style="color:#ff79c6">,</span> attr<span style="color:#ff79c6">.</span>nullable<span style="color:#ff79c6">).</span>genCode<span style="color:#ff79c6">(</span>ctx<span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">}</span>
+</span></span><span style="display:flex;"><span>      <span style="color:#ff79c6">}</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">val</span> inputVars <span style="color:#ff79c6">=</span> inputVarsCandidate <span style="color:#ff79c6">match</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>      <span style="color:#ff79c6">case</span> stream<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">Stream</span><span style="color:#ff79c6">[</span><span style="color:#8be9fd">ExprCode</span><span style="color:#ff79c6">]</span> <span style="color:#ff79c6">=&gt;</span> stream<span style="color:#ff79c6">.</span>force
+</span></span><span style="display:flex;"><span>      <span style="color:#ff79c6">case</span> other <span style="color:#ff79c6">=&gt;</span> other
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">}</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">val</span> rowVar <span style="color:#ff79c6">=</span> prepareRowVar<span style="color:#ff79c6">(</span>ctx<span style="color:#ff79c6">,</span> row<span style="color:#ff79c6">,</span> outputVars<span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#6272a4">// Set up the `currentVars` in the codegen context, as we generate the code of `inputVars`
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>    <span style="color:#6272a4">// before calling `parent.doConsume`. We can&#39;t set up `INPUT_ROW`, because parent needs to
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>    <span style="color:#6272a4">// generate code of `rowVar` manually.
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>    ctx<span style="color:#ff79c6">.</span>currentVars <span style="color:#ff79c6">=</span> inputVars
+</span></span><span style="display:flex;"><span>    ctx<span style="color:#ff79c6">.</span><span style="color:#50fa7b">INPUT_ROW</span> <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">null</span>
+</span></span><span style="display:flex;"><span>    ctx<span style="color:#ff79c6">.</span>freshNamePrefix <span style="color:#ff79c6">=</span> parent<span style="color:#ff79c6">.</span>variablePrefix
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">val</span> evaluated <span style="color:#ff79c6">=</span> evaluateRequiredVariables<span style="color:#ff79c6">(</span>output<span style="color:#ff79c6">,</span> inputVars<span style="color:#ff79c6">,</span> parent<span style="color:#ff79c6">.</span>usedInputs<span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#6272a4">// Under certain conditions, we can put the logic to consume the rows of this operator into
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>    <span style="color:#6272a4">// another function. So we can prevent a generated function too long to be optimized by JIT.
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>    <span style="color:#6272a4">// The conditions:
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>    <span style="color:#6272a4">// 1. The config &#34;spark.sql.codegen.splitConsumeFuncByOperator&#34; is enabled.
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>    <span style="color:#6272a4">// 2. `inputVars` are all materialized. That is guaranteed to be true if the parent plan uses
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>    <span style="color:#6272a4">//    all variables in output (see `requireAllOutput`).
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>    <span style="color:#6272a4">// 3. The number of output variables must less than maximum number of parameters in Java method
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>    <span style="color:#6272a4">//    declaration.
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>    <span style="color:#ff79c6">val</span> confEnabled <span style="color:#ff79c6">=</span> conf<span style="color:#ff79c6">.</span>wholeStageSplitConsumeFuncByOperator
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">val</span> requireAllOutput <span style="color:#ff79c6">=</span> output<span style="color:#ff79c6">.</span>forall<span style="color:#ff79c6">(</span>parent<span style="color:#ff79c6">.</span>usedInputs<span style="color:#ff79c6">.</span>contains<span style="color:#ff79c6">(</span><span style="color:#ff79c6">_</span><span style="color:#ff79c6">))</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">val</span> paramLength <span style="color:#ff79c6">=</span> <span style="color:#50fa7b">CodeGenerator</span><span style="color:#ff79c6">.</span>calculateParamLength<span style="color:#ff79c6">(</span>output<span style="color:#ff79c6">)</span> <span style="color:#ff79c6">+</span> <span style="color:#ff79c6">(</span><span style="color:#ff79c6">if</span> <span style="color:#ff79c6">(</span>row <span style="color:#ff79c6">!=</span> <span style="color:#ff79c6">null</span><span style="color:#ff79c6">)</span> <span style="color:#bd93f9">1</span> <span style="color:#ff79c6">else</span> <span style="color:#bd93f9">0</span><span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">val</span> consumeFunc <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">if</span> <span style="color:#ff79c6">(</span>confEnabled <span style="color:#ff79c6">&amp;&amp;</span> requireAllOutput
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">&amp;&amp;</span> <span style="color:#50fa7b">CodeGenerator</span><span style="color:#ff79c6">.</span>isValidParamLength<span style="color:#ff79c6">(</span>paramLength<span style="color:#ff79c6">))</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>      constructDoConsumeFunction<span style="color:#ff79c6">(</span>ctx<span style="color:#ff79c6">,</span> inputVars<span style="color:#ff79c6">,</span> row<span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">}</span> <span style="color:#ff79c6">else</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>      parent<span style="color:#ff79c6">.</span>doConsume<span style="color:#ff79c6">(</span>ctx<span style="color:#ff79c6">,</span> inputVars<span style="color:#ff79c6">,</span> rowVar<span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">}</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#f1fa8c">s&#34;&#34;&#34;
+</span></span></span><span style="display:flex;"><span><span style="color:#f1fa8c">       |</span><span style="color:#f1fa8c">${</span>ctx<span style="color:#ff79c6">.</span>registerComment<span style="color:#ff79c6">(</span><span style="color:#f1fa8c">s&#34;CONSUME: </span><span style="color:#f1fa8c">${</span>parent<span style="color:#ff79c6">.</span>simpleString<span style="color:#ff79c6">(</span>conf<span style="color:#ff79c6">.</span>maxToStringFields<span style="color:#ff79c6">)</span><span style="color:#f1fa8c">}</span><span style="color:#f1fa8c">&#34;</span><span style="color:#ff79c6">)</span><span style="color:#f1fa8c">}</span><span style="color:#f1fa8c">
+</span></span></span><span style="display:flex;"><span><span style="color:#f1fa8c">       |</span><span style="color:#f1fa8c">$evaluated</span><span style="color:#f1fa8c">
+</span></span></span><span style="display:flex;"><span><span style="color:#f1fa8c">       |</span><span style="color:#f1fa8c">$consumeFunc</span><span style="color:#f1fa8c">
+</span></span></span><span style="display:flex;"><span><span style="color:#f1fa8c">     &#34;&#34;&#34;</span><span style="color:#ff79c6">.</span>stripMargin
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">}</span>
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>这里会继续调用<strong>父类</strong>的doConsume，完成进一步代码填充<br>
+需要注意的是，这里判断了代码是否太大，如果太大，则将调用逻辑封装为一个函数，然后直接调用这个函数</p>
+<p>WholeStageCodegenExec 的 doExecute 流程  <br>
+代码生成可以看作是两个方向相反的递归过程：</p>
+<ul>
+<li>代码的整体框架由 produce/doProduce 方法负责，父节点调用子节点</li>
+<li>代码具体处理逻辑由 consume/doConsume 方法负责，由子节点调用父节点</li>
+<li>整个物理算子树的执行过程被InputAdapter分隔开
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/05/10/7bvCoc.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/05/10/7bvCoc.png" />
+        </a>
+    </li>
+</ul>
+<h2 id="详细分析">详细分析</h2>
+<h3 id="简单查询执行过程">简单查询执行过程</h3>
+<p>下面这个SQL</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-sql" data-lang="sql"><span style="display:flex;"><span><span style="color:#ff79c6">SELECT</span>  id  <span style="color:#ff79c6">FROM</span> people <span style="color:#ff79c6">WHERE</span> id <span style="color:#ff79c6">&gt;</span> <span style="color:#bd93f9">0</span> <span style="color:#ff79c6">AND</span> id <span style="color:#ff79c6">&lt;</span> <span style="color:#bd93f9">100</span>
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>InputRDDCodegen#doProduce主要逻辑：</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">8
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-scala" data-lang="scala"><span style="display:flex;"><span>    <span style="color:#f1fa8c">s&#34;&#34;&#34;
+</span></span></span><span style="display:flex;"><span><span style="color:#f1fa8c">       | while (</span><span style="color:#f1fa8c">$limitNotReachedCond</span><span style="color:#f1fa8c"> </span><span style="color:#f1fa8c">$input</span><span style="color:#f1fa8c">.hasNext()) {
+</span></span></span><span style="display:flex;"><span><span style="color:#f1fa8c">       |   InternalRow </span><span style="color:#f1fa8c">$row</span><span style="color:#f1fa8c"> = (InternalRow) </span><span style="color:#f1fa8c">$input</span><span style="color:#f1fa8c">.next();
+</span></span></span><span style="display:flex;"><span><span style="color:#f1fa8c">       |   </span><span style="color:#f1fa8c">${</span>updateNumOutputRowsMetrics<span style="color:#f1fa8c">}</span><span style="color:#f1fa8c">
+</span></span></span><span style="display:flex;"><span><span style="color:#f1fa8c">       |   </span><span style="color:#f1fa8c">${</span>consume<span style="color:#ff79c6">(</span>ctx<span style="color:#ff79c6">,</span> outputVars<span style="color:#ff79c6">,</span> <span style="color:#ff79c6">if</span> <span style="color:#ff79c6">(</span>createUnsafeProjection<span style="color:#ff79c6">)</span> <span style="color:#ff79c6">null</span> <span style="color:#ff79c6">else</span> row<span style="color:#ff79c6">).</span>trim<span style="color:#f1fa8c">}</span><span style="color:#f1fa8c">
+</span></span></span><span style="display:flex;"><span><span style="color:#f1fa8c">       |   </span><span style="color:#f1fa8c">${</span>shouldStopCheckCode<span style="color:#f1fa8c">}</span><span style="color:#f1fa8c">
+</span></span></span><span style="display:flex;"><span><span style="color:#f1fa8c">       | }
+</span></span></span><span style="display:flex;"><span><span style="color:#f1fa8c">     &#34;&#34;&#34;</span><span style="color:#ff79c6">.</span>stripMargi
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>FilterExec#doCosume()的主要生成逻辑：</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">7
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-scala" data-lang="scala"><span style="display:flex;"><span>    <span style="color:#f1fa8c">s&#34;&#34;&#34;
+</span></span></span><span style="display:flex;"><span><span style="color:#f1fa8c">       |do {
+</span></span></span><span style="display:flex;"><span><span style="color:#f1fa8c">       |  </span><span style="color:#f1fa8c">$predicateCode</span><span style="color:#f1fa8c">
+</span></span></span><span style="display:flex;"><span><span style="color:#f1fa8c">       |  </span><span style="color:#f1fa8c">$numOutput</span><span style="color:#f1fa8c">.add(1);
+</span></span></span><span style="display:flex;"><span><span style="color:#f1fa8c">       |  </span><span style="color:#f1fa8c">${</span>consume<span style="color:#ff79c6">(</span>ctx<span style="color:#ff79c6">,</span> resultVars<span style="color:#ff79c6">)</span><span style="color:#f1fa8c">}</span><span style="color:#f1fa8c">
+</span></span></span><span style="display:flex;"><span><span style="color:#f1fa8c">       |} while(false);
+</span></span></span><span style="display:flex;"><span><span style="color:#f1fa8c">     &#34;&#34;&#34;</span><span style="color:#ff79c6">.</span>stripMargin
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>生成的核心代码片段：
+可读性不好，但是也大概能看出来，是计算 id &gt; 0 AND id &lt; 100</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">15
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">16
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">17
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">18
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-java" data-lang="java"><span style="display:flex;"><span><span style="color:#8be9fd">boolean</span> rdd_isNull_1 <span style="color:#ff79c6">=</span> rdd_row_0<span style="color:#ff79c6">.</span><span style="color:#50fa7b">isNullAt</span><span style="color:#ff79c6">(</span>1<span style="color:#ff79c6">);</span>
+</span></span><span style="display:flex;"><span><span style="color:#8be9fd">long</span> rdd_value_1 <span style="color:#ff79c6">=</span> rdd_isNull_1 <span style="color:#ff79c6">?</span>
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">-</span>1L <span style="color:#ff79c6">:</span> <span style="color:#ff79c6">(</span>rdd_row_0<span style="color:#ff79c6">.</span><span style="color:#50fa7b">getLong</span><span style="color:#ff79c6">(</span>1<span style="color:#ff79c6">));</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#8be9fd">boolean</span> filter_value_2 <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">!</span>rdd_isNull_1<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">if</span> <span style="color:#ff79c6">(!</span>filter_value_2<span style="color:#ff79c6">)</span> <span style="color:#ff79c6">continue</span><span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#8be9fd">boolean</span> filter_value_3 <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">false</span><span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span>        filter_value_3 <span style="color:#ff79c6">=</span> rdd_value_1 <span style="color:#ff79c6">&gt;</span> 0L<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">if</span> <span style="color:#ff79c6">(!</span>filter_value_3<span style="color:#ff79c6">)</span> <span style="color:#ff79c6">continue</span><span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span><span style="color:#8be9fd">boolean</span> filter_value_8 <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">!</span>rdd_isNull_1<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">if</span> <span style="color:#ff79c6">(!</span>filter_value_8<span style="color:#ff79c6">)</span> <span style="color:#ff79c6">continue</span><span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#8be9fd">boolean</span> filter_value_9 <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">false</span><span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span>        filter_value_9 <span style="color:#ff79c6">=</span> rdd_value_1 <span style="color:#ff79c6">&lt;</span> 100L<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">if</span> <span style="color:#ff79c6">(!</span>filter_value_9<span style="color:#ff79c6">)</span> <span style="color:#ff79c6">continue</span><span style="color:#ff79c6">;</span>
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>ProjectExec#doConsume()主要逻辑：</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">7
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-scala" data-lang="scala"><span style="display:flex;"><span>    <span style="color:#f1fa8c">s&#34;&#34;&#34;
+</span></span></span><span style="display:flex;"><span><span style="color:#f1fa8c">       |// common sub-expressions
+</span></span></span><span style="display:flex;"><span><span style="color:#f1fa8c">       |</span><span style="color:#f1fa8c">${</span>evaluateVariables<span style="color:#ff79c6">(</span>localValInputs<span style="color:#ff79c6">)</span><span style="color:#f1fa8c">}</span><span style="color:#f1fa8c">
+</span></span></span><span style="display:flex;"><span><span style="color:#f1fa8c">       |</span><span style="color:#f1fa8c">$subExprsCode</span><span style="color:#f1fa8c">
+</span></span></span><span style="display:flex;"><span><span style="color:#f1fa8c">       |</span><span style="color:#f1fa8c">${</span>evaluateRequiredVariables<span style="color:#ff79c6">(</span>output<span style="color:#ff79c6">,</span> resultVars<span style="color:#ff79c6">,</span> <span style="color:#50fa7b">AttributeSet</span><span style="color:#ff79c6">(</span>nonDeterministicAttrs<span style="color:#ff79c6">))</span><span style="color:#f1fa8c">}</span><span style="color:#f1fa8c">
+</span></span></span><span style="display:flex;"><span><span style="color:#f1fa8c">       |</span><span style="color:#f1fa8c">${</span>consume<span style="color:#ff79c6">(</span>ctx<span style="color:#ff79c6">,</span> resultVars<span style="color:#ff79c6">)</span><span style="color:#f1fa8c">}</span><span style="color:#f1fa8c">
+</span></span></span><span style="display:flex;"><span><span style="color:#f1fa8c">     &#34;&#34;&#34;</span><span style="color:#ff79c6">.</span>stripMargin
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>生成的 时序图：<br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/05/09/7b51K5.png">
+            <img class="mx-auto" alt="2" src="https://v1.ax1x.com/2024/05/09/7b51K5.png" />
+        </a>
+    </p>
+<p>生成过程：</p>
+<ul>
+<li>从 WholeStageCodegenExec#doExecute出发，在这里调用 doCodeGen 开始生成代码</li>
+<li>调用 CodegenSupport#produce()，这里只是产生一些metrics的逻辑，然后调用doProduce</li>
+<li>每个具体算子中 doProduce 只是简单的调用子节点的 produce()，于是由回到CodegenSupport，继续递归往下调用</li>
+<li>到叶子节点 RDDScanExec时候，其父类 InputRDDCodegen 开始生成骨架代码，然后调用CodegenSupport#consume</li>
+<li>consume中调用每个具体算子的 doConsume，也是继续递归调用到 FilterExec的 doConsume，ProjectExec#doConsume</li>
+<li>叶子节点RDD 算子只是一个 while循环，读取读取数据，然后调用子节点 Filter，Project等来处理这些数据</li>
+<li>最后调用到最上层节点 WholeStageCodegenExec#doConsume 获取结果</li>
+<li>整个过程是从 WholeStageCodegenExec 开始递归往下调用的，一直到叶子节点(读取数据的节点）</li>
+<li>在读取数据的节点生成骨架代码，然后又递归调用父节点，填充骨架代码</li>
+</ul>
+<p>另一个视角
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/05/09/7b5rNh.png">
+            <img class="mx-auto" alt="4" src="https://v1.ax1x.com/2024/05/09/7b5rNh.png" />
+        </a>
+    <br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/04/30/7KcHUa.jpg">
+            <img class="mx-auto" alt="spark性能优化" src="https://v1.ax1x.com/2024/04/30/7KcHUa.jpg" />
+        </a>
+    </p>
+<p>ProjectExec + FilterExec + ScanRDDExec 生成的代码片段:</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">15
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">16
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">17
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">18
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">19
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">20
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">21
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">22
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">23
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">24
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">25
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">26
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">27
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">28
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">29
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">30
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">31
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">32
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">33
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">34
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">35
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">36
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">37
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">38
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">39
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">40
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">41
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">42
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">43
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-java" data-lang="java"><span style="display:flex;"><span> <span style="color:#ff79c6">while</span> <span style="color:#ff79c6">(</span> rdd_input_0<span style="color:#ff79c6">.</span><span style="color:#50fa7b">hasNext</span><span style="color:#ff79c6">())</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>   InternalRow rdd_row_0 <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">(</span>InternalRow<span style="color:#ff79c6">)</span> rdd_input_0<span style="color:#ff79c6">.</span><span style="color:#50fa7b">next</span><span style="color:#ff79c6">();</span>
+</span></span><span style="display:flex;"><span>   <span style="color:#ff79c6">((</span>org<span style="color:#ff79c6">.</span><span style="color:#50fa7b">apache</span><span style="color:#ff79c6">.</span><span style="color:#50fa7b">spark</span><span style="color:#ff79c6">.</span><span style="color:#50fa7b">sql</span><span style="color:#ff79c6">.</span><span style="color:#50fa7b">execution</span><span style="color:#ff79c6">.</span><span style="color:#50fa7b">metric</span><span style="color:#ff79c6">.</span><span style="color:#50fa7b">SQLMetric</span><span style="color:#ff79c6">)</span> references<span style="color:#ff79c6">[</span>0<span style="color:#ff79c6">]</span> <span style="color:#6272a4">/* numOutputRows */</span><span style="color:#ff79c6">).</span><span style="color:#50fa7b">add</span><span style="color:#ff79c6">(</span>1<span style="color:#ff79c6">);</span>
+</span></span><span style="display:flex;"><span>   <span style="color:#ff79c6">do</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>  
+</span></span><span style="display:flex;"><span><span style="color:#8be9fd">boolean</span> rdd_isNull_1 <span style="color:#ff79c6">=</span> rdd_row_0<span style="color:#ff79c6">.</span><span style="color:#50fa7b">isNullAt</span><span style="color:#ff79c6">(</span>1<span style="color:#ff79c6">);</span>
+</span></span><span style="display:flex;"><span><span style="color:#8be9fd">long</span> rdd_value_1 <span style="color:#ff79c6">=</span> rdd_isNull_1 <span style="color:#ff79c6">?</span>
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">-</span>1L <span style="color:#ff79c6">:</span> <span style="color:#ff79c6">(</span>rdd_row_0<span style="color:#ff79c6">.</span><span style="color:#50fa7b">getLong</span><span style="color:#ff79c6">(</span>1<span style="color:#ff79c6">));</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#8be9fd">boolean</span> filter_value_2 <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">!</span>rdd_isNull_1<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">if</span> <span style="color:#ff79c6">(!</span>filter_value_2<span style="color:#ff79c6">)</span> <span style="color:#ff79c6">continue</span><span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#8be9fd">boolean</span> filter_value_3 <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">false</span><span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span>        filter_value_3 <span style="color:#ff79c6">=</span> rdd_value_1 <span style="color:#ff79c6">&gt;</span> 0L<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">if</span> <span style="color:#ff79c6">(!</span>filter_value_3<span style="color:#ff79c6">)</span> <span style="color:#ff79c6">continue</span><span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span><span style="color:#8be9fd">boolean</span> filter_value_8 <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">!</span>rdd_isNull_1<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">if</span> <span style="color:#ff79c6">(!</span>filter_value_8<span style="color:#ff79c6">)</span> <span style="color:#ff79c6">continue</span><span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#8be9fd">boolean</span> filter_value_9 <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">false</span><span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span>        filter_value_9 <span style="color:#ff79c6">=</span> rdd_value_1 <span style="color:#ff79c6">&lt;</span> 100L<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">if</span> <span style="color:#ff79c6">(!</span>filter_value_9<span style="color:#ff79c6">)</span> <span style="color:#ff79c6">continue</span><span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span>   
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">((</span>org<span style="color:#ff79c6">.</span><span style="color:#50fa7b">apache</span><span style="color:#ff79c6">.</span><span style="color:#50fa7b">spark</span><span style="color:#ff79c6">.</span><span style="color:#50fa7b">sql</span><span style="color:#ff79c6">.</span><span style="color:#50fa7b">execution</span><span style="color:#ff79c6">.</span><span style="color:#50fa7b">metric</span><span style="color:#ff79c6">.</span><span style="color:#50fa7b">SQLMetric</span><span style="color:#ff79c6">)</span> references<span style="color:#ff79c6">[</span>1<span style="color:#ff79c6">]</span> <span style="color:#6272a4">/* numOutputRows */</span><span style="color:#ff79c6">).</span><span style="color:#50fa7b">add</span><span style="color:#ff79c6">(</span>1<span style="color:#ff79c6">);</span>
+</span></span><span style="display:flex;"><span>  
+</span></span><span style="display:flex;"><span><span style="color:#6272a4">// common sub-expressions
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>
+</span></span><span style="display:flex;"><span>UTF8String project_value_0<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">if</span> <span style="color:#ff79c6">(</span><span style="color:#ff79c6">false</span><span style="color:#ff79c6">)</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>  project_value_0 <span style="color:#ff79c6">=</span> UTF8String<span style="color:#ff79c6">.</span><span style="color:#50fa7b">fromString</span><span style="color:#ff79c6">(</span><span style="color:#f1fa8c">&#34;NULL&#34;</span><span style="color:#ff79c6">);</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">}</span> <span style="color:#ff79c6">else</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>  project_value_0 <span style="color:#ff79c6">=</span> UTF8String<span style="color:#ff79c6">.</span><span style="color:#50fa7b">fromString</span><span style="color:#ff79c6">(</span>String<span style="color:#ff79c6">.</span><span style="color:#50fa7b">valueOf</span><span style="color:#ff79c6">(</span>rdd_value_1<span style="color:#ff79c6">));</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">}</span>
+</span></span><span style="display:flex;"><span>rdd_mutableStateArray_0<span style="color:#ff79c6">[</span>2<span style="color:#ff79c6">].</span><span style="color:#50fa7b">reset</span><span style="color:#ff79c6">();</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>rdd_mutableStateArray_0<span style="color:#ff79c6">[</span>2<span style="color:#ff79c6">].</span><span style="color:#50fa7b">write</span><span style="color:#ff79c6">(</span>0<span style="color:#ff79c6">,</span> project_value_0<span style="color:#ff79c6">);</span>
+</span></span><span style="display:flex;"><span>append<span style="color:#ff79c6">((</span>rdd_mutableStateArray_0<span style="color:#ff79c6">[</span>2<span style="color:#ff79c6">].</span><span style="color:#50fa7b">getRow</span><span style="color:#ff79c6">()));</span>
+</span></span><span style="display:flex;"><span>      
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">}</span> <span style="color:#ff79c6">while</span><span style="color:#ff79c6">(</span><span style="color:#ff79c6">false</span><span style="color:#ff79c6">);</span>
+</span></span><span style="display:flex;"><span>   <span style="color:#ff79c6">if</span> <span style="color:#ff79c6">(</span>shouldStop<span style="color:#ff79c6">())</span> <span style="color:#ff79c6">return</span><span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span> <span style="color:#ff79c6">}</span>
+</span></span></code></pre></td></tr></table>
+</div>
+</div><h3 id="join">JOIN</h3>
+<h4 id="broadcast-hash-join">Broadcast Hash Join</h4>
+<p>boradcast-hash-join 的待生成 code-gen 时的物理计划</p>
+<ul>
+<li>到了 BroadcastHashJoinExec 时候分为左右两个节点</li>
+<li>其中右边节点是 RowDataSourceScanExec，在下面是 JDBCRDD</li>
+<li>左边节点是 InputAdapter，相当于对生成代码做了分割</li>
+<li>这部分跟非code-gen 的 bhj 类似，使用了 BroadcastQueryStageExec 再委托BroadcastExchangeExec 获取广播数据</li>
+<li>广播exchange 下面又是 WholeStageCodegenExec，下面是又是代码生成部分了
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/05/11/7ba3zJ.png">
+            <img class="mx-auto" alt="8" src="https://v1.ax1x.com/2024/05/11/7ba3zJ.png" />
+        </a>
+    </li>
+</ul>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">8
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-scala" data-lang="scala"><span style="display:flex;"><span>在 <span style="color:#50fa7b">HashJoin</span> 中先建立好 build 表，然后将这个 build 放到 拼接代码中
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">for</span><span style="color:#ff79c6">(</span>遍历 流表的 <span style="color:#50fa7b">RDD</span><span style="color:#ff79c6">)</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>    执行 bhj，探测 build 表
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">if</span> <span style="color:#ff79c6">(</span>找到了匹配值<span style="color:#ff79c6">)</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>        做投影，再输出结果
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">}</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">}</span>
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>获取 build 表的时序图，这里跟上面的依赖父子依赖关系展示的类似   <br>
+读取数据也是通过 代码生成的<br>
+然后通过广播的方式发送出去，这里还使用了线程池，等待超时等机制<br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/05/11/7baLLV.png">
+            <img class="mx-auto" alt="9" src="https://v1.ax1x.com/2024/05/11/7baLLV.png" />
+        </a>
+    </p>
+<p>bhj 的总体流程</p>
+<ul>
+<li>跟普通的查询的时序图差不多<br>
+-produce()和consume()也是委托给 CodegenSupport 来调用的</li>
+<li>先读取数据，也就是InputRDDCode部分，生成读取 JDBCRDD的代码</li>
+<li>然后调用 bhj，执行join逻辑，在 join 中拿到事先构建好的 build 表去判断</li>
+<li>如果有匹配的则输出
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/05/11/7ba0xL.png">
+            <img class="mx-auto" alt="10" src="https://v1.ax1x.com/2024/05/11/7ba0xL.png" />
+        </a>
+    </li>
+</ul>
+<h4 id="shuffle-hash-join">Shuffle Hash Join</h4>
+<p>shuffle-hash-join 的待生成 code-gen 时的物理计划<br>
+总体来说，跟 bhj 类似，只是左右两个子节点都增加了 InputAdapter，作为code-gen 的分割<br>
+这两个子节点都是通过广播获取的<br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/05/11/7ba79G.png">
+            <img class="mx-auto" alt="11" src="https://v1.ax1x.com/2024/05/11/7ba79G.png" />
+        </a>
+    </p>
+<p>时序图</p>
+<ul>
+<li>总体来说，跟 bhj 非常类似</li>
+<li>除了把 执行的 join exec 换成了 ShuffledHashJoinExec，其他调用过程都是一样</li>
+<li>执行 join 的code-gen是父类 HashJoin 完成的
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/05/11/7baEKB.png">
+            <img class="mx-auto" alt="12" src="https://v1.ax1x.com/2024/05/11/7baEKB.png" />
+        </a>
+    </li>
+</ul>
+<h4 id="shuffle-sort-merge-join">Shuffle Sort Merge Join</h4>
+<p>待生成 code-gen 时的物理计划 <br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/05/11/7baQ1t.png">
+            <img class="mx-auto" alt="13" src="https://v1.ax1x.com/2024/05/11/7baQ1t.png" />
+        </a>
+    
+上图中</p>
+<ul>
+<li>总体比 bhj，shj 要复杂很多</li>
+<li>sort-merge-join 左右两边都是 InputAdapter，对code-gen做了分割</li>
+<li>这之后又调用了 SortExec，所以再次增加了 InputAdapter 做了分割</li>
+<li>之后就是 shuffle逻辑，跟 shj 差不多了</li>
+<li>这里一共会生成 5个代码片段</li>
+<li>sort-merge-join 一个，左边的 sort，右边的 sort，以及左右的读取数据</li>
+</ul>
+<p>执行的时序图如下：</p>
+<ul>
+<li>相比 bhj，shj 要简单不少</li>
+<li>SortMergeJoinExec 左右节点都是 InputAdapter 类型的，所以到它这里就结束了
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/05/13/7ba2ae.png">
+            <img class="mx-auto" alt="14" src="https://v1.ax1x.com/2024/05/13/7ba2ae.png" />
+        </a>
+    </li>
+</ul>
+<p>SortMergeJoinExec 的 codegenInner 的生成代码逻辑：</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-scala" data-lang="scala"><span style="display:flex;"><span>    <span style="color:#f1fa8c">s&#34;&#34;&#34;
+</span></span></span><span style="display:flex;"><span><span style="color:#f1fa8c">       |while (</span><span style="color:#f1fa8c">$findNextJoinRows</span><span style="color:#f1fa8c">) {
+</span></span></span><span style="display:flex;"><span><span style="color:#f1fa8c">       |  </span><span style="color:#f1fa8c">$beforeLoop</span><span style="color:#f1fa8c">
+</span></span></span><span style="display:flex;"><span><span style="color:#f1fa8c">       |  while (</span><span style="color:#f1fa8c">$matchIterator</span><span style="color:#f1fa8c">.hasNext()) {
+</span></span></span><span style="display:flex;"><span><span style="color:#f1fa8c">       |    InternalRow </span><span style="color:#f1fa8c">$bufferedRow</span><span style="color:#f1fa8c"> = (InternalRow) </span><span style="color:#f1fa8c">$matchIterator</span><span style="color:#f1fa8c">.next();
+</span></span></span><span style="display:flex;"><span><span style="color:#f1fa8c">       |    </span><span style="color:#f1fa8c">$conditionCheck</span><span style="color:#f1fa8c">
+</span></span></span><span style="display:flex;"><span><span style="color:#f1fa8c">       |    </span><span style="color:#f1fa8c">$outputRow</span><span style="color:#f1fa8c">
+</span></span></span><span style="display:flex;"><span><span style="color:#f1fa8c">       |  }
+</span></span></span><span style="display:flex;"><span><span style="color:#f1fa8c">       |  if (shouldStop()) return;
+</span></span></span><span style="display:flex;"><span><span style="color:#f1fa8c">       |}
+</span></span></span><span style="display:flex;"><span><span style="color:#f1fa8c">       |</span><span style="color:#f1fa8c">$eagerCleanup</span><span style="color:#f1fa8c">
+</span></span></span><span style="display:flex;"><span><span style="color:#f1fa8c">     &#34;&#34;&#34;</span><span style="color:#ff79c6">.</span>stripMargin
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>SortMergeJoinExec + ProjectExec 生成 的代码片段：</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">15
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">16
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">17
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">18
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">19
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">20
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">21
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">22
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">23
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">24
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">25
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">26
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">27
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">28
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">29
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">30
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">31
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">32
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">33
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">34
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">35
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">36
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">37
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">38
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">39
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">40
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">41
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">42
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">43
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">44
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">45
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">46
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">47
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">48
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">49
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">50
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">51
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">52
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">53
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">54
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">55
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">56
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">57
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">58
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">59
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">60
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-Java" data-lang="Java"><span style="display:flex;"><span><span style="color:#ff79c6">while</span> <span style="color:#ff79c6">(</span>smj_findNextJoinRows_0<span style="color:#ff79c6">(</span>smj_streamedInput_0<span style="color:#ff79c6">,</span> smj_bufferedInput_0<span style="color:#ff79c6">))</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>	<span style="color:#8be9fd">boolean</span> smj_isNull_2 <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">false</span><span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span>	<span style="color:#8be9fd">int</span> smj_value_4 <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">-</span>1<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span>           
+</span></span><span style="display:flex;"><span>	<span style="color:#8be9fd">boolean</span> smj_isNull_3 <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">false</span><span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span>	UTF8String smj_value_5 <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">null</span><span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span>           
+</span></span><span style="display:flex;"><span>	smj_isNull_2 <span style="color:#ff79c6">=</span> smj_streamedRow_0<span style="color:#ff79c6">.</span><span style="color:#50fa7b">isNullAt</span><span style="color:#ff79c6">(</span>0<span style="color:#ff79c6">);</span>
+</span></span><span style="display:flex;"><span>	smj_value_4 <span style="color:#ff79c6">=</span> smj_isNull_2 <span style="color:#ff79c6">?</span> <span style="color:#ff79c6">-</span>1 <span style="color:#ff79c6">:</span> <span style="color:#ff79c6">(</span>smj_streamedRow_0<span style="color:#ff79c6">.</span><span style="color:#50fa7b">getInt</span><span style="color:#ff79c6">(</span>0<span style="color:#ff79c6">));</span>
+</span></span><span style="display:flex;"><span>	smj_isNull_3 <span style="color:#ff79c6">=</span> smj_streamedRow_0<span style="color:#ff79c6">.</span><span style="color:#50fa7b">isNullAt</span><span style="color:#ff79c6">(</span>1<span style="color:#ff79c6">);</span>
+</span></span><span style="display:flex;"><span>	smj_value_5 <span style="color:#ff79c6">=</span> smj_isNull_3 <span style="color:#ff79c6">?</span> <span style="color:#ff79c6">null</span> <span style="color:#ff79c6">:</span> <span style="color:#ff79c6">(</span>smj_streamedRow_0<span style="color:#ff79c6">.</span><span style="color:#50fa7b">getUTF8String</span><span style="color:#ff79c6">(</span>1<span style="color:#ff79c6">));</span>
+</span></span><span style="display:flex;"><span>	scala<span style="color:#ff79c6">.</span><span style="color:#50fa7b">collection</span><span style="color:#ff79c6">.</span><span style="color:#50fa7b">Iterator</span><span style="color:#ff79c6">&lt;</span>UnsafeRow<span style="color:#ff79c6">&gt;</span> smj_iterator_0 <span style="color:#ff79c6">=</span> smj_matches_0<span style="color:#ff79c6">.</span><span style="color:#50fa7b">generateIterator</span><span style="color:#ff79c6">();</span>
+</span></span><span style="display:flex;"><span>       
+</span></span><span style="display:flex;"><span>	<span style="color:#ff79c6">while</span> <span style="color:#ff79c6">(</span>smj_iterator_0<span style="color:#ff79c6">.</span><span style="color:#50fa7b">hasNext</span><span style="color:#ff79c6">())</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>		InternalRow smj_bufferedRow_1 <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">(</span>InternalRow<span style="color:#ff79c6">)</span> smj_iterator_0<span style="color:#ff79c6">.</span><span style="color:#50fa7b">next</span><span style="color:#ff79c6">();</span>
+</span></span><span style="display:flex;"><span>		<span style="color:#ff79c6">((</span>org<span style="color:#ff79c6">.</span><span style="color:#50fa7b">apache</span><span style="color:#ff79c6">.</span><span style="color:#50fa7b">spark</span><span style="color:#ff79c6">.</span><span style="color:#50fa7b">sql</span><span style="color:#ff79c6">.</span><span style="color:#50fa7b">execution</span><span style="color:#ff79c6">.</span><span style="color:#50fa7b">metric</span><span style="color:#ff79c6">.</span><span style="color:#50fa7b">SQLMetric</span><span style="color:#ff79c6">)</span> references<span style="color:#ff79c6">[</span>0<span style="color:#ff79c6">]</span> <span style="color:#6272a4">/* numOutputRows */</span><span style="color:#ff79c6">).</span><span style="color:#50fa7b">add</span><span style="color:#ff79c6">(</span>1<span style="color:#ff79c6">);</span>
+</span></span><span style="display:flex;"><span>		
+</span></span><span style="display:flex;"><span>		<span style="color:#6272a4">// common sub-expressions
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>		UTF8String project_value_0<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span>		<span style="color:#ff79c6">if</span> <span style="color:#ff79c6">(</span>smj_isNull_2<span style="color:#ff79c6">)</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>			project_value_0 <span style="color:#ff79c6">=</span> UTF8String<span style="color:#ff79c6">.</span><span style="color:#50fa7b">fromString</span><span style="color:#ff79c6">(</span><span style="color:#f1fa8c">&#34;NULL&#34;</span><span style="color:#ff79c6">);</span>
+</span></span><span style="display:flex;"><span>		<span style="color:#ff79c6">}</span> <span style="color:#ff79c6">else</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>			project_value_0 <span style="color:#ff79c6">=</span> UTF8String<span style="color:#ff79c6">.</span><span style="color:#50fa7b">fromString</span><span style="color:#ff79c6">(</span>String<span style="color:#ff79c6">.</span><span style="color:#50fa7b">valueOf</span><span style="color:#ff79c6">(</span>smj_value_4<span style="color:#ff79c6">));</span>
+</span></span><span style="display:flex;"><span>		<span style="color:#ff79c6">}</span>
+</span></span><span style="display:flex;"><span>		UTF8String project_value_2<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span>		
+</span></span><span style="display:flex;"><span>		<span style="color:#ff79c6">if</span> <span style="color:#ff79c6">(</span>smj_isNull_3<span style="color:#ff79c6">)</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>			project_value_2 <span style="color:#ff79c6">=</span> UTF8String<span style="color:#ff79c6">.</span><span style="color:#50fa7b">fromString</span><span style="color:#ff79c6">(</span><span style="color:#f1fa8c">&#34;NULL&#34;</span><span style="color:#ff79c6">);</span>
+</span></span><span style="display:flex;"><span>		<span style="color:#ff79c6">}</span> <span style="color:#ff79c6">else</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>			project_value_2 <span style="color:#ff79c6">=</span> smj_value_5<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span>		<span style="color:#ff79c6">}</span>
+</span></span><span style="display:flex;"><span>		<span style="color:#8be9fd">boolean</span> smj_isNull_4 <span style="color:#ff79c6">=</span> smj_bufferedRow_1<span style="color:#ff79c6">.</span><span style="color:#50fa7b">isNullAt</span><span style="color:#ff79c6">(</span>0<span style="color:#ff79c6">);</span>
+</span></span><span style="display:flex;"><span>		<span style="color:#8be9fd">int</span> smj_value_6 <span style="color:#ff79c6">=</span> smj_isNull_4 <span style="color:#ff79c6">?</span> <span style="color:#ff79c6">-</span>1 <span style="color:#ff79c6">:</span> <span style="color:#ff79c6">(</span>smj_bufferedRow_1<span style="color:#ff79c6">.</span><span style="color:#50fa7b">getInt</span><span style="color:#ff79c6">(</span>0<span style="color:#ff79c6">));</span>
+</span></span><span style="display:flex;"><span>		
+</span></span><span style="display:flex;"><span>		UTF8String project_value_4<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span>		<span style="color:#ff79c6">if</span> <span style="color:#ff79c6">(</span>smj_isNull_4<span style="color:#ff79c6">)</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>			project_value_4 <span style="color:#ff79c6">=</span> UTF8String<span style="color:#ff79c6">.</span><span style="color:#50fa7b">fromString</span><span style="color:#ff79c6">(</span><span style="color:#f1fa8c">&#34;NULL&#34;</span><span style="color:#ff79c6">);</span>
+</span></span><span style="display:flex;"><span>		<span style="color:#ff79c6">}</span> <span style="color:#ff79c6">else</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>			project_value_4 <span style="color:#ff79c6">=</span> UTF8String<span style="color:#ff79c6">.</span><span style="color:#50fa7b">fromString</span><span style="color:#ff79c6">(</span>String<span style="color:#ff79c6">.</span><span style="color:#50fa7b">valueOf</span><span style="color:#ff79c6">(</span>smj_value_6<span style="color:#ff79c6">));</span>
+</span></span><span style="display:flex;"><span>		<span style="color:#ff79c6">}</span>
+</span></span><span style="display:flex;"><span>		<span style="color:#8be9fd">boolean</span> smj_isNull_5 <span style="color:#ff79c6">=</span> smj_bufferedRow_1<span style="color:#ff79c6">.</span><span style="color:#50fa7b">isNullAt</span><span style="color:#ff79c6">(</span>1<span style="color:#ff79c6">);</span>
+</span></span><span style="display:flex;"><span>		UTF8String smj_value_7 <span style="color:#ff79c6">=</span> smj_isNull_5 <span style="color:#ff79c6">?</span> <span style="color:#ff79c6">null</span> <span style="color:#ff79c6">:</span> <span style="color:#ff79c6">(</span>smj_bufferedRow_1<span style="color:#ff79c6">.</span><span style="color:#50fa7b">getUTF8String</span><span style="color:#ff79c6">(</span>1<span style="color:#ff79c6">));</span>
+</span></span><span style="display:flex;"><span>		UTF8String project_value_6<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>		<span style="color:#ff79c6">if</span> <span style="color:#ff79c6">(</span>smj_isNull_5<span style="color:#ff79c6">)</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>			project_value_6 <span style="color:#ff79c6">=</span> UTF8String<span style="color:#ff79c6">.</span><span style="color:#50fa7b">fromString</span><span style="color:#ff79c6">(</span><span style="color:#f1fa8c">&#34;NULL&#34;</span><span style="color:#ff79c6">);</span>
+</span></span><span style="display:flex;"><span>		<span style="color:#ff79c6">}</span> <span style="color:#ff79c6">else</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>			project_value_6 <span style="color:#ff79c6">=</span> smj_value_7<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span>		<span style="color:#ff79c6">}</span>
+</span></span><span style="display:flex;"><span>		
+</span></span><span style="display:flex;"><span>		smj_mutableStateArray_0<span style="color:#ff79c6">[</span>1<span style="color:#ff79c6">].</span><span style="color:#50fa7b">reset</span><span style="color:#ff79c6">();</span>
+</span></span><span style="display:flex;"><span>		smj_mutableStateArray_0<span style="color:#ff79c6">[</span>1<span style="color:#ff79c6">].</span><span style="color:#50fa7b">write</span><span style="color:#ff79c6">(</span>0<span style="color:#ff79c6">,</span> project_value_0<span style="color:#ff79c6">);</span>
+</span></span><span style="display:flex;"><span>		smj_mutableStateArray_0<span style="color:#ff79c6">[</span>1<span style="color:#ff79c6">].</span><span style="color:#50fa7b">write</span><span style="color:#ff79c6">(</span>1<span style="color:#ff79c6">,</span> project_value_2<span style="color:#ff79c6">);</span>
+</span></span><span style="display:flex;"><span>		smj_mutableStateArray_0<span style="color:#ff79c6">[</span>1<span style="color:#ff79c6">].</span><span style="color:#50fa7b">write</span><span style="color:#ff79c6">(</span>2<span style="color:#ff79c6">,</span> project_value_4<span style="color:#ff79c6">);</span>
+</span></span><span style="display:flex;"><span>		smj_mutableStateArray_0<span style="color:#ff79c6">[</span>1<span style="color:#ff79c6">].</span><span style="color:#50fa7b">write</span><span style="color:#ff79c6">(</span>3<span style="color:#ff79c6">,</span> project_value_6<span style="color:#ff79c6">);</span>
+</span></span><span style="display:flex;"><span>		append<span style="color:#ff79c6">((</span>smj_mutableStateArray_0<span style="color:#ff79c6">[</span>1<span style="color:#ff79c6">].</span><span style="color:#50fa7b">getRow</span><span style="color:#ff79c6">()).</span><span style="color:#50fa7b">copy</span><span style="color:#ff79c6">());</span>    
+</span></span><span style="display:flex;"><span>	<span style="color:#ff79c6">}</span> <span style="color:#6272a4">//  end inner while`
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>	
+</span></span><span style="display:flex;"><span>	<span style="color:#ff79c6">if</span> <span style="color:#ff79c6">(</span>shouldStop<span style="color:#ff79c6">())</span> <span style="color:#ff79c6">return</span><span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">}</span> <span style="color:#6272a4">//  end outer while
+</span></span></span></code></pre></td></tr></table>
+</div>
+</div><h4 id="broadcastnestedloopjoin">BroadcastNestedLoopJoin</h4>
+<p>跟普的 doExecute 很类似，广播然后用 nested loop 实现的</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-scala" data-lang="scala"><span style="display:flex;"><span>  <span style="color:#ff79c6">override</span> <span style="color:#ff79c6">def</span> doConsume<span style="color:#ff79c6">(</span>ctx<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">CodegenContext</span><span style="color:#ff79c6">,</span> input<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">Seq</span><span style="color:#ff79c6">[</span><span style="color:#8be9fd">ExprCode</span><span style="color:#ff79c6">],</span> row<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">ExprCode</span><span style="color:#ff79c6">)</span><span style="color:#ff79c6">:</span> <span style="color:#8be9fd">String</span> <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">(</span>joinType<span style="color:#ff79c6">,</span> buildSide<span style="color:#ff79c6">)</span> <span style="color:#ff79c6">match</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>      <span style="color:#ff79c6">case</span> <span style="color:#ff79c6">(</span><span style="color:#ff79c6">_:</span> <span style="color:#8be9fd">InnerLike</span><span style="color:#ff79c6">,</span> <span style="color:#ff79c6">_</span><span style="color:#ff79c6">)</span> <span style="color:#ff79c6">=&gt;</span> codegenInner<span style="color:#ff79c6">(</span>ctx<span style="color:#ff79c6">,</span> input<span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>      <span style="color:#ff79c6">case</span> <span style="color:#ff79c6">(</span><span style="color:#50fa7b">LeftOuter</span><span style="color:#ff79c6">,</span> <span style="color:#50fa7b">BuildRight</span><span style="color:#ff79c6">)</span> <span style="color:#ff79c6">|</span> <span style="color:#ff79c6">(</span><span style="color:#50fa7b">RightOuter</span><span style="color:#ff79c6">,</span> <span style="color:#50fa7b">BuildLeft</span><span style="color:#ff79c6">)</span> <span style="color:#ff79c6">=&gt;</span> codegenOuter<span style="color:#ff79c6">(</span>ctx<span style="color:#ff79c6">,</span> input<span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>      <span style="color:#ff79c6">case</span> <span style="color:#ff79c6">(</span><span style="color:#50fa7b">LeftSemi</span><span style="color:#ff79c6">,</span> <span style="color:#50fa7b">BuildRight</span><span style="color:#ff79c6">)</span> <span style="color:#ff79c6">=&gt;</span> codegenLeftExistence<span style="color:#ff79c6">(</span>ctx<span style="color:#ff79c6">,</span> input<span style="color:#ff79c6">,</span> exists <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">true</span><span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>      <span style="color:#ff79c6">case</span> <span style="color:#ff79c6">(</span><span style="color:#50fa7b">LeftAnti</span><span style="color:#ff79c6">,</span> <span style="color:#50fa7b">BuildRight</span><span style="color:#ff79c6">)</span> <span style="color:#ff79c6">=&gt;</span> codegenLeftExistence<span style="color:#ff79c6">(</span>ctx<span style="color:#ff79c6">,</span> input<span style="color:#ff79c6">,</span> exists <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">false</span><span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>      <span style="color:#ff79c6">case</span> <span style="color:#ff79c6">_</span> <span style="color:#ff79c6">=&gt;</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">throw</span> <span style="color:#ff79c6">new</span> <span style="color:#50fa7b">IllegalArgumentException</span><span style="color:#ff79c6">(</span>
+</span></span><span style="display:flex;"><span>          <span style="color:#f1fa8c">s&#34;BroadcastNestedLoopJoin code-gen should not take neither </span><span style="color:#f1fa8c">$joinType</span><span style="color:#f1fa8c"> as the JoinType &#34;</span> <span style="color:#ff79c6">+</span>
+</span></span><span style="display:flex;"><span>          <span style="color:#f1fa8c">s&#34;nor </span><span style="color:#f1fa8c">$buildSide</span><span style="color:#f1fa8c"> as the BuildSide&#34;</span><span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">}</span>
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">}</span>
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>inner join 的code-gen 函数如下：就是 一个 for 里面再不断 probe hash-table</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">15
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">16
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">17
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">18
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">19
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">20
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">21
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-scala" data-lang="scala"><span style="display:flex;"><span>  <span style="color:#ff79c6">private</span> <span style="color:#ff79c6">def</span> codegenInner<span style="color:#ff79c6">(</span>ctx<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">CodegenContext</span><span style="color:#ff79c6">,</span> input<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">Seq</span><span style="color:#ff79c6">[</span><span style="color:#8be9fd">ExprCode</span><span style="color:#ff79c6">])</span><span style="color:#ff79c6">:</span> <span style="color:#8be9fd">String</span> <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">val</span> <span style="color:#ff79c6">(</span><span style="color:#ff79c6">_</span><span style="color:#ff79c6">,</span> buildRowArrayTerm<span style="color:#ff79c6">)</span> <span style="color:#ff79c6">=</span> prepareBroadcast<span style="color:#ff79c6">(</span>ctx<span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">val</span> <span style="color:#ff79c6">(</span>buildRow<span style="color:#ff79c6">,</span> checkCondition<span style="color:#ff79c6">,</span> buildVars<span style="color:#ff79c6">)</span> <span style="color:#ff79c6">=</span> getJoinCondition<span style="color:#ff79c6">(</span>ctx<span style="color:#ff79c6">,</span> input<span style="color:#ff79c6">,</span> streamed<span style="color:#ff79c6">,</span> broadcast<span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">val</span> resultVars <span style="color:#ff79c6">=</span> buildSide <span style="color:#ff79c6">match</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>      <span style="color:#ff79c6">case</span> <span style="color:#50fa7b">BuildLeft</span> <span style="color:#ff79c6">=&gt;</span> buildVars <span style="color:#ff79c6">++</span> input
+</span></span><span style="display:flex;"><span>      <span style="color:#ff79c6">case</span> <span style="color:#50fa7b">BuildRight</span> <span style="color:#ff79c6">=&gt;</span> input <span style="color:#ff79c6">++</span> buildVars
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">}</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">val</span> arrayIndex <span style="color:#ff79c6">=</span> ctx<span style="color:#ff79c6">.</span>freshName<span style="color:#ff79c6">(</span><span style="color:#f1fa8c">&#34;arrayIndex&#34;</span><span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">val</span> numOutput <span style="color:#ff79c6">=</span> metricTerm<span style="color:#ff79c6">(</span>ctx<span style="color:#ff79c6">,</span> <span style="color:#f1fa8c">&#34;numOutputRows&#34;</span><span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#f1fa8c">s&#34;&#34;&#34;
+</span></span></span><span style="display:flex;"><span><span style="color:#f1fa8c">       |for (int </span><span style="color:#f1fa8c">$arrayIndex</span><span style="color:#f1fa8c"> = 0; </span><span style="color:#f1fa8c">$arrayIndex</span><span style="color:#f1fa8c"> &lt; </span><span style="color:#f1fa8c">$buildRowArrayTerm</span><span style="color:#f1fa8c">.length; </span><span style="color:#f1fa8c">$arrayIndex</span><span style="color:#f1fa8c">++) {
+</span></span></span><span style="display:flex;"><span><span style="color:#f1fa8c">       |  UnsafeRow </span><span style="color:#f1fa8c">$buildRow</span><span style="color:#f1fa8c"> = (UnsafeRow) </span><span style="color:#f1fa8c">$buildRowArrayTerm</span><span style="color:#f1fa8c">[</span><span style="color:#f1fa8c">$arrayIndex</span><span style="color:#f1fa8c">];
+</span></span></span><span style="display:flex;"><span><span style="color:#f1fa8c">       |  </span><span style="color:#f1fa8c">$checkCondition</span><span style="color:#f1fa8c"> {
+</span></span></span><span style="display:flex;"><span><span style="color:#f1fa8c">       |    </span><span style="color:#f1fa8c">$numOutput</span><span style="color:#f1fa8c">.add(1);
+</span></span></span><span style="display:flex;"><span><span style="color:#f1fa8c">       |    </span><span style="color:#f1fa8c">${</span>consume<span style="color:#ff79c6">(</span>ctx<span style="color:#ff79c6">,</span> resultVars<span style="color:#ff79c6">)</span><span style="color:#f1fa8c">}</span><span style="color:#f1fa8c">
+</span></span></span><span style="display:flex;"><span><span style="color:#f1fa8c">       |  }
+</span></span></span><span style="display:flex;"><span><span style="color:#f1fa8c">       |}
+</span></span></span><span style="display:flex;"><span><span style="color:#f1fa8c">     &#34;&#34;&#34;</span><span style="color:#ff79c6">.</span>stripMargin
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">}</span>
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>CartesianProduct 没有 code-gen</p>
+<h2 id="参考">参考</h2>
+<ul>
+<li><a href="https://zhuanlan.zhihu.com/p/563332917">Tungsten Codegen 全阶段代码生成</a>、</li>
+<li><a href="https://www.databricks.com/blog/2016/07/14/a-tale-of-three-apache-spark-apis-rdds-dataframes-and-datasets.html">A Tale of Three Apache Spark APIs: RDDs vs DataFrames and Datasets</a></li>
+<li><a href="https://zhuanlan.zhihu.com/p/558510076">Tungsten Codegen优势与表达式生成</a></li>
+<li><a href="https://blog.csdn.net/qq_41775852/article/details/105471662">Spark代码生成-全阶段代码生成</a></li>
+<li><a href="http://spark.coolplayer.net/?p=209">spark 自己的分布式存储系统 – BlockManager</a></li>
+</ul>
+
+			<script type="text/javascript"
+        async
+        src="https://cdn.bootcss.com/mathjax/2.7.3/MathJax.js?config=TeX-AMS-MML_HTMLorMML">
+MathJax.Hub.Config({
+  tex2jax: {
+    inlineMath: [['$','$'], ['\\(','\\)']],
+    displayMath: [['$$','$$'], ['\[\[','\]\]']],
+    processEscapes: true,
+    processEnvironments: true,
+    skipTags: ['script', 'noscript', 'style', 'textarea', 'pre'],
+    TeX: { equationNumbers: { autoNumber: "AMS" },
+         extensions: ["AMSmath.js", "AMSsymbols.js"] }
+  }
+});
+
+MathJax.Hub.Queue(function() {
+    
+    
+    
+    var all = MathJax.Hub.getAllJax(), i;
+    for(i = 0; i < all.length; i += 1) {
+        all[i].SourceElement().parentNode.className += ' has-jax';
+    }
+});
+</script>
+
+<style>
+code.has-jax {
+    font: inherit;
+    font-size: 100%;
+    background: inherit;
+    border: inherit;
+    color: #515151;
+}
+</style>
+        </div>
+
+        
+
+
+        
+
+<div class="post-archive">
+    <h2>相关文章</h2>
+    <ul class="listing">
+        
+        <li><a href="/post/2024/05/spark_join/">Spark原理-JOIN</a></li>
+        
+        <li><a href="/post/2024/05/spark_windows_cube/">Spark原理-窗口函数和多维分析</a></li>
+        
+        <li><a href="/post/2024/04/spark_agg/">Spark原理-聚合</a></li>
+        
+        <li><a href="/post/2024/03/spark_plan_agg/">Spark原理-物理计划&amp;聚合</a></li>
+        
+        <li><a href="/post/2024/03/spark_optimized/">Spark原理-优化规则</a></li>
+        
+    </ul>
+</div>
+
+
+        <div class="post-meta meta-tags">
+            
+            <ul class="clearfix">
+                
+                <li><a href='/tags/spark'>Spark</a></li>
+                
+            </ul>
+            
+        </div>
+    </article>
+    
+    
+
+    
+    
+    <div class="post bg-white">
+      <script src="https://utteranc.es/client.js"
+            repo= "himichael/hugoblogtalks"
+            issue-term="pathname"
+            theme="github-light"
+            crossorigin="anonymous"
+            async>
+      </script>
+    </div>
+    
+</div>
+
+
+                </div>
+
+                <div id="secondary">
+    <section class="widget">
+        <form id="search" action='https://code0xff.org/search/' method="get" accept-charset="utf-8" target="_blank" _lpchecked="1">
+      
+      <input type="text" name="q" maxlength="20" placeholder="Search">
+      <input type="hidden" name="sitesearch" value="https://code0xff.org/">
+      <button type="submit" class="submit icon-search"></button>
+</form>
+    </section>
+    
+    <section class="widget">
+        <h3 class="widget-title">最近文章</h3>
+<ul class="widget-list">
+    
+    <li>
+        <a href="https://code0xff.org/post/2025/01/spark_register_source/" title="Spark 注册数据源">Spark 注册数据源</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2025/01/spark_core_2/" title="Spark Core相关-2">Spark Core相关-2</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2024/12/llamafactory/" title="Llama Factory">Llama Factory</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2024/11/spark_core/" title="Spark Core相关-1">Spark Core相关-1</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2024/11/sae_tunnel/" title="sea tunnel">sea tunnel</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2024/11/k8s_networks/" title="k8s 网络">k8s 网络</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2024/11/ozone/" title="ozone">ozone</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2024/11/es/" title="ES的简单学习">ES的简单学习</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2025/02/ai/" title="AI的简单学习">AI的简单学习</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2024/11/big_data_investigation/" title="国内几个云厂商大数据平台">国内几个云厂商大数据平台</a>
+    </li>
+    
+</ul>
+    </section>
+
+    
+
+    <section class="widget">
+        <h3 class="widget-title"><a href='/categories/'>分类</a></h3>
+<ul class="widget-list">
+    
+    <li><a href="https://code0xff.org/categories/%E5%88%86%E5%B8%83%E5%BC%8F/">分布式 (6)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E5%8E%9F%E7%90%86%E5%88%86%E6%9E%90/">原理分析 (24)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E5%95%86%E4%B8%9A/">商业 (3)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E5%A4%A7%E6%95%B0%E6%8D%AE/">大数据 (56)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%95%B0%E6%8D%AE%E5%BA%93/">数据库 (41)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%96%87%E5%AD%A6%E5%92%8C%E8%89%BA%E6%9C%AF/">文学和艺术 (3)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%97%85%E8%A1%8C/">旅行 (12)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%9E%B6%E6%9E%84/">架构 (13)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E7%AE%97%E6%B3%95/">算法 (8)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E7%B3%BB%E7%BB%9F/">系统 (7)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E7%BC%96%E7%A8%8B%E8%AF%AD%E8%A8%80/">编程语言 (7)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E8%A1%8C%E4%B8%9A%E8%A7%82%E5%AF%9F/">行业观察 (3)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E8%AF%BB%E4%B9%A6%E7%AC%94%E8%AE%B0/">读书笔记 (14)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E9%9A%8F%E4%BE%BF%E5%86%99%E5%86%99/">随便写写 (3)</a></li>
+    
+</ul>
+    </section>
+
+    <section class="widget">
+        <h3 class="widget-title">归档</a></h3>
+<ul class="widget-list">
+    
+    <li><a href="https://code0xff.org/years/2021%E5%B9%B4/">2021年 (41)</a></li>
+    
+    <li><a href="https://code0xff.org/years/2022%E5%B9%B4/">2022年 (55)</a></li>
+    
+    <li><a href="https://code0xff.org/years/2023%E5%B9%B4/">2023年 (54)</a></li>
+    
+    <li><a href="https://code0xff.org/years/2024%E5%B9%B4/">2024年 (48)</a></li>
+    
+    <li><a href="https://code0xff.org/years/2025%E5%B9%B4/">2025年 (2)</a></li>
+    
+</ul>
+    </section>
+
+    <section class="widget">
+        <h3 class="widget-title"><a href='/tags/'>标签</a></h3>
+<div class="tagcloud">
+    
+    <a href="https://code0xff.org/tags/ai/">AI </a>
+    
+    <a href="https://code0xff.org/tags/ambari/">Ambari </a>
+    
+    <a href="https://code0xff.org/tags/architecture/">architecture </a>
+    
+    <a href="https://code0xff.org/tags/bigdata/">bigdata </a>
+    
+    <a href="https://code0xff.org/tags/b%E6%A0%91/">B树 </a>
+    
+    <a href="https://code0xff.org/tags/c&#43;&#43;/">C&#43;&#43; </a>
+    
+    <a href="https://code0xff.org/tags/calcite/">calcite </a>
+    
+    <a href="https://code0xff.org/tags/cmu-database/">CMU-Database </a>
+    
+    <a href="https://code0xff.org/tags/data_ingestion/">Data_Ingestion </a>
+    
+    <a href="https://code0xff.org/tags/deltalake/">DeltaLake </a>
+    
+    <a href="https://code0xff.org/tags/doris/">Doris </a>
+    
+    <a href="https://code0xff.org/tags/english/">English </a>
+    
+    <a href="https://code0xff.org/tags/es/">ES </a>
+    
+    <a href="https://code0xff.org/tags/facebook/">Facebook </a>
+    
+    <a href="https://code0xff.org/tags/flink/">flink </a>
+    
+    <a href="https://code0xff.org/tags/flume/">flume </a>
+    
+    <a href="https://code0xff.org/tags/gc/">GC </a>
+    
+    <a href="https://code0xff.org/tags/gluten/">Gluten </a>
+    
+    <a href="https://code0xff.org/tags/hana/">HANA </a>
+    
+    <a href="https://code0xff.org/tags/hive/">Hive </a>
+    
+    <a href="https://code0xff.org/tags/iceberg/">iceberg </a>
+    
+    <a href="https://code0xff.org/tags/impala/">Impala </a>
+    
+    <a href="https://code0xff.org/tags/janino/">janino </a>
+    
+    <a href="https://code0xff.org/tags/k8s/">k8s </a>
+    
+    <a href="https://code0xff.org/tags/kafka/">Kafka </a>
+    
+    <a href="https://code0xff.org/tags/kudu/">kudu </a>
+    
+    <a href="https://code0xff.org/tags/kyuubi/">Kyuubi </a>
+    
+    <a href="https://code0xff.org/tags/lakehouse/">Lakehouse </a>
+    
+    <a href="https://code0xff.org/tags/leveldb/">LevelDB </a>
+    
+    <a href="https://code0xff.org/tags/llamafactory/">LlamaFactory </a>
+    
+    <a href="https://code0xff.org/tags/llvm/">LLVM </a>
+    
+    <a href="https://code0xff.org/tags/manacher/">Manacher </a>
+    
+    <a href="https://code0xff.org/tags/mapreduce/">MapReduce </a>
+    
+    <a href="https://code0xff.org/tags/micro-service/">micro-service </a>
+    
+    <a href="https://code0xff.org/tags/mysql/">MySQL </a>
+    
+    <a href="https://code0xff.org/tags/newsql/">NewSQL </a>
+    
+    <a href="https://code0xff.org/tags/oceanbase/">OceanBase </a>
+    
+    <a href="https://code0xff.org/tags/openlogreplicator/">OpenLogReplicator </a>
+    
+    <a href="https://code0xff.org/tags/parquet/">parquet </a>
+    
+    <a href="https://code0xff.org/tags/paxos/">paxos </a>
+    
+    <a href="https://code0xff.org/tags/presto/">Presto </a>
+    
+    <a href="https://code0xff.org/tags/quick-sql/">quick-sql </a>
+    
+    <a href="https://code0xff.org/tags/raft/">raft </a>
+    
+    <a href="https://code0xff.org/tags/scala/">scala </a>
+    
+    <a href="https://code0xff.org/tags/simd/">SIMD </a>
+    
+    <a href="https://code0xff.org/tags/snowflake/">snowflake </a>
+    
+    <a href="https://code0xff.org/tags/spark/">spark </a>
+    
+    <a href="https://code0xff.org/tags/sre/">SRE </a>
+    
+    <a href="https://code0xff.org/tags/teradata/">TeraData </a>
+    
+    <a href="https://code0xff.org/tags/tpcx-hs/">TPCx-HS </a>
+    
+    <a href="https://code0xff.org/tags/trino/">Trino </a>
+    
+    <a href="https://code0xff.org/tags/tuning/">Tuning </a>
+    
+    <a href="https://code0xff.org/tags/unix/">unix </a>
+    
+    <a href="https://code0xff.org/tags/yarn/">YARN </a>
+    
+    <a href="https://code0xff.org/tags/%E4%BA%8C%E5%88%86%E6%9F%A5%E6%89%BE/">二分查找 </a>
+    
+    <a href="https://code0xff.org/tags/%E4%BA%8C%E5%8F%89%E6%A0%91%E9%81%8D%E5%8E%86/">二叉树遍历 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%88%86%E5%B8%83%E5%BC%8F/">分布式 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%88%97%E5%AD%98/">列存 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%8A%A8%E6%80%81%E6%B3%A8%E5%85%A5/">动态注入 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%8E%86%E5%8F%B2/">历史 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%90%91%E9%87%8F%E5%8C%96/">向量化 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%9B%9E%E6%BA%AF/">回溯 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%9B%BD%E5%86%85%E6%97%85%E8%A1%8C/">国内旅行 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%9B%BD%E5%A4%96%E6%97%85%E8%A1%8C/">国外旅行 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%A4%9A%E7%A7%9F%E6%88%B7/">多租户 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%A4%A7%E6%95%B0%E6%8D%AE/">大数据 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%AD%98%E5%82%A8/">存储 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%B7%A5%E4%BD%9C%E8%AE%B0%E5%BD%95/">工作记录 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%BE%AE%E6%9C%8D%E5%8A%A1/">微服务 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%95%B0%E6%8D%AE%E4%B8%AD%E5%8F%B0/">数据中台 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%95%B0%E6%8D%AE%E5%BA%93/">数据库 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%95%B0%E6%8D%AE%E6%A8%A1%E5%9E%8B/">数据模型 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%95%B0%E6%8D%AE%E8%BF%81%E7%A7%BB/">数据迁移 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%9F%A5%E8%AF%A2%E4%BC%98%E5%8C%96/">查询优化 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%9F%A5%E8%AF%A2%E7%BC%96%E8%AF%91/">查询编译 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%A6%82%E7%8E%87/">概率 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%B1%87%E7%BC%96/">汇编 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%B5%8B%E8%AF%95/">测试 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%94%9F%E6%B4%BB/">生活 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%94%B5%E5%BD%B1/">电影 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%AE%97%E6%B3%95/">算法 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%B4%A2%E5%BC%95/">索引 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BB%8F%E6%B5%8E/">经济 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BC%93%E5%AD%98/">缓存 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BC%96%E8%AF%91%E5%8E%9F%E7%90%86/">编译原理 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BD%91%E7%BB%9C/">网络 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AE%A1%E7%AE%97%E6%A1%86%E6%9E%B6/">计算框架 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AE%BA%E6%96%87/">论文 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AF%BB%E4%B9%A6/">读书 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AF%BB%E4%B9%A6%E7%AC%94%E8%AE%B0/">读书笔记 </a>
+    
+</div>
+    </section>
+
+    
+
+    <section class="widget">
+        <h3 class="widget-title">RSS</h3>
+        <ul class="widget-list">
+            <li><a href="https://code0xff.org/index.xml">文章 RSS</a></li>
+        </ul>
+    </section>
+</div>
+            </div>
+        </div>
+    </div>
+    <footer id="footer">
+    <div>
+        &copy; 2025 <a href="https://code0xff.org/">记录每个瞬间 By 老王</a>
+        
+    </div>
+    <br />
+    <div>
+        <div class="github-badge">
+            <a href="https://gohugo.io/" target="_black" rel="nofollow"><span class="badge-subject">Powered by</span><span class="badge-value bg-blue">Hugo</span></a>
+        </div>
+        <div class="github-badge">
+            <a href="https://github.com/flysnow-org/maupassant-hugo" target="_black"><span class="badge-subject">Theme</span><span class="badge-value bg-yellowgreen">Maupassant</span></a>
+        </div>
+    </div>
+</footer>
+
+
+    
+    <script type="text/javascript">
+        window.MathJax = {
+            tex2jax: {
+                inlineMath: [['$', '$']],
+                processEscapes: true
+                }
+            };
+    </script>
+    <script src='https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.5/MathJax.js?config=TeX-MML-AM_CHTML' async></script><script src="https://cdn.bootcdn.net/ajax/libs/fancybox/3.5.7/jquery.fancybox.min.js"></script>
+
+<a id="rocket" href="#top"></a>
+<script type="text/javascript" src='/js/totop.js?v=0.0.0' async=""></script>
+
+<script type="application/javascript">
+var doNotTrack = false;
+if (!doNotTrack) {
+	window.ga=window.ga||function(){(ga.q=ga.q||[]).push(arguments)};ga.l=+new Date;
+	ga('create', 'GA ID', 'auto');
+	
+	ga('send', 'pageview');
+}
+</script>
+<script async src='https://www.google-analytics.com/analytics.js'></script>
+
+
+
+    <script type="text/javascript" src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js" async></script>
+
+
+
+
+</body>
+
+</html>

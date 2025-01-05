@@ -1,0 +1,927 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    
+    <meta name="referrer" content="no-referrer-when-downgrade">
+    
+
+    <title>The Life of a Read/Write Query for Apache Iceberg Tables | 记录每个瞬间</title>
+    <meta property="og:title" content="The Life of a Read/Write Query for Apache Iceberg Tables - 记录每个瞬间">
+    <meta property="og:type" content="article">
+        
+    <meta property="article:published_time" content='2024-02-26T09:08:07&#43;08:00'>
+        
+        
+    <meta property="article:modified_time" content='2024-02-26T09:08:07&#43;08:00'>
+        
+    <meta name="Keywords" content="">
+    <meta name="description" content="The Life of a Read/Write Query for Apache Iceberg Tables">
+        <meta name="author" content="隔壁老王">
+        
+    <meta property="og:url" content="https://code0xff.org/post/2024/03/the_life_of_iceberg/">
+    <link rel="shortcut icon" href='/favicon.ico'  type="image/x-icon">
+
+    <link rel="stylesheet" href='/css/normalize.css'>
+    <link rel="stylesheet" href='/css/style.css'>
+    <script type="text/javascript" src="//cdn.bootcdn.net/ajax/libs/jquery/3.4.1/jquery.min.js"></script>
+
+    
+    
+    
+        <link href="https://cdn.bootcdn.net/ajax/libs/fancybox/3.5.7/jquery.fancybox.min.css" rel="stylesheet">
+    
+    
+    
+    
+</head>
+
+
+<body>
+    <header id="header" class="clearfix">
+    <div class="container">
+        <div class="col-group">
+            <div class="site-name ">
+                
+                    <a id="logo" href="https://code0xff.org/">
+                        记录每个瞬间
+                    </a>
+                
+                
+            </div>
+            <div>
+                <nav id="nav-menu" class="clearfix">
+                    <a class="current" href="https://code0xff.org/">首页</a>
+                    
+                    <a  href="https://code0xff.org/linked/" title="链接">链接</a>
+                    
+                    <a  href="https://code0xff.org/archives/" title="归档">归档</a>
+                    
+                    <a  href="https://code0xff.org/about/" title="关于">关于</a>
+                    
+                </nav>
+            </div>
+        </div>
+    </div>
+</header>
+
+    <div id="body">
+        <div class="container">
+            <div class="col-group">
+
+                <div class="col-8" id="main">
+                    
+<div class="res-cons">
+    
+    <article class="post">
+        <header>
+            <h1 class="post-title">The Life of a Read/Write Query for Apache Iceberg Tables</h1>
+        </header>
+        <date class="post-meta meta-date">
+            2024年2月26日
+        </date>
+<nav id="TableOfContents">
+  <ul>
+    <li>
+      <ul>
+        <li><a href="#apache-iceberg-101">Apache Iceberg 101</a></li>
+        <li><a href="#how-a-query-engine-processes-the-query">How a Query Engine Processes the Query</a>
+          <ul>
+            <li><a href="#metadata-qeruy">Metadata Qeruy</a></li>
+            <li><a href="#performing-the-scan-and-returning-the-results">Performing the Scan and Returning the Results</a></li>
+            <li><a href="#time-travel">Time Travel</a></li>
+          </ul>
+        </li>
+        <li><a href="#how-a-query-engine-processes-the-write">How a Query Engine Processes the Write</a>
+          <ul>
+            <li><a href="#insert">Insert</a></li>
+            <li><a href="#delete">Delete</a></li>
+            <li><a href="#upsertmerge">Upsert/Merge</a></li>
+          </ul>
+        </li>
+        <li><a href="#reference">Reference</a></li>
+      </ul>
+    </li>
+  </ul>
+</nav>
+        
+        <div class="post-meta">
+            
+            <span class="post-meta meta-tags">
+                <ul class="clearfix">
+                    <a href='/categories/%E5%A4%A7%E6%95%B0%E6%8D%AE'>大数据</a>
+                </ul>
+            </span>
+            
+        </div>
+        
+        
+        <div class="post-meta">
+            <span id="busuanzi_container_page_pv">|<span id="busuanzi_value_page_pv"></span><span>
+                    阅读</span></span>
+        </div>
+        
+        
+        <div class="post-content">
+            <blockquote>
+<p>原文 <br>
+<a href="https://www.dremio.com/blog/the-life-of-a-read-query-for-apache-iceberg-tables/">https://www.dremio.com/blog/the-life-of-a-read-query-for-apache-iceberg-tables/</a></p>
+</blockquote>
+<h2 id="apache-iceberg-101">Apache Iceberg 101</h2>
+<p>存储层的结构如下：<br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/05/21/7gQ0V4.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/05/21/7gQ0V4.png" />
+        </a>
+    </p>
+<p>Data Layer</p>
+<ul>
+<li><strong>Data files</strong> – Parquet or ORC 的存储格式，真实数据放这里</li>
+<li><strong>Delete files</strong> – 被认为是删除的数据</li>
+</ul>
+<p>Metadata Layer</p>
+<ul>
+<li><strong>Manifest files</strong> – 一个快照的子集，这些文件用于追踪这些子集中独立的数据文件，以及进一步的元数据裁剪</li>
+<li><strong>Manifest lists</strong> – 定义一个表的快照，列出构成这个快照的所有 manifest文件，以及进一步裁剪的元数据</li>
+<li><strong>Metadata files</strong> – 定义表，跟踪 manifest lists，当前以及前一个快照，schemas，以及 分区 schemas</li>
+</ul>
+<p>The Catalog</p>
+<ul>
+<li>这个指定当前的元数据文件，可以提供类似数据库的事务保证，以及元数据存储功能</li>
+</ul>
+<p>官网的描述信息</p>
+<ul>
+<li><a href="https://iceberg.apache.org/spec/#snapshots">Snapshots 格式细节描述</a></li>
+<li><a href="https://iceberg.apache.org/spec/#manifests">Manifests 格式细节描述</a></li>
+<li><a href="https://iceberg.apache.org/spec/#table-metadata">Table Metadata</a></li>
+<li><a href="https://iceberg.apache.org/spec/#appendix-c-json-serialization">JSON serialization</a></li>
+</ul>
+<h2 id="how-a-query-engine-processes-the-query">How a Query Engine Processes the Query</h2>
+<p>基于<code>order</code>表的查询，表结构</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-sql" data-lang="sql"><span style="display:flex;"><span><span style="color:#ff79c6">CREATE</span> <span style="color:#ff79c6">TABLE</span> orders (...)
+</span></span><span style="display:flex;"><span>PARTITIONED <span style="color:#ff79c6">BY</span> (<span style="color:#ff79c6">year</span>(order_ts));
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>查询语句</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-sql" data-lang="sql"><span style="display:flex;"><span><span style="color:#ff79c6">SELECT</span> <span style="color:#ff79c6">*</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">FROM</span> orders
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">WHERE</span> order_ts
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">BETWEEN</span> <span style="color:#f1fa8c">&#39;2021-06-01 10:00:00&#39;</span> <span style="color:#ff79c6">and</span> <span style="color:#f1fa8c">&#39;2021-06-30 10:00:00&#39;</span>;
+</span></span></code></pre></td></tr></table>
+</div>
+</div><h3 id="metadata-qeruy">Metadata Qeruy</h3>
+<p>查询首先被提交到 engine，然后被解析，engine 需要知道这个表的元数据，才能做plan<br>
+查询元数据，四个步骤执行过程如下：<br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/05/21/7gQEhY.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/05/21/7gQEhY.png" />
+        </a>
+    </p>
+<p><strong>第一步</strong>，获取 catalog，根据 catalog 获取 orders 表的当前元数据文件</p>
+<p><strong>第二步</strong>，通过 order 表的最新的元数据，可以</p>
+<ul>
+<li>拿到表的 schema</li>
+<li>表的分区信息，之后在 plan 中可以做裁剪</li>
+<li>当前快照的 &ldquo;manifest list&rdquo; 可以知道 需要再进一步扫描哪些文件
+
+        <a data-fancybox="gallery" href="hhttps://v1.ax1x.com/2024/05/21/7gQ7m9.png">
+            <img class="mx-auto" alt="" src="hhttps://v1.ax1x.com/2024/05/21/7gQ7m9.png" />
+        </a>
+    </li>
+</ul>
+<p><strong>第三步</strong>，通过 manifest list 文件，我们可以再进一步</p>
+<ul>
+<li>partition-spec-id，可以拿到分区的 schema信息，当前的 order 只有一个分区</li>
+<li>每个分区还包含了一些统计信息，通过 lower 和 upper 边界，可以可以确定 是否要跳过这个分区</li>
+<li>当后面拿到 manifest file 时候还可以再做进一步的 skip</li>
+</ul>
+<p>
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/05/21/7gQ3Xh.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/05/21/7gQ3Xh.png" />
+        </a>
+    </p>
+<p><strong>第四步</strong>，根据每个 manifest file 文件，可以继续做裁剪，然后获取每个文件对应的 data</p>
+<ul>
+<li>schema-id， partition-id 包含的就是数据文件信息</li>
+<li>内容的类型，比如可以跳过 delete类型的数据</li>
+<li>列中包含了 value内容、唯一值、lower、upper信息，可以做裁剪</li>
+</ul>
+<p>
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/05/21/7gQQrH.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/05/21/7gQQrH.png" />
+        </a>
+    </p>
+<h3 id="performing-the-scan-and-returning-the-results">Performing the Scan and Returning the Results</h3>
+<p>经过上面几次 裁剪后，真正要扫描的数据文件就很少了<br>
+parquet 文件本身也包含 min/max信息，还可以继续在文件级别继续 裁剪<br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/05/21/7gQNdZ.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/05/21/7gQNdZ.png" />
+        </a>
+    </p>
+<h3 id="time-travel">Time Travel</h3>
+<p>查询前一个版本的信息</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-sql" data-lang="sql"><span style="display:flex;"><span><span style="color:#ff79c6">SELECT</span> <span style="color:#ff79c6">*</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">FROM</span> orders <span style="color:#ff79c6">TIMESTAMP</span> <span style="color:#ff79c6">AS</span> <span style="color:#ff79c6">OF</span> <span style="color:#f1fa8c">&#39;2022-06-01 10:00:00&#39;</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">WHERE</span> order_ts <span style="color:#ff79c6">BETWEEN</span> <span style="color:#f1fa8c">&#39;2021-06-01 10:00:00&#39;</span> <span style="color:#ff79c6">and</span> <span style="color:#f1fa8c">&#39;2022-05-31 10:00:00&#39;</span>;
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>这里使用了 TIMESTAMP AS OF ，用做 time travel 用的<br>
+完整的执行过程如下：<br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/05/21/7gQK7a.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/05/21/7gQK7a.png" />
+        </a>
+    </p>
+<p>通过最新的 快照，可以：</p>
+<ul>
+<li>通过比较快照 id，或者 快照的 timestamp，找到 AS OF 之前的快照</li>
+<li>获取这个表的 schema</li>
+<li>获取查询分区，用于裁剪，以及目标快照的 manifest list<br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/05/21/7gQuwU.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/05/21/7gQuwU.png" />
+        </a>
+    </li>
+</ul>
+<p>跟普查查询类似，找到 manifest list 文件</p>
+<ul>
+<li>通过 partition-spec-id，可以知道分区信息</li>
+<li>分解分区的统计信息，lower 和 upper做进一步裁剪</li>
+<li>在这里可以 skip 大量不需要的分区 
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/05/21/7gQyis.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/05/21/7gQyis.png" />
+        </a>
+    </li>
+</ul>
+<p>对于 manifest files</p>
+<ul>
+<li>schema-id、partition-id 对应于数据文件</li>
+<li>跳过 delete 类型的文件</li>
+<li>根据 统计信息，如 lower、upper，做裁剪<br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/05/21/7gQwSq.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/05/21/7gQwSq.png" />
+        </a>
+    </li>
+</ul>
+<p>接下来就是 scan 数据文件，因为前面已经 skip 了大量的文件，此时需要扫描的文件就少很多了<br>
+parquet文件本身也可以做谓词下推，进一步减少读取的数量<br>
+整个过程，其实跟普通的读取差不多</p>
+<h2 id="how-a-query-engine-processes-the-write">How a Query Engine Processes the Write</h2>
+<h3 id="insert">Insert</h3>
+<p>查询语句</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-sql" data-lang="sql"><span style="display:flex;"><span><span style="color:#ff79c6">INSERT</span> <span style="color:#ff79c6">INTO</span> orders <span style="color:#ff79c6">VALUES</span> (...);
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>执行过程</p>
+<ol>
+<li>查询被提交到 engine，解析，之后查询引擎开始解析</li>
+<li>获取 catalog，拿到 schema，尽管只是append，但要确认两件事</li>
+</ol>
+<ul>
+<li>确保满足表的 schema，以及哪些字段不能为 null</li>
+<li>获取表的分区，确定如何组织写入的数据</li>
+</ul>
+<ol start="3">
+<li>写入数据</li>
+</ol>
+<ul>
+<li>因为是 insert，所以不会对已有文件造成影响，只要写入新文件即可</li>
+<li>写入时根据表的分区 schema信息做写入</li>
+<li>如果设置了排序顺序，并且engine 也支持，则写入也会按照指定要求写入</li>
+</ul>
+<ol start="4">
+<li>写入元数据</li>
+</ol>
+<ul>
+<li>写入每个 manifest file 文件，每个文件包含了数据文件的具体路径，每个列的统计信息等</li>
+<li>将本地快照中新增的 manifest file，已经存在的 manifest file，一起写入到 新的 manifest list 中</li>
+<li>在这个 manifest list中，包含了所有 manifest file 的路径，以及每个文件的信息，如每个分区的 lower和upper等</li>
+<li>创建一个 metadata file用来汇总表信息，包含文件路径，以及 manifest list 信息等</li>
+</ul>
+<ol start="5">
+<li>提交</li>
+</ol>
+<ul>
+<li>engine 再一次获取 catalog，以确保在写入的同时，没有新的快照出现</li>
+<li>这是为了防止并发写入冲突</li>
+<li>当出现冲突时第一个写入成功，后面的写入者会重试 3 或者 4，直到成功或者 重试失败退出</li>
+<li>读取的时候总是拿到最新的快照，所以并发写入还没有提交时不会有影响</li>
+</ul>
+<h3 id="delete">Delete</h3>
+<p>语句</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-sql" data-lang="sql"><span style="display:flex;"><span><span style="color:#ff79c6">DELETE</span> <span style="color:#ff79c6">FROM</span> orders 
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">WHERE</span> order_ts <span style="color:#ff79c6">BETWEEN</span> <span style="color:#f1fa8c">&#39;2022-05-01 10:00:00&#39;</span> <span style="color:#ff79c6">AND</span> <span style="color:#f1fa8c">&#39;2022-05-31 10:00:00&#39;</span>;
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>执行过程</p>
+<ol>
+<li>发送请求到 engine，准备解析</li>
+<li>获取 catalog拿到最新的 metadata file</li>
+</ol>
+<ul>
+<li>根据表的分区信息，确定如何写入数据</li>
+<li>获取当前的 序列ID，事务序列ID， 假设在完成之前没有其他的写入冲突，利用了 OCC 机制</li>
+</ul>
+<ol start="3">
+<li>写文件</li>
+</ol>
+<ul>
+<li>写策略取决于表的删除策略：“copy-on-write” (COW) or “merge-on-read” (MOR)</li>
+</ul>
+<p>如果是 copy-on-write</p>
+<ul>
+<li>通过元数据，识别出哪些文件包含删除的数据</li>
+<li>完整的读取这些文件，确定删除的内容</li>
+<li>写一个新文件替换这个快照中的文件，新文件中不包含被删除的内容</li>
+</ul>
+<p>如果是 merge-on-write 避免了重写数据文件，但包含了墓碑的删除数据文件，读取时需要进一步处理，包含两种删除</p>
+<ul>
+<li>Position deletes</li>
+<li>Equality deletes</li>
+</ul>
+<p>Position deletes</p>
+<ul>
+<li>通过扫描元数据，确定哪些文件被删除</li>
+<li>通过扫描数据文件，确定要删除的记录位置</li>
+<li>在分区中写一个删除类型的文件，记录了哪些记录是按位置从 哪些文件中删除的
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/05/21/7gQgXI.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/05/21/7gQgXI.png" />
+        </a>
+    </li>
+</ul>
+<p>Equality deletes</p>
+<ul>
+<li>不需要扫描任何文件，只需要写一个删除类型的文件，列出哪些行中的值要被删除</li>
+<li>在读取时，根据删除类型文件和分区中的数据记录做重建，这个操作代价很高
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/05/21/7gQbW7.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/05/21/7gQbW7.png" />
+        </a>
+    <br>
+原始的文件仍然被保留，当后续读取时，会根据 删除类型文件，旧文件做合并处理</li>
+</ul>
+<ol start="4">
+<li>写元数据文件</li>
+</ol>
+<ul>
+<li>开始写入 manifest file，每个文件包含 数据文件的路径，以及文件的 列统计信息，lower和upper等</li>
+<li>将新的 和存在的 manifest files文件一起当做一个快照，写入到 manifest list 中</li>
+<li>在新的 mainfest list中包含所有 manifest file 的路径，以及统计信息，如增加了多少数据，lower、upper等</li>
+<li>再写入 metadata file，记录表的汇总信息，包括manifest list的路径和相信信息</li>
+</ul>
+<ol start="5">
+<li>提交记录</li>
+</ol>
+<ul>
+<li>再次获取 catalog，同时确保在写入时候，没有出现新的快照</li>
+<li>同样也是为了预防并发冲突的，失败会继续重试</li>
+<li>读取总是拿到最新的快照，正在写入的不会影响读取</li>
+</ul>
+<h3 id="upsertmerge">Upsert/Merge</h3>
+<p>语句</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">5
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-sql" data-lang="sql"><span style="display:flex;"><span>MERGE <span style="color:#ff79c6">INTO</span> orders o
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">USING</span> (<span style="color:#ff79c6">SELECT</span> <span style="color:#ff79c6">*</span> <span style="color:#ff79c6">FROM</span> orders_staging) s
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">ON</span> o.id <span style="color:#ff79c6">=</span> s.id
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">WHEN</span> MATCHED …
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">WHEN</span> <span style="color:#ff79c6">NOT</span> MATCHED
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>执行过程</p>
+<ol>
+<li>解析查询，准备建立查询计划</li>
+<li>检查 catalog</li>
+</ol>
+<ul>
+<li>校验表的 schema，确认非空字段，获取分析信息</li>
+<li>获取当前的 序列ID，事务序列ID，使用 OCC 做并发控制</li>
+</ul>
+<ol start="3">
+<li>写数据文件</li>
+</ol>
+<ul>
+<li>同时从源、目标读取数据文件放入内存中，然后做匹配，比如根据 id 做比较，</li>
+<li>copy-on-write，只要匹配更新任何一行，整个文件都需要读取，重写</li>
+<li>merge-on-read，生成新的更新/删除/插入 数据文件，读取时会忽略旧的文件，只有更新的数据在内存中，占用内存会减少</li>
+<li>如果 WHEN MATCHED 匹配，则做更新，则做插入操作</li>
+</ul>
+<ol start="4">
+<li>写元数据</li>
+</ol>
+<ul>
+<li>跟之前的一样，写入 manifest files，以及数据文件路径、统计信息</li>
+<li>当前快照中已经存在的 manifest file，跟新的一起，写入到 manifest list中，以及manifest file 的路径和统计信息</li>
+<li>写入metadata file汇总表信息，包含 manifest list路径和信息等</li>
+</ul>
+<ol start="5">
+<li>提交</li>
+</ol>
+<ul>
+<li>再次获取 catalog信息，确保这段时间没有写冲突，如果有冲突则继续重试</li>
+<li>利用了OCC 做并发控制，快照隔离级别，串行化隔离级别，来确保 ACID 事务</li>
+</ul>
+<h2 id="reference">Reference</h2>
+<ul>
+<li><a href="https://www.dremio.com/blog/the-life-of-a-write-query-for-apache-iceberg-tables/">The Life of a Write Query for Apache Iceberg Tables</a></li>
+<li><a href="https://www.dremio.com/blog/maintaining-iceberg-tables-compaction-expiring-snapshots-and-more/">Maintaining Iceberg Tables – Compaction, Expiring Snapshots, and More</a></li>
+<li><a href="https://www.dremio.com/blog/how-z-ordering-in-apache-iceberg-helps-improve-performance/">How Z-Ordering in Apache Iceberg Helps Improve Performance</a></li>
+<li><a href="https://www.dremio.com/resources/guides/apache-iceberg/">What Is Apache Iceberg? Features &amp; Benefits</a></li>
+<li><a href="https://roysandip.medium.com/lakehouse-trifecta-delta-lake-apache-iceberg-apache-hudi-747e99c467b">Lakehouse Trifecta — Delta Lake, Apache Iceberg &amp; Apache Hudi</a></li>
+<li><a href="https://iceberg.apache.org/spec/">Iceberg Table Spec</a></li>
+<li><a href="https://www.youtube.com/watch?v=LiC9vZATv0o&amp;t=8s">Youtub: CHUG Talks: Introduction to Apache Iceberg</a></li>
+<li><a href="https://www.dremio.com/blog/row-level-changes-on-the-lakehouse-copy-on-write-vs-merge-on-read-in-apache-iceberg/">Row-Level Changes on the Lakehouse: Copy-On-Write vs. Merge-On-Read in Apache Iceberg</a></li>
+<li><a href="https://en.wikipedia.org/wiki/Optimistic_concurrency_control">Optimistic concurrency control</a></li>
+<li><a href="https://netflixtechblog.com/how-netflix-uses-ebpf-flow-logs-at-scale-for-network-insight-e3ea997dca96">How Netflix uses eBPF flow logs at scale for network insight</a></li>
+</ul>
+
+			<script type="text/javascript"
+        async
+        src="https://cdn.bootcss.com/mathjax/2.7.3/MathJax.js?config=TeX-AMS-MML_HTMLorMML">
+MathJax.Hub.Config({
+  tex2jax: {
+    inlineMath: [['$','$'], ['\\(','\\)']],
+    displayMath: [['$$','$$'], ['\[\[','\]\]']],
+    processEscapes: true,
+    processEnvironments: true,
+    skipTags: ['script', 'noscript', 'style', 'textarea', 'pre'],
+    TeX: { equationNumbers: { autoNumber: "AMS" },
+         extensions: ["AMSmath.js", "AMSsymbols.js"] }
+  }
+});
+
+MathJax.Hub.Queue(function() {
+    
+    
+    
+    var all = MathJax.Hub.getAllJax(), i;
+    for(i = 0; i < all.length; i += 1) {
+        all[i].SourceElement().parentNode.className += ' has-jax';
+    }
+});
+</script>
+
+<style>
+code.has-jax {
+    font: inherit;
+    font-size: 100%;
+    background: inherit;
+    border: inherit;
+    color: #515151;
+}
+</style>
+        </div>
+
+        
+
+
+        
+
+<div class="post-archive">
+    <h2>相关文章</h2>
+    <ul class="listing">
+        
+        <li><a href="/post/2024/02/icer_berg/">Iceberg 简单总结</a></li>
+        
+    </ul>
+</div>
+
+
+        <div class="post-meta meta-tags">
+            
+            <ul class="clearfix">
+                
+                <li><a href='/tags/iceberg'>iceberg</a></li>
+                
+            </ul>
+            
+        </div>
+    </article>
+    
+    
+
+    
+    
+    <div class="post bg-white">
+      <script src="https://utteranc.es/client.js"
+            repo= "himichael/hugoblogtalks"
+            issue-term="pathname"
+            theme="github-light"
+            crossorigin="anonymous"
+            async>
+      </script>
+    </div>
+    
+</div>
+
+
+                </div>
+
+                <div id="secondary">
+    <section class="widget">
+        <form id="search" action='https://code0xff.org/search/' method="get" accept-charset="utf-8" target="_blank" _lpchecked="1">
+      
+      <input type="text" name="q" maxlength="20" placeholder="Search">
+      <input type="hidden" name="sitesearch" value="https://code0xff.org/">
+      <button type="submit" class="submit icon-search"></button>
+</form>
+    </section>
+    
+    <section class="widget">
+        <h3 class="widget-title">最近文章</h3>
+<ul class="widget-list">
+    
+    <li>
+        <a href="https://code0xff.org/post/2025/01/spark_register_source/" title="Spark 注册数据源">Spark 注册数据源</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2025/01/spark_core_2/" title="Spark Core相关-2">Spark Core相关-2</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2024/12/llamafactory/" title="Llama Factory">Llama Factory</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2024/11/spark_core/" title="Spark Core相关-1">Spark Core相关-1</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2024/11/sae_tunnel/" title="sea tunnel">sea tunnel</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2024/11/k8s_networks/" title="k8s 网络">k8s 网络</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2024/11/ozone/" title="ozone">ozone</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2024/11/es/" title="ES的简单学习">ES的简单学习</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2025/02/ai/" title="AI的简单学习">AI的简单学习</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2024/11/big_data_investigation/" title="国内几个云厂商大数据平台">国内几个云厂商大数据平台</a>
+    </li>
+    
+</ul>
+    </section>
+
+    
+
+    <section class="widget">
+        <h3 class="widget-title"><a href='/categories/'>分类</a></h3>
+<ul class="widget-list">
+    
+    <li><a href="https://code0xff.org/categories/%E5%88%86%E5%B8%83%E5%BC%8F/">分布式 (6)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E5%8E%9F%E7%90%86%E5%88%86%E6%9E%90/">原理分析 (24)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E5%95%86%E4%B8%9A/">商业 (3)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E5%A4%A7%E6%95%B0%E6%8D%AE/">大数据 (56)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%95%B0%E6%8D%AE%E5%BA%93/">数据库 (41)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%96%87%E5%AD%A6%E5%92%8C%E8%89%BA%E6%9C%AF/">文学和艺术 (3)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%97%85%E8%A1%8C/">旅行 (12)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%9E%B6%E6%9E%84/">架构 (13)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E7%AE%97%E6%B3%95/">算法 (8)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E7%B3%BB%E7%BB%9F/">系统 (7)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E7%BC%96%E7%A8%8B%E8%AF%AD%E8%A8%80/">编程语言 (7)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E8%A1%8C%E4%B8%9A%E8%A7%82%E5%AF%9F/">行业观察 (3)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E8%AF%BB%E4%B9%A6%E7%AC%94%E8%AE%B0/">读书笔记 (14)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E9%9A%8F%E4%BE%BF%E5%86%99%E5%86%99/">随便写写 (3)</a></li>
+    
+</ul>
+    </section>
+
+    <section class="widget">
+        <h3 class="widget-title">归档</a></h3>
+<ul class="widget-list">
+    
+    <li><a href="https://code0xff.org/years/2021%E5%B9%B4/">2021年 (41)</a></li>
+    
+    <li><a href="https://code0xff.org/years/2022%E5%B9%B4/">2022年 (55)</a></li>
+    
+    <li><a href="https://code0xff.org/years/2023%E5%B9%B4/">2023年 (54)</a></li>
+    
+    <li><a href="https://code0xff.org/years/2024%E5%B9%B4/">2024年 (48)</a></li>
+    
+    <li><a href="https://code0xff.org/years/2025%E5%B9%B4/">2025年 (2)</a></li>
+    
+</ul>
+    </section>
+
+    <section class="widget">
+        <h3 class="widget-title"><a href='/tags/'>标签</a></h3>
+<div class="tagcloud">
+    
+    <a href="https://code0xff.org/tags/ai/">AI </a>
+    
+    <a href="https://code0xff.org/tags/ambari/">Ambari </a>
+    
+    <a href="https://code0xff.org/tags/architecture/">architecture </a>
+    
+    <a href="https://code0xff.org/tags/bigdata/">bigdata </a>
+    
+    <a href="https://code0xff.org/tags/b%E6%A0%91/">B树 </a>
+    
+    <a href="https://code0xff.org/tags/c&#43;&#43;/">C&#43;&#43; </a>
+    
+    <a href="https://code0xff.org/tags/calcite/">calcite </a>
+    
+    <a href="https://code0xff.org/tags/cmu-database/">CMU-Database </a>
+    
+    <a href="https://code0xff.org/tags/data_ingestion/">Data_Ingestion </a>
+    
+    <a href="https://code0xff.org/tags/deltalake/">DeltaLake </a>
+    
+    <a href="https://code0xff.org/tags/doris/">Doris </a>
+    
+    <a href="https://code0xff.org/tags/english/">English </a>
+    
+    <a href="https://code0xff.org/tags/es/">ES </a>
+    
+    <a href="https://code0xff.org/tags/facebook/">Facebook </a>
+    
+    <a href="https://code0xff.org/tags/flink/">flink </a>
+    
+    <a href="https://code0xff.org/tags/flume/">flume </a>
+    
+    <a href="https://code0xff.org/tags/gc/">GC </a>
+    
+    <a href="https://code0xff.org/tags/gluten/">Gluten </a>
+    
+    <a href="https://code0xff.org/tags/hana/">HANA </a>
+    
+    <a href="https://code0xff.org/tags/hive/">Hive </a>
+    
+    <a href="https://code0xff.org/tags/iceberg/">iceberg </a>
+    
+    <a href="https://code0xff.org/tags/impala/">Impala </a>
+    
+    <a href="https://code0xff.org/tags/janino/">janino </a>
+    
+    <a href="https://code0xff.org/tags/k8s/">k8s </a>
+    
+    <a href="https://code0xff.org/tags/kafka/">Kafka </a>
+    
+    <a href="https://code0xff.org/tags/kudu/">kudu </a>
+    
+    <a href="https://code0xff.org/tags/kyuubi/">Kyuubi </a>
+    
+    <a href="https://code0xff.org/tags/lakehouse/">Lakehouse </a>
+    
+    <a href="https://code0xff.org/tags/leveldb/">LevelDB </a>
+    
+    <a href="https://code0xff.org/tags/llamafactory/">LlamaFactory </a>
+    
+    <a href="https://code0xff.org/tags/llvm/">LLVM </a>
+    
+    <a href="https://code0xff.org/tags/manacher/">Manacher </a>
+    
+    <a href="https://code0xff.org/tags/mapreduce/">MapReduce </a>
+    
+    <a href="https://code0xff.org/tags/micro-service/">micro-service </a>
+    
+    <a href="https://code0xff.org/tags/mysql/">MySQL </a>
+    
+    <a href="https://code0xff.org/tags/newsql/">NewSQL </a>
+    
+    <a href="https://code0xff.org/tags/oceanbase/">OceanBase </a>
+    
+    <a href="https://code0xff.org/tags/openlogreplicator/">OpenLogReplicator </a>
+    
+    <a href="https://code0xff.org/tags/parquet/">parquet </a>
+    
+    <a href="https://code0xff.org/tags/paxos/">paxos </a>
+    
+    <a href="https://code0xff.org/tags/presto/">Presto </a>
+    
+    <a href="https://code0xff.org/tags/quick-sql/">quick-sql </a>
+    
+    <a href="https://code0xff.org/tags/raft/">raft </a>
+    
+    <a href="https://code0xff.org/tags/scala/">scala </a>
+    
+    <a href="https://code0xff.org/tags/simd/">SIMD </a>
+    
+    <a href="https://code0xff.org/tags/snowflake/">snowflake </a>
+    
+    <a href="https://code0xff.org/tags/spark/">spark </a>
+    
+    <a href="https://code0xff.org/tags/sre/">SRE </a>
+    
+    <a href="https://code0xff.org/tags/teradata/">TeraData </a>
+    
+    <a href="https://code0xff.org/tags/tpcx-hs/">TPCx-HS </a>
+    
+    <a href="https://code0xff.org/tags/trino/">Trino </a>
+    
+    <a href="https://code0xff.org/tags/tuning/">Tuning </a>
+    
+    <a href="https://code0xff.org/tags/unix/">unix </a>
+    
+    <a href="https://code0xff.org/tags/yarn/">YARN </a>
+    
+    <a href="https://code0xff.org/tags/%E4%BA%8C%E5%88%86%E6%9F%A5%E6%89%BE/">二分查找 </a>
+    
+    <a href="https://code0xff.org/tags/%E4%BA%8C%E5%8F%89%E6%A0%91%E9%81%8D%E5%8E%86/">二叉树遍历 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%88%86%E5%B8%83%E5%BC%8F/">分布式 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%88%97%E5%AD%98/">列存 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%8A%A8%E6%80%81%E6%B3%A8%E5%85%A5/">动态注入 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%8E%86%E5%8F%B2/">历史 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%90%91%E9%87%8F%E5%8C%96/">向量化 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%9B%9E%E6%BA%AF/">回溯 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%9B%BD%E5%86%85%E6%97%85%E8%A1%8C/">国内旅行 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%9B%BD%E5%A4%96%E6%97%85%E8%A1%8C/">国外旅行 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%A4%9A%E7%A7%9F%E6%88%B7/">多租户 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%A4%A7%E6%95%B0%E6%8D%AE/">大数据 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%AD%98%E5%82%A8/">存储 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%B7%A5%E4%BD%9C%E8%AE%B0%E5%BD%95/">工作记录 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%BE%AE%E6%9C%8D%E5%8A%A1/">微服务 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%95%B0%E6%8D%AE%E4%B8%AD%E5%8F%B0/">数据中台 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%95%B0%E6%8D%AE%E5%BA%93/">数据库 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%95%B0%E6%8D%AE%E6%A8%A1%E5%9E%8B/">数据模型 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%95%B0%E6%8D%AE%E8%BF%81%E7%A7%BB/">数据迁移 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%9F%A5%E8%AF%A2%E4%BC%98%E5%8C%96/">查询优化 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%9F%A5%E8%AF%A2%E7%BC%96%E8%AF%91/">查询编译 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%A6%82%E7%8E%87/">概率 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%B1%87%E7%BC%96/">汇编 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%B5%8B%E8%AF%95/">测试 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%94%9F%E6%B4%BB/">生活 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%94%B5%E5%BD%B1/">电影 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%AE%97%E6%B3%95/">算法 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%B4%A2%E5%BC%95/">索引 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BB%8F%E6%B5%8E/">经济 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BC%93%E5%AD%98/">缓存 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BC%96%E8%AF%91%E5%8E%9F%E7%90%86/">编译原理 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BD%91%E7%BB%9C/">网络 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AE%A1%E7%AE%97%E6%A1%86%E6%9E%B6/">计算框架 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AE%BA%E6%96%87/">论文 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AF%BB%E4%B9%A6/">读书 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AF%BB%E4%B9%A6%E7%AC%94%E8%AE%B0/">读书笔记 </a>
+    
+</div>
+    </section>
+
+    
+
+    <section class="widget">
+        <h3 class="widget-title">RSS</h3>
+        <ul class="widget-list">
+            <li><a href="https://code0xff.org/index.xml">文章 RSS</a></li>
+        </ul>
+    </section>
+</div>
+            </div>
+        </div>
+    </div>
+    <footer id="footer">
+    <div>
+        &copy; 2025 <a href="https://code0xff.org/">记录每个瞬间 By 老王</a>
+        
+    </div>
+    <br />
+    <div>
+        <div class="github-badge">
+            <a href="https://gohugo.io/" target="_black" rel="nofollow"><span class="badge-subject">Powered by</span><span class="badge-value bg-blue">Hugo</span></a>
+        </div>
+        <div class="github-badge">
+            <a href="https://github.com/flysnow-org/maupassant-hugo" target="_black"><span class="badge-subject">Theme</span><span class="badge-value bg-yellowgreen">Maupassant</span></a>
+        </div>
+    </div>
+</footer>
+
+
+    
+    <script type="text/javascript">
+        window.MathJax = {
+            tex2jax: {
+                inlineMath: [['$', '$']],
+                processEscapes: true
+                }
+            };
+    </script>
+    <script src='https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.5/MathJax.js?config=TeX-MML-AM_CHTML' async></script><script src="https://cdn.bootcdn.net/ajax/libs/fancybox/3.5.7/jquery.fancybox.min.js"></script>
+
+<a id="rocket" href="#top"></a>
+<script type="text/javascript" src='/js/totop.js?v=0.0.0' async=""></script>
+
+<script type="application/javascript">
+var doNotTrack = false;
+if (!doNotTrack) {
+	window.ga=window.ga||function(){(ga.q=ga.q||[]).push(arguments)};ga.l=+new Date;
+	ga('create', 'GA ID', 'auto');
+	
+	ga('send', 'pageview');
+}
+</script>
+<script async src='https://www.google-analytics.com/analytics.js'></script>
+
+
+
+    <script type="text/javascript" src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js" async></script>
+
+
+
+
+</body>
+
+</html>

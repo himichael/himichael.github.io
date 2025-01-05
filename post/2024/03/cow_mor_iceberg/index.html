@@ -1,0 +1,818 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    
+    <meta name="referrer" content="no-referrer-when-downgrade">
+    
+
+    <title>Copy-On-Write vs Merge-On-Read in Apache Iceberg | 记录每个瞬间</title>
+    <meta property="og:title" content="Copy-On-Write vs Merge-On-Read in Apache Iceberg - 记录每个瞬间">
+    <meta property="og:type" content="article">
+        
+    <meta property="article:published_time" content='2024-02-28T09:08:07&#43;08:00'>
+        
+        
+    <meta property="article:modified_time" content='2024-02-28T09:08:07&#43;08:00'>
+        
+    <meta name="Keywords" content="">
+    <meta name="description" content="Copy-On-Write vs Merge-On-Read in Apache Iceberg">
+        <meta name="author" content="隔壁老王">
+        
+    <meta property="og:url" content="https://code0xff.org/post/2024/03/cow_mor_iceberg/">
+    <link rel="shortcut icon" href='/favicon.ico'  type="image/x-icon">
+
+    <link rel="stylesheet" href='/css/normalize.css'>
+    <link rel="stylesheet" href='/css/style.css'>
+    <script type="text/javascript" src="//cdn.bootcdn.net/ajax/libs/jquery/3.4.1/jquery.min.js"></script>
+
+    
+    
+    
+        <link href="https://cdn.bootcdn.net/ajax/libs/fancybox/3.5.7/jquery.fancybox.min.css" rel="stylesheet">
+    
+    
+    
+    
+</head>
+
+
+<body>
+    <header id="header" class="clearfix">
+    <div class="container">
+        <div class="col-group">
+            <div class="site-name ">
+                
+                    <a id="logo" href="https://code0xff.org/">
+                        记录每个瞬间
+                    </a>
+                
+                
+            </div>
+            <div>
+                <nav id="nav-menu" class="clearfix">
+                    <a class="current" href="https://code0xff.org/">首页</a>
+                    
+                    <a  href="https://code0xff.org/linked/" title="链接">链接</a>
+                    
+                    <a  href="https://code0xff.org/archives/" title="归档">归档</a>
+                    
+                    <a  href="https://code0xff.org/about/" title="关于">关于</a>
+                    
+                </nav>
+            </div>
+        </div>
+    </div>
+</header>
+
+    <div id="body">
+        <div class="container">
+            <div class="col-group">
+
+                <div class="col-8" id="main">
+                    
+<div class="res-cons">
+    
+    <article class="post">
+        <header>
+            <h1 class="post-title">Copy-On-Write vs Merge-On-Read in Apache Iceberg</h1>
+        </header>
+        <date class="post-meta meta-date">
+            2024年2月28日
+        </date>
+<nav id="TableOfContents">
+  <ul>
+    <li>
+      <ul>
+        <li><a href="#updating-tables-on-the-data-lake">Updating Tables on the Data Lake</a></li>
+        <li><a href="#cow-best-for-tables-with-frequent-reads-infrequent-writesupdates-or-large-batch-updates">CoW-Best for tables with frequent reads, infrequent writes/updates, or large batch updates</a></li>
+        <li><a href="#mor---best-for-tables-with-frequent-writesupdates">MoR - Best for tables with frequent writes/updates</a>
+          <ul>
+            <li><a href="#position-deletes">Position Deletes</a></li>
+            <li><a href="#equality-deletes">Equality Deletes</a></li>
+            <li><a href="#minimizing-the-read-costs">Minimizing the Read Costs</a></li>
+          </ul>
+        </li>
+        <li><a href="#when-to-use-cow-and-when-to-use-mor">When to Use COW and When to Use MOR</a></li>
+        <li><a href="#configuring-cow-and-mor">Configuring COW and MOR</a></li>
+        <li><a href="#further-optional-deleteupdates-fine-tuning-strategies">Further Optional Delete/Updates Fine-Tuning Strategies</a></li>
+        <li><a href="#reference">Reference</a></li>
+      </ul>
+    </li>
+  </ul>
+</nav>
+        
+        <div class="post-meta">
+            
+            <span class="post-meta meta-tags">
+                <ul class="clearfix">
+                    <a href='/categories/%E5%A4%A7%E6%95%B0%E6%8D%AE'>大数据</a>
+                </ul>
+            </span>
+            
+        </div>
+        
+        
+        <div class="post-meta">
+            <span id="busuanzi_container_page_pv">|<span id="busuanzi_value_page_pv"></span><span>
+                    阅读</span></span>
+        </div>
+        
+        
+        <div class="post-content">
+            <blockquote>
+<p>原文 <br>
+<a href="https://www.dremio.com/blog/row-level-changes-on-the-lakehouse-copy-on-write-vs-merge-on-read-in-apache-iceberg/#h-updating-tables-on-the-data-lake">https://www.dremio.com/blog/row-level-changes-on-the-lakehouse-copy-on-write-vs-merge-on-read-in-apache-iceberg/#h-updating-tables-on-the-data-lake</a></p>
+</blockquote>
+<h2 id="updating-tables-on-the-data-lake">Updating Tables on the Data Lake</h2>
+<p>更新、删除能力对于传统数据库是必须的，但对于数据仓库来说，他只是一个特殊的数据库，用于做分析处理<br>
+data lakes用于解决成本、扩展性的问题，用独立的技术来解决如存储，计算等问题，可扩展也可以通过对象存储来解决<br>
+计算引擎演化为主要处理读的计算<br>
+lake house则从传统的数据仓库，往数据湖方向走</p>
+<p>而对于写密集型的场景，data lake 需要在计算、存储之间增加新的抽象，来实现 ACID 保证以及性能，这也是 数据湖表格式出现的原因<br>
+iceberg 就是存储和计算之间的表格式<br>
+iceberg提供了 ACID保障，v2表格式 可以在不可变数据删实现 update、delete，而不用重写整个文件</p>
+<p>有两种方式可以实现 update、delete等特性</p>
+<ul>
+<li>copy-on-write (COW)</li>
+<li>merge-on-read (MOR).</li>
+</ul>
+<p>没有一种通吃的方案，每个方案都是 trade-off，有他们合适的场景，主要考虑的是 读、写的延迟<br>
+这也不是 iceberg 特有的问题，对于其他场景，如 lambda 架构也会存在这些问题</p>
+<h2 id="cow-best-for-tables-with-frequent-reads-infrequent-writesupdates-or-large-batch-updates">CoW-Best for tables with frequent reads, infrequent writes/updates, or large batch updates</h2>
+<p>CoW，当要更新、删除 某一行、或者一批行时，会将数据文件复制一份<br>
+新版本中会包含更新的数据，删除的话，就做取反操作，将没被删除的数据重写一份<br>
+写入的速度依赖于要更新多少 数据文件（重写这些文件），在并发执行时也会导致冲突，出现更多的重试</p>
+<p>如果要更新很多行，那么 CoW 倒是不错的选择，但如果更新的行也少，也需要重写整个文件，代价就比较高了<br>
+对于读来说，没有什么额外要做的事情，正常读就可以了，所以适合 读多写少的场景</p>
+<p>
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/05/21/7gEoYf.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/05/21/7gEoYf.png" />
+        </a>
+    </p>
+<table>
+<thead>
+<tr>
+<th>Summary of COW (Copy-On-Write)</th>
+<th></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>PROS</td>
+<td>CONS</td>
+</tr>
+<tr>
+<td>Fastest reads</td>
+<td>Expensive writes</td>
+</tr>
+<tr>
+<td>Good for infrequent updates/deletes</td>
+<td>Bad for frequent updates/deletes</td>
+</tr>
+</tbody>
+</table>
+<h2 id="mor---best-for-tables-with-frequent-writesupdates">MoR - Best for tables with frequent writes/updates</h2>
+<p>MoR 时，文件不需要重写，只需 将更改写入到新文件中，在读取的时候使，将这些变更 merge 到原始文件中，形成 新的状态<br>
+这种方式写入时很快，但也意味着 读的时候，需要做更多的事情</p>
+<p>iceberg 是通过跟踪 update、delete的文件实现的
+如果删除一行，就将其添加到删除文件中，读取时重建这些文件<br>
+如果是更新一行，delete 文件也会个跟踪这个 update，之后读取时会忽略掉旧的数据<br>
+而做了数据压缩之后，就跟 LSM 树格式一样，只会记录合并后的少量数据，更新前的数据就会被忽略</p>
+<p>
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/05/21/7gQBw3.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/05/21/7gQBw3.png" />
+        </a>
+    </p>
+<h3 id="position-deletes">Position Deletes</h3>
+<p>在这个模式中，仍然需要读取记录文件，但不需要重写文件了<br>
+而是记录被删除文件记录中的位置<br>
+这个策略 很大程度上减少了update、delete的写时间，读的时候，merge 的成本也相对较低<br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/05/21/7gQ9dc.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/05/21/7gQ9dc.png" />
+        </a>
+    </p>
+<h3 id="equality-deletes">Equality Deletes</h3>
+<p>在写入的时候不需要读取任何文件，对于写时间可以进一步提升<br>
+在删除文件中记录 待删除/更新的 字段，以及值<br>
+这种策略在 更新的时候，比 Position Deletes要快很多<br>
+但是读取的代价很高，需要扫描所有的行，然后做重建<br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/05/21/7gQTOj.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/05/21/7gQTOj.png" />
+        </a>
+    </p>
+<h3 id="minimizing-the-read-costs">Minimizing the Read Costs</h3>
+<p>当执行压缩时，会写入新文件，这个文件根据 删除文件，旧文件做了合并重建，这样读取时就不需要做额外操作了<br>
+推荐定期执行 压缩，这样对读的的影响就降低了，同时也能保持高的写性能</p>
+<p>Types of Delete Files Summary</p>
+<table>
+<thead>
+<tr>
+<th></th>
+<th>How it works</th>
+<th>Pros</th>
+<th>Cons</th>
+<th>How to manage read costs</th>
+<th>Good fit</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Position</td>
+<td>Tracks file path and row position in file</td>
+<td>Fast writes</td>
+<td>Slower reads</td>
+<td>Run compaction jobs regularly</td>
+<td>Better forfrequent updates/deletes in which copy- on-write is not fast enough</td>
+</tr>
+<tr>
+<td>Equality</td>
+<td>Tracks query criteria for delete/update targets</td>
+<td>Super-fast writes</td>
+<td>Much slower reads</td>
+<td></td>
+<td>For when updates/deletes with position deletes is still not fast enough</td>
+</tr>
+</tbody>
+</table>
+<h2 id="when-to-use-cow-and-when-to-use-mor">When to Use COW and When to Use MOR</h2>
+<p>选择 CoW、MoR/position、MoR/equality 取决于如何使用表<br>
+可以根据场景预测表的使用方式，如果选择不对，也可以简单调整策略</p>
+<table>
+<thead>
+<tr>
+<th>Approach</th>
+<th>Update/Delete Frequency</th>
+<th>Insert Performance</th>
+<th>Update/Delete Latency/Performance</th>
+<th>Read Latency/Performance</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Copy-On-Write</td>
+<td>Infrequent updates/deletes</td>
+<td>Same</td>
+<td>Slowest</td>
+<td>Fastest</td>
+</tr>
+<tr>
+<td>Merge-On-Read Position Deletes</td>
+<td>Frequent updates/deletes</td>
+<td>Same</td>
+<td>Fast</td>
+<td>Fast</td>
+</tr>
+<tr>
+<td>Merge-On-Read Equality Deletes</td>
+<td>Frequent updates/deletes where position delete MOR is still not fast enough on the write sid</td>
+<td>Same</td>
+<td>Fastes</td>
+<td>Slowest</td>
+</tr>
+</tbody>
+</table>
+<h2 id="configuring-cow-and-mor">Configuring COW and MOR</h2>
+<p>COW 、MOR 不是非此即彼的选项，可以在表的配置中 独立的设置 delete、update、merge选项</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-sql" data-lang="sql"><span style="display:flex;"><span><span style="color:#ff79c6">CREATE</span> <span style="color:#ff79c6">TABLE</span> <span style="color:#ff79c6">catalog</span>.db.students (
+</span></span><span style="display:flex;"><span>    id <span style="color:#8be9fd;font-style:italic">int</span>,
+</span></span><span style="display:flex;"><span>    first_name string,
+</span></span><span style="display:flex;"><span>    last_name string,
+</span></span><span style="display:flex;"><span>    major string,
+</span></span><span style="display:flex;"><span>    class_year <span style="color:#8be9fd;font-style:italic">int</span>
+</span></span><span style="display:flex;"><span>) TBLPROPERTIES (
+</span></span><span style="display:flex;"><span>    <span style="color:#f1fa8c">&#39;write.delete.mode&#39;</span><span style="color:#ff79c6">=</span><span style="color:#f1fa8c">&#39;copy-on-write&#39;</span>,
+</span></span><span style="display:flex;"><span>    <span style="color:#f1fa8c">&#39;write.update.mode&#39;</span><span style="color:#ff79c6">=</span><span style="color:#f1fa8c">&#39;merge-on-read&#39;</span>,
+</span></span><span style="display:flex;"><span>    <span style="color:#f1fa8c">&#39;write.merge.mode&#39;</span><span style="color:#ff79c6">=</span><span style="color:#f1fa8c">&#39;merge-on-read&#39;</span>
+</span></span><span style="display:flex;"><span>) PARTITIONED <span style="color:#ff79c6">BY</span> (class_year) <span style="color:#ff79c6">USING</span> iceberg; 
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>可以使用 alter 修改</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">5
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-sql" data-lang="sql"><span style="display:flex;"><span><span style="color:#ff79c6">ALTER</span> <span style="color:#ff79c6">TABLE</span> <span style="color:#ff79c6">catalog</span>.db.students <span style="color:#ff79c6">SET</span> TBLPROPERTIES (
+</span></span><span style="display:flex;"><span>    <span style="color:#f1fa8c">&#39;write.delete.mode&#39;</span><span style="color:#ff79c6">=</span><span style="color:#f1fa8c">&#39;merge-on-read&#39;</span>,
+</span></span><span style="display:flex;"><span>    <span style="color:#f1fa8c">&#39;write.update.mode&#39;</span><span style="color:#ff79c6">=</span><span style="color:#f1fa8c">&#39;copy-on-write&#39;</span>,
+</span></span><span style="display:flex;"><span>    <span style="color:#f1fa8c">&#39;write.merge.mode&#39;</span><span style="color:#ff79c6">=</span><span style="color:#f1fa8c">&#39;copy-on-write&#39;</span>
+</span></span><span style="display:flex;"><span>);
+</span></span></code></pre></td></tr></table>
+</div>
+</div><h2 id="further-optional-deleteupdates-fine-tuning-strategies">Further Optional Delete/Updates Fine-Tuning Strategies</h2>
+<p>几个注意点</p>
+<ul>
+<li>分区字段一般包含在查询中，特别像时间戳这样的字段，可以加速查询</li>
+<li>排序表字段一般也包含在分区字段中，如 timestamp</li>
+<li>对单独的列做额外的元数据调整，可以用 write.metadata.metrics 对每个字段做细粒度调整</li>
+<li>比如对于流写入，一般波动不会太大，可以禁用 check-ordering 设置，这样就不会检查写入数据的字段是否与表顺序相同，可以节省时间</li>
+</ul>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">6
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-sql" data-lang="sql"><span style="display:flex;"><span><span style="color:#ff79c6">ALTER</span> <span style="color:#ff79c6">TABLE</span> <span style="color:#ff79c6">catalog</span>.db.students <span style="color:#ff79c6">SET</span> TBLPROPERTIES (
+</span></span><span style="display:flex;"><span>    <span style="color:#f1fa8c">&#39;write.metadata.metrics.column.col1&#39;</span><span style="color:#ff79c6">=</span><span style="color:#f1fa8c">&#39;none&#39;</span>,
+</span></span><span style="display:flex;"><span>    <span style="color:#f1fa8c">&#39;write.metadata.metrics.column.col2&#39;</span><span style="color:#ff79c6">=</span><span style="color:#f1fa8c">&#39;full&#39;</span>,
+</span></span><span style="display:flex;"><span>    <span style="color:#f1fa8c">&#39;write.metadata.metrics.column.col3&#39;</span><span style="color:#ff79c6">=</span><span style="color:#f1fa8c">&#39;counts&#39;</span>,
+</span></span><span style="display:flex;"><span>    <span style="color:#f1fa8c">&#39;write.metadata.metrics.column.col4&#39;</span><span style="color:#ff79c6">=</span><span style="color:#f1fa8c">&#39;truncate(16)&#39;</span>,
+</span></span><span style="display:flex;"><span>);
+</span></span></code></pre></td></tr></table>
+</div>
+</div><h2 id="reference">Reference</h2>
+<ul>
+<li><a href="https://www.dremio.com/blog/apache-iceberg-101-your-guide-to-learning-apache-iceberg-concepts-and-practices/">Apache Iceberg 101 – Your Guide to Learning Apache Iceberg Concepts and Practices</a></li>
+<li><a href="https://www.dremio.com/blog/exploring-the-architecture-of-apache-iceberg-delta-lake-and-apache-hudi/">Exploring the Architecture of Apache Iceberg, Delta Lake, and Apache Hudi</a></li>
+<li><a href="https://www.dremio.com/blog/compaction-in-apache-iceberg-fine-tuning-your-iceberg-tables-data-files/">Compaction in Apache Iceberg: Fine-Tuning Your Iceberg Table’s Data Files</a></li>
+<li><a href="https://www.dremio.com/blog/deep-dive-into-configuring-your-apache-iceberg-catalog-with-apache-spark/">Deep Dive Into Configuring Your Apache Iceberg Catalog with Apache Spark</a></li>
+<li><a href="https://www.dremio.com/blog/hadoop-modernization/">Hadoop Modernization: A Framework for Success</a></li>
+<li><a href="https://www.dremio.com/blog/apache-iceberg-faq/">Apache Iceberg FAQ</a></li>
+<li><a href="https://www.dremio.com/blog/multi-table-transactions-on-the-lakehouse-enabled-by-dremio-arctic/">Multi-Table Transactions on the Lakehouse – Enabled by Dremio Arctic</a></li>
+<li><a href="https://www.dremio.com/blog/a-hands-on-look-at-the-structure-of-an-apache-iceberg-table/">A Hands-On Look at the Structure of an Apache Iceberg Table</a></li>
+<li><a href="https://www.dremio.com/blog/new-row-level-and-column-level-access-controls/">New: Row-Level and Column-Level Access Controls</a></li>
+<li><a href="https://www.dremio.com/blog/compaction-in-apache-iceberg-fine-tuning-your-iceberg-tables-data-files/">Compaction in Apache Iceberg: Fine-Tuning Your Iceberg Table’s Data Files</a></li>
+<li><a href="https://www.dremio.com/blog/table-format-partitioning-comparison-apache-iceberg-apache-hudi-and-delta-lake/">Table Format Partitioning Comparison: Apache Iceberg, Apache Hudi, and Delta Lake</a></li>
+<li><a href="https://www.dremio.com/blog/migrating-a-hive-table-to-an-iceberg-table-hands-on-tutorial/">Migrating a Hive Table to an Iceberg Table Hands-on Tutorial</a></li>
+<li><a href="https://www.dremio.com/blog/table-format-governance-and-community-contributions-apache-iceberg-apache-hudi-and-delta-lake/">Table Format Governance and Community Contributions: Apache Iceberg, Apache Hudi, and Delta Lake</a></li>
+<li><a href="https://www.dremio.com/blog/how-we-got-to-open-lakehouse/">How We Got to Open Lakehouse</a></li>
+<li><a href="https://www.dremio.com/blog/comparison-of-data-lake-table-formats-apache-iceberg-apache-hudi-and-delta-lake/">Comparison of Data Lake Table Formats (Apache Iceberg, Apache Hudi and Delta Lake)</a></li>
+<li><a href="https://www.dremio.com/blog/gooddata-dremio-a-modern-cloud-native-analytics-stack/">How to Build a Modern, Cloud-Native Analytics Stack with GoodData and Dremio</a></li>
+</ul>
+
+			<script type="text/javascript"
+        async
+        src="https://cdn.bootcss.com/mathjax/2.7.3/MathJax.js?config=TeX-AMS-MML_HTMLorMML">
+MathJax.Hub.Config({
+  tex2jax: {
+    inlineMath: [['$','$'], ['\\(','\\)']],
+    displayMath: [['$$','$$'], ['\[\[','\]\]']],
+    processEscapes: true,
+    processEnvironments: true,
+    skipTags: ['script', 'noscript', 'style', 'textarea', 'pre'],
+    TeX: { equationNumbers: { autoNumber: "AMS" },
+         extensions: ["AMSmath.js", "AMSsymbols.js"] }
+  }
+});
+
+MathJax.Hub.Queue(function() {
+    
+    
+    
+    var all = MathJax.Hub.getAllJax(), i;
+    for(i = 0; i < all.length; i += 1) {
+        all[i].SourceElement().parentNode.className += ' has-jax';
+    }
+});
+</script>
+
+<style>
+code.has-jax {
+    font: inherit;
+    font-size: 100%;
+    background: inherit;
+    border: inherit;
+    color: #515151;
+}
+</style>
+        </div>
+
+        
+
+
+        
+
+<div class="post-archive">
+    <h2>相关文章</h2>
+    <ul class="listing">
+        
+        <li><a href="/post/2024/03/the_life_of_iceberg/">The Life of a Read/Write Query for Apache Iceberg Tables</a></li>
+        
+        <li><a href="/post/2024/02/icer_berg/">Iceberg 简单总结</a></li>
+        
+    </ul>
+</div>
+
+
+        <div class="post-meta meta-tags">
+            
+            <ul class="clearfix">
+                
+                <li><a href='/tags/iceberg'>iceberg</a></li>
+                
+            </ul>
+            
+        </div>
+    </article>
+    
+    
+
+    
+    
+    <div class="post bg-white">
+      <script src="https://utteranc.es/client.js"
+            repo= "himichael/hugoblogtalks"
+            issue-term="pathname"
+            theme="github-light"
+            crossorigin="anonymous"
+            async>
+      </script>
+    </div>
+    
+</div>
+
+
+                </div>
+
+                <div id="secondary">
+    <section class="widget">
+        <form id="search" action='https://code0xff.org/search/' method="get" accept-charset="utf-8" target="_blank" _lpchecked="1">
+      
+      <input type="text" name="q" maxlength="20" placeholder="Search">
+      <input type="hidden" name="sitesearch" value="https://code0xff.org/">
+      <button type="submit" class="submit icon-search"></button>
+</form>
+    </section>
+    
+    <section class="widget">
+        <h3 class="widget-title">最近文章</h3>
+<ul class="widget-list">
+    
+    <li>
+        <a href="https://code0xff.org/post/2025/01/spark_register_source/" title="Spark 注册数据源">Spark 注册数据源</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2025/01/spark_core_2/" title="Spark Core相关-2">Spark Core相关-2</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2024/12/llamafactory/" title="Llama Factory">Llama Factory</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2024/11/spark_core/" title="Spark Core相关-1">Spark Core相关-1</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2024/11/sae_tunnel/" title="sea tunnel">sea tunnel</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2024/11/k8s_networks/" title="k8s 网络">k8s 网络</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2024/11/ozone/" title="ozone">ozone</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2024/11/es/" title="ES的简单学习">ES的简单学习</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2025/02/ai/" title="AI的简单学习">AI的简单学习</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2024/11/big_data_investigation/" title="国内几个云厂商大数据平台">国内几个云厂商大数据平台</a>
+    </li>
+    
+</ul>
+    </section>
+
+    
+
+    <section class="widget">
+        <h3 class="widget-title"><a href='/categories/'>分类</a></h3>
+<ul class="widget-list">
+    
+    <li><a href="https://code0xff.org/categories/%E5%88%86%E5%B8%83%E5%BC%8F/">分布式 (6)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E5%8E%9F%E7%90%86%E5%88%86%E6%9E%90/">原理分析 (24)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E5%95%86%E4%B8%9A/">商业 (3)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E5%A4%A7%E6%95%B0%E6%8D%AE/">大数据 (56)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%95%B0%E6%8D%AE%E5%BA%93/">数据库 (41)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%96%87%E5%AD%A6%E5%92%8C%E8%89%BA%E6%9C%AF/">文学和艺术 (3)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%97%85%E8%A1%8C/">旅行 (12)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%9E%B6%E6%9E%84/">架构 (13)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E7%AE%97%E6%B3%95/">算法 (8)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E7%B3%BB%E7%BB%9F/">系统 (7)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E7%BC%96%E7%A8%8B%E8%AF%AD%E8%A8%80/">编程语言 (7)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E8%A1%8C%E4%B8%9A%E8%A7%82%E5%AF%9F/">行业观察 (3)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E8%AF%BB%E4%B9%A6%E7%AC%94%E8%AE%B0/">读书笔记 (14)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E9%9A%8F%E4%BE%BF%E5%86%99%E5%86%99/">随便写写 (3)</a></li>
+    
+</ul>
+    </section>
+
+    <section class="widget">
+        <h3 class="widget-title">归档</a></h3>
+<ul class="widget-list">
+    
+    <li><a href="https://code0xff.org/years/2021%E5%B9%B4/">2021年 (41)</a></li>
+    
+    <li><a href="https://code0xff.org/years/2022%E5%B9%B4/">2022年 (55)</a></li>
+    
+    <li><a href="https://code0xff.org/years/2023%E5%B9%B4/">2023年 (54)</a></li>
+    
+    <li><a href="https://code0xff.org/years/2024%E5%B9%B4/">2024年 (48)</a></li>
+    
+    <li><a href="https://code0xff.org/years/2025%E5%B9%B4/">2025年 (2)</a></li>
+    
+</ul>
+    </section>
+
+    <section class="widget">
+        <h3 class="widget-title"><a href='/tags/'>标签</a></h3>
+<div class="tagcloud">
+    
+    <a href="https://code0xff.org/tags/ai/">AI </a>
+    
+    <a href="https://code0xff.org/tags/ambari/">Ambari </a>
+    
+    <a href="https://code0xff.org/tags/architecture/">architecture </a>
+    
+    <a href="https://code0xff.org/tags/bigdata/">bigdata </a>
+    
+    <a href="https://code0xff.org/tags/b%E6%A0%91/">B树 </a>
+    
+    <a href="https://code0xff.org/tags/c&#43;&#43;/">C&#43;&#43; </a>
+    
+    <a href="https://code0xff.org/tags/calcite/">calcite </a>
+    
+    <a href="https://code0xff.org/tags/cmu-database/">CMU-Database </a>
+    
+    <a href="https://code0xff.org/tags/data_ingestion/">Data_Ingestion </a>
+    
+    <a href="https://code0xff.org/tags/deltalake/">DeltaLake </a>
+    
+    <a href="https://code0xff.org/tags/doris/">Doris </a>
+    
+    <a href="https://code0xff.org/tags/english/">English </a>
+    
+    <a href="https://code0xff.org/tags/es/">ES </a>
+    
+    <a href="https://code0xff.org/tags/facebook/">Facebook </a>
+    
+    <a href="https://code0xff.org/tags/flink/">flink </a>
+    
+    <a href="https://code0xff.org/tags/flume/">flume </a>
+    
+    <a href="https://code0xff.org/tags/gc/">GC </a>
+    
+    <a href="https://code0xff.org/tags/gluten/">Gluten </a>
+    
+    <a href="https://code0xff.org/tags/hana/">HANA </a>
+    
+    <a href="https://code0xff.org/tags/hive/">Hive </a>
+    
+    <a href="https://code0xff.org/tags/iceberg/">iceberg </a>
+    
+    <a href="https://code0xff.org/tags/impala/">Impala </a>
+    
+    <a href="https://code0xff.org/tags/janino/">janino </a>
+    
+    <a href="https://code0xff.org/tags/k8s/">k8s </a>
+    
+    <a href="https://code0xff.org/tags/kafka/">Kafka </a>
+    
+    <a href="https://code0xff.org/tags/kudu/">kudu </a>
+    
+    <a href="https://code0xff.org/tags/kyuubi/">Kyuubi </a>
+    
+    <a href="https://code0xff.org/tags/lakehouse/">Lakehouse </a>
+    
+    <a href="https://code0xff.org/tags/leveldb/">LevelDB </a>
+    
+    <a href="https://code0xff.org/tags/llamafactory/">LlamaFactory </a>
+    
+    <a href="https://code0xff.org/tags/llvm/">LLVM </a>
+    
+    <a href="https://code0xff.org/tags/manacher/">Manacher </a>
+    
+    <a href="https://code0xff.org/tags/mapreduce/">MapReduce </a>
+    
+    <a href="https://code0xff.org/tags/micro-service/">micro-service </a>
+    
+    <a href="https://code0xff.org/tags/mysql/">MySQL </a>
+    
+    <a href="https://code0xff.org/tags/newsql/">NewSQL </a>
+    
+    <a href="https://code0xff.org/tags/oceanbase/">OceanBase </a>
+    
+    <a href="https://code0xff.org/tags/openlogreplicator/">OpenLogReplicator </a>
+    
+    <a href="https://code0xff.org/tags/parquet/">parquet </a>
+    
+    <a href="https://code0xff.org/tags/paxos/">paxos </a>
+    
+    <a href="https://code0xff.org/tags/presto/">Presto </a>
+    
+    <a href="https://code0xff.org/tags/quick-sql/">quick-sql </a>
+    
+    <a href="https://code0xff.org/tags/raft/">raft </a>
+    
+    <a href="https://code0xff.org/tags/scala/">scala </a>
+    
+    <a href="https://code0xff.org/tags/simd/">SIMD </a>
+    
+    <a href="https://code0xff.org/tags/snowflake/">snowflake </a>
+    
+    <a href="https://code0xff.org/tags/spark/">spark </a>
+    
+    <a href="https://code0xff.org/tags/sre/">SRE </a>
+    
+    <a href="https://code0xff.org/tags/teradata/">TeraData </a>
+    
+    <a href="https://code0xff.org/tags/tpcx-hs/">TPCx-HS </a>
+    
+    <a href="https://code0xff.org/tags/trino/">Trino </a>
+    
+    <a href="https://code0xff.org/tags/tuning/">Tuning </a>
+    
+    <a href="https://code0xff.org/tags/unix/">unix </a>
+    
+    <a href="https://code0xff.org/tags/yarn/">YARN </a>
+    
+    <a href="https://code0xff.org/tags/%E4%BA%8C%E5%88%86%E6%9F%A5%E6%89%BE/">二分查找 </a>
+    
+    <a href="https://code0xff.org/tags/%E4%BA%8C%E5%8F%89%E6%A0%91%E9%81%8D%E5%8E%86/">二叉树遍历 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%88%86%E5%B8%83%E5%BC%8F/">分布式 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%88%97%E5%AD%98/">列存 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%8A%A8%E6%80%81%E6%B3%A8%E5%85%A5/">动态注入 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%8E%86%E5%8F%B2/">历史 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%90%91%E9%87%8F%E5%8C%96/">向量化 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%9B%9E%E6%BA%AF/">回溯 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%9B%BD%E5%86%85%E6%97%85%E8%A1%8C/">国内旅行 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%9B%BD%E5%A4%96%E6%97%85%E8%A1%8C/">国外旅行 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%A4%9A%E7%A7%9F%E6%88%B7/">多租户 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%A4%A7%E6%95%B0%E6%8D%AE/">大数据 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%AD%98%E5%82%A8/">存储 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%B7%A5%E4%BD%9C%E8%AE%B0%E5%BD%95/">工作记录 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%BE%AE%E6%9C%8D%E5%8A%A1/">微服务 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%95%B0%E6%8D%AE%E4%B8%AD%E5%8F%B0/">数据中台 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%95%B0%E6%8D%AE%E5%BA%93/">数据库 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%95%B0%E6%8D%AE%E6%A8%A1%E5%9E%8B/">数据模型 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%95%B0%E6%8D%AE%E8%BF%81%E7%A7%BB/">数据迁移 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%9F%A5%E8%AF%A2%E4%BC%98%E5%8C%96/">查询优化 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%9F%A5%E8%AF%A2%E7%BC%96%E8%AF%91/">查询编译 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%A6%82%E7%8E%87/">概率 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%B1%87%E7%BC%96/">汇编 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%B5%8B%E8%AF%95/">测试 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%94%9F%E6%B4%BB/">生活 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%94%B5%E5%BD%B1/">电影 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%AE%97%E6%B3%95/">算法 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%B4%A2%E5%BC%95/">索引 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BB%8F%E6%B5%8E/">经济 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BC%93%E5%AD%98/">缓存 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BC%96%E8%AF%91%E5%8E%9F%E7%90%86/">编译原理 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BD%91%E7%BB%9C/">网络 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AE%A1%E7%AE%97%E6%A1%86%E6%9E%B6/">计算框架 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AE%BA%E6%96%87/">论文 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AF%BB%E4%B9%A6/">读书 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AF%BB%E4%B9%A6%E7%AC%94%E8%AE%B0/">读书笔记 </a>
+    
+</div>
+    </section>
+
+    
+
+    <section class="widget">
+        <h3 class="widget-title">RSS</h3>
+        <ul class="widget-list">
+            <li><a href="https://code0xff.org/index.xml">文章 RSS</a></li>
+        </ul>
+    </section>
+</div>
+            </div>
+        </div>
+    </div>
+    <footer id="footer">
+    <div>
+        &copy; 2025 <a href="https://code0xff.org/">记录每个瞬间 By 老王</a>
+        
+    </div>
+    <br />
+    <div>
+        <div class="github-badge">
+            <a href="https://gohugo.io/" target="_black" rel="nofollow"><span class="badge-subject">Powered by</span><span class="badge-value bg-blue">Hugo</span></a>
+        </div>
+        <div class="github-badge">
+            <a href="https://github.com/flysnow-org/maupassant-hugo" target="_black"><span class="badge-subject">Theme</span><span class="badge-value bg-yellowgreen">Maupassant</span></a>
+        </div>
+    </div>
+</footer>
+
+
+    
+    <script type="text/javascript">
+        window.MathJax = {
+            tex2jax: {
+                inlineMath: [['$', '$']],
+                processEscapes: true
+                }
+            };
+    </script>
+    <script src='https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.5/MathJax.js?config=TeX-MML-AM_CHTML' async></script><script src="https://cdn.bootcdn.net/ajax/libs/fancybox/3.5.7/jquery.fancybox.min.js"></script>
+
+<a id="rocket" href="#top"></a>
+<script type="text/javascript" src='/js/totop.js?v=0.0.0' async=""></script>
+
+<script type="application/javascript">
+var doNotTrack = false;
+if (!doNotTrack) {
+	window.ga=window.ga||function(){(ga.q=ga.q||[]).push(arguments)};ga.l=+new Date;
+	ga('create', 'GA ID', 'auto');
+	
+	ga('send', 'pageview');
+}
+</script>
+<script async src='https://www.google-analytics.com/analytics.js'></script>
+
+
+
+    <script type="text/javascript" src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js" async></script>
+
+
+
+
+</body>
+
+</html>

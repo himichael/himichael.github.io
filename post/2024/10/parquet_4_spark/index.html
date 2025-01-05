@@ -1,0 +1,1327 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    
+    <meta name="referrer" content="no-referrer-when-downgrade">
+    
+
+    <title>Parquet for Spark | 记录每个瞬间</title>
+    <meta property="og:title" content="Parquet for Spark - 记录每个瞬间">
+    <meta property="og:type" content="article">
+        
+    <meta property="article:published_time" content='2024-10-02T09:08:07&#43;08:00'>
+        
+        
+    <meta property="article:modified_time" content='2024-10-02T09:08:07&#43;08:00'>
+        
+    <meta name="Keywords" content="">
+    <meta name="description" content="Parquet for Spark">
+        <meta name="author" content="隔壁老王">
+        
+    <meta property="og:url" content="https://code0xff.org/post/2024/10/parquet_4_spark/">
+    <link rel="shortcut icon" href='/favicon.ico'  type="image/x-icon">
+
+    <link rel="stylesheet" href='/css/normalize.css'>
+    <link rel="stylesheet" href='/css/style.css'>
+    <script type="text/javascript" src="//cdn.bootcdn.net/ajax/libs/jquery/3.4.1/jquery.min.js"></script>
+
+    
+    
+    
+        <link href="https://cdn.bootcdn.net/ajax/libs/fancybox/3.5.7/jquery.fancybox.min.css" rel="stylesheet">
+    
+    
+    
+    
+</head>
+
+
+<body>
+    <header id="header" class="clearfix">
+    <div class="container">
+        <div class="col-group">
+            <div class="site-name ">
+                
+                    <a id="logo" href="https://code0xff.org/">
+                        记录每个瞬间
+                    </a>
+                
+                
+            </div>
+            <div>
+                <nav id="nav-menu" class="clearfix">
+                    <a class="current" href="https://code0xff.org/">首页</a>
+                    
+                    <a  href="https://code0xff.org/linked/" title="链接">链接</a>
+                    
+                    <a  href="https://code0xff.org/archives/" title="归档">归档</a>
+                    
+                    <a  href="https://code0xff.org/about/" title="关于">关于</a>
+                    
+                </nav>
+            </div>
+        </div>
+    </div>
+</header>
+
+    <div id="body">
+        <div class="container">
+            <div class="col-group">
+
+                <div class="col-8" id="main">
+                    
+<div class="res-cons">
+    
+    <article class="post">
+        <header>
+            <h1 class="post-title">Parquet for Spark</h1>
+        </header>
+        <date class="post-meta meta-date">
+            2024年10月2日
+        </date>
+<nav id="TableOfContents">
+  <ul>
+    <li>
+      <ul>
+        <li><a href="#概览">概览</a></li>
+        <li><a href="#parquet-内部">Parquet 内部</a></li>
+        <li><a href="#parquet-encoding">Parquet Encoding</a></li>
+        <li><a href="#vectorised-parquet-reading">Vectorised Parquet Reading</a></li>
+        <li><a href="#参考">参考</a></li>
+      </ul>
+    </li>
+  </ul>
+</nav>
+        
+        <div class="post-meta">
+            
+            <span class="post-meta meta-tags">
+                <ul class="clearfix">
+                    <a href='/categories/%E5%A4%A7%E6%95%B0%E6%8D%AE'>大数据</a>
+                </ul>
+            </span>
+            
+        </div>
+        
+        
+        <div class="post-meta">
+            <span id="busuanzi_container_page_pv">|<span id="busuanzi_value_page_pv"></span><span>
+                    阅读</span></span>
+        </div>
+        
+        
+        <div class="post-content">
+            <h2 id="概览">概览</h2>
+<p>Spark + Delta-Lake，写入Parquet 文件，总体流程如下：<br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/09/25/7xCsuq.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/09/25/7xCsuq.png" />
+        </a>
+    <br>
+图片来自 -&gt; <a href="https://dataninjago.com/2021/12/03/databricks-deep-dive-1-table-writing-journey-overview/">这里</a></p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">8
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">9
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-scala" data-lang="scala"><span style="display:flex;"><span>df<span style="color:#ff79c6">.</span>write<span style="color:#ff79c6">.</span>format<span style="color:#ff79c6">(</span><span style="color:#f1fa8c">&#34;delta&#34;</span><span style="color:#ff79c6">).</span>save<span style="color:#ff79c6">(</span>path<span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">def</span> write<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">DataFrameWriter</span><span style="color:#ff79c6">[</span><span style="color:#8be9fd">T</span><span style="color:#ff79c6">]</span> <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">if</span> <span style="color:#ff79c6">(</span>isStreaming<span style="color:#ff79c6">)</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>    logicalPlan<span style="color:#ff79c6">.</span>failAnalysis<span style="color:#ff79c6">(</span>
+</span></span><span style="display:flex;"><span>	  <span style="color:#f1fa8c">&#34;&#39;write&#39; can not be called on streaming Dataset/DataFrame&#34;</span><span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">}</span>
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">new</span> <span style="color:#50fa7b">DataFrameWriter</span><span style="color:#ff79c6">[</span><span style="color:#8be9fd">T</span><span style="color:#ff79c6">](</span><span style="color:#ff79c6">this</span><span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">}</span>
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>format(&ldquo;delta&rdquo;) 这个别名的注册，是通过<code>DeltaDataSource</code>实现了这个接口<br>
+以插件的形式，注入到 Spark 中<br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/09/25/7xC2Ds.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/09/25/7xC2Ds.png" />
+        </a>
+    </p>
+<p>DataFrameWrite 会将执行流程 转到 saveToV1Source  函数，这个函数又会调用 planForWriting</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-scala" data-lang="scala"><span style="display:flex;"><span>  <span style="color:#ff79c6">def</span> planForWriting<span style="color:#ff79c6">(</span>mode<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">SaveMode</span><span style="color:#ff79c6">,</span> data<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">LogicalPlan</span><span style="color:#ff79c6">)</span><span style="color:#ff79c6">:</span> <span style="color:#8be9fd">LogicalPlan</span> <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>    providingInstance<span style="color:#ff79c6">()</span> <span style="color:#ff79c6">match</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>      <span style="color:#ff79c6">case</span> dataSource<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">CreatableRelationProvider</span> <span style="color:#ff79c6">=&gt;</span>
+</span></span><span style="display:flex;"><span>        disallowWritingIntervals<span style="color:#ff79c6">(</span>data<span style="color:#ff79c6">.</span>schema<span style="color:#ff79c6">.</span>map<span style="color:#ff79c6">(</span><span style="color:#ff79c6">_</span><span style="color:#ff79c6">.</span>dataType<span style="color:#ff79c6">),</span> forbidAnsiIntervals <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">true</span><span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#50fa7b">SaveIntoDataSourceCommand</span><span style="color:#ff79c6">(</span>data<span style="color:#ff79c6">,</span> dataSource<span style="color:#ff79c6">,</span> caseInsensitiveOptions<span style="color:#ff79c6">,</span> mode<span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>      <span style="color:#ff79c6">case</span> format<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">FileFormat</span> <span style="color:#ff79c6">=&gt;</span>
+</span></span><span style="display:flex;"><span>        disallowWritingIntervals<span style="color:#ff79c6">(</span>data<span style="color:#ff79c6">.</span>schema<span style="color:#ff79c6">.</span>map<span style="color:#ff79c6">(</span><span style="color:#ff79c6">_</span><span style="color:#ff79c6">.</span>dataType<span style="color:#ff79c6">),</span> forbidAnsiIntervals <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">false</span><span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#50fa7b">DataSource</span><span style="color:#ff79c6">.</span>validateSchema<span style="color:#ff79c6">(</span>data<span style="color:#ff79c6">.</span>schema<span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>        planForWritingFileFormat<span style="color:#ff79c6">(</span>format<span style="color:#ff79c6">,</span> mode<span style="color:#ff79c6">,</span> data<span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>      <span style="color:#ff79c6">case</span> <span style="color:#ff79c6">_</span> <span style="color:#ff79c6">=&gt;</span> <span style="color:#ff79c6">throw</span> <span style="color:#ff79c6">new</span> <span style="color:#50fa7b">IllegalStateException</span><span style="color:#ff79c6">(</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#f1fa8c">s&#34;</span><span style="color:#f1fa8c">${</span>providingClass<span style="color:#ff79c6">.</span>getCanonicalName<span style="color:#f1fa8c">}</span><span style="color:#f1fa8c"> does not allow create table as select.&#34;</span><span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">}</span>
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">}</span>
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>然后执行 SaveIntoDataSourceCommand</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">15
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">16
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">17
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">18
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">19
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-scala" data-lang="scala"><span style="display:flex;"><span><span style="color:#ff79c6">case</span> <span style="color:#ff79c6">class</span> <span style="color:#50fa7b">SaveIntoDataSourceCommand</span><span style="color:#ff79c6">(</span>
+</span></span><span style="display:flex;"><span>    query<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">LogicalPlan</span><span style="color:#ff79c6">,</span>
+</span></span><span style="display:flex;"><span>    dataSource<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">CreatableRelationProvider</span><span style="color:#ff79c6">,</span>
+</span></span><span style="display:flex;"><span>    options<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">Map</span><span style="color:#ff79c6">[</span><span style="color:#8be9fd">String</span>, <span style="color:#8be9fd">String</span><span style="color:#ff79c6">],</span>
+</span></span><span style="display:flex;"><span>    mode<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">SaveMode</span><span style="color:#ff79c6">)</span> <span style="color:#ff79c6">extends</span> <span style="color:#50fa7b">LeafRunnableCommand</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">override</span> <span style="color:#ff79c6">def</span> innerChildren<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">Seq</span><span style="color:#ff79c6">[</span><span style="color:#8be9fd">QueryPlan</span><span style="color:#ff79c6">[</span><span style="color:#ff79c6">_</span><span style="color:#ff79c6">]]</span> <span style="color:#ff79c6">=</span> <span style="color:#50fa7b">Seq</span><span style="color:#ff79c6">(</span>query<span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">override</span> <span style="color:#ff79c6">def</span> run<span style="color:#ff79c6">(</span>sparkSession<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">SparkSession</span><span style="color:#ff79c6">)</span><span style="color:#ff79c6">:</span> <span style="color:#8be9fd">Seq</span><span style="color:#ff79c6">[</span><span style="color:#8be9fd">Row</span><span style="color:#ff79c6">]</span> <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">val</span> relation <span style="color:#ff79c6">=</span> dataSource<span style="color:#ff79c6">.</span>createRelation<span style="color:#ff79c6">(</span>
+</span></span><span style="display:flex;"><span>      sparkSession<span style="color:#ff79c6">.</span>sqlContext<span style="color:#ff79c6">,</span> mode<span style="color:#ff79c6">,</span> options<span style="color:#ff79c6">,</span> <span style="color:#50fa7b">Dataset</span><span style="color:#ff79c6">.</span>ofRows<span style="color:#ff79c6">(</span>sparkSession<span style="color:#ff79c6">,</span> query<span style="color:#ff79c6">))</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">try</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>      <span style="color:#ff79c6">val</span> logicalRelation <span style="color:#ff79c6">=</span> <span style="color:#50fa7b">LogicalRelation</span><span style="color:#ff79c6">(</span>relation<span style="color:#ff79c6">,</span> relation<span style="color:#ff79c6">.</span>schema<span style="color:#ff79c6">.</span>toAttributes<span style="color:#ff79c6">,</span> <span style="color:#50fa7b">None</span><span style="color:#ff79c6">,</span> <span style="color:#ff79c6">false</span><span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>      sparkSession<span style="color:#ff79c6">.</span>sharedState<span style="color:#ff79c6">.</span>cacheManager<span style="color:#ff79c6">.</span>recacheByPlan<span style="color:#ff79c6">(</span>sparkSession<span style="color:#ff79c6">,</span> logicalRelation<span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">}</span> <span style="color:#ff79c6">catch</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>      <span style="color:#ff79c6">case</span> <span style="color:#50fa7b">NonFatal</span><span style="color:#ff79c6">(</span><span style="color:#ff79c6">_</span><span style="color:#ff79c6">)</span> <span style="color:#ff79c6">=&gt;</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#6272a4">// some data source can not support return a valid relation, e.g. `KafkaSourceProvider`
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>    <span style="color:#ff79c6">}</span>
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>这里调用<code>createRelation</code>，所以会创建出<code>DeltaDataSource</code><br>
+这里包含了 事务优化，写数据文件，写元数据等</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">15
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">16
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">17
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">18
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">19
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">20
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">21
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">22
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">23
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">24
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">25
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">26
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">27
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">28
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-scala" data-lang="scala"><span style="display:flex;"><span>  <span style="color:#ff79c6">override</span> <span style="color:#ff79c6">def</span> createRelation<span style="color:#ff79c6">(</span>
+</span></span><span style="display:flex;"><span>      sqlContext<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">SQLContext</span><span style="color:#ff79c6">,</span>
+</span></span><span style="display:flex;"><span>      mode<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">SaveMode</span><span style="color:#ff79c6">,</span>
+</span></span><span style="display:flex;"><span>      parameters<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">Map</span><span style="color:#ff79c6">[</span><span style="color:#8be9fd">String</span>, <span style="color:#8be9fd">String</span><span style="color:#ff79c6">],</span>
+</span></span><span style="display:flex;"><span>      data<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">DataFrame</span><span style="color:#ff79c6">)</span><span style="color:#ff79c6">:</span> <span style="color:#8be9fd">BaseRelation</span> <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">val</span> path <span style="color:#ff79c6">=</span> parameters<span style="color:#ff79c6">.</span>getOrElse<span style="color:#ff79c6">(</span><span style="color:#f1fa8c">&#34;path&#34;</span><span style="color:#ff79c6">,</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>      <span style="color:#ff79c6">throw</span> <span style="color:#50fa7b">DeltaErrors</span><span style="color:#ff79c6">.</span>pathNotSpecifiedException
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">})</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">val</span> partitionColumns <span style="color:#ff79c6">=</span> parameters<span style="color:#ff79c6">.</span>get<span style="color:#ff79c6">(</span><span style="color:#50fa7b">DeltaSourceUtils</span><span style="color:#ff79c6">.</span><span style="color:#50fa7b">PARTITIONING_COLUMNS_KEY</span><span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>      <span style="color:#ff79c6">.</span>map<span style="color:#ff79c6">(</span><span style="color:#50fa7b">DeltaDataSource</span><span style="color:#ff79c6">.</span>decodePartitioningColumns<span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>      <span style="color:#ff79c6">.</span>getOrElse<span style="color:#ff79c6">(</span><span style="color:#50fa7b">Nil</span><span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">val</span> deltaLog <span style="color:#ff79c6">=</span> <span style="color:#50fa7b">DeltaLog</span><span style="color:#ff79c6">.</span>forTable<span style="color:#ff79c6">(</span>sqlContext<span style="color:#ff79c6">.</span>sparkSession<span style="color:#ff79c6">,</span> <span style="color:#ff79c6">new</span> <span style="color:#50fa7b">Path</span><span style="color:#ff79c6">(</span>path<span style="color:#ff79c6">),</span> parameters<span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#50fa7b">WriteIntoDelta</span><span style="color:#ff79c6">(</span>
+</span></span><span style="display:flex;"><span>      deltaLog <span style="color:#ff79c6">=</span> deltaLog<span style="color:#ff79c6">,</span>
+</span></span><span style="display:flex;"><span>      mode <span style="color:#ff79c6">=</span> mode<span style="color:#ff79c6">,</span>
+</span></span><span style="display:flex;"><span>      <span style="color:#ff79c6">new</span> <span style="color:#50fa7b">DeltaOptions</span><span style="color:#ff79c6">(</span>parameters<span style="color:#ff79c6">,</span> sqlContext<span style="color:#ff79c6">.</span>sparkSession<span style="color:#ff79c6">.</span>sessionState<span style="color:#ff79c6">.</span>conf<span style="color:#ff79c6">),</span>
+</span></span><span style="display:flex;"><span>      partitionColumns <span style="color:#ff79c6">=</span> partitionColumns<span style="color:#ff79c6">,</span>
+</span></span><span style="display:flex;"><span>      configuration <span style="color:#ff79c6">=</span> <span style="color:#50fa7b">DeltaConfigs</span><span style="color:#ff79c6">.</span>validateConfigurations<span style="color:#ff79c6">(</span>
+</span></span><span style="display:flex;"><span>        parameters<span style="color:#ff79c6">.</span>filterKeys<span style="color:#ff79c6">(</span><span style="color:#ff79c6">_</span><span style="color:#ff79c6">.</span>startsWith<span style="color:#ff79c6">(</span><span style="color:#f1fa8c">&#34;delta.&#34;</span><span style="color:#ff79c6">)).</span>toMap<span style="color:#ff79c6">),</span>
+</span></span><span style="display:flex;"><span>      data <span style="color:#ff79c6">=</span> data<span style="color:#ff79c6">,</span>
+</span></span><span style="display:flex;"><span>      <span style="color:#6272a4">// empty catalogTable is acceptable as the code path is only for path based writes
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>      <span style="color:#6272a4">// (df.write.save(&#34;path&#34;)) which does not need to use/update catalog
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>      catalogTableOpt <span style="color:#ff79c6">=</span> <span style="color:#50fa7b">None</span>
+</span></span><span style="display:flex;"><span>      <span style="color:#ff79c6">).</span>run<span style="color:#ff79c6">(</span>sqlContext<span style="color:#ff79c6">.</span>sparkSession<span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    deltaLog<span style="color:#ff79c6">.</span>createRelation<span style="color:#ff79c6">()</span>
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">}</span>
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>参考代码，<a href="https://github.com/delta-io/delta/blob/master/spark/src/main/scala/org/apache/spark/sql/delta/sources/DeltaDataSource.scala#L180">这里</a></p>
+<p>最后是调用<code>FileFormatWriter</code>，将数据写入存储系统<br>
+这里会创建多个 Task，然后并行的写入<br>
+如果写入成功，最后会做一些统计信息，否则就是丢弃<br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/09/25/7xC6fa.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/09/25/7xC6fa.png" />
+        </a>
+    </p>
+<p>对于每个 Task内部，则是调用<code>ParquetOutputWriter</code>，开始写入 Parquet</p>
+<h2 id="parquet-内部">Parquet 内部</h2>
+<p>一些概念</p>
+<ul>
+<li>Magic Number and File Signature</li>
+<li>Row Group，数据按照 row 分成多块</li>
+<li>Column Chunk，每个 row group内部，按照 column 来存储</li>
+<li>Page，最小单元，每个 Column Chunk由多个 Page组成，page包括不同类型，page 中还包含了 head，用来描述结构
+<ul>
+<li>Data Pages store the actual column data.</li>
+<li>Index Pages store the index of column data.</li>
+<li>Dictionary Pages store dictionary-encoded data (if applicable).</li>
+</ul>
+</li>
+<li>Footer，包括：FileMetaData，Row Group MetaData，其中第二个又包括：
+<ul>
+<li>Column paths and encodings</li>
+<li>Number of values</li>
+<li>Offsets for the first data and index pages</li>
+<li>Compressed/uncompressed sizes</li>
+<li>Additional key/value metadata.</li>
+</ul>
+</li>
+<li>Metadata<br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/09/25/7xCZl7.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/09/25/7xCZl7.png" />
+        </a>
+    </li>
+</ul>
+<p>Spark内部执行 ParquetOutputWriter，然后创建 ParquetOutputFormat<br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/09/25/7xCdAI.pnp">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/09/25/7xCdAI.pnp" />
+        </a>
+    
+之后会将 Spark SQL Catalyst InternalRow 转为 Parquet messages
+ParquetFileWriter 封装了文件级别操作，然后设置 magic number<br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/09/25/7xCeJV.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/09/25/7xCeJV.png" />
+        </a>
+    </p>
+<p>Parquet 虽然是按照列来存储的，但是 DataFrame 是按照 row by row 处理的<br>
+也就是不断遍历：Iterator[InternalRow]<br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/09/25/7xJ9TL.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/09/25/7xJ9TL.png" />
+        </a>
+    </p>
+<p>调用<code>org.apache.parquet.hadoop.InternalParquetRecordWriter</code></p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">5
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-java" data-lang="java"><span style="display:flex;"><span>  <span style="color:#8be9fd;font-style:italic">public</span> <span style="color:#8be9fd">void</span> <span style="color:#50fa7b">write</span><span style="color:#ff79c6">(</span>T value<span style="color:#ff79c6">)</span> <span style="color:#8be9fd;font-style:italic">throws</span> IOException<span style="color:#ff79c6">,</span> InterruptedException <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>    writeSupport<span style="color:#ff79c6">.</span><span style="color:#50fa7b">write</span><span style="color:#ff79c6">(</span>value<span style="color:#ff79c6">);</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">++</span> recordCount<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span>    checkBlockSizeReached<span style="color:#ff79c6">();</span>
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">}</span>
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>再调用 实现类<code>org.apache.spark.sql.execution.datasources.parquet.ParquetWriteSupport</code></p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">15
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">16
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">17
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">18
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-scala" data-lang="scala"><span style="display:flex;"><span>  <span style="color:#ff79c6">override</span> <span style="color:#ff79c6">def</span> write<span style="color:#ff79c6">(</span>row<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">InternalRow</span><span style="color:#ff79c6">)</span><span style="color:#ff79c6">:</span> <span style="color:#8be9fd">Unit</span> <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>    consumeMessage <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>      writeFields<span style="color:#ff79c6">(</span>row<span style="color:#ff79c6">,</span> schema<span style="color:#ff79c6">,</span> rootFieldWriters<span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">}</span>
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">}</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">private</span> <span style="color:#ff79c6">def</span> writeFields<span style="color:#ff79c6">(</span>
+</span></span><span style="display:flex;"><span>      row<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">InternalRow</span><span style="color:#ff79c6">,</span> schema<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">StructType</span><span style="color:#ff79c6">,</span> fieldWriters<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">Array</span><span style="color:#ff79c6">[</span><span style="color:#8be9fd">ValueWriter</span><span style="color:#ff79c6">])</span><span style="color:#ff79c6">:</span> <span style="color:#8be9fd">Unit</span> <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">var</span> i <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">0</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">while</span> <span style="color:#ff79c6">(</span>i <span style="color:#ff79c6">&lt;</span> row<span style="color:#ff79c6">.</span>numFields<span style="color:#ff79c6">)</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>      <span style="color:#ff79c6">if</span> <span style="color:#ff79c6">(!</span>row<span style="color:#ff79c6">.</span>isNullAt<span style="color:#ff79c6">(</span>i<span style="color:#ff79c6">))</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>        consumeField<span style="color:#ff79c6">(</span>schema<span style="color:#ff79c6">(</span>i<span style="color:#ff79c6">).</span>name<span style="color:#ff79c6">,</span> i<span style="color:#ff79c6">)</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>          fieldWriters<span style="color:#ff79c6">(</span>i<span style="color:#ff79c6">).</span>apply<span style="color:#ff79c6">(</span>row<span style="color:#ff79c6">,</span> i<span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">}</span>
+</span></span><span style="display:flex;"><span>      <span style="color:#ff79c6">}</span>
+</span></span><span style="display:flex;"><span>      i <span style="color:#ff79c6">+=</span> <span style="color:#bd93f9">1</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">}</span>
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">}</span>
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>在 Parquet 端，调用 ValuesWriter对输入的值做编码
+相关的编码实现类如下：<br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/09/25/7xJkgJ.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/09/25/7xJkgJ.png" />
+        </a>
+    </p>
+<p>当达到 page 的阈值后，就会压缩这些数据，包括</p>
+<ul>
+<li>value count</li>
+<li>null value count</li>
+<li>min/max value</li>
+</ul>
+<p>parquet 内部按照 array list of byte[] (List&lt;byte[]&gt;) 存储的<br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/09/25/7xJTdB.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/09/25/7xJTdB.png" />
+        </a>
+    <br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/09/25/7xJput.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/09/25/7xJput.png" />
+        </a>
+    </p>
+<p>以上都是发生在 memory 中，真正的写磁盘是触发到了 row group 阈值</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">15
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">16
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">17
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">18
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">19
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">20
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">21
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">22
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">23
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-java" data-lang="java"><span style="display:flex;"><span>  <span style="color:#8be9fd;font-style:italic">private</span> <span style="color:#8be9fd">void</span> <span style="color:#50fa7b">flushRowGroupToStore</span><span style="color:#ff79c6">()</span>
+</span></span><span style="display:flex;"><span>      <span style="color:#8be9fd;font-style:italic">throws</span> IOException <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>    recordConsumer<span style="color:#ff79c6">.</span><span style="color:#50fa7b">flush</span><span style="color:#ff79c6">();</span>
+</span></span><span style="display:flex;"><span>    LOG<span style="color:#ff79c6">.</span><span style="color:#50fa7b">debug</span><span style="color:#ff79c6">(</span><span style="color:#f1fa8c">&#34;Flushing mem columnStore to file. allocated memory: {}&#34;</span><span style="color:#ff79c6">,</span> columnStore<span style="color:#ff79c6">.</span><span style="color:#50fa7b">getAllocatedSize</span><span style="color:#ff79c6">());</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">if</span> <span style="color:#ff79c6">(</span>columnStore<span style="color:#ff79c6">.</span><span style="color:#50fa7b">getAllocatedSize</span><span style="color:#ff79c6">()</span> <span style="color:#ff79c6">&gt;</span> <span style="color:#ff79c6">(</span>3 <span style="color:#ff79c6">*</span> rowGroupSizeThreshold<span style="color:#ff79c6">))</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>      LOG<span style="color:#ff79c6">.</span><span style="color:#50fa7b">warn</span><span style="color:#ff79c6">(</span><span style="color:#f1fa8c">&#34;Too much memory used: {}&#34;</span><span style="color:#ff79c6">,</span> columnStore<span style="color:#ff79c6">.</span><span style="color:#50fa7b">memUsageString</span><span style="color:#ff79c6">());</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">}</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">if</span> <span style="color:#ff79c6">(</span>recordCount <span style="color:#ff79c6">&gt;</span> 0<span style="color:#ff79c6">)</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>      rowGroupOrdinal<span style="color:#ff79c6">++;</span>
+</span></span><span style="display:flex;"><span>      parquetFileWriter<span style="color:#ff79c6">.</span><span style="color:#50fa7b">startBlock</span><span style="color:#ff79c6">(</span>recordCount<span style="color:#ff79c6">);</span>
+</span></span><span style="display:flex;"><span>      columnStore<span style="color:#ff79c6">.</span><span style="color:#50fa7b">flush</span><span style="color:#ff79c6">();</span>
+</span></span><span style="display:flex;"><span>      pageStore<span style="color:#ff79c6">.</span><span style="color:#50fa7b">flushToFileWriter</span><span style="color:#ff79c6">(</span>parquetFileWriter<span style="color:#ff79c6">);</span>
+</span></span><span style="display:flex;"><span>      recordCount <span style="color:#ff79c6">=</span> 0<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span>      parquetFileWriter<span style="color:#ff79c6">.</span><span style="color:#50fa7b">endBlock</span><span style="color:#ff79c6">();</span>
+</span></span><span style="display:flex;"><span>      <span style="color:#ff79c6">this</span><span style="color:#ff79c6">.</span><span style="color:#50fa7b">nextRowGroupSize</span> <span style="color:#ff79c6">=</span> Math<span style="color:#ff79c6">.</span><span style="color:#50fa7b">min</span><span style="color:#ff79c6">(</span>
+</span></span><span style="display:flex;"><span>          parquetFileWriter<span style="color:#ff79c6">.</span><span style="color:#50fa7b">getNextRowGroupSize</span><span style="color:#ff79c6">(),</span>
+</span></span><span style="display:flex;"><span>          rowGroupSizeThreshold<span style="color:#ff79c6">);</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">}</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    columnStore <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">null</span><span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span>    pageStore <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">null</span><span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">}</span>
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/09/25/7xJLOb.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/09/25/7xJLOb.png" />
+        </a>
+    <br>
+之后，Parquet解除当前的列存储和页存储并重新初始化新的存储，并继续读取剩余的数据框行并重复该过程<br>
+FileMetaData Write<br>
+在最后，将所有 row group 的 meta 信息存储<br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/09/25/7xJ0fe.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/09/25/7xJ0fe.png" />
+        </a>
+    </p>
+<h2 id="parquet-encoding">Parquet Encoding</h2>
+<p>Dictionary Encoding</p>
+<ul>
+<li>将列的 value 替换成 dictionary 的index</li>
+<li>尽量选择基数小的，比如年龄，性别等，不合适基数高的情况
+![](<a href="https://v1.ax1x.com/2024/10/05/7xIPNB.png">https://v1.ax1x.com/2024/10/05/7xIPNB.png</a>）</li>
+</ul>
+<p>Run Length Encoding (RLE)</p>
+<ul>
+<li>可以看做是 dictionary encoding 的补充</li>
+<li>如果一个值反复出现了多次，就记录【出现的次数】- 【值的内容】</li>
+<li>如果column 中包括的都是不相同的值，则效果就不好了
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/10/05/7xIRvt.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/10/05/7xIRvt.png" />
+        </a>
+    </li>
+</ul>
+<p>Delta Encoding</p>
+<ul>
+<li>适合时间戳这样的，用 long 来表示每个时间戳的值</li>
+<li>起始值是一个比较大的值，而后面每次变化其实不大</li>
+<li>只需要很少的 bit 就可以存储每次增量的变化
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/10/05/7xIYIb.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/10/05/7xIYIb.png" />
+        </a>
+    </li>
+</ul>
+<p>parquet 如何实现 encoding</p>
+<ul>
+<li>根类是 ValuesWriter</li>
+<li>实现的抽象类是 DictionaryValuesWriter，它下面还有各种类型的 具体实现类
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/10/05/7xItLe.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/10/05/7xItLe.png" />
+        </a>
+    </li>
+</ul>
+<p>下面是 PlainBinaryDictionaryValuesWriter</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">15
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">16
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">17
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">18
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">19
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">20
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">21
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">22
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">23
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">24
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-java" data-lang="java"><span style="display:flex;"><span><span style="color:#8be9fd;font-style:italic">public</span> <span style="color:#8be9fd;font-style:italic">static</span> <span style="color:#8be9fd;font-style:italic">class</span> <span style="color:#50fa7b">PlainBinaryDictionaryValuesWriter</span> <span style="color:#8be9fd;font-style:italic">extends</span> DictionaryValuesWriter <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#6272a4">/* type specific dictionary content */</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#8be9fd;font-style:italic">protected</span> Object2IntMap<span style="color:#ff79c6">&lt;</span>Binary<span style="color:#ff79c6">&gt;</span> binaryDictionaryContent <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">new</span> Object2IntLinkedOpenHashMap<span style="color:#ff79c6">&lt;&gt;();</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#8be9fd;font-style:italic">public</span> <span style="color:#50fa7b">PlainBinaryDictionaryValuesWriter</span><span style="color:#ff79c6">(</span><span style="color:#8be9fd">int</span> maxDictionaryByteSize<span style="color:#ff79c6">,</span> Encoding encodingForDataPage<span style="color:#ff79c6">,</span> 
+</span></span><span style="display:flex;"><span>	Encoding encodingForDictionaryPage<span style="color:#ff79c6">,</span> ByteBufferAllocator allocator<span style="color:#ff79c6">)</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>      <span style="color:#8be9fd;font-style:italic">super</span><span style="color:#ff79c6">(</span>maxDictionaryByteSize<span style="color:#ff79c6">,</span> encodingForDataPage<span style="color:#ff79c6">,</span> encodingForDictionaryPage<span style="color:#ff79c6">,</span> allocator<span style="color:#ff79c6">);</span>
+</span></span><span style="display:flex;"><span>      binaryDictionaryContent<span style="color:#ff79c6">.</span><span style="color:#50fa7b">defaultReturnValue</span><span style="color:#ff79c6">(-</span>1<span style="color:#ff79c6">);</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">}</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    @Override
+</span></span><span style="display:flex;"><span>    <span style="color:#8be9fd;font-style:italic">public</span> <span style="color:#8be9fd">void</span> <span style="color:#50fa7b">writeBytes</span><span style="color:#ff79c6">(</span>Binary v<span style="color:#ff79c6">)</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>      <span style="color:#8be9fd">int</span> id <span style="color:#ff79c6">=</span> binaryDictionaryContent<span style="color:#ff79c6">.</span><span style="color:#50fa7b">getInt</span><span style="color:#ff79c6">(</span>v<span style="color:#ff79c6">);</span>
+</span></span><span style="display:flex;"><span>      <span style="color:#ff79c6">if</span> <span style="color:#ff79c6">(</span>id <span style="color:#ff79c6">==</span> <span style="color:#ff79c6">-</span>1<span style="color:#ff79c6">)</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>        id <span style="color:#ff79c6">=</span> binaryDictionaryContent<span style="color:#ff79c6">.</span><span style="color:#50fa7b">size</span><span style="color:#ff79c6">();</span>
+</span></span><span style="display:flex;"><span>        binaryDictionaryContent<span style="color:#ff79c6">.</span><span style="color:#50fa7b">put</span><span style="color:#ff79c6">(</span>v<span style="color:#ff79c6">.</span><span style="color:#50fa7b">copy</span><span style="color:#ff79c6">(),</span> id<span style="color:#ff79c6">);</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#6272a4">// length as int (4 bytes) + actual bytes
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>        dictionaryByteSize <span style="color:#ff79c6">+=</span> 4L <span style="color:#ff79c6">+</span> v<span style="color:#ff79c6">.</span><span style="color:#50fa7b">length</span><span style="color:#ff79c6">();</span>
+</span></span><span style="display:flex;"><span>      <span style="color:#ff79c6">}</span>
+</span></span><span style="display:flex;"><span>      encodedValues<span style="color:#ff79c6">.</span><span style="color:#50fa7b">add</span><span style="color:#ff79c6">(</span>id<span style="color:#ff79c6">);</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">}</span>
+</span></span><span style="display:flex;"><span>。。。
+</span></span><span style="display:flex;"><span>	
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>内部使用 hash-map 做编号的，超过阈值后，将 这个编号信息 flush</p>
+<p>RLE 的实现是<code>RunLengthBitPackingHybridValuesWriter</code>
+如果重复的次数超过 8 次，使用下面算法</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-shell" data-lang="shell"><span style="display:flex;"><span>rle-run :<span style="color:#ff79c6">=</span> &lt;rle-header&gt; &lt;repeated-value&gt;
+</span></span><span style="display:flex;"><span>rle-header :<span style="color:#ff79c6">=</span> varint-encode<span style="color:#ff79c6">((</span>rle-run-len<span style="color:#ff79c6">)</span> <span style="color:#f1fa8c">&lt;&lt; 1)
+</span></span></span><span style="display:flex;"><span><span style="color:#f1fa8c">repeated-value := value that is repeated, using a fixed-width of round-up-to-next-byte(bit-width)
+</span></span></span><span style="display:flex;"><span><span style="color:#f1fa8c">*varint-encode is ULEB01</span><span style="color:#bd93f9">28</span> coding
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/10/05/7xIzxP.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/10/05/7xIzxP.png" />
+        </a>
+    <br>
+否则使用下面算法</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-shell" data-lang="shell"><span style="display:flex;"><span>bit-packed-run :<span style="color:#ff79c6">=</span> &lt;bit-packed-header&gt; &lt;bit-packed-values&gt;
+</span></span><span style="display:flex;"><span>bit-packed-header :<span style="color:#ff79c6">=</span> varint-encode<span style="color:#ff79c6">(</span>&lt;bit-pack-scaled-run-len&gt; <span style="color:#f1fa8c">&lt;&lt; 1 | 1</span><span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>bit-pack-scaled-run-len :<span style="color:#ff79c6">=</span> <span style="color:#ff79c6">(</span>bit-packed-run-len<span style="color:#ff79c6">)</span> / <span style="color:#bd93f9">8</span>
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>delta 的实现很多，包括</p>
+<ul>
+<li>DeltaBinaryPackingValuesWriter ， Int32</li>
+<li>DeltaLengthByteArrayValuesWriter ，Int64</li>
+<li>DeltaLengthByteArrayValuesWriter</li>
+<li>DeltaByteArrayWriter</li>
+</ul>
+<p>就是通过计算本次，前一次的差值来写入的<br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/10/05/7xI44w.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/10/05/7xI44w.png" />
+        </a>
+    </p>
+<p>parquet 通过 factory 创建不同的 writer<br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/10/05/7xIJ96.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/10/05/7xIJ96.png" />
+        </a>
+    </p>
+<p>接口类</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">5
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-java" data-lang="java"><span style="display:flex;"><span><span style="color:#8be9fd;font-style:italic">public</span> <span style="color:#8be9fd;font-style:italic">interface</span> <span style="color:#50fa7b">ValuesWriterFactory</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#8be9fd">void</span> <span style="color:#50fa7b">initialize</span><span style="color:#ff79c6">(</span>ParquetProperties var1<span style="color:#ff79c6">);</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    ValuesWriter <span style="color:#50fa7b">newValuesWriter</span><span style="color:#ff79c6">(</span>ColumnDescriptor var1<span style="color:#ff79c6">);</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">}</span>
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>DefaultValuesWriterFactory 的主要实现</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">15
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">16
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">17
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">18
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">19
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">20
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">21
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">22
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">23
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">24
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">25
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">26
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">27
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">28
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">29
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">30
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">31
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">32
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">33
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">34
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-java" data-lang="java"><span style="display:flex;"><span>    <span style="color:#8be9fd;font-style:italic">public</span> ValuesWriter <span style="color:#50fa7b">newValuesWriter</span><span style="color:#ff79c6">(</span>ColumnDescriptor descriptor<span style="color:#ff79c6">)</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">return</span> <span style="color:#ff79c6">this</span><span style="color:#ff79c6">.</span><span style="color:#50fa7b">delegateFactory</span><span style="color:#ff79c6">.</span><span style="color:#50fa7b">newValuesWriter</span><span style="color:#ff79c6">(</span>descriptor<span style="color:#ff79c6">);</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">}</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#8be9fd;font-style:italic">static</span> DictionaryValuesWriter <span style="color:#50fa7b">dictionaryWriter</span><span style="color:#ff79c6">(</span>ColumnDescriptor path<span style="color:#ff79c6">,</span> ParquetProperties properties<span style="color:#ff79c6">,</span> Encoding dictPageEncoding<span style="color:#ff79c6">,</span> Encoding 
+</span></span><span style="display:flex;"><span>	dataPageEncoding<span style="color:#ff79c6">)</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">switch</span><span style="color:#ff79c6">(</span>path<span style="color:#ff79c6">.</span><span style="color:#50fa7b">getType</span><span style="color:#ff79c6">())</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">case</span> BOOLEAN<span style="color:#ff79c6">:</span>
+</span></span><span style="display:flex;"><span>            <span style="color:#ff79c6">throw</span> <span style="color:#ff79c6">new</span> IllegalArgumentException<span style="color:#ff79c6">(</span><span style="color:#f1fa8c">&#34;no dictionary encoding for BOOLEAN&#34;</span><span style="color:#ff79c6">);</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">case</span> BINARY<span style="color:#ff79c6">:</span>
+</span></span><span style="display:flex;"><span>            <span style="color:#ff79c6">return</span> <span style="color:#ff79c6">new</span> PlainBinaryDictionaryValuesWriter<span style="color:#ff79c6">(</span>properties<span style="color:#ff79c6">.</span><span style="color:#50fa7b">getDictionaryPageSizeThreshold</span><span style="color:#ff79c6">(),</span> dataPageEncoding<span style="color:#ff79c6">,</span> dictPageEncoding<span style="color:#ff79c6">,</span> 
+</span></span><span style="display:flex;"><span>			properties<span style="color:#ff79c6">.</span><span style="color:#50fa7b">getAllocator</span><span style="color:#ff79c6">());</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">case</span> INT32<span style="color:#ff79c6">:</span>
+</span></span><span style="display:flex;"><span>            <span style="color:#ff79c6">return</span> <span style="color:#ff79c6">new</span> PlainIntegerDictionaryValuesWriter<span style="color:#ff79c6">(</span>properties<span style="color:#ff79c6">.</span><span style="color:#50fa7b">getDictionaryPageSizeThreshold</span><span style="color:#ff79c6">(),</span> dataPageEncoding<span style="color:#ff79c6">,</span> dictPageEncoding<span style="color:#ff79c6">,</span> 
+</span></span><span style="display:flex;"><span>			properties<span style="color:#ff79c6">.</span><span style="color:#50fa7b">getAllocator</span><span style="color:#ff79c6">());</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">case</span> INT64<span style="color:#ff79c6">:</span>
+</span></span><span style="display:flex;"><span>            <span style="color:#ff79c6">return</span> <span style="color:#ff79c6">new</span> PlainLongDictionaryValuesWriter<span style="color:#ff79c6">(</span>properties<span style="color:#ff79c6">.</span><span style="color:#50fa7b">getDictionaryPageSizeThreshold</span><span style="color:#ff79c6">(),</span> dataPageEncoding<span style="color:#ff79c6">,</span> dictPageEncoding<span style="color:#ff79c6">,</span> 
+</span></span><span style="display:flex;"><span>			properties<span style="color:#ff79c6">.</span><span style="color:#50fa7b">getAllocator</span><span style="color:#ff79c6">());</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">case</span> INT96<span style="color:#ff79c6">:</span>
+</span></span><span style="display:flex;"><span>            <span style="color:#ff79c6">return</span> <span style="color:#ff79c6">new</span> PlainFixedLenArrayDictionaryValuesWriter<span style="color:#ff79c6">(</span>properties<span style="color:#ff79c6">.</span><span style="color:#50fa7b">getDictionaryPageSizeThreshold</span><span style="color:#ff79c6">(),</span> 12<span style="color:#ff79c6">,</span> dataPageEncoding<span style="color:#ff79c6">,</span> 
+</span></span><span style="display:flex;"><span>			dictPageEncoding<span style="color:#ff79c6">,</span> properties<span style="color:#ff79c6">.</span><span style="color:#50fa7b">getAllocator</span><span style="color:#ff79c6">());</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">case</span> DOUBLE<span style="color:#ff79c6">:</span>
+</span></span><span style="display:flex;"><span>            <span style="color:#ff79c6">return</span> <span style="color:#ff79c6">new</span> PlainDoubleDictionaryValuesWriter<span style="color:#ff79c6">(</span>properties<span style="color:#ff79c6">.</span><span style="color:#50fa7b">getDictionaryPageSizeThreshold</span><span style="color:#ff79c6">(),</span> dataPageEncoding<span style="color:#ff79c6">,</span> dictPageEncoding<span style="color:#ff79c6">,</span> 
+</span></span><span style="display:flex;"><span>			properties<span style="color:#ff79c6">.</span><span style="color:#50fa7b">getAllocator</span><span style="color:#ff79c6">());</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">case</span> FLOAT<span style="color:#ff79c6">:</span>
+</span></span><span style="display:flex;"><span>            <span style="color:#ff79c6">return</span> <span style="color:#ff79c6">new</span> PlainFloatDictionaryValuesWriter<span style="color:#ff79c6">(</span>properties<span style="color:#ff79c6">.</span><span style="color:#50fa7b">getDictionaryPageSizeThreshold</span><span style="color:#ff79c6">(),</span> dataPageEncoding<span style="color:#ff79c6">,</span> dictPageEncoding<span style="color:#ff79c6">,</span> 
+</span></span><span style="display:flex;"><span>			properties<span style="color:#ff79c6">.</span><span style="color:#50fa7b">getAllocator</span><span style="color:#ff79c6">());</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">case</span> FIXED_LEN_BYTE_ARRAY<span style="color:#ff79c6">:</span>
+</span></span><span style="display:flex;"><span>            <span style="color:#ff79c6">return</span> <span style="color:#ff79c6">new</span> PlainFixedLenArrayDictionaryValuesWriter<span style="color:#ff79c6">(</span>properties<span style="color:#ff79c6">.</span><span style="color:#50fa7b">getDictionaryPageSizeThreshold</span><span style="color:#ff79c6">(),</span> path<span style="color:#ff79c6">.</span><span style="color:#50fa7b">getTypeLength</span><span style="color:#ff79c6">(),</span> 
+</span></span><span style="display:flex;"><span>			dataPageEncoding<span style="color:#ff79c6">,</span> dictPageEncoding<span style="color:#ff79c6">,</span> properties<span style="color:#ff79c6">.</span><span style="color:#50fa7b">getAllocator</span><span style="color:#ff79c6">());</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">default</span><span style="color:#ff79c6">:</span>
+</span></span><span style="display:flex;"><span>            <span style="color:#ff79c6">throw</span> <span style="color:#ff79c6">new</span> IllegalArgumentException<span style="color:#ff79c6">(</span><span style="color:#f1fa8c">&#34;Unknown type &#34;</span> <span style="color:#ff79c6">+</span> path<span style="color:#ff79c6">.</span><span style="color:#50fa7b">getType</span><span style="color:#ff79c6">());</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">}</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">}</span>
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>也实现自定义的 encoding 类，只要继承 ValuesWriterFactory 即可 <br>
+然后 在 org.apache.parquet.column.Build#withValuesWriterFactory 进行设置</p>
+<h2 id="vectorised-parquet-reading">Vectorised Parquet Reading</h2>
+<p>早期的时候是一次读一行，现在改为一次读一个 batch</p>
+<p>ColumnBatch 包装了若干个 ColumnVectors，ColumnVectors 包括了一个列的若干值   <br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/10/08/7xM9FH.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/10/08/7xM9FH.png" />
+        </a>
+    </p>
+<p>ColumnBatch 也提供了 row 迭代的访问方式，
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/10/08/7xML0s.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/10/08/7xML0s.png" />
+        </a>
+    </p>
+<p>提供了获取各种数据类型的方式<br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/10/08/7xMmMq.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/10/08/7xMmMq.png" />
+        </a>
+    </p>
+<p>Spark 在读取的时候，是重用了 ColumnVector 实例，这样开销就很小了<br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/10/08/7xM7kI.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/10/08/7xM7kI.png" />
+        </a>
+    </p>
+<p>Spark实现的parquet 主要包含</p>
+<ul>
+<li>VectorizedParquetRecordReader</li>
+<li>VectorizedColumnReader</li>
+<li>VectorizedValuersReader</li>
+</ul>
+<p>执行过程</p>
+<ul>
+<li>初始化 VectorizedParquetRecordReader，调用nextKeyValue</li>
+<li>创建多个 VectorizedColumnReaders，每个对应一个column</li>
+<li>之后通过VectorizedValuesReader，用来读取和解码数据</li>
+<li>有两个版本的VectorizedRleValuesReader (RLE/Bit-PackingHybrid)</li>
+<li>以及VectorizedPlainValuesReader(for plain encoding)</li>
+<li>最后将这些数据返回给 VectorizedParquetRecordReader，再由上层进一步消费
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/10/08/7xMNFJ.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/10/08/7xMNFJ.png" />
+        </a>
+    </li>
+</ul>
+<p>VectorizedParquetRecordReader</p>
+<ul>
+<li>继承自抽象类RecordReader，覆盖了 nextKeyValue 函数</li>
+<li>读之前会创建capacity 和 内存模式(on-heap or off-heap)</li>
+<li>首先创建 ColumnBatch，然后创建 ColumnVector(对应于每个column)</li>
+<li>再通过VectorizedColumnReader 读每个 batach column</li>
+</ul>
+<p>VectorizedParquetRecordReader#nextBatch 主要逻辑：</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">15
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">16
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">17
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">18
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">19
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">20
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">21
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">22
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">23
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">24
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">25
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">26
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-java" data-lang="java"><span style="display:flex;"><span>  <span style="color:#8be9fd;font-style:italic">public</span> <span style="color:#8be9fd">boolean</span> <span style="color:#50fa7b">nextBatch</span><span style="color:#ff79c6">()</span> <span style="color:#8be9fd;font-style:italic">throws</span> IOException <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">for</span> <span style="color:#ff79c6">(</span>ParquetColumnVector vector <span style="color:#ff79c6">:</span> columnVectors<span style="color:#ff79c6">)</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>      vector<span style="color:#ff79c6">.</span><span style="color:#50fa7b">reset</span><span style="color:#ff79c6">();</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">}</span>
+</span></span><span style="display:flex;"><span>    columnarBatch<span style="color:#ff79c6">.</span><span style="color:#50fa7b">setNumRows</span><span style="color:#ff79c6">(</span>0<span style="color:#ff79c6">);</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">if</span> <span style="color:#ff79c6">(</span>rowsReturned <span style="color:#ff79c6">&gt;=</span> totalRowCount<span style="color:#ff79c6">)</span> <span style="color:#ff79c6">return</span> <span style="color:#ff79c6">false</span><span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span>    checkEndOfRowGroup<span style="color:#ff79c6">();</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#8be9fd">int</span> num <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">(</span><span style="color:#8be9fd">int</span><span style="color:#ff79c6">)</span> Math<span style="color:#ff79c6">.</span><span style="color:#50fa7b">min</span><span style="color:#ff79c6">(</span>capacity<span style="color:#ff79c6">,</span> totalCountLoadedSoFar <span style="color:#ff79c6">-</span> rowsReturned<span style="color:#ff79c6">);</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">for</span> <span style="color:#ff79c6">(</span>ParquetColumnVector cv <span style="color:#ff79c6">:</span> columnVectors<span style="color:#ff79c6">)</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>      <span style="color:#ff79c6">for</span> <span style="color:#ff79c6">(</span>ParquetColumnVector leafCv <span style="color:#ff79c6">:</span> cv<span style="color:#ff79c6">.</span><span style="color:#50fa7b">getLeaves</span><span style="color:#ff79c6">())</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>        VectorizedColumnReader columnReader <span style="color:#ff79c6">=</span> leafCv<span style="color:#ff79c6">.</span><span style="color:#50fa7b">getColumnReader</span><span style="color:#ff79c6">();</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">if</span> <span style="color:#ff79c6">(</span>columnReader <span style="color:#ff79c6">!=</span> <span style="color:#ff79c6">null</span><span style="color:#ff79c6">)</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>          columnReader<span style="color:#ff79c6">.</span><span style="color:#50fa7b">readBatch</span><span style="color:#ff79c6">(</span>num<span style="color:#ff79c6">,</span> leafCv<span style="color:#ff79c6">.</span><span style="color:#50fa7b">getValueVector</span><span style="color:#ff79c6">(),</span>
+</span></span><span style="display:flex;"><span>            leafCv<span style="color:#ff79c6">.</span><span style="color:#50fa7b">getRepetitionLevelVector</span><span style="color:#ff79c6">(),</span> leafCv<span style="color:#ff79c6">.</span><span style="color:#50fa7b">getDefinitionLevelVector</span><span style="color:#ff79c6">());</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">}</span>
+</span></span><span style="display:flex;"><span>      <span style="color:#ff79c6">}</span>
+</span></span><span style="display:flex;"><span>      cv<span style="color:#ff79c6">.</span><span style="color:#50fa7b">assemble</span><span style="color:#ff79c6">();</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">}</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    rowsReturned <span style="color:#ff79c6">+=</span> num<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span>    columnarBatch<span style="color:#ff79c6">.</span><span style="color:#50fa7b">setNumRows</span><span style="color:#ff79c6">(</span>num<span style="color:#ff79c6">);</span>
+</span></span><span style="display:flex;"><span>    numBatched <span style="color:#ff79c6">=</span> num<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span>    batchIdx <span style="color:#ff79c6">=</span> 0<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">return</span> <span style="color:#ff79c6">true</span><span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">}</span>
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>VectorizedColumnReader &amp; VectorizedValuesReader</p>
+<ul>
+<li>VectorizedColumnReader 创建对应的 ColumnDescriptor</li>
+<li>执行readBatch 时，传递两个参数，total(读batch 的数量)，column</li>
+</ul>
+<p>
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/10/08/7xMuqG.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/10/08/7xMuqG.png" />
+        </a>
+    </p>
+<p>如果 isCurrentPageDictionaryEncoded 被打开，则计算  dictionary encoded column values
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/10/08/7xMyMt.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/10/08/7xMyMt.png" />
+        </a>
+    </p>
+<p>如果isCurrentPageDictionaryEncoded 关闭，则根据类型做解码
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/10/08/7xMK3b.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/10/08/7xMK3b.png" />
+        </a>
+    <br>
+这里是通过 VectorizedValueReader 来读取，并解码的</p>
+<h2 id="参考">参考</h2>
+<ul>
+<li><a href="https://dataninjago.com/2021/12/03/databricks-deep-dive-1-table-writing-journey-overview/">Parquet for Spark Deep Dive (1) – Table Writing Journey Overview</a></li>
+<li><a href="https://dataninjago.com/2021/12/05/databricks-deep-dive-2-parquet-write-internal/">Parquet for Spark Deep Dive (2) – Parquet Write Internal</a></li>
+<li><a href="https://dataninjago.com/2021/12/07/databricks-deep-dive-3-parquet-encoding/">Parquet for Spark Deep Dive (3) – Parquet Encoding</a></li>
+<li><a href="https://dataninjago.com/2021/12/12/databricks-deep-dive-4-vectorised-parquet-reading/">Parquet for Spark Deep Dive (4) – Vectorised Parquet Reading</a></li>
+</ul>
+
+			<script type="text/javascript"
+        async
+        src="https://cdn.bootcss.com/mathjax/2.7.3/MathJax.js?config=TeX-AMS-MML_HTMLorMML">
+MathJax.Hub.Config({
+  tex2jax: {
+    inlineMath: [['$','$'], ['\\(','\\)']],
+    displayMath: [['$$','$$'], ['\[\[','\]\]']],
+    processEscapes: true,
+    processEnvironments: true,
+    skipTags: ['script', 'noscript', 'style', 'textarea', 'pre'],
+    TeX: { equationNumbers: { autoNumber: "AMS" },
+         extensions: ["AMSmath.js", "AMSsymbols.js"] }
+  }
+});
+
+MathJax.Hub.Queue(function() {
+    
+    
+    
+    var all = MathJax.Hub.getAllJax(), i;
+    for(i = 0; i < all.length; i += 1) {
+        all[i].SourceElement().parentNode.className += ' has-jax';
+    }
+});
+</script>
+
+<style>
+code.has-jax {
+    font: inherit;
+    font-size: 100%;
+    background: inherit;
+    border: inherit;
+    color: #515151;
+}
+</style>
+        </div>
+
+        
+
+
+        
+
+
+        <div class="post-meta meta-tags">
+            
+            <ul class="clearfix">
+                
+                <li><a href='/tags/parquet'>parquet</a></li>
+                
+            </ul>
+            
+        </div>
+    </article>
+    
+    
+
+    
+    
+    <div class="post bg-white">
+      <script src="https://utteranc.es/client.js"
+            repo= "himichael/hugoblogtalks"
+            issue-term="pathname"
+            theme="github-light"
+            crossorigin="anonymous"
+            async>
+      </script>
+    </div>
+    
+</div>
+
+
+                </div>
+
+                <div id="secondary">
+    <section class="widget">
+        <form id="search" action='https://code0xff.org/search/' method="get" accept-charset="utf-8" target="_blank" _lpchecked="1">
+      
+      <input type="text" name="q" maxlength="20" placeholder="Search">
+      <input type="hidden" name="sitesearch" value="https://code0xff.org/">
+      <button type="submit" class="submit icon-search"></button>
+</form>
+    </section>
+    
+    <section class="widget">
+        <h3 class="widget-title">最近文章</h3>
+<ul class="widget-list">
+    
+    <li>
+        <a href="https://code0xff.org/post/2025/01/spark_register_source/" title="Spark 注册数据源">Spark 注册数据源</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2025/01/spark_core_2/" title="Spark Core相关-2">Spark Core相关-2</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2024/12/llamafactory/" title="Llama Factory">Llama Factory</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2024/11/spark_core/" title="Spark Core相关-1">Spark Core相关-1</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2024/11/sae_tunnel/" title="sea tunnel">sea tunnel</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2024/11/k8s_networks/" title="k8s 网络">k8s 网络</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2024/11/ozone/" title="ozone">ozone</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2024/11/es/" title="ES的简单学习">ES的简单学习</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2025/02/ai/" title="AI的简单学习">AI的简单学习</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2024/11/big_data_investigation/" title="国内几个云厂商大数据平台">国内几个云厂商大数据平台</a>
+    </li>
+    
+</ul>
+    </section>
+
+    
+
+    <section class="widget">
+        <h3 class="widget-title"><a href='/categories/'>分类</a></h3>
+<ul class="widget-list">
+    
+    <li><a href="https://code0xff.org/categories/%E5%88%86%E5%B8%83%E5%BC%8F/">分布式 (6)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E5%8E%9F%E7%90%86%E5%88%86%E6%9E%90/">原理分析 (24)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E5%95%86%E4%B8%9A/">商业 (3)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E5%A4%A7%E6%95%B0%E6%8D%AE/">大数据 (56)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%95%B0%E6%8D%AE%E5%BA%93/">数据库 (41)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%96%87%E5%AD%A6%E5%92%8C%E8%89%BA%E6%9C%AF/">文学和艺术 (3)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%97%85%E8%A1%8C/">旅行 (12)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%9E%B6%E6%9E%84/">架构 (13)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E7%AE%97%E6%B3%95/">算法 (8)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E7%B3%BB%E7%BB%9F/">系统 (7)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E7%BC%96%E7%A8%8B%E8%AF%AD%E8%A8%80/">编程语言 (7)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E8%A1%8C%E4%B8%9A%E8%A7%82%E5%AF%9F/">行业观察 (3)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E8%AF%BB%E4%B9%A6%E7%AC%94%E8%AE%B0/">读书笔记 (14)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E9%9A%8F%E4%BE%BF%E5%86%99%E5%86%99/">随便写写 (3)</a></li>
+    
+</ul>
+    </section>
+
+    <section class="widget">
+        <h3 class="widget-title">归档</a></h3>
+<ul class="widget-list">
+    
+    <li><a href="https://code0xff.org/years/2021%E5%B9%B4/">2021年 (41)</a></li>
+    
+    <li><a href="https://code0xff.org/years/2022%E5%B9%B4/">2022年 (55)</a></li>
+    
+    <li><a href="https://code0xff.org/years/2023%E5%B9%B4/">2023年 (54)</a></li>
+    
+    <li><a href="https://code0xff.org/years/2024%E5%B9%B4/">2024年 (48)</a></li>
+    
+    <li><a href="https://code0xff.org/years/2025%E5%B9%B4/">2025年 (2)</a></li>
+    
+</ul>
+    </section>
+
+    <section class="widget">
+        <h3 class="widget-title"><a href='/tags/'>标签</a></h3>
+<div class="tagcloud">
+    
+    <a href="https://code0xff.org/tags/ai/">AI </a>
+    
+    <a href="https://code0xff.org/tags/ambari/">Ambari </a>
+    
+    <a href="https://code0xff.org/tags/architecture/">architecture </a>
+    
+    <a href="https://code0xff.org/tags/bigdata/">bigdata </a>
+    
+    <a href="https://code0xff.org/tags/b%E6%A0%91/">B树 </a>
+    
+    <a href="https://code0xff.org/tags/c&#43;&#43;/">C&#43;&#43; </a>
+    
+    <a href="https://code0xff.org/tags/calcite/">calcite </a>
+    
+    <a href="https://code0xff.org/tags/cmu-database/">CMU-Database </a>
+    
+    <a href="https://code0xff.org/tags/data_ingestion/">Data_Ingestion </a>
+    
+    <a href="https://code0xff.org/tags/deltalake/">DeltaLake </a>
+    
+    <a href="https://code0xff.org/tags/doris/">Doris </a>
+    
+    <a href="https://code0xff.org/tags/english/">English </a>
+    
+    <a href="https://code0xff.org/tags/es/">ES </a>
+    
+    <a href="https://code0xff.org/tags/facebook/">Facebook </a>
+    
+    <a href="https://code0xff.org/tags/flink/">flink </a>
+    
+    <a href="https://code0xff.org/tags/flume/">flume </a>
+    
+    <a href="https://code0xff.org/tags/gc/">GC </a>
+    
+    <a href="https://code0xff.org/tags/gluten/">Gluten </a>
+    
+    <a href="https://code0xff.org/tags/hana/">HANA </a>
+    
+    <a href="https://code0xff.org/tags/hive/">Hive </a>
+    
+    <a href="https://code0xff.org/tags/iceberg/">iceberg </a>
+    
+    <a href="https://code0xff.org/tags/impala/">Impala </a>
+    
+    <a href="https://code0xff.org/tags/janino/">janino </a>
+    
+    <a href="https://code0xff.org/tags/k8s/">k8s </a>
+    
+    <a href="https://code0xff.org/tags/kafka/">Kafka </a>
+    
+    <a href="https://code0xff.org/tags/kudu/">kudu </a>
+    
+    <a href="https://code0xff.org/tags/kyuubi/">Kyuubi </a>
+    
+    <a href="https://code0xff.org/tags/lakehouse/">Lakehouse </a>
+    
+    <a href="https://code0xff.org/tags/leveldb/">LevelDB </a>
+    
+    <a href="https://code0xff.org/tags/llamafactory/">LlamaFactory </a>
+    
+    <a href="https://code0xff.org/tags/llvm/">LLVM </a>
+    
+    <a href="https://code0xff.org/tags/manacher/">Manacher </a>
+    
+    <a href="https://code0xff.org/tags/mapreduce/">MapReduce </a>
+    
+    <a href="https://code0xff.org/tags/micro-service/">micro-service </a>
+    
+    <a href="https://code0xff.org/tags/mysql/">MySQL </a>
+    
+    <a href="https://code0xff.org/tags/newsql/">NewSQL </a>
+    
+    <a href="https://code0xff.org/tags/oceanbase/">OceanBase </a>
+    
+    <a href="https://code0xff.org/tags/openlogreplicator/">OpenLogReplicator </a>
+    
+    <a href="https://code0xff.org/tags/parquet/">parquet </a>
+    
+    <a href="https://code0xff.org/tags/paxos/">paxos </a>
+    
+    <a href="https://code0xff.org/tags/presto/">Presto </a>
+    
+    <a href="https://code0xff.org/tags/quick-sql/">quick-sql </a>
+    
+    <a href="https://code0xff.org/tags/raft/">raft </a>
+    
+    <a href="https://code0xff.org/tags/scala/">scala </a>
+    
+    <a href="https://code0xff.org/tags/simd/">SIMD </a>
+    
+    <a href="https://code0xff.org/tags/snowflake/">snowflake </a>
+    
+    <a href="https://code0xff.org/tags/spark/">spark </a>
+    
+    <a href="https://code0xff.org/tags/sre/">SRE </a>
+    
+    <a href="https://code0xff.org/tags/teradata/">TeraData </a>
+    
+    <a href="https://code0xff.org/tags/tpcx-hs/">TPCx-HS </a>
+    
+    <a href="https://code0xff.org/tags/trino/">Trino </a>
+    
+    <a href="https://code0xff.org/tags/tuning/">Tuning </a>
+    
+    <a href="https://code0xff.org/tags/unix/">unix </a>
+    
+    <a href="https://code0xff.org/tags/yarn/">YARN </a>
+    
+    <a href="https://code0xff.org/tags/%E4%BA%8C%E5%88%86%E6%9F%A5%E6%89%BE/">二分查找 </a>
+    
+    <a href="https://code0xff.org/tags/%E4%BA%8C%E5%8F%89%E6%A0%91%E9%81%8D%E5%8E%86/">二叉树遍历 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%88%86%E5%B8%83%E5%BC%8F/">分布式 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%88%97%E5%AD%98/">列存 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%8A%A8%E6%80%81%E6%B3%A8%E5%85%A5/">动态注入 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%8E%86%E5%8F%B2/">历史 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%90%91%E9%87%8F%E5%8C%96/">向量化 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%9B%9E%E6%BA%AF/">回溯 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%9B%BD%E5%86%85%E6%97%85%E8%A1%8C/">国内旅行 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%9B%BD%E5%A4%96%E6%97%85%E8%A1%8C/">国外旅行 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%A4%9A%E7%A7%9F%E6%88%B7/">多租户 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%A4%A7%E6%95%B0%E6%8D%AE/">大数据 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%AD%98%E5%82%A8/">存储 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%B7%A5%E4%BD%9C%E8%AE%B0%E5%BD%95/">工作记录 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%BE%AE%E6%9C%8D%E5%8A%A1/">微服务 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%95%B0%E6%8D%AE%E4%B8%AD%E5%8F%B0/">数据中台 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%95%B0%E6%8D%AE%E5%BA%93/">数据库 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%95%B0%E6%8D%AE%E6%A8%A1%E5%9E%8B/">数据模型 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%95%B0%E6%8D%AE%E8%BF%81%E7%A7%BB/">数据迁移 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%9F%A5%E8%AF%A2%E4%BC%98%E5%8C%96/">查询优化 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%9F%A5%E8%AF%A2%E7%BC%96%E8%AF%91/">查询编译 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%A6%82%E7%8E%87/">概率 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%B1%87%E7%BC%96/">汇编 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%B5%8B%E8%AF%95/">测试 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%94%9F%E6%B4%BB/">生活 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%94%B5%E5%BD%B1/">电影 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%AE%97%E6%B3%95/">算法 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%B4%A2%E5%BC%95/">索引 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BB%8F%E6%B5%8E/">经济 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BC%93%E5%AD%98/">缓存 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BC%96%E8%AF%91%E5%8E%9F%E7%90%86/">编译原理 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BD%91%E7%BB%9C/">网络 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AE%A1%E7%AE%97%E6%A1%86%E6%9E%B6/">计算框架 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AE%BA%E6%96%87/">论文 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AF%BB%E4%B9%A6/">读书 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AF%BB%E4%B9%A6%E7%AC%94%E8%AE%B0/">读书笔记 </a>
+    
+</div>
+    </section>
+
+    
+
+    <section class="widget">
+        <h3 class="widget-title">RSS</h3>
+        <ul class="widget-list">
+            <li><a href="https://code0xff.org/index.xml">文章 RSS</a></li>
+        </ul>
+    </section>
+</div>
+            </div>
+        </div>
+    </div>
+    <footer id="footer">
+    <div>
+        &copy; 2025 <a href="https://code0xff.org/">记录每个瞬间 By 老王</a>
+        
+    </div>
+    <br />
+    <div>
+        <div class="github-badge">
+            <a href="https://gohugo.io/" target="_black" rel="nofollow"><span class="badge-subject">Powered by</span><span class="badge-value bg-blue">Hugo</span></a>
+        </div>
+        <div class="github-badge">
+            <a href="https://github.com/flysnow-org/maupassant-hugo" target="_black"><span class="badge-subject">Theme</span><span class="badge-value bg-yellowgreen">Maupassant</span></a>
+        </div>
+    </div>
+</footer>
+
+
+    
+    <script type="text/javascript">
+        window.MathJax = {
+            tex2jax: {
+                inlineMath: [['$', '$']],
+                processEscapes: true
+                }
+            };
+    </script>
+    <script src='https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.5/MathJax.js?config=TeX-MML-AM_CHTML' async></script><script src="https://cdn.bootcdn.net/ajax/libs/fancybox/3.5.7/jquery.fancybox.min.js"></script>
+
+<a id="rocket" href="#top"></a>
+<script type="text/javascript" src='/js/totop.js?v=0.0.0' async=""></script>
+
+<script type="application/javascript">
+var doNotTrack = false;
+if (!doNotTrack) {
+	window.ga=window.ga||function(){(ga.q=ga.q||[]).push(arguments)};ga.l=+new Date;
+	ga('create', 'GA ID', 'auto');
+	
+	ga('send', 'pageview');
+}
+</script>
+<script async src='https://www.google-analytics.com/analytics.js'></script>
+
+
+
+    <script type="text/javascript" src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js" async></script>
+
+
+
+
+</body>
+
+</html>

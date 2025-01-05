@@ -1,0 +1,1680 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    
+    <meta name="referrer" content="no-referrer-when-downgrade">
+    
+
+    <title>Spark原理-解析过程和Catalog | 记录每个瞬间</title>
+    <meta property="og:title" content="Spark原理-解析过程和Catalog - 记录每个瞬间">
+    <meta property="og:type" content="article">
+        
+    <meta property="article:published_time" content='2024-03-02T09:08:07&#43;08:00'>
+        
+        
+    <meta property="article:modified_time" content='2024-03-02T09:08:07&#43;08:00'>
+        
+    <meta name="Keywords" content="">
+    <meta name="description" content="Spark原理-解析过程和Catalog">
+        <meta name="author" content="隔壁老王">
+        
+    <meta property="og:url" content="https://code0xff.org/post/2024/03/spark_internal/">
+    <link rel="shortcut icon" href='/favicon.ico'  type="image/x-icon">
+
+    <link rel="stylesheet" href='/css/normalize.css'>
+    <link rel="stylesheet" href='/css/style.css'>
+    <script type="text/javascript" src="//cdn.bootcdn.net/ajax/libs/jquery/3.4.1/jquery.min.js"></script>
+
+    
+    
+    
+        <link href="https://cdn.bootcdn.net/ajax/libs/fancybox/3.5.7/jquery.fancybox.min.css" rel="stylesheet">
+    
+    
+    
+    
+</head>
+
+
+<body>
+    <header id="header" class="clearfix">
+    <div class="container">
+        <div class="col-group">
+            <div class="site-name ">
+                
+                    <a id="logo" href="https://code0xff.org/">
+                        记录每个瞬间
+                    </a>
+                
+                
+            </div>
+            <div>
+                <nav id="nav-menu" class="clearfix">
+                    <a class="current" href="https://code0xff.org/">首页</a>
+                    
+                    <a  href="https://code0xff.org/linked/" title="链接">链接</a>
+                    
+                    <a  href="https://code0xff.org/archives/" title="归档">归档</a>
+                    
+                    <a  href="https://code0xff.org/about/" title="关于">关于</a>
+                    
+                </nav>
+            </div>
+        </div>
+    </div>
+</header>
+
+    <div id="body">
+        <div class="container">
+            <div class="col-group">
+
+                <div class="col-8" id="main">
+                    
+<div class="res-cons">
+    
+    <article class="post">
+        <header>
+            <h1 class="post-title">Spark原理-解析过程和Catalog</h1>
+        </header>
+        <date class="post-meta meta-date">
+            2024年3月2日
+        </date>
+<nav id="TableOfContents">
+  <ul>
+    <li><a href="#解析过程">解析过程</a>
+      <ul>
+        <li><a href="#语法解析">语法解析</a></li>
+        <li><a href="#逻辑计划">逻辑计划</a></li>
+        <li><a href="#优化规则">优化规则</a></li>
+        <li><a href="#查询下推">查询下推</a></li>
+        <li><a href="#catalog">catalog</a>
+          <ul>
+            <li><a href="#catalog结构">catalog结构</a></li>
+            <li><a href="#execute执行逻辑">execute执行逻辑</a></li>
+            <li><a href="#缓存">缓存</a></li>
+          </ul>
+        </li>
+        <li><a href="#udf整体结构">UDF整体结构</a>
+          <ul>
+            <li><a href="#实现方式">实现方式</a></li>
+            <li><a href="#v2方式">V2方式</a></li>
+            <li><a href="#执行展示">执行展示</a></li>
+            <li><a href="#自定义函数下推">自定义函数下推</a></li>
+          </ul>
+        </li>
+        <li><a href="#参考">参考</a></li>
+      </ul>
+    </li>
+  </ul>
+</nav>
+        
+        <div class="post-meta">
+            
+            <span class="post-meta meta-tags">
+                <ul class="clearfix">
+                    <a href='/categories/%E5%8E%9F%E7%90%86%E5%88%86%E6%9E%90'>原理分析</a>
+                </ul>
+            </span>
+            
+        </div>
+        
+        
+        <div class="post-meta">
+            <span id="busuanzi_container_page_pv">|<span id="busuanzi_value_page_pv"></span><span>
+                    阅读</span></span>
+        </div>
+        
+        
+        <div class="post-content">
+            <h1 id="解析过程">解析过程</h1>
+<h2 id="语法解析">语法解析</h2>
+<p>SparkSession 中，先解析SQL，转换成 Spark的逻辑计划，再处理</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">15
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-scala" data-lang="scala"><span style="display:flex;"><span>  <span style="color:#ff79c6">private</span><span style="color:#ff79c6">[</span><span style="color:#8be9fd">sql</span><span style="color:#ff79c6">]</span> <span style="color:#ff79c6">def</span> sql<span style="color:#ff79c6">(</span>
+</span></span><span style="display:flex;"><span>      sqlText<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">String</span><span style="color:#ff79c6">,</span>
+</span></span><span style="display:flex;"><span>      args<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">Map</span><span style="color:#ff79c6">[</span><span style="color:#8be9fd">String</span>, <span style="color:#8be9fd">Any</span><span style="color:#ff79c6">],</span>
+</span></span><span style="display:flex;"><span>      tracker<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">QueryPlanningTracker</span><span style="color:#ff79c6">)</span><span style="color:#ff79c6">:</span> <span style="color:#8be9fd">DataFrame</span> <span style="color:#ff79c6">=</span>
+</span></span><span style="display:flex;"><span>    withActive <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>      <span style="color:#ff79c6">val</span> plan <span style="color:#ff79c6">=</span> tracker<span style="color:#ff79c6">.</span>measurePhase<span style="color:#ff79c6">(</span><span style="color:#50fa7b">QueryPlanningTracker</span><span style="color:#ff79c6">.</span><span style="color:#50fa7b">PARSING</span><span style="color:#ff79c6">)</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">val</span> parsedPlan <span style="color:#ff79c6">=</span> sessionState<span style="color:#ff79c6">.</span>sqlParser<span style="color:#ff79c6">.</span>parsePlan<span style="color:#ff79c6">(</span>sqlText<span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">if</span> <span style="color:#ff79c6">(</span>args<span style="color:#ff79c6">.</span>nonEmpty<span style="color:#ff79c6">)</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>          <span style="color:#50fa7b">NameParameterizedQuery</span><span style="color:#ff79c6">(</span>parsedPlan<span style="color:#ff79c6">,</span> args<span style="color:#ff79c6">.</span>mapValues<span style="color:#ff79c6">(</span>lit<span style="color:#ff79c6">(</span><span style="color:#ff79c6">_</span><span style="color:#ff79c6">).</span>expr<span style="color:#ff79c6">).</span>toMap<span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">}</span> <span style="color:#ff79c6">else</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>          parsedPlan
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">}</span>
+</span></span><span style="display:flex;"><span>      <span style="color:#ff79c6">}</span>
+</span></span><span style="display:flex;"><span>      <span style="color:#50fa7b">Dataset</span><span style="color:#ff79c6">.</span>ofRows<span style="color:#ff79c6">(</span>self<span style="color:#ff79c6">,</span> plan<span style="color:#ff79c6">,</span> tracker<span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">}</span>
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/05/10/7bc4us.png">
+            <img class="mx-auto" alt="spark注入规则" src="https://v1.ax1x.com/2024/05/10/7bc4us.png" />
+        </a>
+    </p>
+<h2 id="逻辑计划">逻辑计划</h2>
+<p>执行过程(省略了很多细节)：<br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/04/30/7KVeRs.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/04/30/7KVeRs.png" />
+        </a>
+    </p>
+<p>类的层次关系<br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/05/22/7gNCPG.png">
+            <img class="mx-auto" alt="https://malinxiao.files.wordpress.com/2021/12/image-96.png" src="https://v1.ax1x.com/2024/05/22/7gNCPG.png" />
+        </a>
+       <br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/05/22/7gN4KJ.png">
+            <img class="mx-auto" alt="https://malinxiao.files.wordpress.com/2021/12/image-93.png" src="https://v1.ax1x.com/2024/05/22/7gN4KJ.png" />
+        </a>
+    </p>
+<p>RuleExecutor#execute 的主要逻辑：</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-scala" data-lang="scala"><span style="display:flex;"><span>      <span style="color:#6272a4">// Run until fix point (or the max number of iterations as specified in the strategy.
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>      <span style="color:#ff79c6">while</span> <span style="color:#ff79c6">(</span>continue<span style="color:#ff79c6">)</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>        curPlan <span style="color:#ff79c6">=</span> batch<span style="color:#ff79c6">.</span>rules<span style="color:#ff79c6">.</span>foldLeft<span style="color:#ff79c6">(</span>curPlan<span style="color:#ff79c6">)</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>          <span style="color:#ff79c6">case</span> <span style="color:#ff79c6">(</span>plan<span style="color:#ff79c6">,</span> rule<span style="color:#ff79c6">)</span> <span style="color:#ff79c6">=&gt;</span>
+</span></span><span style="display:flex;"><span>            <span style="color:#ff79c6">val</span> startTime <span style="color:#ff79c6">=</span> <span style="color:#50fa7b">System</span><span style="color:#ff79c6">.</span>nanoTime<span style="color:#ff79c6">()</span>
+</span></span><span style="display:flex;"><span>            <span style="color:#ff79c6">val</span> result <span style="color:#ff79c6">=</span> rule<span style="color:#ff79c6">(</span>plan<span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>            <span style="color:#ff79c6">val</span> runTime <span style="color:#ff79c6">=</span> <span style="color:#50fa7b">System</span><span style="color:#ff79c6">.</span>nanoTime<span style="color:#ff79c6">()</span> <span style="color:#ff79c6">-</span> startTime
+</span></span><span style="display:flex;"><span>            <span style="color:#ff79c6">val</span> effective <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">!</span>result<span style="color:#ff79c6">.</span>fastEquals<span style="color:#ff79c6">(</span>plan<span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>            
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>内置的 所有逻辑计划规则：</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">15
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">16
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">17
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">18
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">19
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">20
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">21
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">22
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">23
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">24
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">25
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">26
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">27
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">28
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">29
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">30
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">31
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">32
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">33
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">34
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">35
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">36
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">37
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">38
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">39
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">40
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">41
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">42
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">43
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">44
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">45
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">46
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">47
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">48
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">49
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">50
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">51
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">52
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">53
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">54
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">55
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">56
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">57
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-scala" data-lang="scala"><span style="display:flex;"><span><span style="color:#bd93f9">0</span> <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">{</span><span style="color:#50fa7b">ResolveCatalogs</span><span style="color:#ff79c6">@</span><span style="color:#bd93f9">10511</span><span style="color:#ff79c6">}</span> 
+</span></span><span style="display:flex;"><span><span style="color:#bd93f9">1</span> <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">{</span><span style="color:#50fa7b">Analyzer$ResolveInsertInto</span>$<span style="color:#ff79c6">@</span><span style="color:#bd93f9">10365</span><span style="color:#ff79c6">}</span> 
+</span></span><span style="display:flex;"><span><span style="color:#bd93f9">2</span> <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">{</span><span style="color:#50fa7b">Analyzer$ResolveRelations</span>$<span style="color:#ff79c6">@</span><span style="color:#bd93f9">10364</span><span style="color:#ff79c6">}</span> 
+</span></span><span style="display:flex;"><span><span style="color:#bd93f9">3</span> <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">{</span><span style="color:#50fa7b">ResolvePartitionSpec</span>$<span style="color:#ff79c6">@</span><span style="color:#bd93f9">10512</span><span style="color:#ff79c6">}</span> 
+</span></span><span style="display:flex;"><span><span style="color:#bd93f9">4</span> <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">{</span><span style="color:#50fa7b">Analyzer$ResolveFieldNameAndPosition</span>$<span style="color:#ff79c6">@</span><span style="color:#bd93f9">10387</span><span style="color:#ff79c6">}</span> 
+</span></span><span style="display:flex;"><span><span style="color:#bd93f9">5</span> <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">{</span><span style="color:#50fa7b">Analyzer$AddMetadataColumns</span>$<span style="color:#ff79c6">@</span><span style="color:#bd93f9">10363</span><span style="color:#ff79c6">}</span> 
+</span></span><span style="display:flex;"><span><span style="color:#bd93f9">6</span> <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">{</span><span style="color:#50fa7b">DeduplicateRelations</span>$<span style="color:#ff79c6">@</span><span style="color:#bd93f9">10513</span><span style="color:#ff79c6">}</span> 
+</span></span><span style="display:flex;"><span><span style="color:#bd93f9">7</span> <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">{</span><span style="color:#50fa7b">Analyzer$ResolveReferences</span>$<span style="color:#ff79c6">@</span><span style="color:#bd93f9">10366</span><span style="color:#ff79c6">}</span> 
+</span></span><span style="display:flex;"><span><span style="color:#bd93f9">8</span> <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">{</span><span style="color:#50fa7b">ResolveLateralColumnAliasReference</span>$<span style="color:#ff79c6">@</span><span style="color:#bd93f9">10514</span><span style="color:#ff79c6">}</span> 
+</span></span><span style="display:flex;"><span><span style="color:#bd93f9">9</span> <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">{</span><span style="color:#50fa7b">ResolveExpressionsWithNamePlaceholders</span>$<span style="color:#ff79c6">@</span><span style="color:#bd93f9">10515</span><span style="color:#ff79c6">}</span> 
+</span></span><span style="display:flex;"><span><span style="color:#bd93f9">10</span> <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">{</span><span style="color:#50fa7b">Analyzer$ResolveDeserializer</span>$<span style="color:#ff79c6">@</span><span style="color:#bd93f9">10384</span><span style="color:#ff79c6">}</span> 
+</span></span><span style="display:flex;"><span><span style="color:#bd93f9">11</span> <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">{</span><span style="color:#50fa7b">Analyzer$ResolveNewInstance</span>$<span style="color:#ff79c6">@</span><span style="color:#bd93f9">10385</span><span style="color:#ff79c6">}</span> 
+</span></span><span style="display:flex;"><span><span style="color:#bd93f9">12</span> <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">{</span><span style="color:#50fa7b">Analyzer$ResolveUpCast</span>$<span style="color:#ff79c6">@</span><span style="color:#bd93f9">10386</span><span style="color:#ff79c6">}</span> 
+</span></span><span style="display:flex;"><span><span style="color:#bd93f9">13</span> <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">{</span><span style="color:#50fa7b">Analyzer$ResolveGroupingAnalytics</span>$<span style="color:#ff79c6">@</span><span style="color:#bd93f9">10360</span><span style="color:#ff79c6">}</span> 
+</span></span><span style="display:flex;"><span><span style="color:#bd93f9">14</span> <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">{</span><span style="color:#50fa7b">Analyzer$ResolvePivot</span>$<span style="color:#ff79c6">@</span><span style="color:#bd93f9">10361</span><span style="color:#ff79c6">}</span> 
+</span></span><span style="display:flex;"><span><span style="color:#bd93f9">15</span> <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">{</span><span style="color:#50fa7b">Analyzer$ResolveUnpivot</span>$<span style="color:#ff79c6">@</span><span style="color:#bd93f9">10362</span><span style="color:#ff79c6">}</span> 
+</span></span><span style="display:flex;"><span><span style="color:#bd93f9">16</span> <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">{</span><span style="color:#50fa7b">Analyzer$ResolveOrdinalInOrderByAndGroupBy</span>$<span style="color:#ff79c6">@</span><span style="color:#bd93f9">10367</span><span style="color:#ff79c6">}</span> 
+</span></span><span style="display:flex;"><span><span style="color:#bd93f9">17</span> <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">{</span><span style="color:#50fa7b">Analyzer$ExtractGenerator</span>$<span style="color:#ff79c6">@</span><span style="color:#bd93f9">10374</span><span style="color:#ff79c6">}</span> 
+</span></span><span style="display:flex;"><span><span style="color:#bd93f9">18</span> <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">{</span><span style="color:#50fa7b">Analyzer$ResolveGenerate</span>$<span style="color:#ff79c6">@</span><span style="color:#bd93f9">10375</span><span style="color:#ff79c6">}</span> 
+</span></span><span style="display:flex;"><span><span style="color:#bd93f9">19</span> <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">{</span><span style="color:#50fa7b">Analyzer$ResolveFunctions</span>$<span style="color:#ff79c6">@</span><span style="color:#bd93f9">10369</span><span style="color:#ff79c6">}</span> 
+</span></span><span style="display:flex;"><span><span style="color:#bd93f9">20</span> <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">{</span><span style="color:#50fa7b">ResolveTableSpec</span>$<span style="color:#ff79c6">@</span><span style="color:#bd93f9">10516</span><span style="color:#ff79c6">}</span> 
+</span></span><span style="display:flex;"><span><span style="color:#bd93f9">21</span> <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">{</span><span style="color:#50fa7b">Analyzer$ResolveAliases</span>$<span style="color:#ff79c6">@</span><span style="color:#bd93f9">10359</span><span style="color:#ff79c6">}</span> 
+</span></span><span style="display:flex;"><span><span style="color:#bd93f9">22</span> <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">{</span><span style="color:#50fa7b">Analyzer$ResolveSubquery</span>$<span style="color:#ff79c6">@</span><span style="color:#bd93f9">10370</span><span style="color:#ff79c6">}</span> 
+</span></span><span style="display:flex;"><span><span style="color:#bd93f9">23</span> <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">{</span><span style="color:#50fa7b">Analyzer$ResolveSubqueryColumnAliases</span>$<span style="color:#ff79c6">@</span><span style="color:#bd93f9">10371</span><span style="color:#ff79c6">}</span> 
+</span></span><span style="display:flex;"><span><span style="color:#bd93f9">24</span> <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">{</span><span style="color:#50fa7b">Analyzer$ResolveWindowOrder</span>$<span style="color:#ff79c6">@</span><span style="color:#bd93f9">10381</span><span style="color:#ff79c6">}</span> 
+</span></span><span style="display:flex;"><span><span style="color:#bd93f9">25</span> <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">{</span><span style="color:#50fa7b">Analyzer$ResolveWindowFrame</span>$<span style="color:#ff79c6">@</span><span style="color:#bd93f9">10380</span><span style="color:#ff79c6">}</span> 
+</span></span><span style="display:flex;"><span><span style="color:#bd93f9">26</span> <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">{</span><span style="color:#50fa7b">Analyzer$ResolveNaturalAndUsingJoin</span>$<span style="color:#ff79c6">@</span><span style="color:#bd93f9">10382</span><span style="color:#ff79c6">}</span> 
+</span></span><span style="display:flex;"><span><span style="color:#bd93f9">27</span> <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">{</span><span style="color:#50fa7b">Analyzer$ResolveOutputRelation</span>$<span style="color:#ff79c6">@</span><span style="color:#bd93f9">10383</span><span style="color:#ff79c6">}</span> 
+</span></span><span style="display:flex;"><span><span style="color:#bd93f9">28</span> <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">{</span><span style="color:#50fa7b">Analyzer$ExtractWindowExpressions</span>$<span style="color:#ff79c6">@</span><span style="color:#bd93f9">10376</span><span style="color:#ff79c6">}</span> 
+</span></span><span style="display:flex;"><span><span style="color:#bd93f9">29</span> <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">{</span><span style="color:#50fa7b">Analyzer$GlobalAggregates</span>$<span style="color:#ff79c6">@</span><span style="color:#bd93f9">10372</span><span style="color:#ff79c6">}</span> 
+</span></span><span style="display:flex;"><span><span style="color:#bd93f9">30</span> <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">{</span><span style="color:#50fa7b">Analyzer$ResolveAggregateFunctions</span>$<span style="color:#ff79c6">@</span><span style="color:#bd93f9">10373</span><span style="color:#ff79c6">}</span> 
+</span></span><span style="display:flex;"><span><span style="color:#bd93f9">31</span> <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">{</span><span style="color:#50fa7b">TimeWindowing</span>$<span style="color:#ff79c6">@</span><span style="color:#bd93f9">10517</span><span style="color:#ff79c6">}</span> 
+</span></span><span style="display:flex;"><span><span style="color:#bd93f9">32</span> <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">{</span><span style="color:#50fa7b">SessionWindowing</span>$<span style="color:#ff79c6">@</span><span style="color:#bd93f9">10518</span><span style="color:#ff79c6">}</span> 
+</span></span><span style="display:flex;"><span><span style="color:#bd93f9">33</span> <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">{</span><span style="color:#50fa7b">ResolveWindowTime</span>$<span style="color:#ff79c6">@</span><span style="color:#bd93f9">10519</span><span style="color:#ff79c6">}</span> 
+</span></span><span style="display:flex;"><span><span style="color:#bd93f9">34</span> <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">{</span><span style="color:#50fa7b">ResolveInlineTables</span>$<span style="color:#ff79c6">@</span><span style="color:#bd93f9">10520</span><span style="color:#ff79c6">}</span> 
+</span></span><span style="display:flex;"><span><span style="color:#bd93f9">35</span> <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">{</span><span style="color:#50fa7b">ResolveLambdaVariables</span>$<span style="color:#ff79c6">@</span><span style="color:#bd93f9">10521</span><span style="color:#ff79c6">}</span> 
+</span></span><span style="display:flex;"><span><span style="color:#bd93f9">36</span> <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">{</span><span style="color:#50fa7b">ResolveTimeZone</span>$<span style="color:#ff79c6">@</span><span style="color:#bd93f9">10522</span><span style="color:#ff79c6">}</span> 
+</span></span><span style="display:flex;"><span><span style="color:#bd93f9">37</span> <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">{</span><span style="color:#50fa7b">Analyzer$ResolveRandomSeed</span>$<span style="color:#ff79c6">@</span><span style="color:#bd93f9">10377</span><span style="color:#ff79c6">}</span> 
+</span></span><span style="display:flex;"><span><span style="color:#bd93f9">38</span> <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">{</span><span style="color:#50fa7b">Analyzer$ResolveBinaryArithmetic</span>$<span style="color:#ff79c6">@</span><span style="color:#bd93f9">10357</span><span style="color:#ff79c6">}</span> 
+</span></span><span style="display:flex;"><span><span style="color:#bd93f9">39</span> <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">{</span><span style="color:#50fa7b">ResolveIdentifierClause</span>$<span style="color:#ff79c6">@</span><span style="color:#bd93f9">10523</span><span style="color:#ff79c6">}</span> 
+</span></span><span style="display:flex;"><span><span style="color:#bd93f9">40</span> <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">{</span><span style="color:#50fa7b">ResolveUnion</span>$<span style="color:#ff79c6">@</span><span style="color:#bd93f9">10524</span><span style="color:#ff79c6">}</span> 
+</span></span><span style="display:flex;"><span><span style="color:#bd93f9">41</span> <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">{</span><span style="color:#50fa7b">ResolveRowLevelCommandAssignments</span>$<span style="color:#ff79c6">@</span><span style="color:#bd93f9">10525</span><span style="color:#ff79c6">}</span> 
+</span></span><span style="display:flex;"><span><span style="color:#bd93f9">42</span> <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">{</span><span style="color:#50fa7b">RewriteDeleteFromTable</span>$<span style="color:#ff79c6">@</span><span style="color:#bd93f9">10526</span><span style="color:#ff79c6">}</span> 
+</span></span><span style="display:flex;"><span><span style="color:#bd93f9">43</span> <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">{</span><span style="color:#50fa7b">RewriteUpdateTable</span>$<span style="color:#ff79c6">@</span><span style="color:#bd93f9">10527</span><span style="color:#ff79c6">}</span> 
+</span></span><span style="display:flex;"><span><span style="color:#bd93f9">44</span> <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">{</span><span style="color:#50fa7b">RewriteMergeIntoTable</span>$<span style="color:#ff79c6">@</span><span style="color:#bd93f9">10528</span><span style="color:#ff79c6">}</span> 
+</span></span><span style="display:flex;"><span><span style="color:#bd93f9">45</span> <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">{</span><span style="color:#50fa7b">TypeCoercionBase$UnpivotCoercion</span>$<span style="color:#ff79c6">@</span><span style="color:#bd93f9">10529</span><span style="color:#ff79c6">}</span> 
+</span></span><span style="display:flex;"><span><span style="color:#bd93f9">46</span> <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">{</span><span style="color:#50fa7b">TypeCoercionBase$WidenSetOperationTypes</span>$<span style="color:#ff79c6">@</span><span style="color:#bd93f9">10530</span><span style="color:#ff79c6">}</span> 
+</span></span><span style="display:flex;"><span><span style="color:#bd93f9">47</span> <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">{</span><span style="color:#50fa7b">TypeCoercionBase$CombinedTypeCoercionRule</span><span style="color:#ff79c6">@</span><span style="color:#bd93f9">10531</span><span style="color:#ff79c6">}</span> 
+</span></span><span style="display:flex;"><span><span style="color:#bd93f9">48</span> <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">{</span><span style="color:#50fa7b">ResolveWithCTE</span>$<span style="color:#ff79c6">@</span><span style="color:#bd93f9">10532</span><span style="color:#ff79c6">}</span> 
+</span></span><span style="display:flex;"><span><span style="color:#bd93f9">49</span> <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">{</span><span style="color:#50fa7b">ExtractDistributedSequenceID</span>$<span style="color:#ff79c6">@</span><span style="color:#bd93f9">10533</span><span style="color:#ff79c6">}</span> 
+</span></span><span style="display:flex;"><span><span style="color:#bd93f9">50</span> <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">{</span><span style="color:#50fa7b">FindDataSourceTable</span><span style="color:#ff79c6">@</span><span style="color:#bd93f9">10534</span><span style="color:#ff79c6">}</span> 
+</span></span><span style="display:flex;"><span><span style="color:#bd93f9">51</span> <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">{</span><span style="color:#50fa7b">ResolveSQLOnFile</span><span style="color:#ff79c6">@</span><span style="color:#bd93f9">10535</span><span style="color:#ff79c6">}</span> 
+</span></span><span style="display:flex;"><span><span style="color:#bd93f9">52</span> <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">{</span><span style="color:#50fa7b">FallBackFileSourceV2</span><span style="color:#ff79c6">@</span><span style="color:#bd93f9">10536</span><span style="color:#ff79c6">}</span> 
+</span></span><span style="display:flex;"><span><span style="color:#bd93f9">53</span> <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">{</span><span style="color:#50fa7b">ResolveEncodersInScalaAgg</span>$<span style="color:#ff79c6">@</span><span style="color:#bd93f9">10537</span><span style="color:#ff79c6">}</span> 
+</span></span><span style="display:flex;"><span><span style="color:#bd93f9">54</span> <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">{</span><span style="color:#50fa7b">ResolveSessionCatalog</span><span style="color:#ff79c6">@</span><span style="color:#bd93f9">10538</span><span style="color:#ff79c6">}</span> 
+</span></span><span style="display:flex;"><span><span style="color:#bd93f9">55</span> <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">{</span><span style="color:#50fa7b">ResolveWriteToStream</span>$<span style="color:#ff79c6">@</span><span style="color:#bd93f9">10539</span><span style="color:#ff79c6">}</span> 
+</span></span><span style="display:flex;"><span><span style="color:#bd93f9">56</span> <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">{</span><span style="color:#50fa7b">EvalSubqueriesForTimeTravel</span><span style="color:#ff79c6">@</span><span style="color:#bd93f9">10540</span><span style="color:#ff79c6">}</span> 
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p><strong>ResolveRelations</strong><br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/05/22/7gNjNt.png">
+            <img class="mx-auto" alt="https://malinxiao.files.wordpress.com/2021/12/image-101.png" src="https://v1.ax1x.com/2024/05/22/7gNjNt.png" />
+        </a>
+    
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/05/22/7gNJFB.png">
+            <img class="mx-auto" alt="https://malinxiao.files.wordpress.com/2021/12/image-102.png" src="https://v1.ax1x.com/2024/05/22/7gNJFB.png" />
+        </a>
+    </p>
+<p>会调用到 loadTable，然后是 CatalogV2Util#loadTable，返回一个 Table 对象</p>
+<p>以这个SQL为例子</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-sql" data-lang="sql"><span style="display:flex;"><span><span style="color:#ff79c6">SELECT</span> id <span style="color:#ff79c6">FROM</span> mysql8.hello.test <span style="color:#ff79c6">LIMIT</span> <span style="color:#bd93f9">10</span>
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>得到的逻辑计划：</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-scala" data-lang="scala"><span style="display:flex;"><span>&#39;GlobalLimit <span style="color:#bd93f9">10</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">+-</span> &#39;LocalLimit <span style="color:#bd93f9">10</span>
+</span></span><span style="display:flex;"><span>   <span style="color:#ff79c6">+-</span> &#39;Project <span style="color:#ff79c6">[</span>&#39;<span style="color:#8be9fd">id</span><span style="color:#ff79c6">]</span>
+</span></span><span style="display:flex;"><span>      <span style="color:#ff79c6">+-</span> &#39;UnresolvedRelation <span style="color:#ff79c6">[</span><span style="color:#8be9fd">mysql58</span>, <span style="color:#8be9fd">hello</span>, <span style="color:#8be9fd">test</span><span style="color:#ff79c6">],</span> <span style="color:#ff79c6">[],</span> <span style="color:#ff79c6">false</span>
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>这里不断的递归往下，直到页节点，然后开始处理</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">15
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">16
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">17
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">18
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">19
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">20
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">21
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-scala" data-lang="scala"><span style="display:flex;"><span>  <span style="color:#ff79c6">def</span> resolveOperatorsUpWithPruning<span style="color:#ff79c6">(</span>cond<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">TreePatternBits</span> <span style="color:#ff79c6">=&gt;</span> <span style="color:#50fa7b">Boolean</span><span style="color:#ff79c6">,</span>
+</span></span><span style="display:flex;"><span>    ruleId<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">RuleId</span> <span style="color:#ff79c6">=</span> <span style="color:#50fa7b">UnknownRuleId</span><span style="color:#ff79c6">)(</span>rule<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">PartialFunction</span><span style="color:#ff79c6">[</span><span style="color:#8be9fd">LogicalPlan</span>, <span style="color:#8be9fd">LogicalPlan</span><span style="color:#ff79c6">])</span>
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">:</span> <span style="color:#8be9fd">LogicalPlan</span> <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">if</span> <span style="color:#ff79c6">(!</span>analyzed <span style="color:#ff79c6">&amp;&amp;</span> cond<span style="color:#ff79c6">.</span>apply<span style="color:#ff79c6">(</span>self<span style="color:#ff79c6">)</span> <span style="color:#ff79c6">&amp;&amp;</span> <span style="color:#ff79c6">!</span>isRuleIneffective<span style="color:#ff79c6">(</span>ruleId<span style="color:#ff79c6">))</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>      <span style="color:#50fa7b">AnalysisHelper</span><span style="color:#ff79c6">.</span>allowInvokingTransformsInAnalyzer <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">val</span> afterRuleOnChildren <span style="color:#ff79c6">=</span> mapChildren<span style="color:#ff79c6">(</span><span style="color:#ff79c6">_</span><span style="color:#ff79c6">.</span>resolveOperatorsUpWithPruning<span style="color:#ff79c6">(</span>cond<span style="color:#ff79c6">,</span> ruleId<span style="color:#ff79c6">)(</span>rule<span style="color:#ff79c6">))</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">val</span> afterRule <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">if</span> <span style="color:#ff79c6">(</span>self fastEquals afterRuleOnChildren<span style="color:#ff79c6">)</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>          <span style="color:#50fa7b">CurrentOrigin</span><span style="color:#ff79c6">.</span>withOrigin<span style="color:#ff79c6">(</span>origin<span style="color:#ff79c6">)</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>            rule<span style="color:#ff79c6">.</span>applyOrElse<span style="color:#ff79c6">(</span>self<span style="color:#ff79c6">,</span> identity<span style="color:#ff79c6">[</span><span style="color:#8be9fd">LogicalPlan</span><span style="color:#ff79c6">])</span>
+</span></span><span style="display:flex;"><span>          <span style="color:#ff79c6">}</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">}</span> <span style="color:#ff79c6">else</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>          <span style="color:#50fa7b">CurrentOrigin</span><span style="color:#ff79c6">.</span>withOrigin<span style="color:#ff79c6">(</span>origin<span style="color:#ff79c6">)</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>            rule<span style="color:#ff79c6">.</span>applyOrElse<span style="color:#ff79c6">(</span>afterRuleOnChildren<span style="color:#ff79c6">,</span> identity<span style="color:#ff79c6">[</span><span style="color:#8be9fd">LogicalPlan</span><span style="color:#ff79c6">])</span>
+</span></span><span style="display:flex;"><span>          <span style="color:#ff79c6">}</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">}</span>
+</span></span><span style="display:flex;"><span>		。。。。。
+</span></span><span style="display:flex;"><span>      <span style="color:#ff79c6">}</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">}</span> <span style="color:#ff79c6">else</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>      self
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">}</span>
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">}</span>
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>执行过程如下：<br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/04/30/7KVdgq.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/04/30/7KVdgq.png" />
+        </a>
+    </p>
+<p><strong>ResolveReferences</strong><br>
+自下而上的解析字段<br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/05/22/7gNnab.png">
+            <img class="mx-auto" alt="https://malinxiao.files.wordpress.com/2021/12/image-121.png" src="https://v1.ax1x.com/2024/05/22/7gNnab.png" />
+        </a>
+       <br>
+一次只能做一次转换，对于有很多子节点的情况，会执行多次转换</p>
+<h2 id="优化规则">优化规则</h2>
+<p>Optimizer 类中的所有的优化规则</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">15
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">16
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">17
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">18
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">19
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">20
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">21
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">22
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">23
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">24
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">25
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">26
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">27
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">28
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">29
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">30
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">31
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">32
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">33
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">34
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">35
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">36
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">37
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">38
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-scala" data-lang="scala"><span style="display:flex;"><span><span style="color:#50fa7b">CheckCartesianProducts</span>$
+</span></span><span style="display:flex;"><span><span style="color:#50fa7b">CollapseProject</span>$
+</span></span><span style="display:flex;"><span><span style="color:#50fa7b">CollapseRepartition</span>$
+</span></span><span style="display:flex;"><span><span style="color:#50fa7b">CollapseWindow</span>$
+</span></span><span style="display:flex;"><span><span style="color:#50fa7b">ColumnPruning</span>$
+</span></span><span style="display:flex;"><span><span style="color:#50fa7b">CombineFilters</span>$
+</span></span><span style="display:flex;"><span><span style="color:#50fa7b">CombineUnions</span>$
+</span></span><span style="display:flex;"><span><span style="color:#50fa7b">ConvertToLocalRelation</span>$
+</span></span><span style="display:flex;"><span><span style="color:#50fa7b">DecimalAggregates</span>$
+</span></span><span style="display:flex;"><span><span style="color:#50fa7b">EliminateAggregateFilter</span>$
+</span></span><span style="display:flex;"><span><span style="color:#50fa7b">EliminateDistinct</span>$
+</span></span><span style="display:flex;"><span><span style="color:#50fa7b">EliminateLimits</span>$
+</span></span><span style="display:flex;"><span><span style="color:#50fa7b">EliminateOffsets</span>$
+</span></span><span style="display:flex;"><span><span style="color:#50fa7b">EliminateSorts</span>$
+</span></span><span style="display:flex;"><span><span style="color:#50fa7b">GenerateOptimization</span>$
+</span></span><span style="display:flex;"><span><span style="color:#50fa7b">InferFiltersFromConstraints</span>$
+</span></span><span style="display:flex;"><span><span style="color:#50fa7b">InferFiltersFromGenerate</span>$
+</span></span><span style="display:flex;"><span><span style="color:#50fa7b">LimitPushDown</span>$
+</span></span><span style="display:flex;"><span><span style="color:#50fa7b">Optimizer</span>
+</span></span><span style="display:flex;"><span><span style="color:#50fa7b">OptimizeRepartition</span>$
+</span></span><span style="display:flex;"><span><span style="color:#50fa7b">OptimizeWindowFunctions</span>$
+</span></span><span style="display:flex;"><span><span style="color:#50fa7b">PruneFilters</span>$
+</span></span><span style="display:flex;"><span><span style="color:#50fa7b">PushDownPredicates</span>$
+</span></span><span style="display:flex;"><span><span style="color:#50fa7b">PushPredicateThroughJoin</span>$
+</span></span><span style="display:flex;"><span><span style="color:#50fa7b">PushPredicateThroughNonJoin</span>$
+</span></span><span style="display:flex;"><span><span style="color:#50fa7b">PushProjectionThroughUnion</span>$
+</span></span><span style="display:flex;"><span><span style="color:#50fa7b">RemoveLiteralFromGroupExpressions</span>$
+</span></span><span style="display:flex;"><span><span style="color:#50fa7b">RemoveNoopOperators</span>$
+</span></span><span style="display:flex;"><span><span style="color:#50fa7b">RemoveNoopUnion</span>$
+</span></span><span style="display:flex;"><span><span style="color:#50fa7b">RemoveRedundantAliases</span>$
+</span></span><span style="display:flex;"><span><span style="color:#50fa7b">RemoveRepetitionFromGroupExpressions</span>$
+</span></span><span style="display:flex;"><span><span style="color:#50fa7b">ReplaceDeduplicateWithAggregate</span>$
+</span></span><span style="display:flex;"><span><span style="color:#50fa7b">ReplaceDistinctWithAggregate</span>$
+</span></span><span style="display:flex;"><span><span style="color:#50fa7b">ReplaceExceptWithAntiJoin</span>$
+</span></span><span style="display:flex;"><span><span style="color:#50fa7b">ReplaceIntersectWithSemiJoin</span>$
+</span></span><span style="display:flex;"><span><span style="color:#50fa7b">RewriteExceptAll</span>$
+</span></span><span style="display:flex;"><span><span style="color:#50fa7b">RewriteIntersectAll</span>$
+</span></span><span style="display:flex;"><span><span style="color:#50fa7b">TransposeWindow</span>$
+</span></span></code></pre></td></tr></table>
+</div>
+</div><h2 id="查询下推">查询下推</h2>
+<p>一个联邦查询中可能包含了好几个数据源，可以将同源的查询做合并，合并成一个大的join，直接下推给数据源处理</p>
+<p>比如一个 联邦查询，包含了 mysql、hive、oracle、还有其他数据源<br>
+其中 mysql 出现了好 3次，也就是查询了 三个 mysql表，可以将这个查询合并，下推到数据源，让mysql自己处理</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-sql" data-lang="sql"><span style="display:flex;"><span><span style="color:#ff79c6">select</span> <span style="color:#ff79c6">*</span>  <span style="color:#ff79c6">from</span> mysql1, mysql2, mysql3, oracle, hive, es ...
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>这里一个 LogicPlan 可能包含多个数据源，然后判断是否可以合并下推</p>
+<ul>
+<li>比如，一个JOIN条件，包含了两个、或多个同实例的MySQL（数据类型、IP、PORT相等），则可以合并成一个SQL下推过去</li>
+<li>下图中假设 source-1 和source-2 都是同类型，且ip、port相同，可以合并下推
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/04/30/7KVZBU.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/04/30/7KVZBU.png" />
+        </a>
+    </li>
+</ul>
+<p>下推过程</p>
+<ul>
+<li>使用 自顶向下来处理，判断当前的 LogicPlan 是否可以下推，比如JOIN 两边的数据源是同源而且相同的</li>
+<li>将这个 LogicPlan 转为 Calcite 的逻辑计划，spark和calcite的逻辑计划不完全匹配，中间会有很多转换问题</li>
+<li>使用 calcite 将逻辑计划，转换为 SQL，这是它自带的功能</li>
+<li>将这个 logicplain 转为：DataSourceV2Relation，将SQL 作为 JDBCOptions 的query，也就是查询语句，封装进去</li>
+<li>于是整个大的logicplan 就变成一个数据源了，后面生成代码的时候，直接根据这个数据源做 codegen，然后执行这个SQL</li>
+</ul>
+<p>另一种情况，这种不好处理，因为要重写改写整个语法树了，很难处理<br>
+所以像这种情况下，mysql还是分别查两次，不做下推处理<br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/04/30/7KV6CZ.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/04/30/7KV6CZ.png" />
+        </a>
+    </p>
+<p>除了关系数据库，理论上非关系的 NoSQL 也可以下推，只要是同源的都可以 <br>
+用 calcite 将这两个同源的 NoSQL，查询语句做合并，比如两个 ES 的，两个 HBase 的<br>
+因为有些 NoSQL，比如ES 实际不支持 index 做聚合，所以下推也没什么意义，大部分场景来说，NoSQL 的 join 可能都不适合下推</p>
+<h2 id="catalog">catalog</h2>
+<h3 id="catalog结构">catalog结构</h3>
+<p>
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/08/31/7xwFq6.jpg">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/08/31/7xwFq6.jpg" />
+        </a>
+    </p>
+<h3 id="execute执行逻辑">execute执行逻辑</h3>
+<p>以 CreateDatabaseCommand 为例，其调用逻辑如下<br>
+最终是用 hive client imp 调用到 hive meta-data，存到数据库中<br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/08/31/7xwdfQ.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/08/31/7xwdfQ.png" />
+        </a>
+    </p>
+<p>父类 RunnableCOmmand 和相关的缓存，序列化，视图的关系<br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/08/31/7xwo3f.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/08/31/7xwo3f.png" />
+        </a>
+    </p>
+<p>SessionCatalog 的调用链路<br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/08/31/7xy9Ac.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/08/31/7xy9Ac.png" />
+        </a>
+    </p>
+<h3 id="缓存">缓存</h3>
+<p>这个在 spark3.5 中已经 没有了<br>
+缓存的执行逻辑<br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/08/31/7xykJ3.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/08/31/7xykJ3.png" />
+        </a>
+    </p>
+<p>缓存的判断逻辑<br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/08/31/7xyTBj.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/08/31/7xyTBj.png" />
+        </a>
+    </p>
+<h2 id="udf整体结构">UDF整体结构</h2>
+<p>比如这个 sql</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-sql" data-lang="sql"><span style="display:flex;"><span><span style="color:#ff79c6">SELECT</span> my_add_123(id, <span style="color:#bd93f9">100</span>) <span style="color:#ff79c6">AS</span> id <span style="color:#ff79c6">FROM</span> <span style="color:#ff79c6">`</span>mysql57<span style="color:#ff79c6">-</span>hello<span style="color:#ff79c6">`</span>.t1 <span style="color:#ff79c6">AS</span> t
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>这里的 <code>my_add_123</code> 是自定义的函数，功能很简单，将两个整数相加返回</p>
+<h3 id="实现方式">实现方式</h3>
+<p><strong>V1</strong><br>
+自定义一个 my_add_123 函数，假设：</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-scala" data-lang="scala"><span style="display:flex;"><span><span style="color:#ff79c6">trait</span> <span style="color:#50fa7b">MyFunc</span> <span style="color:#ff79c6">extends</span> <span style="color:#50fa7b">Serializable</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">def</span> myfunc<span style="color:#ff79c6">(</span>a<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">Int</span><span style="color:#ff79c6">,</span> b<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">Int</span><span style="color:#ff79c6">)</span><span style="color:#ff79c6">:</span> <span style="color:#8be9fd">Int</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">}</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">class</span> <span style="color:#50fa7b">MyXXX</span> <span style="color:#ff79c6">extends</span> <span style="color:#50fa7b">MyFunc</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">override</span> <span style="color:#ff79c6">def</span> myfunc<span style="color:#ff79c6">(</span>a<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">Int</span><span style="color:#ff79c6">,</span> b<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">Int</span><span style="color:#ff79c6">)</span><span style="color:#ff79c6">:</span> <span style="color:#8be9fd">Int</span> <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>    a <span style="color:#ff79c6">+</span> b
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">}</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">}</span>
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>这里的 接口类非常简单，实际应该是暴露出 函数名，函数签名，返回值等等，这里只是简化了处理<br>
+在元数据库中定义一个表，记录 UDF 的一些信息，比如：</p>
+<table>
+<thead>
+<tr>
+<th>函数名</th>
+<th>库名</th>
+<th>描述信息</th>
+<th>jar 路径</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>my_add_123</td>
+<td>hello</td>
+<td>my add function</td>
+<td>hdfs://kdp:8020/test/my_fun.jar</td>
+</tr>
+</tbody>
+</table>
+<p>增加一个自定义的 类加载器，MyClassLoader，这个类加载其根据 hdfs 路径，将这个 jar 包下载<br>
+然后将 byte[] -&gt; Class，再将其转换为 MyFunc 类型</p>
+<h3 id="v2方式">V2方式</h3>
+<p>继承并自定义<code>loadFunction</code><br>
+根据 Identifier 查找自定义的 function，比如从元数据库中查找，再根据路径从 hdfs 上将对应的 jar 拿到</p>
+<p>同样也需要一个元数据信息</p>
+<table>
+<thead>
+<tr>
+<th>函数名</th>
+<th>库名</th>
+<th>描述信息</th>
+<th>jar 路径</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>my_add_123</td>
+<td>hello</td>
+<td>my add function</td>
+<td>hdfs://kdp:8020/test/my_fun.jar</td>
+</tr>
+</tbody>
+</table>
+<p>这里需要增加一个自定义的classloader<br>
+但目前有些问题，codegen 的时候找不到这个类，因为是另一套 classloader<br>
+解决方法，给 driver 和 executor 增加一个额外的 classpath<br>
+将下载的 jar 放到这个指定的 classpath 路径中</p>
+<p>增加自定义的实现类</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">15
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">16
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">17
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">18
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">19
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">20
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">21
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">22
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">23
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">24
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">25
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">26
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">27
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">28
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">29
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">30
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">31
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">32
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">33
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">34
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">35
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">36
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">37
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">38
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">39
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">40
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">41
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">42
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-scala" data-lang="scala"><span style="display:flex;"><span><span style="color:#ff79c6">class</span> <span style="color:#50fa7b">MyUnboundFunction</span> <span style="color:#ff79c6">extends</span> <span style="color:#50fa7b">UnboundFunction</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">override</span> <span style="color:#ff79c6">def</span> bind<span style="color:#ff79c6">(</span>inputType<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">StructType</span><span style="color:#ff79c6">)</span><span style="color:#ff79c6">:</span> <span style="color:#8be9fd">BoundFunction</span> <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">val</span> loader <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">this</span><span style="color:#ff79c6">.</span>getClass<span style="color:#ff79c6">.</span>getClassLoader
+</span></span><span style="display:flex;"><span>    println<span style="color:#ff79c6">(</span><span style="color:#f1fa8c">s&#34;MyUnboundFunction class loader -&gt; </span><span style="color:#f1fa8c">$loader</span><span style="color:#f1fa8c">&#34;</span><span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">val</span> threadLoader <span style="color:#ff79c6">=</span> <span style="color:#50fa7b">Thread</span><span style="color:#ff79c6">.</span>currentThread<span style="color:#ff79c6">().</span>getContextClassLoader
+</span></span><span style="display:flex;"><span>    println<span style="color:#ff79c6">(</span><span style="color:#f1fa8c">s&#34;thread context loader -&gt; </span><span style="color:#f1fa8c">$threadLoader</span><span style="color:#f1fa8c">&#34;</span><span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">new</span> <span style="color:#50fa7b">AddFunction</span><span style="color:#ff79c6">()</span>
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">}</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">override</span> <span style="color:#ff79c6">def</span> description<span style="color:#ff79c6">()</span><span style="color:#ff79c6">:</span> <span style="color:#8be9fd">String</span> <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#f1fa8c">&#34;my_add_func&#34;</span>
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">}</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">override</span> <span style="color:#ff79c6">def</span> name<span style="color:#ff79c6">()</span><span style="color:#ff79c6">:</span> <span style="color:#8be9fd">String</span> <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#f1fa8c">&#34;add_func&#34;</span>
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">}</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">}</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">class</span> <span style="color:#50fa7b">AddFunction</span> <span style="color:#ff79c6">extends</span> <span style="color:#50fa7b">ScalarFunction</span><span style="color:#ff79c6">[</span><span style="color:#8be9fd">Int</span><span style="color:#ff79c6">]</span>  <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">override</span> <span style="color:#ff79c6">def</span> inputTypes<span style="color:#ff79c6">()</span><span style="color:#ff79c6">:</span> <span style="color:#8be9fd">Array</span><span style="color:#ff79c6">[</span><span style="color:#8be9fd">DataType</span><span style="color:#ff79c6">]</span> <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#50fa7b">Array</span><span style="color:#ff79c6">(</span><span style="color:#50fa7b">DataTypes</span><span style="color:#ff79c6">.</span><span style="color:#50fa7b">IntegerType</span><span style="color:#ff79c6">,</span> <span style="color:#50fa7b">DataTypes</span><span style="color:#ff79c6">.</span><span style="color:#50fa7b">IntegerType</span><span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">}</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">override</span> <span style="color:#ff79c6">def</span> resultType<span style="color:#ff79c6">()</span><span style="color:#ff79c6">:</span> <span style="color:#8be9fd">DataType</span> <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#50fa7b">DataTypes</span><span style="color:#ff79c6">.</span><span style="color:#50fa7b">IntegerType</span>
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">}</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">override</span> <span style="color:#ff79c6">def</span> name<span style="color:#ff79c6">()</span><span style="color:#ff79c6">:</span> <span style="color:#8be9fd">String</span> <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#f1fa8c">&#34;add&#34;</span>
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">}</span>
+</span></span><span style="display:flex;"><span>  <span style="color:#6272a4">// 会优先调用这个函数
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>  <span style="color:#ff79c6">def</span> invoke<span style="color:#ff79c6">(</span>a<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">Int</span><span style="color:#ff79c6">,</span> b<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">Int</span><span style="color:#ff79c6">)</span><span style="color:#ff79c6">:</span> <span style="color:#8be9fd">Int</span> <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>    a <span style="color:#ff79c6">+</span> b
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">}</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">override</span> <span style="color:#ff79c6">def</span> produceResult<span style="color:#ff79c6">(</span>input<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">InternalRow</span><span style="color:#ff79c6">)</span><span style="color:#ff79c6">:</span> <span style="color:#8be9fd">Int</span> <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">val</span> arr<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">Array</span><span style="color:#ff79c6">[</span><span style="color:#8be9fd">MutableValue</span><span style="color:#ff79c6">]</span> <span style="color:#ff79c6">=</span> input<span style="color:#ff79c6">.</span>asInstanceOf<span style="color:#ff79c6">[</span><span style="color:#8be9fd">SpecificInternalRow</span><span style="color:#ff79c6">].</span>values
+</span></span><span style="display:flex;"><span>    arr<span style="color:#ff79c6">(</span><span style="color:#bd93f9">0</span><span style="color:#ff79c6">).</span>asInstanceOf<span style="color:#ff79c6">[</span><span style="color:#8be9fd">MutableInt</span><span style="color:#ff79c6">].</span>value <span style="color:#ff79c6">+</span> arr<span style="color:#ff79c6">(</span><span style="color:#bd93f9">1</span><span style="color:#ff79c6">).</span>asInstanceOf<span style="color:#ff79c6">[</span><span style="color:#8be9fd">MutableInt</span><span style="color:#ff79c6">].</span>value
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">}</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">}</span>
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>add jar 命令引入的 classloader<br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/08/27/7x3tTh.png">
+            <img class="mx-auto" alt="image" src="https://v1.ax1x.com/2024/08/27/7x3tTh.png" />
+        </a>
+     <br>
+使用自定义的 classloader</p>
+<ul>
+<li>加载 MyUnboundFunction 时，使用自定义的 classloader</li>
+<li>MyUnboundFunction 加载 AddFunction 时，正常 new 出来就可以了</li>
+</ul>
+<p>下面这段，放到 loadFunction 中，执行自定义的加载逻辑</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">8
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-scala" data-lang="scala"><span style="display:flex;"><span>    <span style="color:#ff79c6">val</span> parent <span style="color:#ff79c6">=</span> <span style="color:#50fa7b">Thread</span><span style="color:#ff79c6">.</span>currentThread<span style="color:#ff79c6">().</span>getContextClassLoader
+</span></span><span style="display:flex;"><span>    <span style="color:#6272a4">// 这里 spark 的classloader，这里直接使用
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>    <span style="color:#ff79c6">val</span> loader <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">new</span> <span style="color:#50fa7b">NonClosableMutableURLClassLoader</span><span style="color:#ff79c6">(</span>parent<span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>    loader<span style="color:#ff79c6">.</span>addURL<span style="color:#ff79c6">(</span> <span style="color:#ff79c6">new</span> <span style="color:#50fa7b">URL</span><span style="color:#ff79c6">(</span><span style="color:#f1fa8c">&#34;file:/D:\\zzz_my_test\\xx.jar&#34;</span><span style="color:#ff79c6">)</span> <span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#50fa7b">Thread</span><span style="color:#ff79c6">.</span>currentThread<span style="color:#ff79c6">().</span>setContextClassLoader<span style="color:#ff79c6">(</span>loader<span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">val</span> funcClassName <span style="color:#ff79c6">=</span> <span style="color:#f1fa8c">&#34;com.test.func.MyUnboundFunction&#34;</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">val</span> clazz <span style="color:#ff79c6">=</span> <span style="color:#50fa7b">Class</span><span style="color:#ff79c6">.</span>forName<span style="color:#ff79c6">(</span>funcClassName<span style="color:#ff79c6">,</span> <span style="color:#ff79c6">true</span><span style="color:#ff79c6">,</span> loader<span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>    clazz<span style="color:#ff79c6">.</span>newInstance<span style="color:#ff79c6">().</span>asInstanceOf<span style="color:#ff79c6">[</span><span style="color:#8be9fd">UnboundFunction</span><span style="color:#ff79c6">]</span>
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>加载 MyUnboundFunction 后，打印如下信息，这里已经使用了自定义的 classloader 了</p>
+<pre tabindex="0"><code>MyUnboundFunction class loader -&gt; org.apache.spark.sql.internal.NonClosableMutableURLClassLoader@514377fc
+thread context loader -&gt; org.apache.spark.sql.internal.NonClosableMutableURLClassLoader@514377fc
+</code></pre><p>提供创建 函数的 sql：</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">7
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-sql" data-lang="sql"><span style="display:flex;"><span><span style="color:#ff79c6">CREATE</span> <span style="color:#ff79c6">OR</span> <span style="color:#ff79c6">REPLACE</span> <span style="color:#ff79c6">FUNCTION</span> <span style="color:#ff79c6">IF</span> <span style="color:#ff79c6">NOT</span> <span style="color:#ff79c6">EXISTS</span> func1
+</span></span><span style="display:flex;"><span> <span style="color:#ff79c6">BY</span> <span style="color:#f1fa8c">&#39;org.apache.spark.example.A&#39;</span> <span style="color:#ff79c6">USING</span> <span style="color:#f1fa8c">&#39;/tmp/a.jar&#39;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">DROP</span> <span style="color:#ff79c6">FUNCTION</span> <span style="color:#ff79c6">IF</span> <span style="color:#ff79c6">EXISTS</span> func1
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">DESC</span> <span style="color:#ff79c6">FUNCTION</span> func1
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">SHOW</span> FUNCTIONS
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>增加自定义的 parser，逻辑计划等，将这些信息写到数据库中<br>
+上述的函数是全局范围的，也可以指定 catalog，将这个函数绑定到某个 catalog 下<br>
+这样同名的，但不同功能的函数，就可以区分了</p>
+<p><strong>V2方式聚合函数</strong><br>
+这里是将 <code>my_add_123</code>作为聚合函数使用 <br>
+创建两个类，未绑定的函数，以及绑定后的聚合函数</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">15
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">16
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">17
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">18
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">19
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">20
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">21
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">22
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">23
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">24
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">25
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">26
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">27
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">28
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">29
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">30
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">31
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">32
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">33
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">34
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">35
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">36
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">37
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">38
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">39
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">40
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">41
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">42
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">43
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">44
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">45
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">46
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">47
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">48
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">49
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">50
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">51
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">52
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">53
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">54
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">55
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-scala" data-lang="scala"><span style="display:flex;"><span><span style="color:#ff79c6">class</span> <span style="color:#50fa7b">MyUnboundAgg</span> <span style="color:#ff79c6">extends</span> <span style="color:#50fa7b">UnboundFunction</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">override</span> <span style="color:#ff79c6">def</span> bind<span style="color:#ff79c6">(</span>inputType<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">StructType</span><span style="color:#ff79c6">)</span><span style="color:#ff79c6">:</span> <span style="color:#8be9fd">BoundFunction</span> <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">new</span> <span style="color:#50fa7b">MyAggregate</span><span style="color:#ff79c6">()</span>
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">}</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">override</span> <span style="color:#ff79c6">def</span> description<span style="color:#ff79c6">()</span><span style="color:#ff79c6">:</span> <span style="color:#8be9fd">String</span> <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#f1fa8c">&#34;my_agg_udf&#34;</span>
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">}</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">override</span> <span style="color:#ff79c6">def</span> name<span style="color:#ff79c6">()</span><span style="color:#ff79c6">:</span> <span style="color:#8be9fd">String</span> <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#f1fa8c">&#34;my_agg&#34;</span>
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">}</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">}</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">class</span> <span style="color:#50fa7b">MyAggregate</span> <span style="color:#ff79c6">extends</span> <span style="color:#50fa7b">AggregateFunction</span><span style="color:#ff79c6">[</span><span style="color:#8be9fd">AtomicInteger</span>, <span style="color:#8be9fd">Int</span><span style="color:#ff79c6">]</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">override</span> <span style="color:#ff79c6">def</span> newAggregationState<span style="color:#ff79c6">()</span><span style="color:#ff79c6">:</span> <span style="color:#8be9fd">AtomicInteger</span> <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">new</span> <span style="color:#50fa7b">AtomicInteger</span><span style="color:#ff79c6">(</span><span style="color:#bd93f9">0</span><span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">}</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">override</span> <span style="color:#ff79c6">def</span> update<span style="color:#ff79c6">(</span>state<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">AtomicInteger</span><span style="color:#ff79c6">,</span> input<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">InternalRow</span><span style="color:#ff79c6">)</span><span style="color:#ff79c6">:</span> <span style="color:#8be9fd">AtomicInteger</span> <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">val</span> tmp <span style="color:#ff79c6">=</span> input<span style="color:#ff79c6">.</span>getInt<span style="color:#ff79c6">(</span><span style="color:#bd93f9">0</span><span style="color:#ff79c6">)</span> <span style="color:#ff79c6">+</span> input<span style="color:#ff79c6">.</span>getInt<span style="color:#ff79c6">(</span><span style="color:#bd93f9">1</span><span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>    println<span style="color:#ff79c6">(</span><span style="color:#f1fa8c">s&#34;update -&gt; </span><span style="color:#f1fa8c">$tmp</span><span style="color:#f1fa8c">&#34;</span><span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">val</span> tmp2 <span style="color:#ff79c6">=</span> state<span style="color:#ff79c6">.</span>get<span style="color:#ff79c6">()</span> <span style="color:#ff79c6">+</span> tmp
+</span></span><span style="display:flex;"><span>    state<span style="color:#ff79c6">.</span>set<span style="color:#ff79c6">(</span>tmp2<span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>    println<span style="color:#ff79c6">(</span><span style="color:#f1fa8c">s&#34;update total -&gt; </span><span style="color:#f1fa8c">${</span>state<span style="color:#ff79c6">.</span>get<span style="color:#ff79c6">()</span><span style="color:#f1fa8c">}</span><span style="color:#f1fa8c">&#34;</span><span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>    state
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">}</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">override</span> <span style="color:#ff79c6">def</span> merge<span style="color:#ff79c6">(</span>leftState<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">AtomicInteger</span><span style="color:#ff79c6">,</span> rightState<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">AtomicInteger</span><span style="color:#ff79c6">)</span><span style="color:#ff79c6">:</span> <span style="color:#8be9fd">AtomicInteger</span> <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">val</span> res<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">Int</span> <span style="color:#ff79c6">=</span> leftState<span style="color:#ff79c6">.</span>get<span style="color:#ff79c6">()</span> <span style="color:#ff79c6">+</span> rightState<span style="color:#ff79c6">.</span>get<span style="color:#ff79c6">()</span>
+</span></span><span style="display:flex;"><span>    println<span style="color:#ff79c6">(</span><span style="color:#f1fa8c">s&#34;merge -&gt; </span><span style="color:#f1fa8c">$res</span><span style="color:#f1fa8c">&#34;</span><span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>    leftState<span style="color:#ff79c6">.</span>set<span style="color:#ff79c6">(</span>res<span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>    println<span style="color:#ff79c6">(</span><span style="color:#f1fa8c">s&#34;merge -&gt; </span><span style="color:#f1fa8c">${</span>leftState<span style="color:#ff79c6">.</span>get<span style="color:#ff79c6">()</span><span style="color:#f1fa8c">}</span><span style="color:#f1fa8c">&#34;</span><span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>    leftState
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">}</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">override</span> <span style="color:#ff79c6">def</span> produceResult<span style="color:#ff79c6">(</span>state<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">AtomicInteger</span><span style="color:#ff79c6">)</span><span style="color:#ff79c6">:</span> <span style="color:#8be9fd">Int</span> <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>    println<span style="color:#ff79c6">(</span><span style="color:#f1fa8c">s&#34;state -&gt; </span><span style="color:#f1fa8c">$state</span><span style="color:#f1fa8c">&#34;</span><span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>    state<span style="color:#ff79c6">.</span>get<span style="color:#ff79c6">()</span>
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">}</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">override</span> <span style="color:#ff79c6">def</span> inputTypes<span style="color:#ff79c6">()</span><span style="color:#ff79c6">:</span> <span style="color:#8be9fd">Array</span><span style="color:#ff79c6">[</span><span style="color:#8be9fd">DataType</span><span style="color:#ff79c6">]</span> <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#50fa7b">Array</span><span style="color:#ff79c6">(</span><span style="color:#50fa7b">IntegerType</span><span style="color:#ff79c6">,</span> <span style="color:#50fa7b">IntegerType</span><span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">}</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">override</span> <span style="color:#ff79c6">def</span> resultType<span style="color:#ff79c6">()</span><span style="color:#ff79c6">:</span> <span style="color:#8be9fd">DataType</span> <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#50fa7b">IntegerType</span>
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">}</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">override</span> <span style="color:#ff79c6">def</span> name<span style="color:#ff79c6">()</span><span style="color:#ff79c6">:</span> <span style="color:#8be9fd">String</span> <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#f1fa8c">&#34;my_add_123&#34;</span>
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">}</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">}</span>
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>执行结果</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">15
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">16
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-sql" data-lang="sql"><span style="display:flex;"><span><span style="color:#ff79c6">update</span> <span style="color:#ff79c6">-&gt;</span> <span style="color:#bd93f9">101</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">update</span> total <span style="color:#ff79c6">-&gt;</span> <span style="color:#bd93f9">101</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">update</span> <span style="color:#ff79c6">-&gt;</span> <span style="color:#bd93f9">102</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">update</span> total <span style="color:#ff79c6">-&gt;</span> <span style="color:#bd93f9">203</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">update</span> <span style="color:#ff79c6">-&gt;</span> <span style="color:#bd93f9">103</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">update</span> total <span style="color:#ff79c6">-&gt;</span> <span style="color:#bd93f9">306</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">update</span> <span style="color:#ff79c6">-&gt;</span> <span style="color:#bd93f9">104</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">update</span> total <span style="color:#ff79c6">-&gt;</span> <span style="color:#bd93f9">410</span>
+</span></span><span style="display:flex;"><span>merge <span style="color:#ff79c6">-&gt;</span> <span style="color:#bd93f9">410</span>
+</span></span><span style="display:flex;"><span>merge <span style="color:#ff79c6">-&gt;</span> <span style="color:#bd93f9">410</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">state</span> <span style="color:#ff79c6">-&gt;</span> <span style="color:#bd93f9">410</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">+</span><span style="color:#6272a4">---+
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span><span style="color:#ff79c6">|</span> id<span style="color:#ff79c6">|</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">+</span><span style="color:#6272a4">---+
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span><span style="color:#ff79c6">|</span><span style="color:#bd93f9">410</span><span style="color:#ff79c6">|</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">+</span><span style="color:#6272a4">---+
+</span></span></span></code></pre></td></tr></table>
+</div>
+</div><h3 id="执行展示">执行展示</h3>
+<p>查询的 sql</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-sql" data-lang="sql"><span style="display:flex;"><span><span style="color:#ff79c6">SELECT</span> my_add_123(id, <span style="color:#bd93f9">100</span>) <span style="color:#ff79c6">AS</span> id <span style="color:#ff79c6">FROM</span> <span style="color:#ff79c6">`</span>mysql57<span style="color:#ff79c6">-</span>hello<span style="color:#ff79c6">`</span>.t1 <span style="color:#ff79c6">AS</span> t
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>结果<br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/08/27/7x3zh9.png">
+            <img class="mx-auto" alt="image" src="https://v1.ax1x.com/2024/08/27/7x3zh9.png" />
+        </a>
+    </p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">8
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-sql" data-lang="sql"><span style="display:flex;"><span><span style="color:#ff79c6">+</span><span style="color:#6272a4">---+
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span><span style="color:#ff79c6">|</span> id<span style="color:#ff79c6">|</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">+</span><span style="color:#6272a4">---+
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span><span style="color:#ff79c6">|</span><span style="color:#bd93f9">101</span><span style="color:#ff79c6">|</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">|</span><span style="color:#bd93f9">102</span><span style="color:#ff79c6">|</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">|</span><span style="color:#bd93f9">103</span><span style="color:#ff79c6">|</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">|</span><span style="color:#bd93f9">104</span><span style="color:#ff79c6">|</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">+</span><span style="color:#6272a4">---+
+</span></span></span></code></pre></td></tr></table>
+</div>
+</div><h3 id="自定义函数下推">自定义函数下推</h3>
+<p>查找函数，绑定函数<br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/08/27/7x34YY.png">
+            <img class="mx-auto" alt="image" src="https://v1.ax1x.com/2024/08/27/7x34YY.png" />
+        </a>
+    <br>
+目前走的是 v1 的逻辑<br>
+内置很多函数，像<code>max</code>这样的函数就是内置的，所以可以查找到<br>
+绑定的时候，返回对应的 表达式<br>
+org.apache.spark.sql.catalyst.expressions.aggregate.Max</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">15
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">16
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">17
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">18
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">19
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">20
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">21
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">22
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">23
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">24
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">25
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">26
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">27
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">28
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">29
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">30
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">31
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">32
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-scala" data-lang="scala"><span style="display:flex;"><span><span style="color:#ff79c6">case</span> <span style="color:#ff79c6">class</span> <span style="color:#50fa7b">Max</span><span style="color:#ff79c6">(</span>child<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">Expression</span><span style="color:#ff79c6">)</span> <span style="color:#ff79c6">extends</span> <span style="color:#50fa7b">DeclarativeAggregate</span> <span style="color:#ff79c6">with</span> <span style="color:#50fa7b">UnaryLike</span><span style="color:#ff79c6">[</span><span style="color:#8be9fd">Expression</span><span style="color:#ff79c6">]</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">override</span> <span style="color:#ff79c6">def</span> nullable<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">Boolean</span> <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">true</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>  <span style="color:#6272a4">// Return data type.
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>  <span style="color:#ff79c6">override</span> <span style="color:#ff79c6">def</span> dataType<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">DataType</span> <span style="color:#ff79c6">=</span> child<span style="color:#ff79c6">.</span>dataType
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">override</span> <span style="color:#ff79c6">def</span> checkInputDataTypes<span style="color:#ff79c6">()</span><span style="color:#ff79c6">:</span> <span style="color:#8be9fd">TypeCheckResult</span> <span style="color:#ff79c6">=</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#50fa7b">TypeUtils</span><span style="color:#ff79c6">.</span>checkForOrderingExpr<span style="color:#ff79c6">(</span>child<span style="color:#ff79c6">.</span>dataType<span style="color:#ff79c6">,</span> prettyName<span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">private</span> <span style="color:#ff79c6">lazy</span> <span style="color:#ff79c6">val</span> max <span style="color:#ff79c6">=</span> <span style="color:#50fa7b">AttributeReference</span><span style="color:#ff79c6">(</span><span style="color:#f1fa8c">&#34;max&#34;</span><span style="color:#ff79c6">,</span> child<span style="color:#ff79c6">.</span>dataType<span style="color:#ff79c6">)()</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">override</span> <span style="color:#ff79c6">lazy</span> <span style="color:#ff79c6">val</span> aggBufferAttributes<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">Seq</span><span style="color:#ff79c6">[</span><span style="color:#8be9fd">AttributeReference</span><span style="color:#ff79c6">]</span> <span style="color:#ff79c6">=</span> max <span style="color:#ff79c6">:</span><span style="color:#8be9fd">:</span> <span style="color:#8be9fd">Nil</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">override</span> <span style="color:#ff79c6">lazy</span> <span style="color:#ff79c6">val</span> initialValues<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">Seq</span><span style="color:#ff79c6">[</span><span style="color:#8be9fd">Literal</span><span style="color:#ff79c6">]</span> <span style="color:#ff79c6">=</span> <span style="color:#50fa7b">Seq</span><span style="color:#ff79c6">(</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#6272a4">/* max = */</span> <span style="color:#50fa7b">Literal</span><span style="color:#ff79c6">.</span>create<span style="color:#ff79c6">(</span><span style="color:#ff79c6">null</span><span style="color:#ff79c6">,</span> child<span style="color:#ff79c6">.</span>dataType<span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">override</span> <span style="color:#ff79c6">lazy</span> <span style="color:#ff79c6">val</span> updateExpressions<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">Seq</span><span style="color:#ff79c6">[</span><span style="color:#8be9fd">Expression</span><span style="color:#ff79c6">]</span> <span style="color:#ff79c6">=</span> <span style="color:#50fa7b">Seq</span><span style="color:#ff79c6">(</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#6272a4">/* max = */</span> greatest<span style="color:#ff79c6">(</span>max<span style="color:#ff79c6">,</span> child<span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">override</span> <span style="color:#ff79c6">lazy</span> <span style="color:#ff79c6">val</span> mergeExpressions<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">Seq</span><span style="color:#ff79c6">[</span><span style="color:#8be9fd">Expression</span><span style="color:#ff79c6">]</span> <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#50fa7b">Seq</span><span style="color:#ff79c6">(</span>
+</span></span><span style="display:flex;"><span>      <span style="color:#6272a4">/* max = */</span> greatest<span style="color:#ff79c6">(</span>max<span style="color:#ff79c6">.</span>left<span style="color:#ff79c6">,</span> max<span style="color:#ff79c6">.</span>right<span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">}</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">override</span> <span style="color:#ff79c6">lazy</span> <span style="color:#ff79c6">val</span> evaluateExpression<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">AttributeReference</span> <span style="color:#ff79c6">=</span> max
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">override</span> <span style="color:#ff79c6">protected</span> <span style="color:#ff79c6">def</span> withNewChildInternal<span style="color:#ff79c6">(</span>newChild<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">Expression</span><span style="color:#ff79c6">)</span><span style="color:#ff79c6">:</span> <span style="color:#8be9fd">Max</span> <span style="color:#ff79c6">=</span> copy<span style="color:#ff79c6">(</span>child <span style="color:#ff79c6">=</span> newChild<span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">}</span>
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>之后优化逻辑，会将这个 表达式交给具体的方言处理，看是否可以下推<br>
+方言类会将这个表达式，如 <code>max(id + 100)</code>，转换成一个字符串，最后将这个字符串，作为 project list 的一部分，下推到具体的数据源</p>
+<p>这里简单处理一下，实现 聚合函数方言下推</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">15
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">16
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">17
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">18
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">19
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">20
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">21
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-scala" data-lang="scala"><span style="display:flex;"><span><span style="color:#ff79c6">class</span> <span style="color:#50fa7b">UniMySQLSQLBuilder</span> <span style="color:#ff79c6">extends</span> <span style="color:#50fa7b">JDBCSQLBuilder</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">override</span> <span style="color:#ff79c6">def</span> compileExpression<span style="color:#ff79c6">(</span>expr<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">Expression</span><span style="color:#ff79c6">)</span><span style="color:#ff79c6">:</span> <span style="color:#8be9fd">Option</span><span style="color:#ff79c6">[</span><span style="color:#8be9fd">String</span><span style="color:#ff79c6">]</span> <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">val</span> mysqlSQLBuilder <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">new</span> <span style="color:#50fa7b">UniMySQLSQLBuilder</span><span style="color:#ff79c6">()</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">try</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>      <span style="color:#50fa7b">Some</span><span style="color:#ff79c6">(</span>mysqlSQLBuilder<span style="color:#ff79c6">.</span>build<span style="color:#ff79c6">(</span>expr<span style="color:#ff79c6">))</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">}</span> <span style="color:#ff79c6">catch</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>      <span style="color:#ff79c6">case</span> <span style="color:#50fa7b">NonFatal</span><span style="color:#ff79c6">(</span>e<span style="color:#ff79c6">)</span> <span style="color:#ff79c6">=&gt;</span>
+</span></span><span style="display:flex;"><span>        logWarning<span style="color:#ff79c6">(</span><span style="color:#f1fa8c">&#34;Error occurs while compiling V2 expression&#34;</span><span style="color:#ff79c6">,</span> e<span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#50fa7b">None</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">}</span>
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">}</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">override</span> <span style="color:#ff79c6">def</span> build<span style="color:#ff79c6">(</span>expr<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">Expression</span><span style="color:#ff79c6">)</span><span style="color:#ff79c6">:</span> <span style="color:#8be9fd">String</span> <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>      <span style="color:#ff79c6">val</span> s <span style="color:#ff79c6">=</span> expr<span style="color:#ff79c6">.</span>toString
+</span></span><span style="display:flex;"><span>      <span style="color:#ff79c6">if</span> <span style="color:#ff79c6">(</span>s<span style="color:#ff79c6">.</span>contains<span style="color:#ff79c6">(</span><span style="color:#f1fa8c">&#34;my_add_123&#34;</span><span style="color:#ff79c6">))</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#f1fa8c">&#34;my_add_123(id, 100)&#34;</span>
+</span></span><span style="display:flex;"><span>      <span style="color:#ff79c6">}</span> <span style="color:#ff79c6">else</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">super</span><span style="color:#ff79c6">.</span>build<span style="color:#ff79c6">(</span>expr<span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>      <span style="color:#ff79c6">}</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">}</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">}</span>
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>显示已经可以下推了<br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/08/27/7x3CdH.png">
+            <img class="mx-auto" alt="image" src="https://v1.ax1x.com/2024/08/27/7x3CdH.png" />
+        </a>
+    <br>
+查询结果</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">8
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-sql" data-lang="sql"><span style="display:flex;"><span><span style="color:#ff79c6">+</span><span style="color:#6272a4">---+
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span><span style="color:#ff79c6">|</span> id<span style="color:#ff79c6">|</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">+</span><span style="color:#6272a4">---+
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span><span style="color:#ff79c6">|</span><span style="color:#bd93f9">101</span><span style="color:#ff79c6">|</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">|</span><span style="color:#bd93f9">102</span><span style="color:#ff79c6">|</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">|</span><span style="color:#bd93f9">103</span><span style="color:#ff79c6">|</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">|</span><span style="color:#bd93f9">104</span><span style="color:#ff79c6">|</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">+</span><span style="color:#6272a4">---+
+</span></span></span></code></pre></td></tr></table>
+</div>
+</div><p>这个函数，在 mysql 端，只是一个普通的函数，只是 spark 端，将他 当做了一个<strong>聚合</strong>函数下推过去了<br>
+但最终是按照普通函数执行的<br>
+spark 端只是拼接一个 sql</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-sql" data-lang="sql"><span style="display:flex;"><span><span style="color:#ff79c6">SELECT</span> my_add_123(id, <span style="color:#bd93f9">100</span>) <span style="color:#ff79c6">FROM</span> t1
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>这里的 my_add_123 是 聚合函数，还是标量函数，spark 不关心<br>
+所以按照这种方式，就可以实现</p>
+<ul>
+<li>标量函数下推，把它当做聚合函数来对待</li>
+<li>聚合函数下推</li>
+</ul>
+<p>UDF 的完整类图<br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/08/31/7xwZDO.jpg">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/08/31/7xwZDO.jpg" />
+        </a>
+    </p>
+<h2 id="参考">参考</h2>
+<ul>
+<li><a href="https://dataninjago.com/category/deep-dive-spark-sql-query-engine/">Deep Dive – Spark SQL Query Engine</a></li>
+<li><a href="https://cloud.tencent.com/developer/article/1902503">spark sql非join情况的谓词下推优化器PushPredicateThroughNonJoin</a></li>
+<li><a href="https://dataninjago.com/2021/12/26/spark-deep-dive-9-catalyst-optimizer-rules-part-2/">Catalyst Optimizer Rules</a></li>
+<li><a href="https://dataninjago.com/2021/12/21/spark-deep-dive-8-catalyst-optimizer-rules-part-1/">Catalyst Optimizer Rules (Part 1)</a></li>
+</ul>
+
+			<script type="text/javascript"
+        async
+        src="https://cdn.bootcss.com/mathjax/2.7.3/MathJax.js?config=TeX-AMS-MML_HTMLorMML">
+MathJax.Hub.Config({
+  tex2jax: {
+    inlineMath: [['$','$'], ['\\(','\\)']],
+    displayMath: [['$$','$$'], ['\[\[','\]\]']],
+    processEscapes: true,
+    processEnvironments: true,
+    skipTags: ['script', 'noscript', 'style', 'textarea', 'pre'],
+    TeX: { equationNumbers: { autoNumber: "AMS" },
+         extensions: ["AMSmath.js", "AMSsymbols.js"] }
+  }
+});
+
+MathJax.Hub.Queue(function() {
+    
+    
+    
+    var all = MathJax.Hub.getAllJax(), i;
+    for(i = 0; i < all.length; i += 1) {
+        all[i].SourceElement().parentNode.className += ' has-jax';
+    }
+});
+</script>
+
+<style>
+code.has-jax {
+    font: inherit;
+    font-size: 100%;
+    background: inherit;
+    border: inherit;
+    color: #515151;
+}
+</style>
+        </div>
+
+        
+
+
+        
+
+<div class="post-archive">
+    <h2>相关文章</h2>
+    <ul class="listing">
+        
+        <li><a href="/post/2023/06/spark_tuning/">Spark性能调优</a></li>
+        
+        <li><a href="/post/2023/01/photon-a-fast-query-engine-for-lakehouse-systems/">Photon A Fast Query Engine for Lakehouse Systems</a></li>
+        
+    </ul>
+</div>
+
+
+        <div class="post-meta meta-tags">
+            
+            <ul class="clearfix">
+                
+                <li><a href='/tags/spark'>Spark</a></li>
+                
+            </ul>
+            
+        </div>
+    </article>
+    
+    
+
+    
+    
+    <div class="post bg-white">
+      <script src="https://utteranc.es/client.js"
+            repo= "himichael/hugoblogtalks"
+            issue-term="pathname"
+            theme="github-light"
+            crossorigin="anonymous"
+            async>
+      </script>
+    </div>
+    
+</div>
+
+
+                </div>
+
+                <div id="secondary">
+    <section class="widget">
+        <form id="search" action='https://code0xff.org/search/' method="get" accept-charset="utf-8" target="_blank" _lpchecked="1">
+      
+      <input type="text" name="q" maxlength="20" placeholder="Search">
+      <input type="hidden" name="sitesearch" value="https://code0xff.org/">
+      <button type="submit" class="submit icon-search"></button>
+</form>
+    </section>
+    
+    <section class="widget">
+        <h3 class="widget-title">最近文章</h3>
+<ul class="widget-list">
+    
+    <li>
+        <a href="https://code0xff.org/post/2025/01/spark_register_source/" title="Spark 注册数据源">Spark 注册数据源</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2025/01/spark_core_2/" title="Spark Core相关-2">Spark Core相关-2</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2024/12/llamafactory/" title="Llama Factory">Llama Factory</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2024/11/spark_core/" title="Spark Core相关-1">Spark Core相关-1</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2024/11/sae_tunnel/" title="sea tunnel">sea tunnel</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2024/11/k8s_networks/" title="k8s 网络">k8s 网络</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2024/11/ozone/" title="ozone">ozone</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2024/11/es/" title="ES的简单学习">ES的简单学习</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2025/02/ai/" title="AI的简单学习">AI的简单学习</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2024/11/big_data_investigation/" title="国内几个云厂商大数据平台">国内几个云厂商大数据平台</a>
+    </li>
+    
+</ul>
+    </section>
+
+    
+
+    <section class="widget">
+        <h3 class="widget-title"><a href='/categories/'>分类</a></h3>
+<ul class="widget-list">
+    
+    <li><a href="https://code0xff.org/categories/%E5%88%86%E5%B8%83%E5%BC%8F/">分布式 (6)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E5%8E%9F%E7%90%86%E5%88%86%E6%9E%90/">原理分析 (24)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E5%95%86%E4%B8%9A/">商业 (3)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E5%A4%A7%E6%95%B0%E6%8D%AE/">大数据 (56)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%95%B0%E6%8D%AE%E5%BA%93/">数据库 (41)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%96%87%E5%AD%A6%E5%92%8C%E8%89%BA%E6%9C%AF/">文学和艺术 (3)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%97%85%E8%A1%8C/">旅行 (12)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%9E%B6%E6%9E%84/">架构 (13)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E7%AE%97%E6%B3%95/">算法 (8)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E7%B3%BB%E7%BB%9F/">系统 (7)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E7%BC%96%E7%A8%8B%E8%AF%AD%E8%A8%80/">编程语言 (7)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E8%A1%8C%E4%B8%9A%E8%A7%82%E5%AF%9F/">行业观察 (3)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E8%AF%BB%E4%B9%A6%E7%AC%94%E8%AE%B0/">读书笔记 (14)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E9%9A%8F%E4%BE%BF%E5%86%99%E5%86%99/">随便写写 (3)</a></li>
+    
+</ul>
+    </section>
+
+    <section class="widget">
+        <h3 class="widget-title">归档</a></h3>
+<ul class="widget-list">
+    
+    <li><a href="https://code0xff.org/years/2021%E5%B9%B4/">2021年 (41)</a></li>
+    
+    <li><a href="https://code0xff.org/years/2022%E5%B9%B4/">2022年 (55)</a></li>
+    
+    <li><a href="https://code0xff.org/years/2023%E5%B9%B4/">2023年 (54)</a></li>
+    
+    <li><a href="https://code0xff.org/years/2024%E5%B9%B4/">2024年 (48)</a></li>
+    
+    <li><a href="https://code0xff.org/years/2025%E5%B9%B4/">2025年 (2)</a></li>
+    
+</ul>
+    </section>
+
+    <section class="widget">
+        <h3 class="widget-title"><a href='/tags/'>标签</a></h3>
+<div class="tagcloud">
+    
+    <a href="https://code0xff.org/tags/ai/">AI </a>
+    
+    <a href="https://code0xff.org/tags/ambari/">Ambari </a>
+    
+    <a href="https://code0xff.org/tags/architecture/">architecture </a>
+    
+    <a href="https://code0xff.org/tags/bigdata/">bigdata </a>
+    
+    <a href="https://code0xff.org/tags/b%E6%A0%91/">B树 </a>
+    
+    <a href="https://code0xff.org/tags/c&#43;&#43;/">C&#43;&#43; </a>
+    
+    <a href="https://code0xff.org/tags/calcite/">calcite </a>
+    
+    <a href="https://code0xff.org/tags/cmu-database/">CMU-Database </a>
+    
+    <a href="https://code0xff.org/tags/data_ingestion/">Data_Ingestion </a>
+    
+    <a href="https://code0xff.org/tags/deltalake/">DeltaLake </a>
+    
+    <a href="https://code0xff.org/tags/doris/">Doris </a>
+    
+    <a href="https://code0xff.org/tags/english/">English </a>
+    
+    <a href="https://code0xff.org/tags/es/">ES </a>
+    
+    <a href="https://code0xff.org/tags/facebook/">Facebook </a>
+    
+    <a href="https://code0xff.org/tags/flink/">flink </a>
+    
+    <a href="https://code0xff.org/tags/flume/">flume </a>
+    
+    <a href="https://code0xff.org/tags/gc/">GC </a>
+    
+    <a href="https://code0xff.org/tags/gluten/">Gluten </a>
+    
+    <a href="https://code0xff.org/tags/hana/">HANA </a>
+    
+    <a href="https://code0xff.org/tags/hive/">Hive </a>
+    
+    <a href="https://code0xff.org/tags/iceberg/">iceberg </a>
+    
+    <a href="https://code0xff.org/tags/impala/">Impala </a>
+    
+    <a href="https://code0xff.org/tags/janino/">janino </a>
+    
+    <a href="https://code0xff.org/tags/k8s/">k8s </a>
+    
+    <a href="https://code0xff.org/tags/kafka/">Kafka </a>
+    
+    <a href="https://code0xff.org/tags/kudu/">kudu </a>
+    
+    <a href="https://code0xff.org/tags/kyuubi/">Kyuubi </a>
+    
+    <a href="https://code0xff.org/tags/lakehouse/">Lakehouse </a>
+    
+    <a href="https://code0xff.org/tags/leveldb/">LevelDB </a>
+    
+    <a href="https://code0xff.org/tags/llamafactory/">LlamaFactory </a>
+    
+    <a href="https://code0xff.org/tags/llvm/">LLVM </a>
+    
+    <a href="https://code0xff.org/tags/manacher/">Manacher </a>
+    
+    <a href="https://code0xff.org/tags/mapreduce/">MapReduce </a>
+    
+    <a href="https://code0xff.org/tags/micro-service/">micro-service </a>
+    
+    <a href="https://code0xff.org/tags/mysql/">MySQL </a>
+    
+    <a href="https://code0xff.org/tags/newsql/">NewSQL </a>
+    
+    <a href="https://code0xff.org/tags/oceanbase/">OceanBase </a>
+    
+    <a href="https://code0xff.org/tags/openlogreplicator/">OpenLogReplicator </a>
+    
+    <a href="https://code0xff.org/tags/parquet/">parquet </a>
+    
+    <a href="https://code0xff.org/tags/paxos/">paxos </a>
+    
+    <a href="https://code0xff.org/tags/presto/">Presto </a>
+    
+    <a href="https://code0xff.org/tags/quick-sql/">quick-sql </a>
+    
+    <a href="https://code0xff.org/tags/raft/">raft </a>
+    
+    <a href="https://code0xff.org/tags/scala/">scala </a>
+    
+    <a href="https://code0xff.org/tags/simd/">SIMD </a>
+    
+    <a href="https://code0xff.org/tags/snowflake/">snowflake </a>
+    
+    <a href="https://code0xff.org/tags/spark/">spark </a>
+    
+    <a href="https://code0xff.org/tags/sre/">SRE </a>
+    
+    <a href="https://code0xff.org/tags/teradata/">TeraData </a>
+    
+    <a href="https://code0xff.org/tags/tpcx-hs/">TPCx-HS </a>
+    
+    <a href="https://code0xff.org/tags/trino/">Trino </a>
+    
+    <a href="https://code0xff.org/tags/tuning/">Tuning </a>
+    
+    <a href="https://code0xff.org/tags/unix/">unix </a>
+    
+    <a href="https://code0xff.org/tags/yarn/">YARN </a>
+    
+    <a href="https://code0xff.org/tags/%E4%BA%8C%E5%88%86%E6%9F%A5%E6%89%BE/">二分查找 </a>
+    
+    <a href="https://code0xff.org/tags/%E4%BA%8C%E5%8F%89%E6%A0%91%E9%81%8D%E5%8E%86/">二叉树遍历 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%88%86%E5%B8%83%E5%BC%8F/">分布式 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%88%97%E5%AD%98/">列存 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%8A%A8%E6%80%81%E6%B3%A8%E5%85%A5/">动态注入 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%8E%86%E5%8F%B2/">历史 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%90%91%E9%87%8F%E5%8C%96/">向量化 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%9B%9E%E6%BA%AF/">回溯 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%9B%BD%E5%86%85%E6%97%85%E8%A1%8C/">国内旅行 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%9B%BD%E5%A4%96%E6%97%85%E8%A1%8C/">国外旅行 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%A4%9A%E7%A7%9F%E6%88%B7/">多租户 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%A4%A7%E6%95%B0%E6%8D%AE/">大数据 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%AD%98%E5%82%A8/">存储 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%B7%A5%E4%BD%9C%E8%AE%B0%E5%BD%95/">工作记录 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%BE%AE%E6%9C%8D%E5%8A%A1/">微服务 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%95%B0%E6%8D%AE%E4%B8%AD%E5%8F%B0/">数据中台 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%95%B0%E6%8D%AE%E5%BA%93/">数据库 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%95%B0%E6%8D%AE%E6%A8%A1%E5%9E%8B/">数据模型 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%95%B0%E6%8D%AE%E8%BF%81%E7%A7%BB/">数据迁移 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%9F%A5%E8%AF%A2%E4%BC%98%E5%8C%96/">查询优化 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%9F%A5%E8%AF%A2%E7%BC%96%E8%AF%91/">查询编译 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%A6%82%E7%8E%87/">概率 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%B1%87%E7%BC%96/">汇编 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%B5%8B%E8%AF%95/">测试 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%94%9F%E6%B4%BB/">生活 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%94%B5%E5%BD%B1/">电影 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%AE%97%E6%B3%95/">算法 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%B4%A2%E5%BC%95/">索引 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BB%8F%E6%B5%8E/">经济 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BC%93%E5%AD%98/">缓存 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BC%96%E8%AF%91%E5%8E%9F%E7%90%86/">编译原理 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BD%91%E7%BB%9C/">网络 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AE%A1%E7%AE%97%E6%A1%86%E6%9E%B6/">计算框架 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AE%BA%E6%96%87/">论文 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AF%BB%E4%B9%A6/">读书 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AF%BB%E4%B9%A6%E7%AC%94%E8%AE%B0/">读书笔记 </a>
+    
+</div>
+    </section>
+
+    
+
+    <section class="widget">
+        <h3 class="widget-title">RSS</h3>
+        <ul class="widget-list">
+            <li><a href="https://code0xff.org/index.xml">文章 RSS</a></li>
+        </ul>
+    </section>
+</div>
+            </div>
+        </div>
+    </div>
+    <footer id="footer">
+    <div>
+        &copy; 2025 <a href="https://code0xff.org/">记录每个瞬间 By 老王</a>
+        
+    </div>
+    <br />
+    <div>
+        <div class="github-badge">
+            <a href="https://gohugo.io/" target="_black" rel="nofollow"><span class="badge-subject">Powered by</span><span class="badge-value bg-blue">Hugo</span></a>
+        </div>
+        <div class="github-badge">
+            <a href="https://github.com/flysnow-org/maupassant-hugo" target="_black"><span class="badge-subject">Theme</span><span class="badge-value bg-yellowgreen">Maupassant</span></a>
+        </div>
+    </div>
+</footer>
+
+
+    
+    <script type="text/javascript">
+        window.MathJax = {
+            tex2jax: {
+                inlineMath: [['$', '$']],
+                processEscapes: true
+                }
+            };
+    </script>
+    <script src='https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.5/MathJax.js?config=TeX-MML-AM_CHTML' async></script><script src="https://cdn.bootcdn.net/ajax/libs/fancybox/3.5.7/jquery.fancybox.min.js"></script>
+
+<a id="rocket" href="#top"></a>
+<script type="text/javascript" src='/js/totop.js?v=0.0.0' async=""></script>
+
+<script type="application/javascript">
+var doNotTrack = false;
+if (!doNotTrack) {
+	window.ga=window.ga||function(){(ga.q=ga.q||[]).push(arguments)};ga.l=+new Date;
+	ga('create', 'GA ID', 'auto');
+	
+	ga('send', 'pageview');
+}
+</script>
+<script async src='https://www.google-analytics.com/analytics.js'></script>
+
+
+
+    <script type="text/javascript" src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js" async></script>
+
+
+
+
+</body>
+
+</html>

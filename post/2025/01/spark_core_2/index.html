@@ -1,0 +1,2072 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    
+    <meta name="referrer" content="no-referrer-when-downgrade">
+    
+
+    <title>Spark Core相关-2 | 记录每个瞬间</title>
+    <meta property="og:title" content="Spark Core相关-2 - 记录每个瞬间">
+    <meta property="og:type" content="article">
+        
+    <meta property="article:published_time" content='2025-01-01T01:08:07&#43;08:00'>
+        
+        
+    <meta property="article:modified_time" content='2025-01-01T01:08:07&#43;08:00'>
+        
+    <meta name="Keywords" content="">
+    <meta name="description" content="Spark Core相关-2">
+        <meta name="author" content="隔壁老王">
+        
+    <meta property="og:url" content="https://code0xff.org/post/2025/01/spark_core_2/">
+    <link rel="shortcut icon" href='/favicon.ico'  type="image/x-icon">
+
+    <link rel="stylesheet" href='/css/normalize.css'>
+    <link rel="stylesheet" href='/css/style.css'>
+    <script type="text/javascript" src="//cdn.bootcdn.net/ajax/libs/jquery/3.4.1/jquery.min.js"></script>
+
+    
+    
+    
+        <link href="https://cdn.bootcdn.net/ajax/libs/fancybox/3.5.7/jquery.fancybox.min.css" rel="stylesheet">
+    
+    
+    
+    
+</head>
+
+
+<body>
+    <header id="header" class="clearfix">
+    <div class="container">
+        <div class="col-group">
+            <div class="site-name ">
+                
+                    <a id="logo" href="https://code0xff.org/">
+                        记录每个瞬间
+                    </a>
+                
+                
+            </div>
+            <div>
+                <nav id="nav-menu" class="clearfix">
+                    <a class="current" href="https://code0xff.org/">首页</a>
+                    
+                    <a  href="https://code0xff.org/linked/" title="链接">链接</a>
+                    
+                    <a  href="https://code0xff.org/archives/" title="归档">归档</a>
+                    
+                    <a  href="https://code0xff.org/about/" title="关于">关于</a>
+                    
+                </nav>
+            </div>
+        </div>
+    </div>
+</header>
+
+    <div id="body">
+        <div class="container">
+            <div class="col-group">
+
+                <div class="col-8" id="main">
+                    
+<div class="res-cons">
+    
+    <article class="post">
+        <header>
+            <h1 class="post-title">Spark Core相关-2</h1>
+        </header>
+        <date class="post-meta meta-date">
+            2025年1月1日
+        </date>
+<nav id="TableOfContents">
+  <ul>
+    <li>
+      <ul>
+        <li><a href="#调度">调度</a>
+          <ul>
+            <li><a href="#调度概述">调度概述</a></li>
+            <li><a href="#dagscheduler">DAGScheduler</a></li>
+            <li><a href="#taskscheduler">TaskScheduler</a></li>
+            <li><a href="#schedulerbackend">SchedulerBackend</a></li>
+          </ul>
+        </li>
+        <li><a href="#计算引擎">计算引擎</a>
+          <ul>
+            <li><a href="#内存管理">内存管理</a></li>
+            <li><a href="#task-分析">Task 分析</a></li>
+            <li><a href="#shuffle">Shuffle</a></li>
+            <li><a href="#shuffle读写">Shuffle读写</a></li>
+          </ul>
+        </li>
+        <li><a href="#部署模式">部署模式</a>
+          <ul>
+            <li><a href="#task">Task</a></li>
+            <li><a href="#master">Master</a></li>
+            <li><a href="#worker">Worker</a></li>
+            <li><a href="#executor">Executor</a></li>
+            <li><a href="#local-集群部署方式">Local 集群部署方式</a></li>
+            <li><a href="#集群部署">集群部署</a></li>
+            <li><a href="#yarn模式">YARN模式</a></li>
+          </ul>
+        </li>
+        <li><a href="#参考">参考</a></li>
+      </ul>
+    </li>
+  </ul>
+</nav>
+        
+        <div class="post-meta">
+            
+            <span class="post-meta meta-tags">
+                <ul class="clearfix">
+                    <a href='/categories/%E5%8E%9F%E7%90%86%E5%88%86%E6%9E%90'>原理分析</a>
+                </ul>
+            </span>
+            
+        </div>
+        
+        
+        <div class="post-meta">
+            <span id="busuanzi_container_page_pv">|<span id="busuanzi_value_page_pv"></span><span>
+                    阅读</span></span>
+        </div>
+        
+        
+        <div class="post-content">
+            <h2 id="调度">调度</h2>
+<h3 id="调度概述">调度概述</h3>
+<p>调度过程</p>
+<ul>
+<li>将用户提交的 job 转换成 RDD，分解成 DAG</li>
+<li>按照 shuffle 边界，拆分成若干个 stage，每个 stage 按照并行度分为若干个 task</li>
+<li>将 task打包为 task-set 由DAGScheduler 调度 给 TaskScheduler</li>
+<li>使用集群管理器分配资源，按照调度算法做调度</li>
+<li>executor 做执行
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/12/14/7VTabY.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/12/14/7VTabY.png" />
+        </a>
+    </li>
+</ul>
+<p>RDD 的几个核心函数</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">15
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">16
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">17
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">18
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">19
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">20
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">21
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">22
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">23
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">24
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">25
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">26
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-scala" data-lang="scala"><span style="display:flex;"><span>  <span style="color:#6272a4">/**
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * :: DeveloperApi ::
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * Implemented by subclasses to compute a given partition.
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   */</span>
+</span></span><span style="display:flex;"><span>  @DeveloperApi
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">def</span> compute<span style="color:#ff79c6">(</span>split<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">Partition</span><span style="color:#ff79c6">,</span> context<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">TaskContext</span><span style="color:#ff79c6">)</span><span style="color:#ff79c6">:</span> <span style="color:#8be9fd">Iterator</span><span style="color:#ff79c6">[</span><span style="color:#8be9fd">T</span><span style="color:#ff79c6">]</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>  <span style="color:#6272a4">/**
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * Implemented by subclasses to return the set of partitions in this RDD. This method will only
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * be called once, so it is safe to implement a time-consuming computation in it.
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   *
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * The partitions in this array must satisfy the following property:
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   *   `rdd.partitions.zipWithIndex.forall { case (partition, index) =&gt; partition.index == index }`
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   */</span>
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">protected</span> <span style="color:#ff79c6">def</span> getPartitions<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">Array</span><span style="color:#ff79c6">[</span><span style="color:#8be9fd">Partition</span><span style="color:#ff79c6">]</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>  <span style="color:#6272a4">/**
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * Implemented by subclasses to return how this RDD depends on parent RDDs. This method will only
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * be called once, so it is safe to implement a time-consuming computation in it.
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   */</span>
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">protected</span> <span style="color:#ff79c6">def</span> getDependencies<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">Seq</span><span style="color:#ff79c6">[</span><span style="color:#8be9fd">Dependency</span><span style="color:#ff79c6">[</span><span style="color:#ff79c6">_</span><span style="color:#ff79c6">]]</span> <span style="color:#ff79c6">=</span> deps
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>  <span style="color:#6272a4">/**
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * Optionally overridden by subclasses to specify placement preferences.
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   */</span>
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">protected</span> <span style="color:#ff79c6">def</span> getPreferredLocations<span style="color:#ff79c6">(</span>split<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">Partition</span><span style="color:#ff79c6">)</span><span style="color:#ff79c6">:</span> <span style="color:#8be9fd">Seq</span><span style="color:#ff79c6">[</span><span style="color:#8be9fd">String</span><span style="color:#ff79c6">]</span> <span style="color:#ff79c6">=</span> <span style="color:#50fa7b">Nil</span>
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>通常数据处理的模型包括迭代计算、关系查询、MapReduce、流式处理等<br>
+Hadoop采用MapReduce模型，Storm采用流式处理模型，而Spark则借助RDD实现了以上所有模型</p>
+<p>Dependency 的几个实现类</p>
+<ul>
+<li>NarrowDependency</li>
+<li>OneToOneDependency</li>
+<li>RangeDependency</li>
+<li>PruneDependency</li>
+<li>RangeDependency</li>
+<li>ShuffleDependency</li>
+</ul>
+<p>分区计算器，抽象类 Partitioner，实现类</p>
+<ul>
+<li>CoalescedPartitioner</li>
+<li>ConstantPartitioner</li>
+<li>GridPartitioner</li>
+<li>HashPartitioner</li>
+<li>PartitionIdPassthrough</li>
+<li>PythonPartitioner</li>
+<li>RangePartitioner</li>
+</ul>
+<p>Stage 抽象类，以及实现类</p>
+<ul>
+<li>ResultStage</li>
+<li>ShuffleMapStage</li>
+</ul>
+<p>一些信息类</p>
+<ul>
+<li>RDDInfo</li>
+<li>StageInfo</li>
+</ul>
+<h3 id="dagscheduler">DAGScheduler</h3>
+<p>DAGScheduler实现了面向DAG的高层次调度</p>
+<ul>
+<li>DAG中的各个RDD划分到不同的Stage</li>
+<li>DAGScheduler可以通过计算将DAG中的一系列RDD划分到不同的Stage，然后构建这些Stage之间的父子关系</li>
+<li>最后将每个Stage按照Partition切分为多个Task，并以Task集合（即TaskSet）的形式提交给底层的TaskScheduler</li>
+<li>所有的组件都通过向DAGScheduler投递DAGSchedulerEvent来使用DAGScheduler</li>
+</ul>
+<p>DAGScheduler 的一些依赖</p>
+<ul>
+<li>SparkContext</li>
+<li>TaskScheduler</li>
+<li>LiveListenerBus</li>
+<li>MapOutputTrackerMaster</li>
+<li>BlockManagerMaster</li>
+<li>SparkEnv</li>
+<li>SystemClock</li>
+</ul>
+<p>使用到的一些类</p>
+<ul>
+<li>JobListener(抽象类)</li>
+<li>ActiveJob，被活跃调度的 job</li>
+<li>DAGSchedulerEventProcessLoop
+<ul>
+<li>内部维护了一个 阻塞队列</li>
+<li>根据不同的事件类型，如提交 job，会先提交到 阻塞队列中</li>
+<li>阻塞队列中拿出这个 job，
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/12/14/7VTZgO.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/12/14/7VTZgO.png" />
+        </a>
+    </li>
+</ul>
+</li>
+</ul>
+<p>最后统一处理这些 事件：</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">15
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">16
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">17
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">18
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">19
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">20
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">21
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">22
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">23
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">24
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">25
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">26
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">27
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">28
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">29
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">30
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">31
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">32
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">33
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">34
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">35
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">36
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">37
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">38
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">39
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">40
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">41
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">42
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">43
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">44
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">45
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">46
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">47
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">48
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">49
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">50
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">51
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">52
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">53
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">54
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">55
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">56
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">57
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">58
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">59
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">60
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">61
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">62
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">63
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">64
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">65
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">66
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">67
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">68
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">69
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">70
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">71
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">72
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">73
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">74
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-scala" data-lang="scala"><span style="display:flex;"><span>  <span style="color:#ff79c6">private</span> <span style="color:#ff79c6">def</span> doOnReceive<span style="color:#ff79c6">(</span>event<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">DAGSchedulerEvent</span><span style="color:#ff79c6">)</span><span style="color:#ff79c6">:</span> <span style="color:#8be9fd">Unit</span> <span style="color:#ff79c6">=</span> event <span style="color:#ff79c6">match</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">case</span> <span style="color:#50fa7b">JobSubmitted</span><span style="color:#ff79c6">(</span>jobId<span style="color:#ff79c6">,</span> rdd<span style="color:#ff79c6">,</span> func<span style="color:#ff79c6">,</span> partitions<span style="color:#ff79c6">,</span> callSite<span style="color:#ff79c6">,</span> listener<span style="color:#ff79c6">,</span> artifacts<span style="color:#ff79c6">,</span> properties<span style="color:#ff79c6">)</span> <span style="color:#ff79c6">=&gt;</span>
+</span></span><span style="display:flex;"><span>      dagScheduler<span style="color:#ff79c6">.</span>handleJobSubmitted<span style="color:#ff79c6">(</span>jobId<span style="color:#ff79c6">,</span> rdd<span style="color:#ff79c6">,</span> func<span style="color:#ff79c6">,</span> partitions<span style="color:#ff79c6">,</span> callSite<span style="color:#ff79c6">,</span> listener<span style="color:#ff79c6">,</span> artifacts<span style="color:#ff79c6">,</span>
+</span></span><span style="display:flex;"><span>        properties<span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">case</span> <span style="color:#50fa7b">MapStageSubmitted</span><span style="color:#ff79c6">(</span>jobId<span style="color:#ff79c6">,</span> dependency<span style="color:#ff79c6">,</span> callSite<span style="color:#ff79c6">,</span> listener<span style="color:#ff79c6">,</span> artifacts<span style="color:#ff79c6">,</span> properties<span style="color:#ff79c6">)</span> <span style="color:#ff79c6">=&gt;</span>
+</span></span><span style="display:flex;"><span>      dagScheduler<span style="color:#ff79c6">.</span>handleMapStageSubmitted<span style="color:#ff79c6">(</span>jobId<span style="color:#ff79c6">,</span> dependency<span style="color:#ff79c6">,</span> callSite<span style="color:#ff79c6">,</span> listener<span style="color:#ff79c6">,</span> artifacts<span style="color:#ff79c6">,</span>
+</span></span><span style="display:flex;"><span>        properties<span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">case</span> <span style="color:#50fa7b">StageCancelled</span><span style="color:#ff79c6">(</span>stageId<span style="color:#ff79c6">,</span> reason<span style="color:#ff79c6">)</span> <span style="color:#ff79c6">=&gt;</span>
+</span></span><span style="display:flex;"><span>      dagScheduler<span style="color:#ff79c6">.</span>handleStageCancellation<span style="color:#ff79c6">(</span>stageId<span style="color:#ff79c6">,</span> reason<span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">case</span> <span style="color:#50fa7b">JobCancelled</span><span style="color:#ff79c6">(</span>jobId<span style="color:#ff79c6">,</span> reason<span style="color:#ff79c6">)</span> <span style="color:#ff79c6">=&gt;</span>
+</span></span><span style="display:flex;"><span>      dagScheduler<span style="color:#ff79c6">.</span>handleJobCancellation<span style="color:#ff79c6">(</span>jobId<span style="color:#ff79c6">,</span> reason<span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">case</span> <span style="color:#50fa7b">JobGroupCancelled</span><span style="color:#ff79c6">(</span>groupId<span style="color:#ff79c6">)</span> <span style="color:#ff79c6">=&gt;</span>
+</span></span><span style="display:flex;"><span>      dagScheduler<span style="color:#ff79c6">.</span>handleJobGroupCancelled<span style="color:#ff79c6">(</span>groupId<span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">case</span> <span style="color:#50fa7b">JobTagCancelled</span><span style="color:#ff79c6">(</span>tag<span style="color:#ff79c6">)</span> <span style="color:#ff79c6">=&gt;</span>
+</span></span><span style="display:flex;"><span>      dagScheduler<span style="color:#ff79c6">.</span>handleJobTagCancelled<span style="color:#ff79c6">(</span>tag<span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">case</span> <span style="color:#50fa7b">AllJobsCancelled</span> <span style="color:#ff79c6">=&gt;</span>
+</span></span><span style="display:flex;"><span>      dagScheduler<span style="color:#ff79c6">.</span>doCancelAllJobs<span style="color:#ff79c6">()</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">case</span> <span style="color:#50fa7b">ExecutorAdded</span><span style="color:#ff79c6">(</span>execId<span style="color:#ff79c6">,</span> host<span style="color:#ff79c6">)</span> <span style="color:#ff79c6">=&gt;</span>
+</span></span><span style="display:flex;"><span>      dagScheduler<span style="color:#ff79c6">.</span>handleExecutorAdded<span style="color:#ff79c6">(</span>execId<span style="color:#ff79c6">,</span> host<span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">case</span> <span style="color:#50fa7b">ExecutorLost</span><span style="color:#ff79c6">(</span>execId<span style="color:#ff79c6">,</span> reason<span style="color:#ff79c6">)</span> <span style="color:#ff79c6">=&gt;</span>
+</span></span><span style="display:flex;"><span>      <span style="color:#ff79c6">val</span> workerHost <span style="color:#ff79c6">=</span> reason <span style="color:#ff79c6">match</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">case</span> <span style="color:#50fa7b">ExecutorProcessLost</span><span style="color:#ff79c6">(</span><span style="color:#ff79c6">_</span><span style="color:#ff79c6">,</span> workerHost<span style="color:#ff79c6">,</span> <span style="color:#ff79c6">_</span><span style="color:#ff79c6">)</span> <span style="color:#ff79c6">=&gt;</span> workerHost
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">case</span> <span style="color:#50fa7b">ExecutorDecommission</span><span style="color:#ff79c6">(</span>workerHost<span style="color:#ff79c6">,</span> <span style="color:#ff79c6">_</span><span style="color:#ff79c6">)</span> <span style="color:#ff79c6">=&gt;</span> workerHost
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">case</span> <span style="color:#ff79c6">_</span> <span style="color:#ff79c6">=&gt;</span> <span style="color:#50fa7b">None</span>
+</span></span><span style="display:flex;"><span>      <span style="color:#ff79c6">}</span>
+</span></span><span style="display:flex;"><span>      dagScheduler<span style="color:#ff79c6">.</span>handleExecutorLost<span style="color:#ff79c6">(</span>execId<span style="color:#ff79c6">,</span> workerHost<span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">case</span> <span style="color:#50fa7b">WorkerRemoved</span><span style="color:#ff79c6">(</span>workerId<span style="color:#ff79c6">,</span> host<span style="color:#ff79c6">,</span> message<span style="color:#ff79c6">)</span> <span style="color:#ff79c6">=&gt;</span>
+</span></span><span style="display:flex;"><span>      dagScheduler<span style="color:#ff79c6">.</span>handleWorkerRemoved<span style="color:#ff79c6">(</span>workerId<span style="color:#ff79c6">,</span> host<span style="color:#ff79c6">,</span> message<span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">case</span> <span style="color:#50fa7b">BeginEvent</span><span style="color:#ff79c6">(</span>task<span style="color:#ff79c6">,</span> taskInfo<span style="color:#ff79c6">)</span> <span style="color:#ff79c6">=&gt;</span>
+</span></span><span style="display:flex;"><span>      dagScheduler<span style="color:#ff79c6">.</span>handleBeginEvent<span style="color:#ff79c6">(</span>task<span style="color:#ff79c6">,</span> taskInfo<span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">case</span> <span style="color:#50fa7b">SpeculativeTaskSubmitted</span><span style="color:#ff79c6">(</span>task<span style="color:#ff79c6">,</span> taskIndex<span style="color:#ff79c6">)</span> <span style="color:#ff79c6">=&gt;</span>
+</span></span><span style="display:flex;"><span>      dagScheduler<span style="color:#ff79c6">.</span>handleSpeculativeTaskSubmitted<span style="color:#ff79c6">(</span>task<span style="color:#ff79c6">,</span> taskIndex<span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">case</span> <span style="color:#50fa7b">UnschedulableTaskSetAdded</span><span style="color:#ff79c6">(</span>stageId<span style="color:#ff79c6">,</span> stageAttemptId<span style="color:#ff79c6">)</span> <span style="color:#ff79c6">=&gt;</span>
+</span></span><span style="display:flex;"><span>      dagScheduler<span style="color:#ff79c6">.</span>handleUnschedulableTaskSetAdded<span style="color:#ff79c6">(</span>stageId<span style="color:#ff79c6">,</span> stageAttemptId<span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">case</span> <span style="color:#50fa7b">UnschedulableTaskSetRemoved</span><span style="color:#ff79c6">(</span>stageId<span style="color:#ff79c6">,</span> stageAttemptId<span style="color:#ff79c6">)</span> <span style="color:#ff79c6">=&gt;</span>
+</span></span><span style="display:flex;"><span>      dagScheduler<span style="color:#ff79c6">.</span>handleUnschedulableTaskSetRemoved<span style="color:#ff79c6">(</span>stageId<span style="color:#ff79c6">,</span> stageAttemptId<span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">case</span> <span style="color:#50fa7b">GettingResultEvent</span><span style="color:#ff79c6">(</span>taskInfo<span style="color:#ff79c6">)</span> <span style="color:#ff79c6">=&gt;</span>
+</span></span><span style="display:flex;"><span>      dagScheduler<span style="color:#ff79c6">.</span>handleGetTaskResult<span style="color:#ff79c6">(</span>taskInfo<span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">case</span> completion<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">CompletionEvent</span> <span style="color:#ff79c6">=&gt;</span>
+</span></span><span style="display:flex;"><span>      dagScheduler<span style="color:#ff79c6">.</span>handleTaskCompletion<span style="color:#ff79c6">(</span>completion<span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">case</span> <span style="color:#50fa7b">StageFailed</span><span style="color:#ff79c6">(</span>stageId<span style="color:#ff79c6">,</span> reason<span style="color:#ff79c6">,</span> exception<span style="color:#ff79c6">)</span> <span style="color:#ff79c6">=&gt;</span>
+</span></span><span style="display:flex;"><span>      dagScheduler<span style="color:#ff79c6">.</span>handleStageFailed<span style="color:#ff79c6">(</span>stageId<span style="color:#ff79c6">,</span> reason<span style="color:#ff79c6">,</span> exception<span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">case</span> <span style="color:#50fa7b">TaskSetFailed</span><span style="color:#ff79c6">(</span>taskSet<span style="color:#ff79c6">,</span> reason<span style="color:#ff79c6">,</span> exception<span style="color:#ff79c6">)</span> <span style="color:#ff79c6">=&gt;</span>
+</span></span><span style="display:flex;"><span>      dagScheduler<span style="color:#ff79c6">.</span>handleTaskSetFailed<span style="color:#ff79c6">(</span>taskSet<span style="color:#ff79c6">,</span> reason<span style="color:#ff79c6">,</span> exception<span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">case</span> <span style="color:#50fa7b">ResubmitFailedStages</span> <span style="color:#ff79c6">=&gt;</span>
+</span></span><span style="display:flex;"><span>      dagScheduler<span style="color:#ff79c6">.</span>resubmitFailedStages<span style="color:#ff79c6">()</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">case</span> <span style="color:#50fa7b">RegisterMergeStatuses</span><span style="color:#ff79c6">(</span>stage<span style="color:#ff79c6">,</span> mergeStatuses<span style="color:#ff79c6">)</span> <span style="color:#ff79c6">=&gt;</span>
+</span></span><span style="display:flex;"><span>      dagScheduler<span style="color:#ff79c6">.</span>handleRegisterMergeStatuses<span style="color:#ff79c6">(</span>stage<span style="color:#ff79c6">,</span> mergeStatuses<span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">case</span> <span style="color:#50fa7b">ShuffleMergeFinalized</span><span style="color:#ff79c6">(</span>stage<span style="color:#ff79c6">)</span> <span style="color:#ff79c6">=&gt;</span>
+</span></span><span style="display:flex;"><span>      dagScheduler<span style="color:#ff79c6">.</span>handleShuffleMergeFinalized<span style="color:#ff79c6">(</span>stage<span style="color:#ff79c6">,</span> stage<span style="color:#ff79c6">.</span>shuffleDep<span style="color:#ff79c6">.</span>shuffleMergeId<span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">case</span> <span style="color:#50fa7b">ShufflePushCompleted</span><span style="color:#ff79c6">(</span>shuffleId<span style="color:#ff79c6">,</span> shuffleMergeId<span style="color:#ff79c6">,</span> mapIndex<span style="color:#ff79c6">)</span> <span style="color:#ff79c6">=&gt;</span>
+</span></span><span style="display:flex;"><span>      dagScheduler<span style="color:#ff79c6">.</span>handleShufflePushCompleted<span style="color:#ff79c6">(</span>shuffleId<span style="color:#ff79c6">,</span> shuffleMergeId<span style="color:#ff79c6">,</span> mapIndex<span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">}</span>
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>主要函数</p>
+<ul>
+<li>cleanupStateForJobAndIndependentStages</li>
+<li>updateJobIdStageIdMaps</li>
+<li>activeJobForStage</li>
+<li>getCacheLocs</li>
+<li>getPreferredLocs</li>
+<li>handleExecutorAdded</li>
+<li>executorAdded</li>
+<li>runJob</li>
+</ul>
+<p>RDD 触发，提交 job<br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/12/14/7VTeZf.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/12/14/7VTeZf.png" />
+        </a>
+    </p>
+<p>提交一个 job 的执行时序图<br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/12/14/7Vm9uc.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/12/14/7Vm9uc.png" />
+        </a>
+    <br>
+stage 创建的过程</p>
+<ul>
+<li>祖父 stage 先于 父 stage 提交</li>
+<li>createResultStage 创建 stage</li>
+<li>getShuffleDependenciesAndResourceProfiles：获取RDD的所有ShuffleDependency的序列，逐个访问每个RDD及其依赖的非Shuffle的RDD，获取所有非Shuffle的RDD的ShuffleDependency依赖</li>
+<li>mergeResourceProfilesForStage</li>
+<li>获取所有父Stage的列表</li>
+<li>将ResultStage注册到stageIdToStage中</li>
+</ul>
+<p>getOrCreateParentStages</p>
+<ul>
+<li>找到所有还未创建过ShuffleMapStage的祖先ShuffleDependency</li>
+<li>将其记录保存</li>
+<li>根据 shuffle 的边界，递归的创建</li>
+<li>递归的触发：getOrCreateParentStages</li>
+<li>根据 shuffle 边界，拆分 stage</li>
+</ul>
+<p>调用过程<br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/12/28/7VgrV4.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/12/28/7VgrV4.png" />
+        </a>
+    </p>
+<p>反向驱动、正向提交 <br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/12/28/7VgtXh.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/12/28/7VgtXh.png" />
+        </a>
+    </p>
+<p>三层调度关系<br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/12/28/7VgISq.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/12/28/7VgISq.png" />
+        </a>
+    </p>
+<h3 id="taskscheduler">TaskScheduler</h3>
+<p>Pool 的层次关系，有点像 yarn 队列<br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/12/28/7VgChY.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/12/28/7VgChY.png" />
+        </a>
+    </p>
+<p>Pool 提供的函数</p>
+<ul>
+<li>addSchedulable</li>
+<li>removeSchedulable</li>
+<li>getSchedulableByName</li>
+<li>executorLost</li>
+<li>executorDecommission</li>
+</ul>
+<p>调度算法</p>
+<ul>
+<li>抽象类：SchedulingAlgorithm</li>
+<li>FIFOSchedulingAlgorithm</li>
+<li>FairSchedulingAlgorithm</li>
+<li>getSortedTaskSetQueue</li>
+<li>decreaseRunningTasks</li>
+</ul>
+<p>调度配置</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-xml" data-lang="xml"><span style="display:flex;"><span><span style="color:#ff79c6">&lt;allocations&gt;</span>
+</span></span><span style="display:flex;"><span>	<span style="color:#ff79c6">&lt;pool</span> <span style="color:#50fa7b">name=</span><span style="color:#f1fa8c">&#34;production&#34;</span><span style="color:#ff79c6">&gt;</span>
+</span></span><span style="display:flex;"><span>		<span style="color:#ff79c6">&lt;schedulingMode&gt;</span>FAIR<span style="color:#ff79c6">&lt;/schedulingMode&gt;</span>
+</span></span><span style="display:flex;"><span>		<span style="color:#ff79c6">&lt;weight&gt;</span>1<span style="color:#ff79c6">&lt;/weight&gt;</span>
+</span></span><span style="display:flex;"><span>		<span style="color:#ff79c6">&lt;minShare&gt;</span>2<span style="color:#ff79c6">&lt;/minShare&gt;</span>
+</span></span><span style="display:flex;"><span>	<span style="color:#ff79c6">&lt;/pool&gt;</span>
+</span></span><span style="display:flex;"><span>	<span style="color:#ff79c6">&lt;pool</span> <span style="color:#50fa7b">name=</span><span style="color:#f1fa8c">&#34;test&#34;</span><span style="color:#ff79c6">&gt;</span>
+</span></span><span style="display:flex;"><span>		<span style="color:#ff79c6">&lt;schedulingMode&gt;</span>FIFO<span style="color:#ff79c6">&lt;/schedulingMode&gt;</span>
+</span></span><span style="display:flex;"><span>		<span style="color:#ff79c6">&lt;weight&gt;</span>2<span style="color:#ff79c6">&lt;/weight&gt;</span>
+</span></span><span style="display:flex;"><span>		<span style="color:#ff79c6">&lt;minShare&gt;</span>3<span style="color:#ff79c6">&lt;/minShare&gt;</span>
+</span></span><span style="display:flex;"><span>	<span style="color:#ff79c6">&lt;/pool&gt;</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">&lt;/allocations&gt;</span>
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>数据本地性</p>
+<ul>
+<li>PROCESS_LOCAL</li>
+<li>NODE_LOCAL</li>
+<li>NO_PREF</li>
+<li>RACK_LOCAL</li>
+<li>ANY</li>
+</ul>
+<p>TaskSetManager 对本地性的判断<br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/12/28/7Vg4m9.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/12/28/7Vg4m9.png" />
+        </a>
+    </p>
+<p>TaskSetManager 主要函数</p>
+<ul>
+<li>TaskSetManager</li>
+<li>dequeueTaskFromList</li>
+<li>dequeueTask</li>
+<li>addRunningTask与removeRunningTask</li>
+<li>maybeFinishTaskSet</li>
+</ul>
+<p>TaskResultGetter</p>
+<ul>
+<li>任务结果获取器</li>
+<li>处理成功、失败的 task</li>
+</ul>
+<p>TaskSchedulerImpl 调度流程 如下</p>
+<ul>
+<li>3、代表TaskScheduler调用SchedulerBackend的reviveOffers方法给Task提供资源</li>
+<li>4、SchedulerBackend向RpcEndpoint发送ReviveOffers消息</li>
+<li>5、RpcEndpoint将调用TaskScheduler的resourceOffers方法给Task提供资源</li>
+<li>6、根据调度池的 getSortedTaskSetQueue做排序</li>
+<li>7、调用Executor的launchTask方法运行Task尝试
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/12/28/7Vg2XI.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/12/28/7Vg2XI.png" />
+        </a>
+    </li>
+</ul>
+<p>TaskSchedulerImpl对执行结果的处理 如下</p>
+<ul>
+<li>1、Executor将状态返回给 SchedulerBackend</li>
+<li>2、将状态封装后发送给 RpcEndpoint的实现类</li>
+<li>3、RpCEndpoint实现类收到消息后更新 TaskSchedulerImpl</li>
+<li>4、如果是成功状态，则调用TaskResultGetter的enqueueSuccessfulTask方法</li>
+<li>5、将结果交给 TaskSchedulerImpl处理</li>
+<li>6、更新 TaskSetManager</li>
+<li>7、触发调用 DAGScheduler的taskEnded方法，交给 JobWaiter的resultHandler函数来处理
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/12/28/7VgFmV.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/12/28/7VgFmV.png" />
+        </a>
+    </li>
+</ul>
+<h3 id="schedulerbackend">SchedulerBackend</h3>
+<p>LauncherBackend 建立、发送过程<br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/12/28/7VgXdZ.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/12/28/7VgXdZ.png" />
+        </a>
+    </p>
+<p>SchedulerBackend 抽象类</p>
+<ul>
+<li>LocalSchedulerBackend</li>
+<li>CoarseGrainedSchedulerBackend</li>
+</ul>
+<p>CoarseGrainedSchedulerBackend 的实现类</p>
+<ul>
+<li>StandaloneSchedulerBackend</li>
+<li>YarnSchedulerBackend
+<ul>
+<li>其子类：YarnClientSchedulerBackend</li>
+<li>YarnClusterSchedulerBackend</li>
+</ul>
+</li>
+<li>KubernetesClusterSchedulerBackend</li>
+<li>MesosCoarseGrainedSchedulerBackend</li>
+</ul>
+<p>调度过程
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/12/28/7VgnwU.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/12/28/7VgnwU.png" />
+        </a>
+    </p>
+<p>DAGScheduler 将任务分解，交给 TaskScheduler<br>
+再交给 CoarseGrainedSchedulerBackend<br>
+之后启动 Executor 执行任务的过程<br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/12/28/7VgMis.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/12/28/7VgMis.png" />
+        </a>
+    </p>
+<p>几个主要类之间的关系<br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/12/29/7Vh3m6.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/12/29/7Vh3m6.png" />
+        </a>
+    </p>
+<h2 id="计算引擎">计算引擎</h2>
+<h3 id="内存管理">内存管理</h3>
+<p>内存相关的类图如下 
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/12/28/7VgZ8L.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/12/28/7VgZ8L.png" />
+        </a>
+    </p>
+<p>内存分配</p>
+<ul>
+<li>抽象类 MemoryAllocator</li>
+<li>UnsafeMemoryAllocator</li>
+<li>HeapMemoryAllocator</li>
+</ul>
+<p>HeapMemoryAllocator的工作原理 
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/12/28/7VgdrJ.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/12/28/7VgdrJ.png" />
+        </a>
+    </p>
+<p>UnsafeMemoryAllocator的工作原理<br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/12/28/7VgeeG.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/12/28/7VgeeG.png" />
+        </a>
+    </p>
+<p>TaskMemoryManager 和其他类之间的关系<br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/12/29/7Vh9yB.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/12/29/7Vh9yB.png" />
+        </a>
+    </p>
+<p>TaskMemoryManager提供的主要函数</p>
+<ul>
+<li>acquireExecutionMemory</li>
+<li>releaseExecutionMemory</li>
+<li>showMemoryUsage</li>
+<li>pageSizeBytes</li>
+<li>allocatePage</li>
+<li>freePage</li>
+<li>encodePageNumberAndOffset</li>
+<li>decodePageNumber</li>
+<li>decodeOffset</li>
+<li>getPage</li>
+<li>getOffsetInPage</li>
+</ul>
+<p>MemoryConsumer的继承体系
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/12/29/7VhBsb.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/12/29/7VhBsb.png" />
+        </a>
+    </p>
+<p>类之间的关系 <br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/12/29/7VhkSt.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/12/29/7VhkSt.png" />
+        </a>
+    </p>
+<p>MemoryConsumer 主要结构</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">15
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">16
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">17
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">18
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">19
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">20
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">21
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">22
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">23
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">24
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">25
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">26
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">27
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">28
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">29
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">30
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">31
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">32
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">33
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">34
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">35
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">36
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">37
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">38
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">39
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">40
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">41
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">42
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">43
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">44
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">45
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">46
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">47
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">48
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">49
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">50
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">51
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">52
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">53
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">54
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">55
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">56
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">57
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">58
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">59
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">60
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-scala" data-lang="scala"><span style="display:flex;"><span><span style="color:#ff79c6">abstract</span> <span style="color:#ff79c6">class</span> <span style="color:#50fa7b">MemoryConsumer</span><span style="color:#ff79c6">(</span>
+</span></span><span style="display:flex;"><span>    memoryManager<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">MemoryManager</span><span style="color:#ff79c6">,</span>
+</span></span><span style="display:flex;"><span>    numBytes<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">Long</span><span style="color:#ff79c6">,</span>
+</span></span><span style="display:flex;"><span>    memoryMode<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">MemoryMode</span><span style="color:#ff79c6">)</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>  <span style="color:#6272a4">/** Current number of bytes this consumer has acquired */</span>
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">protected</span> <span style="color:#ff79c6">var</span> acquired<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">Long</span> <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">0</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>  <span style="color:#6272a4">/** Whether this consumer has been evicted */</span>
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">protected</span> <span style="color:#ff79c6">var</span> evicted<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">Boolean</span> <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">false</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>  <span style="color:#6272a4">/**
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * Acquires memory from the memory manager. Returns the number of bytes actually acquired.
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   */</span>
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">def</span> acquireMemory<span style="color:#ff79c6">(</span>numBytes<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">Long</span><span style="color:#ff79c6">)</span><span style="color:#ff79c6">:</span> <span style="color:#8be9fd">Long</span> <span style="color:#ff79c6">=</span> synchronized <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">val</span> allowed <span style="color:#ff79c6">=</span> memoryManager<span style="color:#ff79c6">.</span>acquire<span style="color:#ff79c6">(</span><span style="color:#ff79c6">this</span><span style="color:#ff79c6">,</span> numBytes<span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>    acquired <span style="color:#ff79c6">+=</span> allowed
+</span></span><span style="display:flex;"><span>    allowed
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">}</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>  <span style="color:#6272a4">/**
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * Releases memory back to the memory manager.
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   */</span>
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">def</span> releaseMemory<span style="color:#ff79c6">(</span>numBytes<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">Long</span><span style="color:#ff79c6">)</span><span style="color:#ff79c6">:</span> <span style="color:#8be9fd">Unit</span> <span style="color:#ff79c6">=</span> synchronized <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">val</span> toRelease <span style="color:#ff79c6">=</span> math<span style="color:#ff79c6">.</span>min<span style="color:#ff79c6">(</span>numBytes<span style="color:#ff79c6">,</span> acquired<span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>    memoryManager<span style="color:#ff79c6">.</span>release<span style="color:#ff79c6">(</span><span style="color:#ff79c6">this</span><span style="color:#ff79c6">,</span> toRelease<span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>    acquired <span style="color:#ff79c6">-=</span> toRelease
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">}</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>  <span style="color:#6272a4">/**
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * Called by MemoryManager when this consumer needs to release memory.
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   */</span>
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">def</span> evict<span style="color:#ff79c6">()</span><span style="color:#ff79c6">:</span> <span style="color:#8be9fd">Long</span> <span style="color:#ff79c6">=</span> synchronized <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>    evicted <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">true</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#6272a4">// Implement specific eviction logic in subclasses
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>    releaseAcquiredMemory<span style="color:#ff79c6">()</span>
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">}</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>  <span style="color:#6272a4">/**
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * Releases all acquired memory.
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   */</span>
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">protected</span> <span style="color:#ff79c6">def</span> releaseAcquiredMemory<span style="color:#ff79c6">()</span><span style="color:#ff79c6">:</span> <span style="color:#8be9fd">Long</span> <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">val</span> released <span style="color:#ff79c6">=</span> acquired
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">if</span> <span style="color:#ff79c6">(</span>released <span style="color:#ff79c6">&gt;</span> <span style="color:#bd93f9">0</span><span style="color:#ff79c6">)</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>      memoryManager<span style="color:#ff79c6">.</span>release<span style="color:#ff79c6">(</span><span style="color:#ff79c6">this</span><span style="color:#ff79c6">,</span> released<span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>      acquired <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">0</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">}</span>
+</span></span><span style="display:flex;"><span>    released
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">}</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>  <span style="color:#6272a4">/**
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * Returns the current number of bytes acquired by this consumer.
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   */</span>
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">def</span> getAcquiredMemory<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">Long</span> <span style="color:#ff79c6">=</span> synchronized <span style="color:#ff79c6">{</span> acquired <span style="color:#ff79c6">}</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>  <span style="color:#6272a4">/**
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * Whether this consumer has been evicted.
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   */</span>
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">def</span> isEvicted<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">Boolean</span> <span style="color:#ff79c6">=</span> synchronized <span style="color:#ff79c6">{</span> evicted <span style="color:#ff79c6">}</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">}</span>
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>MemoryConsumer 两个子类</p>
+<ul>
+<li>ExecutionMemoryConsumer: Manages memory used for execution tasks like shuffles, joins,aggregations.</li>
+<li>StorageMemoryConsumer: Handles memory used for caching RDDs and broadcast variables.</li>
+</ul>
+<p>几个了之间的关系</p>
+<ul>
+<li>MemoryConsumer: Abstract base class responsible for tracking and managing memory usage for different tasks and operations.</li>
+<li>TaskMemoryManager: Manages memory allocations specific to individual tasks, ensuring isolation and adherence to memory limits.</li>
+<li>MemoryManager: Centralized manager that oversees global memory allocation, handling both on-heap and off-heap memory pools.</li>
+<li>MemoryStore: Handles the actual allocation and deallocation of memory blocks, distinguishing between on-heap and off-heap memory.</li>
+</ul>
+<p>执行内存的整体架构<br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/12/29/7VhpWP.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/12/29/7VhpWP.png" />
+        </a>
+    </p>
+<h3 id="task-分析">Task 分析</h3>
+<p>Task抽象类</p>
+<ul>
+<li>ShuffleMapTask</li>
+<li>ResultTask</li>
+</ul>
+<p>TaskContext 抽象类</p>
+<ul>
+<li>BarrierTaskContext</li>
+<li>TaskContextImpl</li>
+</ul>
+<p>TaskContext 会启动新线程，运行 Task<br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/12/29/7VhLjw.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/12/29/7VhLjw.png" />
+        </a>
+    </p>
+<h3 id="shuffle">Shuffle</h3>
+<p>创建过程
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/12/29/7Vh7tQ.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/12/29/7Vh7tQ.png" />
+        </a>
+    </p>
+<p>索引过程<br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/12/29/7Vhl8O.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/12/29/7Vhl8O.png" />
+        </a>
+    </p>
+<p>IndexShuffleBlockResolver  作用</p>
+<ul>
+<li>Resolves Shuffle Blocks: It translates logical shuffle block identifiers into physical storage locations on disk.</li>
+<li>Manages Shuffle Index Files: It creates and maintains index files that map shuffle block IDs to their corresponding disk locations. These index files facilitate efficient data retrieval during the shuffle read phase.</li>
+<li>Ensures Fault Tolerance: By maintaining index files and data blocks, it helps Spark recover shuffle data in case of executor failures.</li>
+</ul>
+<p>收集数据集评估</p>
+<ul>
+<li>抽象类 SizeTracker</li>
+<li>PartitionedAppendOnlyMap</li>
+<li>PartitionedPairBuffer</li>
+<li>SizeTrackingAppendOnlyMap</li>
+<li>SizeTrackingVector</li>
+</ul>
+<p>SizeTracker的工作原理</p>
+<ul>
+<li>1、为空的情况</li>
+<li>2、添加了 10这个元素</li>
+<li>3、添加 20这个元素</li>
+<li>4、添加 10、20、30 三个元素
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/12/29/7VhEef.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/12/29/7VhEef.png" />
+        </a>
+    </li>
+</ul>
+<p>WritablePartitionedPairCollection</p>
+<ul>
+<li>PartitionedAppendOnlyMap，又继承了 AppendOnlyMap</li>
+<li>PartitionedPairBuffer</li>
+</ul>
+<p>AppendOnlyMap</p>
+<ul>
+<li>Efficient Memory Usage:AppendOnlyMap is optimized for scenarios where data grows incrementally without requiring costly operations like deletion or resizing.</li>
+<li>Open Addressing for Hash Collisions:Uses open addressing to resolve hash collisions, minimizing memory usage compared to structures like Java&rsquo;s HashMap which rely on linked lists for collisions.</li>
+<li>Custom Growth Mechanism:The map dynamically resizes its internal array when the load factor exceeds a threshold, maintaining performance as data grows.</li>
+<li>Specialized for Spark Use Cases: Focused on Spark&rsquo;s data aggregation needs where intermediate results (e.g., during shuffle or reduce operations) accumulate but do not need to be removed.</li>
+</ul>
+<p>
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/12/29/7VhNyc.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/12/29/7VhNyc.png" />
+        </a>
+    <br>
+解释</p>
+<ul>
+<li>传入的key为（0,Apache），value为1，计算得到pos为6，由于2×6＝12的索引位置没有元素，因此将（0,Apache）放入data数组索引为12的位置，将1放入索引为2×6+1＝13的位置</li>
+<li>key为（0,Apache），value为3，计算得到pos为6，由于2×6＝12的索引位置的元素与（0,Apache）一样，因此将3更新到索引为2×6＋1＝13的位置</li>
+<li>传入的key为（0,），value为2，计算得到pos为6，由于2×6＝12的索引位置已经放入了（0,Apache），因此向后寻找新的位置。pos为7时，由于2×7＝14的索引位置没有元素，因此将（0,）放入data数组索引为14的位置，将2放入索引为2×7＋1＝15的位置</li>
+</ul>
+<p>AppendOnlyMap<br>
+基于开放地址的 hashmap，根据阈值做 翻倍增长</p>
+<p>如下 AppendOnlyMap，经过三次探测找到了合适的位置<br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/12/29/7VhqU3.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/12/29/7VhqU3.png" />
+        </a>
+    </p>
+<p>数据溢出的判断过程<br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/12/29/7Vhusj.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/12/29/7Vhusj.png" />
+        </a>
+    </p>
+<p>几个排序、溢出类的类图</p>
+<ul>
+<li>这几个类都是继承了 MemoryConsumer或者其子类 Spillable</li>
+<li>ExternalSorter、ExternalAppendOnlyMap 差不多，有 spill，merge，插入</li>
+<li>这两个类都是调用DiskBlockObjectWriter 完成磁盘写入</li>
+<li>ShuffleExternalSorter、UnsafeExternalSorter 基于shuffle写入和off-heap 排序，都有spill</li>
+<li>ShuffleExternalSorter 调用了 DiskBlockObjectWriter，UnsafeExternalSorter有自己的磁盘写入</li>
+<li>和几个类都是调用 iterator，迭代遍历写入磁盘<br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/12/29/7VhyE5.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/12/29/7VhyE5.png" />
+        </a>
+    </li>
+</ul>
+<table>
+<thead>
+<tr>
+<th><strong>Feature</strong></th>
+<th><strong>ExternalSorter</strong></th>
+<th><strong>ExternalAppendOnlyMap</strong></th>
+<th><strong>UnsafeExternalSorter</strong></th>
+<th><strong>ShuffleExternalSorter</strong></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Primary Use Case</strong></td>
+<td>Sorting and optional aggregation</td>
+<td>Key-value aggregation</td>
+<td>Sorting binary row data</td>
+<td>Sorting and shuffling intermediate data</td>
+</tr>
+<tr>
+<td><strong>Data Format</strong></td>
+<td>Key-value pairs</td>
+<td>Key-value pairs</td>
+<td>Binary-encoded rows</td>
+<td>Binary-encoded rows</td>
+</tr>
+<tr>
+<td><strong>Aggregation Support</strong></td>
+<td>Optional (via combining comparator)</td>
+<td>Yes (custom aggregation functions)</td>
+<td>No</td>
+<td>No</td>
+</tr>
+<tr>
+<td><strong>Spill Mechanism</strong></td>
+<td>Sorts and spills sorted chunks</td>
+<td>Spills serialized key-value pairs</td>
+<td>Spills binary data</td>
+<td>Spills binary data</td>
+</tr>
+<tr>
+<td><strong>Final Merge</strong></td>
+<td>Merges sorted chunks</td>
+<td>Merges aggregated chunks</td>
+<td>Merges binary data</td>
+<td>Optimized merge for shuffle output</td>
+</tr>
+<tr>
+<td><strong>Memory Efficiency</strong></td>
+<td>Standard object-based memory management</td>
+<td>Standard object-based memory management</td>
+<td>Off-heap memory, avoids GC overhead</td>
+<td>Off-heap memory, avoids GC overhead</td>
+</tr>
+<tr>
+<td><strong>Performance</strong></td>
+<td>Optimized for sorting and aggregation</td>
+<td>Optimized for key-value aggregation</td>
+<td>Highly optimized for sorting binary data</td>
+<td>Optimized for shuffle performance</td>
+</tr>
+</tbody>
+</table>
+<p>map任务中间结果持久化的整体流程<br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/12/29/7VhHcm.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/12/29/7VhHcm.png" />
+        </a>
+    </p>
+<h3 id="shuffle读写">Shuffle读写</h3>
+<p>几个shuffle 的类图结构</p>
+<ul>
+<li>父类都是 ShuffleWriter</li>
+<li>三个子类：BypassMergeSortShuffleWriter、SortShuffleWriter、UnsafeShuffleWriter</li>
+<li>这三个类都用了 ShuffleMapOutputWriter 完成 map 端的写磁盘操作</li>
+<li>它只有一个实现类 LocalDiskShuffleMapOutputWriter</li>
+<li>又关联了ShufflePartitionWriter、ShuffleBlockResolver，并使用 java.io 类完成最终写入</li>
+<li>map端不需要在持久化数据之前进行聚合、排序等操作。可以用：BypassMergeSortShuffleWriter
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/12/29/7VhhG9.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/12/29/7VhhG9.png" />
+        </a>
+    </li>
+</ul>
+<p>SortShuffleWriter在map端聚合的执行流程，也可以不在 map 端聚合<br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/12/29/7Vh8tY.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/12/29/7Vh8tY.png" />
+        </a>
+    </p>
+<p>BypassMergeSortShuffleWriter的write方法的执行流程
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/12/29/7VhGoH.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/12/29/7VhGoH.png" />
+        </a>
+    </p>
+<p>shuffle read 相关的类</p>
+<ul>
+<li>核心是委托给 ShuffleBlockFetcherIterator 完成的</li>
+<li>这里会不断 fetch 拿到 block块</li>
+<li>可能从远端获取，也可能从 本地获取</li>
+<li>根据 FetchResult 的结果，有不同的 case 判断</li>
+<li>BlockStoreShuffleReader表示reducer从其他Block文件中读取 起始、结束指定范围内的数据
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/12/29/7Vh5yZ.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/12/29/7Vh5yZ.png" />
+        </a>
+    </li>
+</ul>
+<p>划分本地与远端Block
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/12/29/7VhAUU.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/12/29/7VhAUU.png" />
+        </a>
+    </p>
+<p>此外还有一个 ShuffleManager 抽象类</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-scala" data-lang="scala"><span style="display:flex;"><span>  <span style="color:#ff79c6">def</span> getWriter<span style="color:#ff79c6">[</span><span style="color:#8be9fd">K</span>, <span style="color:#8be9fd">V</span><span style="color:#ff79c6">](</span>
+</span></span><span style="display:flex;"><span>      handle<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">ShuffleHandle</span><span style="color:#ff79c6">,</span>
+</span></span><span style="display:flex;"><span>      mapId<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">Long</span><span style="color:#ff79c6">,</span>
+</span></span><span style="display:flex;"><span>      context<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">TaskContext</span><span style="color:#ff79c6">,</span>
+</span></span><span style="display:flex;"><span>      metrics<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">ShuffleWriteMetricsReporter</span><span style="color:#ff79c6">)</span><span style="color:#ff79c6">:</span> <span style="color:#8be9fd">ShuffleWriter</span><span style="color:#ff79c6">[</span><span style="color:#8be9fd">K</span>, <span style="color:#8be9fd">V</span><span style="color:#ff79c6">]</span>
+</span></span><span style="display:flex;"><span>	  
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">def</span> getReader<span style="color:#ff79c6">[</span><span style="color:#8be9fd">K</span>, <span style="color:#8be9fd">C</span><span style="color:#ff79c6">](</span>
+</span></span><span style="display:flex;"><span>      handle<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">ShuffleHandle</span><span style="color:#ff79c6">,</span>
+</span></span><span style="display:flex;"><span>      startMapIndex<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">Int</span><span style="color:#ff79c6">,</span>
+</span></span><span style="display:flex;"><span>      endMapIndex<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">Int</span><span style="color:#ff79c6">,</span>
+</span></span><span style="display:flex;"><span>      startPartition<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">Int</span><span style="color:#ff79c6">,</span>
+</span></span><span style="display:flex;"><span>      endPartition<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">Int</span><span style="color:#ff79c6">,</span>
+</span></span><span style="display:flex;"><span>      context<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">TaskContext</span><span style="color:#ff79c6">,</span>
+</span></span><span style="display:flex;"><span>      metrics<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">ShuffleReadMetricsReporter</span><span style="color:#ff79c6">)</span><span style="color:#ff79c6">:</span> <span style="color:#8be9fd">ShuffleReader</span><span style="color:#ff79c6">[</span><span style="color:#8be9fd">K</span>, <span style="color:#8be9fd">C</span><span style="color:#ff79c6">]</span>	  
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>ShuffleManager 的类图<br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/12/29/7VhV2q.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/12/29/7VhV2q.png" />
+        </a>
+    </p>
+<p>map端和reduce端都进行聚合
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/12/29/7VhcEs.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/12/29/7VhcEs.png" />
+        </a>
+    </p>
+<p>map端缓存和reduce端不聚合
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/12/29/7Vhvca.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/12/29/7Vhvca.png" />
+        </a>
+    </p>
+<p>map端使用Tungsten缓存和reduce端不聚合
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/12/29/7Vhan7.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/12/29/7Vhan7.png" />
+        </a>
+    </p>
+<p>map端临时Shuffle文件的合并与reduce端聚合
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/12/29/7VhOpI.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/12/29/7VhOpI.png" />
+        </a>
+    </p>
+<h2 id="部署模式">部署模式</h2>
+<h3 id="task">Task</h3>
+<p>Task 相关的类图</p>
+<ul>
+<li>Executor 调用 launchTask，在新线程中启动 TaskRunner</li>
+<li>TaskRunner 又会启动 Task
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/12/31/7VO6NI.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/12/31/7VO6NI.png" />
+        </a>
+    </li>
+</ul>
+<p>心跳相关类图</p>
+<ul>
+<li>接收到 Inbox 后，执行HeartbeatReceiver</li>
+<li>这里会执行接收逻辑，同时也会回复 ack 响应</li>
+<li>根据 case 类做响应的判断
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/12/31/7VOFaV.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/12/31/7VOFaV.png" />
+        </a>
+    </li>
+</ul>
+<p>Task的机制<br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/12/28/7VgsW7.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/12/28/7VgsW7.png" />
+        </a>
+    </p>
+<h3 id="master">Master</h3>
+<p>当 master 故障后，选举出新的 master</p>
+<ul>
+<li>抽象类：PersistenceEngine</li>
+<li>BlackHolePersistenceEngine</li>
+<li>FileSystemPersistenceEngine</li>
+<li>ZooKeeperPersistenceEngine</li>
+</ul>
+<p>LeaderElectionAgent 抽象类</p>
+<ul>
+<li>MonarchyLeaderAgent</li>
+<li>ZooKeeperLeaderElectionAgent</li>
+</ul>
+<p>org.apache.spark.deploy.master.Master 的类图</p>
+<ul>
+<li>继承了领导选举的类</li>
+<li>关联了 worker，application、driver 等info 类</li>
+<li>还有一些 metrics、web-ui 的类</li>
+<li>以接收到数据后的一些 case 类，根据case 条件调用相应的判断<br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/12/31/7VUA76.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/12/31/7VUA76.png" />
+        </a>
+    </li>
+</ul>
+<p>Master 包含的一些功能</p>
+<ul>
+<li>启动</li>
+<li>检查 worker 超时</li>
+<li>被选举为领导时的处理</li>
+</ul>
+<p>调度过程</p>
+<ul>
+<li>Driver 调度时，先对所有 worker 做shuffle，只调度活跃状态</li>
+<li>然后挨个看是否满足条件</li>
+<li>比如当前需要 2C8G，id-2 不满足，id-1 满足</li>
+<li>调度到 id-1 后，同时修改 id-1 剩余的资源</li>
+<li>之后发送 RPC 请求，运行 driver
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/01/01/7VU1Um.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2025/01/01/7VU1Um.png" />
+        </a>
+    </li>
+</ul>
+<p>executor 分配过程</p>
+<ul>
+<li>默认 spreadOutApps 是开启的</li>
+<li>会将 executor尽可能跨多个 worker 分配</li>
+<li>每个 executor的CPU和内存，不能跨节点，必须在一个worker 上<br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/01/01/7VUUy5.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2025/01/01/7VUUy5.png" />
+        </a>
+    </li>
+</ul>
+<p>假设</p>
+<ul>
+<li>有 3 个 worker，每个 4C,20G，启动 3个 executor，每个 2C10G</li>
+<li>第一个 worker 分配一个 executor，剩余 2C10G</li>
+<li>第二个 worker 分配一个 executor， 剩余 2C10G</li>
+<li>第三个 worker 分配一个 executor，剩余 2C10G</li>
+<li>如果是 spreadOutApps为 false</li>
+<li>第一个 worker 会分配 2 个executor，剩余 2C,0G</li>
+</ul>
+<p>其他的一些情况</p>
+<ul>
+<li>注册 worker</li>
+<li>启动 worker</li>
+<li>更新 worker 状态</li>
+<li>处理Worker的心跳</li>
+<li>注册Application</li>
+<li>处理Executor的申请</li>
+<li>处理Executor的状态变化</li>
+</ul>
+<p>Master领导选举的流程
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/01/01/7V1mQw.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2025/01/01/7V1mQw.png" />
+        </a>
+    </p>
+<h3 id="worker">Worker</h3>
+<p>相关类图</p>
+<ul>
+<li>跟Master 类似，这里的 reciver 函数，接收到消息后</li>
+<li>根据 case 处理不同的事件</li>
+<li>它会关联一个 ExternalShuffleService类</li>
+<li>这个类用来接收 reducer的读取shuffle数据，元信息回存储在 roacksDB或者 levelDB中<br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/01/01/7VUPs4.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2025/01/01/7VUPs4.png" />
+        </a>
+    </li>
+</ul>
+<p>启动过程</p>
+<ul>
+<li>创建 临时目录</li>
+<li>创建 ExternalShuffleService，如果设置为true</li>
+<li>创建 woker 资源</li>
+<li>启动 web-ui</li>
+<li>注册 metrics</li>
+</ul>
+<p>worker 中包含了 main，可以作为新的 java 进程方式启动 <br>
+同时也会解析传入的参数，作为新进程的参数来启动</p>
+<p>其他的一些行为</p>
+<ul>
+<li>向Master注册Worker</li>
+<li>向Master发送心跳</li>
+</ul>
+<p>注册Worker的完整流程<br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/01/01/7V1kUe.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2025/01/01/7V1kUe.png" />
+        </a>
+    </p>
+<p>Worker心跳及超时检查的流程
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/01/01/7V1B2P.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2025/01/01/7V1B2P.png" />
+        </a>
+    </p>
+<p>Executor 启动</p>
+<ul>
+<li>通过 ExecutorRunner 启动的</li>
+<li>这个类的 start()函数中，创建新线程来启动 executor</li>
+<li>fetchAndRunExecutor 中获取资源信息，然后封装出 ProcessBuilder</li>
+<li>之后启动新进程，传入命令行参数，启动 executor</li>
+<li>再封装 executor 的输出、错误信息，将日志写到 指定文件中</li>
+<li>worker 还负责接受 executor 退出信息，并发送 executor 状态变更通知</li>
+</ul>
+<p>Executor 停止</p>
+<ul>
+<li>启动时会保存 java.lang.Process</li>
+<li>通过 Process 类来关闭进程</li>
+<li>同时关闭对应的日志文件</li>
+</ul>
+<p>StandaloneAppClient</p>
+<ul>
+<li>应用程序和 spark standalone 模式的交互客户端</li>
+<li>负责创建、停止</li>
+<li>创建会向 master注册</li>
+<li>接收各种 case 类的事件
+<ul>
+<li>ApplicationRemoved</li>
+<li>ExecutorAdded</li>
+<li>ExecutorUpdated</li>
+<li>WorkerRemoved</li>
+<li>MasterChanged</li>
+</ul>
+</li>
+</ul>
+<h3 id="executor">Executor</h3>
+<p>CoarseGrainedExecutorBackend 主要功能</p>
+<ul>
+<li>Task Execution:
+<ul>
+<li>Receives tasks from the driver via the TaskScheduler and executes them on the executor.</li>
+<li>Manages the lifecycle of tasks and reports the status (success/failure) back to the driver.</li>
+</ul>
+</li>
+<li>Communication with Driver:
+<ul>
+<li>Communicates with the driver using the CoarseGrainedSchedulerBackend via RPC (Remote Procedure Call).</li>
+<li>Registers itself with the driver when it starts (registerExecutor).</li>
+</ul>
+</li>
+<li>Resource Management:
+<ul>
+<li>Allocates CPU and memory resources for tasks on the executor.</li>
+<li>Manages task threads using a thread pool.</li>
+</ul>
+</li>
+<li>Data Processing:
+<ul>
+<li>Reads shuffle data, processes RDD partitions, and performs transformations/actions.</li>
+</ul>
+</li>
+</ul>
+<p>CoarseGrainedSchedulerBackend 主要功能</p>
+<ul>
+<li>Resource Management:
+<ul>
+<li>Allocates resources (CPU, memory) for executors on the cluster.</li>
+<li>Manages executor registration and lifecycle (e.g., launching, removing executors).</li>
+</ul>
+</li>
+<li>Task Scheduling:
+<ul>
+<li>Works with the TaskScheduler to assign tasks to executors.</li>
+<li>Sends LaunchTask messages to executors via CoarseGrainedExecutorBackend.</li>
+</ul>
+</li>
+<li>Fault Tolerance:
+<ul>
+<li>Detects failed executors and nodes, and handles retries or rescheduling of tasks.</li>
+</ul>
+</li>
+<li>Cluster Communication:
+<ul>
+<li>Communicates with the cluster manager (e.g., YARN, Kubernetes, Mesos) to request resources.</li>
+<li>Tracks executor state and resource availability.</li>
+</ul>
+</li>
+</ul>
+<p>Master、worker、executor之间的调用关系<br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/12/28/7Vgi7a.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/12/28/7Vgi7a.png" />
+        </a>
+    </p>
+<h3 id="local-集群部署方式">Local 集群部署方式</h3>
+<p>local-cluster部署模式的启动过程</p>
+<ul>
+<li>由 LocalSparkCluster启动 Master</li>
+<li>这里还会注册选举，不过只有一个Master，它就是活跃的</li>
+<li>之后 LocalSparkCluster 创建 Woker，Woker 向 Master注册</li>
+<li>在创建出 StandloneSchedulerBackend，并由它创建出 StandaloneAppClient</li>
+<li>StandaloneAppClient 会向 Master注册
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/01/01/7V1X0O.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2025/01/01/7V1X0O.png" />
+        </a>
+    </li>
+</ul>
+<p>local-cluster部署模式下的Executor资源分配过程</p>
+<ul>
+<li>master 向 worker 触发 启动 executor 命令</li>
+<li>委托 ExecutorRunner，创建新进程</li>
+<li>CoarseGrainedExecutorBackend 会向 Driver注册 executor 信息</li>
+<li>CoarseGrainedExecutorBackend 会启动 Executor</li>
+<li>CoarseGrainedExecutorBackend 和 Executor 在各种模式下都是一个 JVM内的
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/01/01/7V1j5Q.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2025/01/01/7V1j5Q.png" />
+        </a>
+    </li>
+</ul>
+<p>local-cluster部署模式下的任提交过程</p>
+<ul>
+<li>TaskSchedulerImpl 提交 Task 任务，之后发送给 Driver</li>
+<li>Driver 调用 TaskSchedulerImpl获取资源分配情况</li>
+<li>Driver 发送给 CoarseGrainedExecutorBackend 进程，launchTask</li>
+<li>CoarseGrainedExecutorBackend 启动 Executor，，并调用Executor#launchTask 启动 Task</li>
+<li>Executor 会不断更新 Task状态，并同步给 Driver
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/01/01/7V1n4f.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2025/01/01/7V1n4f.png" />
+        </a>
+    </li>
+</ul>
+<h3 id="集群部署">集群部署</h3>
+<p>Standalone部署模式的启动过程</p>
+<ul>
+<li>Standalone模式下会有多个 Master，每个Master都会向 ZK 注册选举</li>
+<li>Worker 会向 Master注册信息</li>
+<li>启动 Dirver，TaskSchedulerImpl会调用 StandaloneSchedulerBackend，再启动 StandaloneAppClinet</li>
+<li>之后Driver 向 Master 注册
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/01/01/7V1Mkc.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2025/01/01/7V1Mkc.png" />
+        </a>
+    </li>
+</ul>
+<p>Standalone部署模式下的Executor资源分配过程</p>
+<ul>
+<li>master发送启动 executor 的命令</li>
+<li>worker 接收到后，创建ExecutorRunner，后者负责启动新进程</li>
+<li>通过 ProcessBuilder 方式启动新进程，也就是CoarseGrainedExecutorBackend</li>
+<li>CoarseGrainedExecutorBackend会向 Dirver 注册</li>
+<li>启动 executor 并向 driver 注册</li>
+<li>CoarseGrainedExecutorBackend会向创建 WorkerWatcher，后者负责跟Worker通讯
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/01/01/7V1fb3.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2025/01/01/7V1fb3.png" />
+        </a>
+    </li>
+</ul>
+<p>Application 退出</p>
+<ul>
+<li>由于会保持 netty的网络通讯</li>
+<li>当 application 正常或者异常退出，都会触发到 master</li>
+<li>master会调用响应机制，回收资源</li>
+</ul>
+<p>Executor异常退出的容错处理</p>
+<ul>
+<li>worker 会持有 executor 的 java.lang.Processor 句柄</li>
+<li>当 executor 正常或者异常退出时，worker都会感知到</li>
+<li>worker会转交给master</li>
+<li>mater将 driver发送 launchExecutor 命令</li>
+<li>启动 executor并将driver 注册
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/01/01/7V1iPj.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2025/01/01/7V1iPj.png" />
+        </a>
+    </li>
+</ul>
+<p>Worker异常退出的容错处理</p>
+<ul>
+<li>worker退出后，master的心跳超时</li>
+<li>正常情况下，当 executor 被杀死、退出时候会通知 worker</li>
+<li>worker再通知master，当超时后</li>
+<li>master会向driver发送 executor状态更新的消息</li>
+<li>driver 会发送启动 executor 的消息</li>
+<li>master向其他 worker节点发送 launchExecutor 的消息
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/01/01/7V1sF5.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2025/01/01/7V1sF5.png" />
+        </a>
+    </li>
+</ul>
+<p>ZooKeeper热备和选举示意图</p>
+<ul>
+<li>只有一个maser时，当master挂了，driver和executor都可以正常运行</li>
+<li>当executor异常退出时，driver的新任务无法提交，executor占用资源无法被释放(master没了)</li>
+<li>如果worker退出，则driver无法提交任务</li>
+<li>新的driver 也无法提交任务</li>
+<li>新master选举后会重新跟worker、driver通讯<br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/01/01/7V16qm.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2025/01/01/7V16qm.png" />
+        </a>
+    </li>
+</ul>
+<p><strong>Key Components</strong></p>
+<ol>
+<li><strong>Master</strong>: The central coordinator in Standalone mode responsible for managing workers and resources.</li>
+<li><strong>Worker</strong>: A node that hosts executors to perform task execution.</li>
+<li><strong>Driver</strong>: The client-side process responsible for submitting applications, scheduling tasks, and orchestrating execution.</li>
+<li><strong>Executor</strong>: A distributed process responsible for executing tasks and storing data.</li>
+<li><strong>CoarseGrainedSchedulerBackend</strong>: Driver-side scheduler for managing executors.</li>
+<li><strong>CoarseGrainedExecutorBackend</strong>: Executor-side component for task execution and communication with the driver.</li>
+</ol>
+<p><strong>Deployment Modes and Relationships</strong></p>
+<table>
+<thead>
+<tr>
+<th><strong>Mode</strong></th>
+<th><strong>Master</strong> Process</th>
+<th><strong>Worker</strong> Process</th>
+<th><strong>Driver</strong> Process</th>
+<th><strong>Executor</strong> Process</th>
+<th><strong>Component Relationship</strong></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Local-Cluster</strong></td>
+<td>Single JVM</td>
+<td>Simulated as threads in JVM</td>
+<td>Same JVM</td>
+<td>Same JVM (threads simulate executors)</td>
+<td>All components run in the same JVM. <code>CoarseGrainedExecutorBackend</code> and <code>Executor</code> in the same thread.</td>
+</tr>
+<tr>
+<td><strong>Standalone Cluster</strong></td>
+<td>Separate JVM</td>
+<td>Separate JVM</td>
+<td>Separate JVM</td>
+<td>Separate JVM per executor</td>
+<td><code>Master</code> manages <code>Workers</code>. Each <code>Worker</code> launches executors. <code>CoarseGrainedExecutorBackend</code> and <code>Executor</code> in the same executor process.</td>
+</tr>
+<tr>
+<td><strong>YARN/Kubernetes</strong></td>
+<td>N/A</td>
+<td>N/A</td>
+<td>Separate JVM</td>
+<td>Separate JVM per executor</td>
+<td>Cluster manager launches executors. <code>CoarseGrainedExecutorBackend</code> and <code>Executor</code> in the same executor process.</td>
+</tr>
+</tbody>
+</table>
+<h3 id="yarn模式">YARN模式</h3>
+<p>YARN的架构</p>
+<ul>
+<li>ResourceManager（RM）：全局资源管理器，负责整个集群的资源管理与分配</li>
+<li>ApplicationMaster（AM）与RM通信获取资源，将作业划分为更细粒度的任务，与NodeManager（NM）通信启动或停止任务，监控失败任务</li>
+<li>NodeManager（NM）：单个节点上的资源与任务管理器，它负责向RM定时汇报本节点的资源使用情况及各个Container的状态
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/05/21/7gEFJ6.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/05/21/7gEFJ6.png" />
+        </a>
+    </li>
+</ul>
+<p>cluster 模式下，spark整合YARN</p>
+<ul>
+<li>客户端提交任务</li>
+<li>RM 响应后让 NM 启动 AM，这个 AM就是spark 的 driver</li>
+<li>AM 请求 RM 获取资源</li>
+<li>AM 向 NM 创建 executor</li>
+<li>executor 跟AM 通讯
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/01/01/7V1Fa4.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2025/01/01/7V1Fa4.png" />
+        </a>
+    </li>
+</ul>
+<p>client 模式下</p>
+<ul>
+<li>spark的driver运行在客户端</li>
+<li>还是会启动 AM，然后创建executor</li>
+<li>executor 跟 client通讯
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/01/01/7V1ZMh.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2025/01/01/7V1ZMh.png" />
+        </a>
+    </li>
+</ul>
+<p>cluster模式、client模式对比</p>
+<table>
+<thead>
+<tr>
+<th><strong>Aspect</strong></th>
+<th><strong>YARN Client Mode</strong></th>
+<th><strong>YARN Cluster Mode</strong></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Driver Location</strong></td>
+<td>Runs on the client machine.</td>
+<td>Runs inside the YARN cluster.</td>
+</tr>
+<tr>
+<td><strong>Fault Tolerance</strong></td>
+<td>Less fault-tolerant (client failures affect execution).</td>
+<td>More fault-tolerant (driver managed by YARN).</td>
+</tr>
+<tr>
+<td><strong>Network Latency</strong></td>
+<td>Higher latency due to driver-executor communication over WAN.</td>
+<td>Lower latency as driver and executors are co-located.</td>
+</tr>
+<tr>
+<td><strong>Use Case</strong></td>
+<td>Interactive applications (e.g., Spark Shell).</td>
+<td>Batch or production jobs with no user interaction.</td>
+</tr>
+<tr>
+<td><strong>Resource Allocation</strong></td>
+<td>Client handles driver resources, YARN manages executors.</td>
+<td>YARN manages both driver and executor resources.</td>
+</tr>
+<tr>
+<td><strong>Client Dependency</strong></td>
+<td>The client must remain active for the driver.</td>
+<td>The client can disconnect after submission.</td>
+</tr>
+</tbody>
+</table>
+<h2 id="参考">参考</h2>
+<ul>
+<li><a href="https://blog.csdn.net/otengyue/article/details/106733031">Spark源码分析之调度框架详解</a></li>
+<li><a href="https://www.sqlboy.tech/pages/6c29c6/">Spark RDD 源码分析</a></li>
+<li><a href="https://spark-internals.books.yourtion.com/markdown/1-Overview.html">Spark的设计与实现</a></li>
+<li><a href="https://dkharazi.github.io/blog/spark-yarn">Testing Spark Applications with YARN</a></li>
+</ul>
+
+			<script type="text/javascript"
+        async
+        src="https://cdn.bootcss.com/mathjax/2.7.3/MathJax.js?config=TeX-AMS-MML_HTMLorMML">
+MathJax.Hub.Config({
+  tex2jax: {
+    inlineMath: [['$','$'], ['\\(','\\)']],
+    displayMath: [['$$','$$'], ['\[\[','\]\]']],
+    processEscapes: true,
+    processEnvironments: true,
+    skipTags: ['script', 'noscript', 'style', 'textarea', 'pre'],
+    TeX: { equationNumbers: { autoNumber: "AMS" },
+         extensions: ["AMSmath.js", "AMSsymbols.js"] }
+  }
+});
+
+MathJax.Hub.Queue(function() {
+    
+    
+    
+    var all = MathJax.Hub.getAllJax(), i;
+    for(i = 0; i < all.length; i += 1) {
+        all[i].SourceElement().parentNode.className += ' has-jax';
+    }
+});
+</script>
+
+<style>
+code.has-jax {
+    font: inherit;
+    font-size: 100%;
+    background: inherit;
+    border: inherit;
+    color: #515151;
+}
+</style>
+        </div>
+
+        
+
+
+        
+
+<div class="post-archive">
+    <h2>相关文章</h2>
+    <ul class="listing">
+        
+        <li><a href="/post/2024/11/spark_core/">Spark Core相关-1</a></li>
+        
+        <li><a href="/post/2024/10/spark_optimize/">Spark的一些优化</a></li>
+        
+        <li><a href="/post/2024/09/spark_streaming/">Spark-Streaming 原理</a></li>
+        
+        <li><a href="/post/2024/09/data_distribution/">Spark的 数据分布</a></li>
+        
+        <li><a href="/post/2024/05/spark_codegen/">code-gen</a></li>
+        
+    </ul>
+</div>
+
+
+        <div class="post-meta meta-tags">
+            
+            <ul class="clearfix">
+                
+                <li><a href='/tags/spark'>Spark</a></li>
+                
+            </ul>
+            
+        </div>
+    </article>
+    
+    
+
+    
+    
+    <div class="post bg-white">
+      <script src="https://utteranc.es/client.js"
+            repo= "himichael/hugoblogtalks"
+            issue-term="pathname"
+            theme="github-light"
+            crossorigin="anonymous"
+            async>
+      </script>
+    </div>
+    
+</div>
+
+
+                </div>
+
+                <div id="secondary">
+    <section class="widget">
+        <form id="search" action='https://code0xff.org/search/' method="get" accept-charset="utf-8" target="_blank" _lpchecked="1">
+      
+      <input type="text" name="q" maxlength="20" placeholder="Search">
+      <input type="hidden" name="sitesearch" value="https://code0xff.org/">
+      <button type="submit" class="submit icon-search"></button>
+</form>
+    </section>
+    
+    <section class="widget">
+        <h3 class="widget-title">最近文章</h3>
+<ul class="widget-list">
+    
+    <li>
+        <a href="https://code0xff.org/post/2025/01/spark_register_source/" title="Spark 注册数据源">Spark 注册数据源</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2025/01/spark_core_2/" title="Spark Core相关-2">Spark Core相关-2</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2024/12/llamafactory/" title="Llama Factory">Llama Factory</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2024/11/spark_core/" title="Spark Core相关-1">Spark Core相关-1</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2024/11/sae_tunnel/" title="sea tunnel">sea tunnel</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2024/11/k8s_networks/" title="k8s 网络">k8s 网络</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2024/11/ozone/" title="ozone">ozone</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2024/11/es/" title="ES的简单学习">ES的简单学习</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2025/02/ai/" title="AI的简单学习">AI的简单学习</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2024/11/big_data_investigation/" title="国内几个云厂商大数据平台">国内几个云厂商大数据平台</a>
+    </li>
+    
+</ul>
+    </section>
+
+    
+
+    <section class="widget">
+        <h3 class="widget-title"><a href='/categories/'>分类</a></h3>
+<ul class="widget-list">
+    
+    <li><a href="https://code0xff.org/categories/%E5%88%86%E5%B8%83%E5%BC%8F/">分布式 (6)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E5%8E%9F%E7%90%86%E5%88%86%E6%9E%90/">原理分析 (24)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E5%95%86%E4%B8%9A/">商业 (3)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E5%A4%A7%E6%95%B0%E6%8D%AE/">大数据 (56)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%95%B0%E6%8D%AE%E5%BA%93/">数据库 (41)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%96%87%E5%AD%A6%E5%92%8C%E8%89%BA%E6%9C%AF/">文学和艺术 (3)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%97%85%E8%A1%8C/">旅行 (12)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%9E%B6%E6%9E%84/">架构 (13)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E7%AE%97%E6%B3%95/">算法 (8)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E7%B3%BB%E7%BB%9F/">系统 (7)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E7%BC%96%E7%A8%8B%E8%AF%AD%E8%A8%80/">编程语言 (7)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E8%A1%8C%E4%B8%9A%E8%A7%82%E5%AF%9F/">行业观察 (3)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E8%AF%BB%E4%B9%A6%E7%AC%94%E8%AE%B0/">读书笔记 (14)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E9%9A%8F%E4%BE%BF%E5%86%99%E5%86%99/">随便写写 (3)</a></li>
+    
+</ul>
+    </section>
+
+    <section class="widget">
+        <h3 class="widget-title">归档</a></h3>
+<ul class="widget-list">
+    
+    <li><a href="https://code0xff.org/years/2021%E5%B9%B4/">2021年 (41)</a></li>
+    
+    <li><a href="https://code0xff.org/years/2022%E5%B9%B4/">2022年 (55)</a></li>
+    
+    <li><a href="https://code0xff.org/years/2023%E5%B9%B4/">2023年 (54)</a></li>
+    
+    <li><a href="https://code0xff.org/years/2024%E5%B9%B4/">2024年 (48)</a></li>
+    
+    <li><a href="https://code0xff.org/years/2025%E5%B9%B4/">2025年 (2)</a></li>
+    
+</ul>
+    </section>
+
+    <section class="widget">
+        <h3 class="widget-title"><a href='/tags/'>标签</a></h3>
+<div class="tagcloud">
+    
+    <a href="https://code0xff.org/tags/ai/">AI </a>
+    
+    <a href="https://code0xff.org/tags/ambari/">Ambari </a>
+    
+    <a href="https://code0xff.org/tags/architecture/">architecture </a>
+    
+    <a href="https://code0xff.org/tags/bigdata/">bigdata </a>
+    
+    <a href="https://code0xff.org/tags/b%E6%A0%91/">B树 </a>
+    
+    <a href="https://code0xff.org/tags/c&#43;&#43;/">C&#43;&#43; </a>
+    
+    <a href="https://code0xff.org/tags/calcite/">calcite </a>
+    
+    <a href="https://code0xff.org/tags/cmu-database/">CMU-Database </a>
+    
+    <a href="https://code0xff.org/tags/data_ingestion/">Data_Ingestion </a>
+    
+    <a href="https://code0xff.org/tags/deltalake/">DeltaLake </a>
+    
+    <a href="https://code0xff.org/tags/doris/">Doris </a>
+    
+    <a href="https://code0xff.org/tags/english/">English </a>
+    
+    <a href="https://code0xff.org/tags/es/">ES </a>
+    
+    <a href="https://code0xff.org/tags/facebook/">Facebook </a>
+    
+    <a href="https://code0xff.org/tags/flink/">flink </a>
+    
+    <a href="https://code0xff.org/tags/flume/">flume </a>
+    
+    <a href="https://code0xff.org/tags/gc/">GC </a>
+    
+    <a href="https://code0xff.org/tags/gluten/">Gluten </a>
+    
+    <a href="https://code0xff.org/tags/hana/">HANA </a>
+    
+    <a href="https://code0xff.org/tags/hive/">Hive </a>
+    
+    <a href="https://code0xff.org/tags/iceberg/">iceberg </a>
+    
+    <a href="https://code0xff.org/tags/impala/">Impala </a>
+    
+    <a href="https://code0xff.org/tags/janino/">janino </a>
+    
+    <a href="https://code0xff.org/tags/k8s/">k8s </a>
+    
+    <a href="https://code0xff.org/tags/kafka/">Kafka </a>
+    
+    <a href="https://code0xff.org/tags/kudu/">kudu </a>
+    
+    <a href="https://code0xff.org/tags/kyuubi/">Kyuubi </a>
+    
+    <a href="https://code0xff.org/tags/lakehouse/">Lakehouse </a>
+    
+    <a href="https://code0xff.org/tags/leveldb/">LevelDB </a>
+    
+    <a href="https://code0xff.org/tags/llamafactory/">LlamaFactory </a>
+    
+    <a href="https://code0xff.org/tags/llvm/">LLVM </a>
+    
+    <a href="https://code0xff.org/tags/manacher/">Manacher </a>
+    
+    <a href="https://code0xff.org/tags/mapreduce/">MapReduce </a>
+    
+    <a href="https://code0xff.org/tags/micro-service/">micro-service </a>
+    
+    <a href="https://code0xff.org/tags/mysql/">MySQL </a>
+    
+    <a href="https://code0xff.org/tags/newsql/">NewSQL </a>
+    
+    <a href="https://code0xff.org/tags/oceanbase/">OceanBase </a>
+    
+    <a href="https://code0xff.org/tags/openlogreplicator/">OpenLogReplicator </a>
+    
+    <a href="https://code0xff.org/tags/parquet/">parquet </a>
+    
+    <a href="https://code0xff.org/tags/paxos/">paxos </a>
+    
+    <a href="https://code0xff.org/tags/presto/">Presto </a>
+    
+    <a href="https://code0xff.org/tags/quick-sql/">quick-sql </a>
+    
+    <a href="https://code0xff.org/tags/raft/">raft </a>
+    
+    <a href="https://code0xff.org/tags/scala/">scala </a>
+    
+    <a href="https://code0xff.org/tags/simd/">SIMD </a>
+    
+    <a href="https://code0xff.org/tags/snowflake/">snowflake </a>
+    
+    <a href="https://code0xff.org/tags/spark/">spark </a>
+    
+    <a href="https://code0xff.org/tags/sre/">SRE </a>
+    
+    <a href="https://code0xff.org/tags/teradata/">TeraData </a>
+    
+    <a href="https://code0xff.org/tags/tpcx-hs/">TPCx-HS </a>
+    
+    <a href="https://code0xff.org/tags/trino/">Trino </a>
+    
+    <a href="https://code0xff.org/tags/tuning/">Tuning </a>
+    
+    <a href="https://code0xff.org/tags/unix/">unix </a>
+    
+    <a href="https://code0xff.org/tags/yarn/">YARN </a>
+    
+    <a href="https://code0xff.org/tags/%E4%BA%8C%E5%88%86%E6%9F%A5%E6%89%BE/">二分查找 </a>
+    
+    <a href="https://code0xff.org/tags/%E4%BA%8C%E5%8F%89%E6%A0%91%E9%81%8D%E5%8E%86/">二叉树遍历 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%88%86%E5%B8%83%E5%BC%8F/">分布式 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%88%97%E5%AD%98/">列存 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%8A%A8%E6%80%81%E6%B3%A8%E5%85%A5/">动态注入 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%8E%86%E5%8F%B2/">历史 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%90%91%E9%87%8F%E5%8C%96/">向量化 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%9B%9E%E6%BA%AF/">回溯 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%9B%BD%E5%86%85%E6%97%85%E8%A1%8C/">国内旅行 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%9B%BD%E5%A4%96%E6%97%85%E8%A1%8C/">国外旅行 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%A4%9A%E7%A7%9F%E6%88%B7/">多租户 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%A4%A7%E6%95%B0%E6%8D%AE/">大数据 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%AD%98%E5%82%A8/">存储 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%B7%A5%E4%BD%9C%E8%AE%B0%E5%BD%95/">工作记录 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%BE%AE%E6%9C%8D%E5%8A%A1/">微服务 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%95%B0%E6%8D%AE%E4%B8%AD%E5%8F%B0/">数据中台 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%95%B0%E6%8D%AE%E5%BA%93/">数据库 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%95%B0%E6%8D%AE%E6%A8%A1%E5%9E%8B/">数据模型 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%95%B0%E6%8D%AE%E8%BF%81%E7%A7%BB/">数据迁移 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%9F%A5%E8%AF%A2%E4%BC%98%E5%8C%96/">查询优化 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%9F%A5%E8%AF%A2%E7%BC%96%E8%AF%91/">查询编译 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%A6%82%E7%8E%87/">概率 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%B1%87%E7%BC%96/">汇编 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%B5%8B%E8%AF%95/">测试 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%94%9F%E6%B4%BB/">生活 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%94%B5%E5%BD%B1/">电影 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%AE%97%E6%B3%95/">算法 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%B4%A2%E5%BC%95/">索引 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BB%8F%E6%B5%8E/">经济 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BC%93%E5%AD%98/">缓存 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BC%96%E8%AF%91%E5%8E%9F%E7%90%86/">编译原理 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BD%91%E7%BB%9C/">网络 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AE%A1%E7%AE%97%E6%A1%86%E6%9E%B6/">计算框架 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AE%BA%E6%96%87/">论文 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AF%BB%E4%B9%A6/">读书 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AF%BB%E4%B9%A6%E7%AC%94%E8%AE%B0/">读书笔记 </a>
+    
+</div>
+    </section>
+
+    
+
+    <section class="widget">
+        <h3 class="widget-title">RSS</h3>
+        <ul class="widget-list">
+            <li><a href="https://code0xff.org/index.xml">文章 RSS</a></li>
+        </ul>
+    </section>
+</div>
+            </div>
+        </div>
+    </div>
+    <footer id="footer">
+    <div>
+        &copy; 2025 <a href="https://code0xff.org/">记录每个瞬间 By 老王</a>
+        
+    </div>
+    <br />
+    <div>
+        <div class="github-badge">
+            <a href="https://gohugo.io/" target="_black" rel="nofollow"><span class="badge-subject">Powered by</span><span class="badge-value bg-blue">Hugo</span></a>
+        </div>
+        <div class="github-badge">
+            <a href="https://github.com/flysnow-org/maupassant-hugo" target="_black"><span class="badge-subject">Theme</span><span class="badge-value bg-yellowgreen">Maupassant</span></a>
+        </div>
+    </div>
+</footer>
+
+
+    
+    <script type="text/javascript">
+        window.MathJax = {
+            tex2jax: {
+                inlineMath: [['$', '$']],
+                processEscapes: true
+                }
+            };
+    </script>
+    <script src='https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.5/MathJax.js?config=TeX-MML-AM_CHTML' async></script><script src="https://cdn.bootcdn.net/ajax/libs/fancybox/3.5.7/jquery.fancybox.min.js"></script>
+
+<a id="rocket" href="#top"></a>
+<script type="text/javascript" src='/js/totop.js?v=0.0.0' async=""></script>
+
+<script type="application/javascript">
+var doNotTrack = false;
+if (!doNotTrack) {
+	window.ga=window.ga||function(){(ga.q=ga.q||[]).push(arguments)};ga.l=+new Date;
+	ga('create', 'GA ID', 'auto');
+	
+	ga('send', 'pageview');
+}
+</script>
+<script async src='https://www.google-analytics.com/analytics.js'></script>
+
+
+
+    <script type="text/javascript" src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js" async></script>
+
+
+
+
+</body>
+
+</html>

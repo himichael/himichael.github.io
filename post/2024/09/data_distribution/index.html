@@ -1,0 +1,910 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    
+    <meta name="referrer" content="no-referrer-when-downgrade">
+    
+
+    <title>Spark的 数据分布 | 记录每个瞬间</title>
+    <meta property="og:title" content="Spark的 数据分布 - 记录每个瞬间">
+    <meta property="og:type" content="article">
+        
+    <meta property="article:published_time" content='2024-09-01T09:08:07&#43;08:00'>
+        
+        
+    <meta property="article:modified_time" content='2024-09-01T09:08:07&#43;08:00'>
+        
+    <meta name="Keywords" content="">
+    <meta name="description" content="Spark的 数据分布">
+        <meta name="author" content="隔壁老王">
+        
+    <meta property="og:url" content="https://code0xff.org/post/2024/09/data_distribution/">
+    <link rel="shortcut icon" href='/favicon.ico'  type="image/x-icon">
+
+    <link rel="stylesheet" href='/css/normalize.css'>
+    <link rel="stylesheet" href='/css/style.css'>
+    <script type="text/javascript" src="//cdn.bootcdn.net/ajax/libs/jquery/3.4.1/jquery.min.js"></script>
+
+    
+    
+    
+        <link href="https://cdn.bootcdn.net/ajax/libs/fancybox/3.5.7/jquery.fancybox.min.css" rel="stylesheet">
+    
+    
+    
+    
+</head>
+
+
+<body>
+    <header id="header" class="clearfix">
+    <div class="container">
+        <div class="col-group">
+            <div class="site-name ">
+                
+                    <a id="logo" href="https://code0xff.org/">
+                        记录每个瞬间
+                    </a>
+                
+                
+            </div>
+            <div>
+                <nav id="nav-menu" class="clearfix">
+                    <a class="current" href="https://code0xff.org/">首页</a>
+                    
+                    <a  href="https://code0xff.org/linked/" title="链接">链接</a>
+                    
+                    <a  href="https://code0xff.org/archives/" title="归档">归档</a>
+                    
+                    <a  href="https://code0xff.org/about/" title="关于">关于</a>
+                    
+                </nav>
+            </div>
+        </div>
+    </div>
+</header>
+
+    <div id="body">
+        <div class="container">
+            <div class="col-group">
+
+                <div class="col-8" id="main">
+                    
+<div class="res-cons">
+    
+    <article class="post">
+        <header>
+            <h1 class="post-title">Spark的 数据分布</h1>
+        </header>
+        <date class="post-meta meta-date">
+            2024年9月1日
+        </date>
+<nav id="TableOfContents">
+  <ul>
+    <li>
+      <ul>
+        <li><a href="#分区相关的">分区相关的</a></li>
+        <li><a href="#排序物理算子">排序物理算子</a></li>
+        <li><a href="#细说排序细节">细说排序细节</a></li>
+        <li><a href="#shuffle操作">Shuffle操作</a></li>
+      </ul>
+    </li>
+  </ul>
+</nav>
+        
+        <div class="post-meta">
+            
+            <span class="post-meta meta-tags">
+                <ul class="clearfix">
+                    <a href='/categories/%E5%A4%A7%E6%95%B0%E6%8D%AE'>大数据</a>
+                </ul>
+            </span>
+            
+        </div>
+        
+        
+        <div class="post-meta">
+            <span id="busuanzi_container_page_pv">|<span id="busuanzi_value_page_pv"></span><span>
+                    阅读</span></span>
+        </div>
+        
+        
+        <div class="post-content">
+            <h2 id="分区相关的">分区相关的</h2>
+<p>Distribution 类的继承关系<br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/09/01/7xyLZ4.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/09/01/7xyLZ4.png" />
+        </a>
+    <br>
+图片来源 -&gt; <a href="https://dataninjago.com/2022/01/20/spark-sql-query-engine-deep-dive-14-partitioning-ordering/">这里</a><br>
+主要的类</p>
+<ul>
+<li>UnspecifiedDistribution – represents the case that no specific requirements for the distribution. All the partitioning types mentioned later can satisfy this distribution.</li>
+<li>AllTuples – represents the distribution that only has a single partition.</li>
+<li>BroadcastDistribution – represents the case that the entire dataset is broadcasted to every node.</li>
+<li>ClusteredDistribution – represents the distribution that the rows sharing the same values for the clustering expression are co-located in the same partition.</li>
+<li>HashClusteredDistribution – represents the distribution that the rows are clustered according to the hash of the given expressions. Because the hash function, is defined in the HashPartitioning, therefore, HashClusteredDistribution can only be satisfied with the HashPartitioning.</li>
+<li>OrderedDistribution – represents the distribution that the rows are ordered across partitions and not necessarily within a partition.</li>
+</ul>
+<p>Partitioning 类的继承关系<br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/09/01/7xy3uh.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/09/01/7xy3uh.png" />
+        </a>
+    <br>
+主要的关系</p>
+<ul>
+<li>SinglePartition – represents a single partition (numPartitions == 1) which satisfies all the distributions apart from BroadcastDistribution as long as the condition for the requiredNumPartitions is met.</li>
+<li>RoundRobinPartitioning – mainly used for implementing the Dataframe.repartition method, which represents a partitioning where rows are distributed evenly across partitions in a round-robin fashion.</li>
+<li>HashPartitioning – represents a partitioning where rows are split across partitions based on the hash of expressions. The hashPartitioning can satisfy the ClusteredDistribution and HashClusteredDistribution.</li>
+<li>RangePartitioning – represents a partitioning where rows are split across partitions based on a total ordering of the dataset, which implies all the rows of a partition have to be larger than any row in the partitions ordered in front of the partition.</li>
+<li>BroadcastPartitioning – represents a partitioning where rows are collected from the nodes in the cluster and then all the collected rows are broadcasted to each node. BroadcastPartitioning can only satisfy the BroadcastDistribution.</li>
+</ul>
+<p>Partitioner 类表示用什么方式做数据分区<br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/09/01/7xylO9.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/09/01/7xylO9.png" />
+        </a>
+    </p>
+<p>例子<br>
+按照 hash 做分区</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-scala" data-lang="scala"><span style="display:flex;"><span><span style="color:#ff79c6">val</span> rdd <span style="color:#ff79c6">=</span> sc<span style="color:#ff79c6">.</span>parallelize<span style="color:#ff79c6">(</span><span style="color:#50fa7b">Seq</span><span style="color:#ff79c6">((</span><span style="color:#f1fa8c">&#34;a&#34;</span><span style="color:#ff79c6">,</span> <span style="color:#bd93f9">1</span><span style="color:#ff79c6">),</span> <span style="color:#ff79c6">(</span><span style="color:#f1fa8c">&#34;b&#34;</span><span style="color:#ff79c6">,</span> <span style="color:#bd93f9">2</span><span style="color:#ff79c6">),</span> <span style="color:#ff79c6">(</span><span style="color:#f1fa8c">&#34;c&#34;</span><span style="color:#ff79c6">,</span> <span style="color:#bd93f9">3</span><span style="color:#ff79c6">),</span> <span style="color:#ff79c6">(</span><span style="color:#f1fa8c">&#34;a&#34;</span><span style="color:#ff79c6">,</span> <span style="color:#bd93f9">4</span><span style="color:#ff79c6">)))</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">val</span> partitionedRdd <span style="color:#ff79c6">=</span> rdd<span style="color:#ff79c6">.</span>partitionBy<span style="color:#ff79c6">(</span><span style="color:#ff79c6">new</span> <span style="color:#50fa7b">HashPartitioner</span><span style="color:#ff79c6">(</span><span style="color:#bd93f9">2</span><span style="color:#ff79c6">))</span>
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>按照 range 做分区</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-scala" data-lang="scala"><span style="display:flex;"><span><span style="color:#ff79c6">import</span> org.apache.spark.RangePartitioner
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">val</span> rdd <span style="color:#ff79c6">=</span> sc<span style="color:#ff79c6">.</span>parallelize<span style="color:#ff79c6">(</span><span style="color:#50fa7b">Seq</span><span style="color:#ff79c6">((</span><span style="color:#bd93f9">1</span><span style="color:#ff79c6">,</span> <span style="color:#f1fa8c">&#34;a&#34;</span><span style="color:#ff79c6">),</span> <span style="color:#ff79c6">(</span><span style="color:#bd93f9">10</span><span style="color:#ff79c6">,</span> <span style="color:#f1fa8c">&#34;b&#34;</span><span style="color:#ff79c6">),</span> <span style="color:#ff79c6">(</span><span style="color:#bd93f9">100</span><span style="color:#ff79c6">,</span> <span style="color:#f1fa8c">&#34;c&#34;</span><span style="color:#ff79c6">),</span> <span style="color:#ff79c6">(</span><span style="color:#bd93f9">1000</span><span style="color:#ff79c6">,</span> <span style="color:#f1fa8c">&#34;d&#34;</span><span style="color:#ff79c6">)))</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">val</span> partitionedRdd <span style="color:#ff79c6">=</span> rdd<span style="color:#ff79c6">.</span>partitionBy<span style="color:#ff79c6">(</span><span style="color:#ff79c6">new</span> <span style="color:#50fa7b">RangePartitioner</span><span style="color:#ff79c6">(</span><span style="color:#bd93f9">3</span><span style="color:#ff79c6">,</span> rdd<span style="color:#ff79c6">))</span>
+</span></span></code></pre></td></tr></table>
+</div>
+</div><h2 id="排序物理算子">排序物理算子</h2>
+<p>SortExec#doExecute 代码：</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">15
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">16
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">17
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">18
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">19
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">20
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">21
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">22
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">23
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">24
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">25
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">26
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">27
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">28
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">29
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">30
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">31
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">32
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">33
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-scala" data-lang="scala"><span style="display:flex;"><span>  <span style="color:#ff79c6">def</span> createSorter<span style="color:#ff79c6">()</span><span style="color:#ff79c6">:</span> <span style="color:#8be9fd">UnsafeExternalRowSorter</span> <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">val</span> ordering <span style="color:#ff79c6">=</span> <span style="color:#50fa7b">RowOrdering</span><span style="color:#ff79c6">.</span>create<span style="color:#ff79c6">(</span>sortOrder<span style="color:#ff79c6">,</span> output<span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#6272a4">// The comparator for comparing prefix
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>    <span style="color:#ff79c6">val</span> boundSortExpression <span style="color:#ff79c6">=</span> <span style="color:#50fa7b">BindReferences</span><span style="color:#ff79c6">.</span>bindReference<span style="color:#ff79c6">(</span>sortOrder<span style="color:#ff79c6">.</span>head<span style="color:#ff79c6">,</span> output<span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">val</span> prefixComparator <span style="color:#ff79c6">=</span> <span style="color:#50fa7b">SortPrefixUtils</span><span style="color:#ff79c6">.</span>getPrefixComparator<span style="color:#ff79c6">(</span>boundSortExpression<span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">val</span> canUseRadixSort <span style="color:#ff79c6">=</span> enableRadixSort <span style="color:#ff79c6">&amp;&amp;</span> sortOrder<span style="color:#ff79c6">.</span>length <span style="color:#ff79c6">==</span> <span style="color:#bd93f9">1</span> <span style="color:#ff79c6">&amp;&amp;</span>
+</span></span><span style="display:flex;"><span>      <span style="color:#50fa7b">SortPrefixUtils</span><span style="color:#ff79c6">.</span>canSortFullyWithPrefix<span style="color:#ff79c6">(</span>boundSortExpression<span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#6272a4">// The generator for prefix
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>    <span style="color:#ff79c6">val</span> prefixExpr <span style="color:#ff79c6">=</span> <span style="color:#50fa7b">SortPrefix</span><span style="color:#ff79c6">(</span>boundSortExpression<span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">val</span> prefixProjection <span style="color:#ff79c6">=</span> <span style="color:#50fa7b">UnsafeProjection</span><span style="color:#ff79c6">.</span>create<span style="color:#ff79c6">(</span><span style="color:#50fa7b">Seq</span><span style="color:#ff79c6">(</span>prefixExpr<span style="color:#ff79c6">))</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">val</span> prefixComputer <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">new</span> <span style="color:#50fa7b">UnsafeExternalRowSorter</span><span style="color:#ff79c6">.</span><span style="color:#50fa7b">PrefixComputer</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>      <span style="color:#ff79c6">private</span> <span style="color:#ff79c6">val</span> result <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">new</span> <span style="color:#50fa7b">UnsafeExternalRowSorter</span><span style="color:#ff79c6">.</span><span style="color:#50fa7b">PrefixComputer</span><span style="color:#ff79c6">.</span><span style="color:#50fa7b">Prefix</span>
+</span></span><span style="display:flex;"><span>      <span style="color:#ff79c6">override</span> <span style="color:#ff79c6">def</span> computePrefix<span style="color:#ff79c6">(</span>row<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">InternalRow</span><span style="color:#ff79c6">)</span><span style="color:#ff79c6">:</span>
+</span></span><span style="display:flex;"><span>          <span style="color:#8be9fd">UnsafeExternalRowSorter.PrefixComputer.Prefix</span> <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">val</span> prefix <span style="color:#ff79c6">=</span> prefixProjection<span style="color:#ff79c6">.</span>apply<span style="color:#ff79c6">(</span>row<span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>        result<span style="color:#ff79c6">.</span>isNull <span style="color:#ff79c6">=</span> prefix<span style="color:#ff79c6">.</span>isNullAt<span style="color:#ff79c6">(</span><span style="color:#bd93f9">0</span><span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>        result<span style="color:#ff79c6">.</span>value <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">if</span> <span style="color:#ff79c6">(</span>result<span style="color:#ff79c6">.</span>isNull<span style="color:#ff79c6">)</span> prefixExpr<span style="color:#ff79c6">.</span>nullValue <span style="color:#ff79c6">else</span> prefix<span style="color:#ff79c6">.</span>getLong<span style="color:#ff79c6">(</span><span style="color:#bd93f9">0</span><span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>        result
+</span></span><span style="display:flex;"><span>      <span style="color:#ff79c6">}</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">}</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">val</span> pageSize <span style="color:#ff79c6">=</span> <span style="color:#50fa7b">SparkEnv</span><span style="color:#ff79c6">.</span>get<span style="color:#ff79c6">.</span>memoryManager<span style="color:#ff79c6">.</span>pageSizeBytes
+</span></span><span style="display:flex;"><span>    rowSorter <span style="color:#ff79c6">=</span> <span style="color:#50fa7b">UnsafeExternalRowSorter</span><span style="color:#ff79c6">.</span>create<span style="color:#ff79c6">(</span>
+</span></span><span style="display:flex;"><span>      schema<span style="color:#ff79c6">,</span> ordering<span style="color:#ff79c6">,</span> prefixComparator<span style="color:#ff79c6">,</span> prefixComputer<span style="color:#ff79c6">,</span> pageSize<span style="color:#ff79c6">,</span> canUseRadixSort<span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">if</span> <span style="color:#ff79c6">(</span>testSpillFrequency <span style="color:#ff79c6">&gt;</span> <span style="color:#bd93f9">0</span><span style="color:#ff79c6">)</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>      rowSorter<span style="color:#ff79c6">.</span>setTestSpillFrequency<span style="color:#ff79c6">(</span>testSpillFrequency<span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">}</span>
+</span></span><span style="display:flex;"><span>    rowSorter
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">}</span>
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>内容比较简单，创建一个排序器，然后对子节点的数据做排序</p>
+<p>SortExec 依赖的其他类<br>
+排序时会有内存阈值判断，超过了会溢出到磁盘
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/05/07/7bxx7Y.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/05/07/7bxx7Y.png" />
+        </a>
+    <br>
+图片来源 -&gt; <a href="https://dataninjago.com/2022/01/23/spark-sql-query-engine-deep-dive-15-unsafeexternalsorter-sortexec/">这里</a></p>
+<h2 id="细说排序细节">细说排序细节</h2>
+<p>以 SortMergeJoin 来说，首先它需要数据分布，以及排序<br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/09/01/7xy7fY.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/09/01/7xy7fY.png" />
+        </a>
+    </p>
+<p>Sort 底层是借用下面两个操作实现</p>
+<ul>
+<li>UnsafeExternalSorter
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/09/01/7xyQlH.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/09/01/7xyQlH.png" />
+        </a>
+    </li>
+</ul>
+<p>UnsafeExternalSorter 的组成</p>
+<ul>
+<li>包含了一个 linked list，用来分配内存页</li>
+<li>spill writer，会free 内存写到磁盘</li>
+<li>UnsafeInMemorySorter 会持有一个 LongArray数组</li>
+<li>UnsafeExternalSorter  提供了插入数据，返回迭代器的接口
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/09/01/7xyNAZ.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/09/01/7xyNAZ.png" />
+        </a>
+    </li>
+</ul>
+<p>如下</p>
+<ul>
+<li>首先会迭代分区中的记录，将器插入到 UnsafeExternalSorter</li>
+<li>这又会插入到 UnsafeInMemorySorter</li>
+<li>插入到内存数组时，会检查页是否足够，是否有足够的内存，是否要spill 等</li>
+<li>这里使用了前缀比较，主要是避免 cache miss
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/09/01/7xyqJU.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/09/01/7xyqJU.png" />
+        </a>
+    </li>
+</ul>
+<p>当内存不足时，会 spill 到磁盘</p>
+<ul>
+<li>首先创建 判断如果超过内存阈值，就需要写入到磁盘了</li>
+<li>创建 UnsafeSorterSpillWriter  实例，也就是 spillWriter</li>
+<li>spillWriter 获取内存页中的指针，拿到数据，写入到磁盘</li>
+<li>之后清空内存中的page
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/09/01/7xywTq.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/09/01/7xywTq.png" />
+        </a>
+    </li>
+</ul>
+<p>spill file按照下列格式存储</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-shell" data-lang="shell"><span style="display:flex;"><span><span style="color:#ff79c6">[</span><span style="color:#6272a4"># of records (int)] [[len (int)][prefix (long)][data (bytes)]...]</span>
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>getSortedIterator</p>
+<ul>
+<li>外排序或者内存排序都会返回一个迭代器</li>
+<li>如果是数字，用的是 radix sort，一般情况就是 封装了 JDK 的 tim sort</li>
+<li>如果有spill 则，调用外排序，还会用归并的动作</li>
+</ul>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">15
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">16
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">17
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">18
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">19
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">20
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">21
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">22
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">23
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">24
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">25
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-scala" data-lang="scala"><span style="display:flex;"><span>  public <span style="color:#50fa7b">UnsafeSorterIterator</span> getIterator<span style="color:#ff79c6">(</span>int startIndex<span style="color:#ff79c6">)</span> throws <span style="color:#50fa7b">IOException</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">if</span> <span style="color:#ff79c6">(</span>spillWriters<span style="color:#ff79c6">.</span>isEmpty<span style="color:#ff79c6">())</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>      assert<span style="color:#ff79c6">(</span>inMemSorter <span style="color:#ff79c6">!=</span> <span style="color:#ff79c6">null</span><span style="color:#ff79c6">);</span>
+</span></span><span style="display:flex;"><span>      <span style="color:#50fa7b">UnsafeSorterIterator</span> iter <span style="color:#ff79c6">=</span> inMemSorter<span style="color:#ff79c6">.</span>getSortedIterator<span style="color:#ff79c6">();</span>
+</span></span><span style="display:flex;"><span>      moveOver<span style="color:#ff79c6">(</span>iter<span style="color:#ff79c6">,</span> startIndex<span style="color:#ff79c6">);</span>
+</span></span><span style="display:flex;"><span>      <span style="color:#ff79c6">return</span> iter<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">}</span> <span style="color:#ff79c6">else</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>      <span style="color:#50fa7b">LinkedList</span><span style="color:#ff79c6">&lt;</span><span style="color:#50fa7b">UnsafeSorterIterator</span><span style="color:#ff79c6">&gt;</span> queue <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">new</span> <span style="color:#50fa7b">LinkedList</span><span style="color:#ff79c6">&lt;&gt;();</span>
+</span></span><span style="display:flex;"><span>      int i <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">0</span><span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span>      <span style="color:#ff79c6">for</span> <span style="color:#ff79c6">(</span><span style="color:#50fa7b">UnsafeSorterSpillWriter</span> spillWriter <span style="color:#ff79c6">:</span> <span style="color:#8be9fd">spillWriters</span><span style="color:#ff79c6">)</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">if</span> <span style="color:#ff79c6">(</span>i <span style="color:#ff79c6">+</span> spillWriter<span style="color:#ff79c6">.</span>recordsSpilled<span style="color:#ff79c6">()</span> <span style="color:#ff79c6">&gt;</span> startIndex<span style="color:#ff79c6">)</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>          <span style="color:#50fa7b">UnsafeSorterIterator</span> iter <span style="color:#ff79c6">=</span> spillWriter<span style="color:#ff79c6">.</span>getReader<span style="color:#ff79c6">(</span>serializerManager<span style="color:#ff79c6">);</span>
+</span></span><span style="display:flex;"><span>          moveOver<span style="color:#ff79c6">(</span>iter<span style="color:#ff79c6">,</span> startIndex <span style="color:#ff79c6">-</span> i<span style="color:#ff79c6">);</span>
+</span></span><span style="display:flex;"><span>          queue<span style="color:#ff79c6">.</span>add<span style="color:#ff79c6">(</span>iter<span style="color:#ff79c6">);</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">}</span>
+</span></span><span style="display:flex;"><span>        i <span style="color:#ff79c6">+=</span> spillWriter<span style="color:#ff79c6">.</span>recordsSpilled<span style="color:#ff79c6">();</span>
+</span></span><span style="display:flex;"><span>      <span style="color:#ff79c6">}</span>
+</span></span><span style="display:flex;"><span>      <span style="color:#ff79c6">if</span> <span style="color:#ff79c6">(</span>inMemSorter <span style="color:#ff79c6">!=</span> <span style="color:#ff79c6">null</span> <span style="color:#ff79c6">&amp;&amp;</span> inMemSorter<span style="color:#ff79c6">.</span>numRecords<span style="color:#ff79c6">()</span> <span style="color:#ff79c6">&gt;</span> <span style="color:#bd93f9">0</span><span style="color:#ff79c6">)</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#50fa7b">UnsafeSorterIterator</span> iter <span style="color:#ff79c6">=</span> inMemSorter<span style="color:#ff79c6">.</span>getSortedIterator<span style="color:#ff79c6">();</span>
+</span></span><span style="display:flex;"><span>        moveOver<span style="color:#ff79c6">(</span>iter<span style="color:#ff79c6">,</span> startIndex <span style="color:#ff79c6">-</span> i<span style="color:#ff79c6">);</span>
+</span></span><span style="display:flex;"><span>        queue<span style="color:#ff79c6">.</span>add<span style="color:#ff79c6">(</span>iter<span style="color:#ff79c6">);</span>
+</span></span><span style="display:flex;"><span>      <span style="color:#ff79c6">}</span>
+</span></span><span style="display:flex;"><span>      <span style="color:#ff79c6">return</span> <span style="color:#ff79c6">new</span> <span style="color:#50fa7b">ChainedIterator</span><span style="color:#ff79c6">(</span>queue<span style="color:#ff79c6">);</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">}</span>
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">}</span>
+</span></span></code></pre></td></tr></table>
+</div>
+</div><h2 id="shuffle操作">Shuffle操作</h2>
+<p>ShuffleExchangeExec 操作</p>
+<ul>
+<li>准备 ShuffleDependency，根据父节点所需要的分区schema，对子节点的输出做分区</li>
+<li>添加 ShuffleRowRDD，并将准备好的 ShuffleDependency指定为这个RDD 的依赖项</li>
+<li>DAGScheduler 发现了ShuffleRowRDD的依赖后，创建ShuffleMapStage，保证 row rdd，并为ShuffleDependency中定义的shuffle操作生成数据
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/09/01/7xyygs.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/09/01/7xyygs.png" />
+        </a>
+    </li>
+</ul>
+<p>ShuffleExchangeExec</p>
+<ul>
+<li>提供的prepareShuffleDependency方法封装了用于根据预期的输出分区定义ShuffleDependency的逻辑</li>
+<li>也就是 输入的 RDD中每一行应该放到哪个分区中</li>
+<li>为输入 RDD每一行创建一个k-v对，k是目标分区id，value是原始记录</li>
+<li>ShuffleMapStage 包装上游RDD，输出shuffle</li>
+<li>ShuffleMapStage 由 每个 Executor 中的 ShuffleMapTasks执行</li>
+<li>每个ShuffleMapStage 调用写操作输出shuffle</li>
+<li>ShuffleDependency 从shuffle manager 那里读取数据，拿到MapStauts 状态
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/09/01/7xyHYa.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/09/01/7xyHYa.png" />
+        </a>
+    </li>
+</ul>
+<p>根据分区生成key 是根据不同的分区目标来做的</p>
+<ul>
+<li>RoundRobinPartitioning</li>
+<li>HashPartitioning</li>
+<li>RangePartitioning</li>
+<li>SinglePartition</li>
+</ul>
+<p>shffule 的管理
+类之间的关系</p>
+<ul>
+<li>ShuffleManager 的唯一实现类SortShuffleManager</li>
+<li>ShuffleWriter 包含了三个实现类</li>
+<li>ShuffleReader只有一个实现类 BlockStoreShuffleReader</li>
+<li>BypassMergeSortShuffleWriter 不做排序，适合分区较少场景</li>
+<li>UnsafeShuffleWriter，使用Tungsten 做分区排序</li>
+<li>SortShuffleWriter，不满足一些阈值条件，则使用这个
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/09/01/7xyKd7.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/09/01/7xyKd7.png" />
+        </a>
+    </li>
+</ul>
+<p>UnsafeShuffleWriter</p>
+<ul>
+<li>其工作原理，跟 UnsafeExternalSorter 类似</li>
+<li>包含了基于内存排序：ShuffleInMemorySorter，内部用 LongArray 指向了 分区-id，value 对</li>
+<li>当&lt;partition id, row&gt; 插入时，首先检查内存是否足够，分配内存页</li>
+<li>如果内存不足则 spill 到磁盘，再做归并排序</li>
+<li>写入的信息也包含一些元信息，如分区长度，block id，等</li>
+<li>写入完后，为每个分区id，增加一个 index，方便 reader快速定位
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/09/01/7xyguI.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/09/01/7xyguI.png" />
+        </a>
+    </li>
+</ul>
+<p>BlockStoreShuffleReader</p>
+<ul>
+<li>shuffle reader的唯一实现类</li>
+<li>当每个shuffule写操作完成后，会注册 ShuffleMapTask  到 driver</li>
+<li>对于reader 端，会抓取到这些信息，并交给BlockStoreShuffleReader
+MapOutputTrackerMaster</li>
+<li>于是会初始化一个真正的 fech实例，然后从 map 端读取数据</li>
+</ul>
+
+			<script type="text/javascript"
+        async
+        src="https://cdn.bootcss.com/mathjax/2.7.3/MathJax.js?config=TeX-AMS-MML_HTMLorMML">
+MathJax.Hub.Config({
+  tex2jax: {
+    inlineMath: [['$','$'], ['\\(','\\)']],
+    displayMath: [['$$','$$'], ['\[\[','\]\]']],
+    processEscapes: true,
+    processEnvironments: true,
+    skipTags: ['script', 'noscript', 'style', 'textarea', 'pre'],
+    TeX: { equationNumbers: { autoNumber: "AMS" },
+         extensions: ["AMSmath.js", "AMSsymbols.js"] }
+  }
+});
+
+MathJax.Hub.Queue(function() {
+    
+    
+    
+    var all = MathJax.Hub.getAllJax(), i;
+    for(i = 0; i < all.length; i += 1) {
+        all[i].SourceElement().parentNode.className += ' has-jax';
+    }
+});
+</script>
+
+<style>
+code.has-jax {
+    font: inherit;
+    font-size: 100%;
+    background: inherit;
+    border: inherit;
+    color: #515151;
+}
+</style>
+        </div>
+
+        
+
+
+        
+
+<div class="post-archive">
+    <h2>相关文章</h2>
+    <ul class="listing">
+        
+        <li><a href="/post/2024/05/spark_codegen/">code-gen</a></li>
+        
+        <li><a href="/post/2024/05/spark_join/">Spark原理-JOIN</a></li>
+        
+        <li><a href="/post/2024/05/spark_windows_cube/">Spark原理-窗口函数和多维分析</a></li>
+        
+        <li><a href="/post/2024/04/spark_agg/">Spark原理-聚合</a></li>
+        
+        <li><a href="/post/2024/03/spark_plan_agg/">Spark原理-物理计划&amp;聚合</a></li>
+        
+    </ul>
+</div>
+
+
+        <div class="post-meta meta-tags">
+            
+            <ul class="clearfix">
+                
+                <li><a href='/tags/spark'>Spark</a></li>
+                
+            </ul>
+            
+        </div>
+    </article>
+    
+    
+
+    
+    
+    <div class="post bg-white">
+      <script src="https://utteranc.es/client.js"
+            repo= "himichael/hugoblogtalks"
+            issue-term="pathname"
+            theme="github-light"
+            crossorigin="anonymous"
+            async>
+      </script>
+    </div>
+    
+</div>
+
+
+                </div>
+
+                <div id="secondary">
+    <section class="widget">
+        <form id="search" action='https://code0xff.org/search/' method="get" accept-charset="utf-8" target="_blank" _lpchecked="1">
+      
+      <input type="text" name="q" maxlength="20" placeholder="Search">
+      <input type="hidden" name="sitesearch" value="https://code0xff.org/">
+      <button type="submit" class="submit icon-search"></button>
+</form>
+    </section>
+    
+    <section class="widget">
+        <h3 class="widget-title">最近文章</h3>
+<ul class="widget-list">
+    
+    <li>
+        <a href="https://code0xff.org/post/2025/01/spark_register_source/" title="Spark 注册数据源">Spark 注册数据源</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2025/01/spark_core_2/" title="Spark Core相关-2">Spark Core相关-2</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2024/12/llamafactory/" title="Llama Factory">Llama Factory</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2024/11/spark_core/" title="Spark Core相关-1">Spark Core相关-1</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2024/11/sae_tunnel/" title="sea tunnel">sea tunnel</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2024/11/k8s_networks/" title="k8s 网络">k8s 网络</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2024/11/ozone/" title="ozone">ozone</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2024/11/es/" title="ES的简单学习">ES的简单学习</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2025/02/ai/" title="AI的简单学习">AI的简单学习</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2024/11/big_data_investigation/" title="国内几个云厂商大数据平台">国内几个云厂商大数据平台</a>
+    </li>
+    
+</ul>
+    </section>
+
+    
+
+    <section class="widget">
+        <h3 class="widget-title"><a href='/categories/'>分类</a></h3>
+<ul class="widget-list">
+    
+    <li><a href="https://code0xff.org/categories/%E5%88%86%E5%B8%83%E5%BC%8F/">分布式 (6)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E5%8E%9F%E7%90%86%E5%88%86%E6%9E%90/">原理分析 (24)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E5%95%86%E4%B8%9A/">商业 (3)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E5%A4%A7%E6%95%B0%E6%8D%AE/">大数据 (56)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%95%B0%E6%8D%AE%E5%BA%93/">数据库 (41)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%96%87%E5%AD%A6%E5%92%8C%E8%89%BA%E6%9C%AF/">文学和艺术 (3)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%97%85%E8%A1%8C/">旅行 (12)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%9E%B6%E6%9E%84/">架构 (13)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E7%AE%97%E6%B3%95/">算法 (8)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E7%B3%BB%E7%BB%9F/">系统 (7)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E7%BC%96%E7%A8%8B%E8%AF%AD%E8%A8%80/">编程语言 (7)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E8%A1%8C%E4%B8%9A%E8%A7%82%E5%AF%9F/">行业观察 (3)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E8%AF%BB%E4%B9%A6%E7%AC%94%E8%AE%B0/">读书笔记 (14)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E9%9A%8F%E4%BE%BF%E5%86%99%E5%86%99/">随便写写 (3)</a></li>
+    
+</ul>
+    </section>
+
+    <section class="widget">
+        <h3 class="widget-title">归档</a></h3>
+<ul class="widget-list">
+    
+    <li><a href="https://code0xff.org/years/2021%E5%B9%B4/">2021年 (41)</a></li>
+    
+    <li><a href="https://code0xff.org/years/2022%E5%B9%B4/">2022年 (55)</a></li>
+    
+    <li><a href="https://code0xff.org/years/2023%E5%B9%B4/">2023年 (54)</a></li>
+    
+    <li><a href="https://code0xff.org/years/2024%E5%B9%B4/">2024年 (48)</a></li>
+    
+    <li><a href="https://code0xff.org/years/2025%E5%B9%B4/">2025年 (2)</a></li>
+    
+</ul>
+    </section>
+
+    <section class="widget">
+        <h3 class="widget-title"><a href='/tags/'>标签</a></h3>
+<div class="tagcloud">
+    
+    <a href="https://code0xff.org/tags/ai/">AI </a>
+    
+    <a href="https://code0xff.org/tags/ambari/">Ambari </a>
+    
+    <a href="https://code0xff.org/tags/architecture/">architecture </a>
+    
+    <a href="https://code0xff.org/tags/bigdata/">bigdata </a>
+    
+    <a href="https://code0xff.org/tags/b%E6%A0%91/">B树 </a>
+    
+    <a href="https://code0xff.org/tags/c&#43;&#43;/">C&#43;&#43; </a>
+    
+    <a href="https://code0xff.org/tags/calcite/">calcite </a>
+    
+    <a href="https://code0xff.org/tags/cmu-database/">CMU-Database </a>
+    
+    <a href="https://code0xff.org/tags/data_ingestion/">Data_Ingestion </a>
+    
+    <a href="https://code0xff.org/tags/deltalake/">DeltaLake </a>
+    
+    <a href="https://code0xff.org/tags/doris/">Doris </a>
+    
+    <a href="https://code0xff.org/tags/english/">English </a>
+    
+    <a href="https://code0xff.org/tags/es/">ES </a>
+    
+    <a href="https://code0xff.org/tags/facebook/">Facebook </a>
+    
+    <a href="https://code0xff.org/tags/flink/">flink </a>
+    
+    <a href="https://code0xff.org/tags/flume/">flume </a>
+    
+    <a href="https://code0xff.org/tags/gc/">GC </a>
+    
+    <a href="https://code0xff.org/tags/gluten/">Gluten </a>
+    
+    <a href="https://code0xff.org/tags/hana/">HANA </a>
+    
+    <a href="https://code0xff.org/tags/hive/">Hive </a>
+    
+    <a href="https://code0xff.org/tags/iceberg/">iceberg </a>
+    
+    <a href="https://code0xff.org/tags/impala/">Impala </a>
+    
+    <a href="https://code0xff.org/tags/janino/">janino </a>
+    
+    <a href="https://code0xff.org/tags/k8s/">k8s </a>
+    
+    <a href="https://code0xff.org/tags/kafka/">Kafka </a>
+    
+    <a href="https://code0xff.org/tags/kudu/">kudu </a>
+    
+    <a href="https://code0xff.org/tags/kyuubi/">Kyuubi </a>
+    
+    <a href="https://code0xff.org/tags/lakehouse/">Lakehouse </a>
+    
+    <a href="https://code0xff.org/tags/leveldb/">LevelDB </a>
+    
+    <a href="https://code0xff.org/tags/llamafactory/">LlamaFactory </a>
+    
+    <a href="https://code0xff.org/tags/llvm/">LLVM </a>
+    
+    <a href="https://code0xff.org/tags/manacher/">Manacher </a>
+    
+    <a href="https://code0xff.org/tags/mapreduce/">MapReduce </a>
+    
+    <a href="https://code0xff.org/tags/micro-service/">micro-service </a>
+    
+    <a href="https://code0xff.org/tags/mysql/">MySQL </a>
+    
+    <a href="https://code0xff.org/tags/newsql/">NewSQL </a>
+    
+    <a href="https://code0xff.org/tags/oceanbase/">OceanBase </a>
+    
+    <a href="https://code0xff.org/tags/openlogreplicator/">OpenLogReplicator </a>
+    
+    <a href="https://code0xff.org/tags/parquet/">parquet </a>
+    
+    <a href="https://code0xff.org/tags/paxos/">paxos </a>
+    
+    <a href="https://code0xff.org/tags/presto/">Presto </a>
+    
+    <a href="https://code0xff.org/tags/quick-sql/">quick-sql </a>
+    
+    <a href="https://code0xff.org/tags/raft/">raft </a>
+    
+    <a href="https://code0xff.org/tags/scala/">scala </a>
+    
+    <a href="https://code0xff.org/tags/simd/">SIMD </a>
+    
+    <a href="https://code0xff.org/tags/snowflake/">snowflake </a>
+    
+    <a href="https://code0xff.org/tags/spark/">spark </a>
+    
+    <a href="https://code0xff.org/tags/sre/">SRE </a>
+    
+    <a href="https://code0xff.org/tags/teradata/">TeraData </a>
+    
+    <a href="https://code0xff.org/tags/tpcx-hs/">TPCx-HS </a>
+    
+    <a href="https://code0xff.org/tags/trino/">Trino </a>
+    
+    <a href="https://code0xff.org/tags/tuning/">Tuning </a>
+    
+    <a href="https://code0xff.org/tags/unix/">unix </a>
+    
+    <a href="https://code0xff.org/tags/yarn/">YARN </a>
+    
+    <a href="https://code0xff.org/tags/%E4%BA%8C%E5%88%86%E6%9F%A5%E6%89%BE/">二分查找 </a>
+    
+    <a href="https://code0xff.org/tags/%E4%BA%8C%E5%8F%89%E6%A0%91%E9%81%8D%E5%8E%86/">二叉树遍历 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%88%86%E5%B8%83%E5%BC%8F/">分布式 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%88%97%E5%AD%98/">列存 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%8A%A8%E6%80%81%E6%B3%A8%E5%85%A5/">动态注入 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%8E%86%E5%8F%B2/">历史 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%90%91%E9%87%8F%E5%8C%96/">向量化 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%9B%9E%E6%BA%AF/">回溯 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%9B%BD%E5%86%85%E6%97%85%E8%A1%8C/">国内旅行 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%9B%BD%E5%A4%96%E6%97%85%E8%A1%8C/">国外旅行 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%A4%9A%E7%A7%9F%E6%88%B7/">多租户 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%A4%A7%E6%95%B0%E6%8D%AE/">大数据 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%AD%98%E5%82%A8/">存储 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%B7%A5%E4%BD%9C%E8%AE%B0%E5%BD%95/">工作记录 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%BE%AE%E6%9C%8D%E5%8A%A1/">微服务 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%95%B0%E6%8D%AE%E4%B8%AD%E5%8F%B0/">数据中台 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%95%B0%E6%8D%AE%E5%BA%93/">数据库 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%95%B0%E6%8D%AE%E6%A8%A1%E5%9E%8B/">数据模型 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%95%B0%E6%8D%AE%E8%BF%81%E7%A7%BB/">数据迁移 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%9F%A5%E8%AF%A2%E4%BC%98%E5%8C%96/">查询优化 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%9F%A5%E8%AF%A2%E7%BC%96%E8%AF%91/">查询编译 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%A6%82%E7%8E%87/">概率 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%B1%87%E7%BC%96/">汇编 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%B5%8B%E8%AF%95/">测试 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%94%9F%E6%B4%BB/">生活 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%94%B5%E5%BD%B1/">电影 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%AE%97%E6%B3%95/">算法 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%B4%A2%E5%BC%95/">索引 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BB%8F%E6%B5%8E/">经济 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BC%93%E5%AD%98/">缓存 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BC%96%E8%AF%91%E5%8E%9F%E7%90%86/">编译原理 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BD%91%E7%BB%9C/">网络 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AE%A1%E7%AE%97%E6%A1%86%E6%9E%B6/">计算框架 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AE%BA%E6%96%87/">论文 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AF%BB%E4%B9%A6/">读书 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AF%BB%E4%B9%A6%E7%AC%94%E8%AE%B0/">读书笔记 </a>
+    
+</div>
+    </section>
+
+    
+
+    <section class="widget">
+        <h3 class="widget-title">RSS</h3>
+        <ul class="widget-list">
+            <li><a href="https://code0xff.org/index.xml">文章 RSS</a></li>
+        </ul>
+    </section>
+</div>
+            </div>
+        </div>
+    </div>
+    <footer id="footer">
+    <div>
+        &copy; 2025 <a href="https://code0xff.org/">记录每个瞬间 By 老王</a>
+        
+    </div>
+    <br />
+    <div>
+        <div class="github-badge">
+            <a href="https://gohugo.io/" target="_black" rel="nofollow"><span class="badge-subject">Powered by</span><span class="badge-value bg-blue">Hugo</span></a>
+        </div>
+        <div class="github-badge">
+            <a href="https://github.com/flysnow-org/maupassant-hugo" target="_black"><span class="badge-subject">Theme</span><span class="badge-value bg-yellowgreen">Maupassant</span></a>
+        </div>
+    </div>
+</footer>
+
+
+    
+    <script type="text/javascript">
+        window.MathJax = {
+            tex2jax: {
+                inlineMath: [['$', '$']],
+                processEscapes: true
+                }
+            };
+    </script>
+    <script src='https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.5/MathJax.js?config=TeX-MML-AM_CHTML' async></script><script src="https://cdn.bootcdn.net/ajax/libs/fancybox/3.5.7/jquery.fancybox.min.js"></script>
+
+<a id="rocket" href="#top"></a>
+<script type="text/javascript" src='/js/totop.js?v=0.0.0' async=""></script>
+
+<script type="application/javascript">
+var doNotTrack = false;
+if (!doNotTrack) {
+	window.ga=window.ga||function(){(ga.q=ga.q||[]).push(arguments)};ga.l=+new Date;
+	ga('create', 'GA ID', 'auto');
+	
+	ga('send', 'pageview');
+}
+</script>
+<script async src='https://www.google-analytics.com/analytics.js'></script>
+
+
+
+    <script type="text/javascript" src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js" async></script>
+
+
+
+
+</body>
+
+</html>

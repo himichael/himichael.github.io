@@ -1,0 +1,841 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    
+    <meta name="referrer" content="no-referrer-when-downgrade">
+    
+
+    <title>Compaction in Apache Iceberg | 记录每个瞬间</title>
+    <meta property="og:title" content="Compaction in Apache Iceberg - 记录每个瞬间">
+    <meta property="og:type" content="article">
+        
+    <meta property="article:published_time" content='2024-02-29T09:08:07&#43;08:00'>
+        
+        
+    <meta property="article:modified_time" content='2024-02-29T09:08:07&#43;08:00'>
+        
+    <meta name="Keywords" content="">
+    <meta name="description" content="Compaction in Apache Iceberg">
+        <meta name="author" content="隔壁老王">
+        
+    <meta property="og:url" content="https://code0xff.org/post/2024/03/compaction-_in_apache_iceberg/">
+    <link rel="shortcut icon" href='/favicon.ico'  type="image/x-icon">
+
+    <link rel="stylesheet" href='/css/normalize.css'>
+    <link rel="stylesheet" href='/css/style.css'>
+    <script type="text/javascript" src="//cdn.bootcdn.net/ajax/libs/jquery/3.4.1/jquery.min.js"></script>
+
+    
+    
+    
+        <link href="https://cdn.bootcdn.net/ajax/libs/fancybox/3.5.7/jquery.fancybox.min.css" rel="stylesheet">
+    
+    
+    
+    
+</head>
+
+
+<body>
+    <header id="header" class="clearfix">
+    <div class="container">
+        <div class="col-group">
+            <div class="site-name ">
+                
+                    <a id="logo" href="https://code0xff.org/">
+                        记录每个瞬间
+                    </a>
+                
+                
+            </div>
+            <div>
+                <nav id="nav-menu" class="clearfix">
+                    <a class="current" href="https://code0xff.org/">首页</a>
+                    
+                    <a  href="https://code0xff.org/linked/" title="链接">链接</a>
+                    
+                    <a  href="https://code0xff.org/archives/" title="归档">归档</a>
+                    
+                    <a  href="https://code0xff.org/about/" title="关于">关于</a>
+                    
+                </nav>
+            </div>
+        </div>
+    </div>
+</header>
+
+    <div id="body">
+        <div class="container">
+            <div class="col-group">
+
+                <div class="col-8" id="main">
+                    
+<div class="res-cons">
+    
+    <article class="post">
+        <header>
+            <h1 class="post-title">Compaction in Apache Iceberg</h1>
+        </header>
+        <date class="post-meta meta-date">
+            2024年2月29日
+        </date>
+<nav id="TableOfContents">
+  <ul>
+    <li>
+      <ul>
+        <li><a href="#maintenance-tasks-with-iceberg-tables">Maintenance Tasks with Iceberg Tables</a></li>
+        <li><a href="#compaction">Compaction</a>
+          <ul>
+            <li><a href="#the-binpack-rewrite-strategy">The Binpack Rewrite Strategy</a></li>
+            <li><a href="#the-sort-strategy">The Sort Strategy</a></li>
+            <li><a href="#z-order-sorting">Z-Order Sorting</a></li>
+          </ul>
+        </li>
+        <li><a href="#expire-snapshots">Expire Snapshots</a>
+          <ul>
+            <li><a href="#removing-old-metadata-files">Removing Old Metadata files</a></li>
+            <li><a href="#delete-orphan-files">Delete Orphan Files</a></li>
+          </ul>
+        </li>
+        <li><a href="#reference">Reference</a></li>
+      </ul>
+    </li>
+  </ul>
+</nav>
+        
+        <div class="post-meta">
+            
+            <span class="post-meta meta-tags">
+                <ul class="clearfix">
+                    <a href='/categories/%E5%A4%A7%E6%95%B0%E6%8D%AE'>大数据</a>
+                </ul>
+            </span>
+            
+        </div>
+        
+        
+        <div class="post-meta">
+            <span id="busuanzi_container_page_pv">|<span id="busuanzi_value_page_pv"></span><span>
+                    阅读</span></span>
+        </div>
+        
+        
+        <div class="post-content">
+            <blockquote>
+<p>原文 <br>
+<a href="https://www.dremio.com/blog/compaction-in-apache-iceberg-fine-tuning-your-iceberg-tables-data-files/">https://www.dremio.com/blog/compaction-in-apache-iceberg-fine-tuning-your-iceberg-tables-data-files/</a><br>
+<a href="https://www.dremio.com/blog/maintaining-iceberg-tables-compaction-expiring-snapshots-and-more/">https://www.dremio.com/blog/maintaining-iceberg-tables-compaction-expiring-snapshots-and-more/</a></p>
+</blockquote>
+<h2 id="maintenance-tasks-with-iceberg-tables">Maintenance Tasks with Iceberg Tables</h2>
+<p>在 数据湖上使用 iceberg有很多好处，如 partition/schema evolution、time-travel、version rollback 等等<br>
+但数据摄取时会出现很多小问题，对于 hive 来说是很大问题，对于 ice-berg 可以用 压缩来解决<br>
+对于 任何表格式来说，都需要定期清理，确保元数据文件不要太多<br>
+iceberg提供 API的方式，可以</p>
+<ul>
+<li>expire snapshots</li>
+<li>remove old metadata files</li>
+<li>delete orphan files</li>
+</ul>
+<h2 id="compaction">Compaction</h2>
+<p>太多的小文件会导致性能问题，当执行压缩时</p>
+<ul>
+<li>使用 rewriteDataFiles  procedure 来做压缩，可以选择压缩的文件，以及期望的结果大小</li>
+<li>spark 会将这些小文件读取，然后合并压缩为大文件</li>
+<li>之后是写 manifest files、manifest list、表元数据，最后提交这次修改到 catalog</li>
+</ul>
+<p>之前的旧文件还在，但不会被查询到了，除非指定了 time-travel<br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/05/21/7gESRZ.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/05/21/7gESRZ.png" />
+        </a>
+    </p>
+<p>使用 RewriteDataFiles 来做压缩，支持 spark3 和 flink<br>
+这里指定了 event_date，大于 7 天前的数据  <br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/05/21/7gERDs.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/05/21/7gERDs.png" />
+        </a>
+    </p>
+<p>sql 方式</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">8
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">9
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-sql" data-lang="sql"><span style="display:flex;"><span><span style="color:#6272a4">-- This will run compaction
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">-- Target file size set by write.target-file-size-bytes
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">-- table property which defaults to 512MB
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">CALL</span> <span style="color:#ff79c6">catalog</span>.<span style="color:#ff79c6">system</span>.rewrite_data_files(
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">table</span> <span style="color:#ff79c6">=&gt;</span> <span style="color:#f1fa8c">&#39;db.table1&#39;</span>, 
+</span></span><span style="display:flex;"><span>  strategy <span style="color:#ff79c6">=&gt;</span> <span style="color:#f1fa8c">&#39;binpack&#39;</span>, 
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">options</span> <span style="color:#ff79c6">=&gt;</span> <span style="color:#ff79c6">map</span>(<span style="color:#f1fa8c">&#39;min-input-files&#39;</span>,<span style="color:#f1fa8c">&#39;2&#39;</span>)
+</span></span><span style="display:flex;"><span>)
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>一些参数</p>
+<ul>
+<li>The table: Which table to run the operation on</li>
+<li>The strategy: Whether to use the “binpack” or “sort” strategy (each are elaborated upon in the sections below)</li>
+<li>Options: Settings to tailor how the job is run, for example, the minimum number of files to compact, and the minimum/maximum file size of the files to be compacted</li>
+</ul>
+<p>其他参数</p>
+<ul>
+<li>Where: Criteria to filter files to compact based on the data in them (in case you only want to target a particular partition for compaction)</li>
+<li>Sort order: How to sort the data when using the “sort” strategy
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/05/21/7gEYfa.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/05/21/7gEYfa.png" />
+        </a>
+    </li>
+</ul>
+<h3 id="the-binpack-rewrite-strategy">The Binpack Rewrite Strategy</h3>
+<p>这是默认的策略，将 很多小文件合并为目标大文件，没有再做其他优化了，所以压缩速度会很快</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-sql" data-lang="sql"><span style="display:flex;"><span><span style="color:#6272a4">--Setting Target File Size to 128mb
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span><span style="color:#ff79c6">ALTER</span> <span style="color:#ff79c6">TABLE</span> <span style="color:#ff79c6">catalog</span>.db.table1 <span style="color:#ff79c6">SET</span> TBLPROPERTIES (
+</span></span><span style="display:flex;"><span>    <span style="color:#f1fa8c">&#39;write.target-file-size-bytes&#39;</span> <span style="color:#ff79c6">=</span> <span style="color:#f1fa8c">&#39;134217728&#39;</span>
+</span></span><span style="display:flex;"><span>);
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>默认的目标 size 为 512M<br>
+下面是压缩 最近一小时的数据</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">6
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-sql" data-lang="sql"><span style="display:flex;"><span><span style="color:#ff79c6">CALL</span> <span style="color:#ff79c6">catalog_name</span>.<span style="color:#ff79c6">system</span>.rewrite_data_files(
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">table</span> <span style="color:#ff79c6">=&gt;</span> <span style="color:#f1fa8c">&#39;db.sample&#39;</span>, 
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">where</span> <span style="color:#ff79c6">=&gt;</span> <span style="color:#f1fa8c">&#39;ingested_at between 
+</span></span></span><span style="display:flex;"><span><span style="color:#f1fa8c">  	&#34;2022-06-30 10:00:00&#34; 
+</span></span></span><span style="display:flex;"><span><span style="color:#f1fa8c">  	and &#34;2022-06-30 11:00:00&#34; &#39;</span>
+</span></span><span style="display:flex;"><span>)
+</span></span></code></pre></td></tr></table>
+</div>
+</div><h3 id="the-sort-strategy">The Sort Strategy</h3>
+<p>除了压缩小文件，还做了排序，这意味着最小/最大过滤的好处将会更大(扫描的文件越少，速度越快)<br>
+未排序的压缩如下：<br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/05/21/7gEzAI.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/05/21/7gEzAI.png" />
+        </a>
+    </p>
+<p>由于没有排序，查询时需要扫描两个文件，而经过排序之后，就可以减少扫描文件的数量<br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/05/21/7gEtl7.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/05/21/7gEtl7.png" />
+        </a>
+    </p>
+<p>排序策略如下，增加了 sort_order 参数：</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">5
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-sql" data-lang="sql"><span style="display:flex;"><span><span style="color:#ff79c6">CALL</span> <span style="color:#ff79c6">catalog</span>.<span style="color:#ff79c6">system</span>.rewrite_data_files(
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">table</span> <span style="color:#ff79c6">=&gt;</span> <span style="color:#f1fa8c">&#39;db.teams&#39;</span>, 
+</span></span><span style="display:flex;"><span>  strategy <span style="color:#ff79c6">=&gt;</span> <span style="color:#f1fa8c">&#39;sort&#39;</span>, 
+</span></span><span style="display:flex;"><span>  sort_order <span style="color:#ff79c6">=&gt;</span> <span style="color:#f1fa8c">&#39;team ASC NULLS LAST&#39;</span>
+</span></span><span style="display:flex;"><span>)
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>排序多个字段，以及如何对待 NULL</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">5
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-sql" data-lang="sql"><span style="display:flex;"><span><span style="color:#ff79c6">CALL</span> <span style="color:#ff79c6">catalog</span>.<span style="color:#ff79c6">system</span>.rewrite_data_files(
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">table</span> <span style="color:#ff79c6">=&gt;</span> <span style="color:#f1fa8c">&#39;db.teams&#39;</span>, 
+</span></span><span style="display:flex;"><span>  strategy <span style="color:#ff79c6">=&gt;</span> <span style="color:#f1fa8c">&#39;sort&#39;</span>, 
+</span></span><span style="display:flex;"><span>  sort_order <span style="color:#ff79c6">=&gt;</span> <span style="color:#f1fa8c">&#39;team ASC NULLS LAST, name DESC NULLS FIRST&#39;</span>
+</span></span><span style="display:flex;"><span>)
+</span></span></code></pre></td></tr></table>
+</div>
+</div><h3 id="z-order-sorting">Z-Order Sorting</h3>
+<p>跟多列排序不一样，他是将所有列等值的对待<br>
+假设有 heigh_in_cm，以及 age，将他们记录到 四个象限中<br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/05/21/7gEJTL.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/05/21/7gEJTL.png" />
+        </a>
+    </p>
+<p>之后将所有的记录 put 到这四个象限中，并将他们写入到合适的文件中，这对于 min/max 来说很有益<br>
+比如当你搜索 age = 25,高度未 200cm，这样只会定位到一个文件，也就是左下方的象限<br>
+z-order可以重复多次，在一个象限内创建另外四个象限，用户进一步微调集群，比如对左下进一步微调，就得到了下面这样：<br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/05/21/7gEXgJ.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/05/21/7gEXgJ.png" />
+        </a>
+    </p>
+<p>当运行 age 和 heigh_in_cm 查询时，可以有效的做裁剪，所以z-order适合多维度，也就是多个列同时查询   <br>
+可以通过下面这样配置z-order压缩</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">5
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-sql" data-lang="sql"><span style="display:flex;"><span><span style="color:#ff79c6">CALL</span> <span style="color:#ff79c6">catalog</span>.<span style="color:#ff79c6">system</span>.rewrite_data_files(
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">table</span> <span style="color:#ff79c6">=&gt;</span> <span style="color:#f1fa8c">&#39;db.people&#39;</span>, 
+</span></span><span style="display:flex;"><span>  strategy <span style="color:#ff79c6">=&gt;</span> <span style="color:#f1fa8c">&#39;sort&#39;</span>, 
+</span></span><span style="display:flex;"><span>  sort_order <span style="color:#ff79c6">=&gt;</span> <span style="color:#f1fa8c">&#39;zorder(height_in_cm, age)&#39;</span>
+</span></span><span style="display:flex;"><span>)
+</span></span></code></pre></td></tr></table>
+</div>
+</div><h2 id="expire-snapshots">Expire Snapshots</h2>
+<p>iceberg的有一个好处是，通过快照可以做 time-travel，verion rolback， 快照中的 manifest files不会被删除<br>
+当手动指定删除不需要的快照时，对应的 manifest list、manifest files、data files 都会被删除<br>
+如果这个 数据文件还被其他 有效的manifest files 关联，则不会被删除<br>
+孤儿文件不关联任何快照，需要用其他的方式将其删除<br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/05/21/7gEndB.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/05/21/7gEndB.png" />
+        </a>
+    </p>
+<p>下面是 删除所有 tsToExpire  之前的快照，也可以指定删除任意处理的快照，或者快照 ID
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/05/21/7gEMut.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/05/21/7gEMut.png" />
+        </a>
+    </p>
+<h3 id="removing-old-metadata-files">Removing Old Metadata files</h3>
+<p>Snapshot isolation 是iceberg中非常有用的一个特性<br>
+但流写入时，会出现很多新的小文件，删除过期文件可以将这些文件数据删除，但是处理不了 manifest 文件<br>
+iceberg 可以允许你设置开启 最老的 manifest 文件删除功能，当新的一个创建时，就会删除掉老的 manifest文件<br>
+还可以指定要保留的 manifest文件数量，下面是 保留 4 个<br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/05/21/7gEjYG.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/05/21/7gEjYG.png" />
+        </a>
+    </p>
+<p>下面是设置删除最老的 manifest 文件，当新的创建时，默认为 false：</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-java" data-lang="java"><span style="display:flex;"><span>write<span style="color:#ff79c6">.</span><span style="color:#50fa7b">metadata</span><span style="color:#ff79c6">.</span><span style="color:#50fa7b">delete</span><span style="color:#ff79c6">-</span>after<span style="color:#ff79c6">-</span>commit<span style="color:#ff79c6">.</span><span style="color:#50fa7b">enabled</span>
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>下面设置要保留多少个 manifest文件，默认为 100</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-java" data-lang="java"><span style="display:flex;"><span>write<span style="color:#ff79c6">.</span><span style="color:#50fa7b">metadata</span><span style="color:#ff79c6">.</span><span style="color:#50fa7b">previous</span><span style="color:#ff79c6">-</span>versions<span style="color:#ff79c6">-</span>max
+</span></span></code></pre></td></tr></table>
+</div>
+</div><h3 id="delete-orphan-files">Delete Orphan Files</h3>
+<p>job、task执行失败，可能会导致写入了部分数据，这些数据没有任何关联任何快照，因此也不能用正常的方式删除他们，因为没有任何关联关系   <br>
+正常的 快照过期，删除元数据都不行，需要用其他方式扫描表的目录，然后找到他们<br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/05/21/7gEfOb.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/05/21/7gEfOb.png" />
+        </a>
+    </p>
+<p>deleteOrphanFiles 操作如下<br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/05/21/7gEife.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/05/21/7gEife.png" />
+        </a>
+     <br>
+这个操作是扫描每个有效的快照，然后找到哪些文件 关联了这些快照<br>
+对于在 数据目录中，没有被有效快照关联的文件，就可以被删除了 <br>
+表的文件也可以存储在数据目录之外，因此需要定期的做清理</p>
+<ul>
+<li>olderThan，帮助预防删除正常处理的文件</li>
+<li>location，删除指定目录下的数据，这些数据不在 主数据目录中，肯恩是之前从其他地方迁移到 iceberg 中的</li>
+</ul>
+<h2 id="reference">Reference</h2>
+<ul>
+<li><a href="https://www.dremio.com/blog/how-z-ordering-in-apache-iceberg-helps-improve-performance/">How Z-Ordering in Apache Iceberg Helps Improve Performance</a></li>
+<li><a href="https://www.dremio.com/resources/guides/what-is-a-data-lakehouse/">What Is a Data Lakehouse?</a></li>
+<li><a href="https://github.com/apache/incubator-xtable">OneTable github</a></li>
+</ul>
+
+			<script type="text/javascript"
+        async
+        src="https://cdn.bootcss.com/mathjax/2.7.3/MathJax.js?config=TeX-AMS-MML_HTMLorMML">
+MathJax.Hub.Config({
+  tex2jax: {
+    inlineMath: [['$','$'], ['\\(','\\)']],
+    displayMath: [['$$','$$'], ['\[\[','\]\]']],
+    processEscapes: true,
+    processEnvironments: true,
+    skipTags: ['script', 'noscript', 'style', 'textarea', 'pre'],
+    TeX: { equationNumbers: { autoNumber: "AMS" },
+         extensions: ["AMSmath.js", "AMSsymbols.js"] }
+  }
+});
+
+MathJax.Hub.Queue(function() {
+    
+    
+    
+    var all = MathJax.Hub.getAllJax(), i;
+    for(i = 0; i < all.length; i += 1) {
+        all[i].SourceElement().parentNode.className += ' has-jax';
+    }
+});
+</script>
+
+<style>
+code.has-jax {
+    font: inherit;
+    font-size: 100%;
+    background: inherit;
+    border: inherit;
+    color: #515151;
+}
+</style>
+        </div>
+
+        
+
+
+        
+
+<div class="post-archive">
+    <h2>相关文章</h2>
+    <ul class="listing">
+        
+        <li><a href="/post/2024/03/cow_mor_iceberg/">Copy-On-Write vs Merge-On-Read in Apache Iceberg</a></li>
+        
+        <li><a href="/post/2024/03/the_life_of_iceberg/">The Life of a Read/Write Query for Apache Iceberg Tables</a></li>
+        
+        <li><a href="/post/2024/02/icer_berg/">Iceberg 简单总结</a></li>
+        
+    </ul>
+</div>
+
+
+        <div class="post-meta meta-tags">
+            
+            <ul class="clearfix">
+                
+                <li><a href='/tags/iceberg'>iceberg</a></li>
+                
+            </ul>
+            
+        </div>
+    </article>
+    
+    
+
+    
+    
+    <div class="post bg-white">
+      <script src="https://utteranc.es/client.js"
+            repo= "himichael/hugoblogtalks"
+            issue-term="pathname"
+            theme="github-light"
+            crossorigin="anonymous"
+            async>
+      </script>
+    </div>
+    
+</div>
+
+
+                </div>
+
+                <div id="secondary">
+    <section class="widget">
+        <form id="search" action='https://code0xff.org/search/' method="get" accept-charset="utf-8" target="_blank" _lpchecked="1">
+      
+      <input type="text" name="q" maxlength="20" placeholder="Search">
+      <input type="hidden" name="sitesearch" value="https://code0xff.org/">
+      <button type="submit" class="submit icon-search"></button>
+</form>
+    </section>
+    
+    <section class="widget">
+        <h3 class="widget-title">最近文章</h3>
+<ul class="widget-list">
+    
+    <li>
+        <a href="https://code0xff.org/post/2025/01/spark_register_source/" title="Spark 注册数据源">Spark 注册数据源</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2025/01/spark_core_2/" title="Spark Core相关-2">Spark Core相关-2</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2024/12/llamafactory/" title="Llama Factory">Llama Factory</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2024/11/spark_core/" title="Spark Core相关-1">Spark Core相关-1</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2024/11/sae_tunnel/" title="sea tunnel">sea tunnel</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2024/11/k8s_networks/" title="k8s 网络">k8s 网络</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2024/11/ozone/" title="ozone">ozone</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2024/11/es/" title="ES的简单学习">ES的简单学习</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2025/02/ai/" title="AI的简单学习">AI的简单学习</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2024/11/big_data_investigation/" title="国内几个云厂商大数据平台">国内几个云厂商大数据平台</a>
+    </li>
+    
+</ul>
+    </section>
+
+    
+
+    <section class="widget">
+        <h3 class="widget-title"><a href='/categories/'>分类</a></h3>
+<ul class="widget-list">
+    
+    <li><a href="https://code0xff.org/categories/%E5%88%86%E5%B8%83%E5%BC%8F/">分布式 (6)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E5%8E%9F%E7%90%86%E5%88%86%E6%9E%90/">原理分析 (24)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E5%95%86%E4%B8%9A/">商业 (3)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E5%A4%A7%E6%95%B0%E6%8D%AE/">大数据 (56)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%95%B0%E6%8D%AE%E5%BA%93/">数据库 (41)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%96%87%E5%AD%A6%E5%92%8C%E8%89%BA%E6%9C%AF/">文学和艺术 (3)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%97%85%E8%A1%8C/">旅行 (12)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%9E%B6%E6%9E%84/">架构 (13)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E7%AE%97%E6%B3%95/">算法 (8)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E7%B3%BB%E7%BB%9F/">系统 (7)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E7%BC%96%E7%A8%8B%E8%AF%AD%E8%A8%80/">编程语言 (7)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E8%A1%8C%E4%B8%9A%E8%A7%82%E5%AF%9F/">行业观察 (3)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E8%AF%BB%E4%B9%A6%E7%AC%94%E8%AE%B0/">读书笔记 (14)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E9%9A%8F%E4%BE%BF%E5%86%99%E5%86%99/">随便写写 (3)</a></li>
+    
+</ul>
+    </section>
+
+    <section class="widget">
+        <h3 class="widget-title">归档</a></h3>
+<ul class="widget-list">
+    
+    <li><a href="https://code0xff.org/years/2021%E5%B9%B4/">2021年 (41)</a></li>
+    
+    <li><a href="https://code0xff.org/years/2022%E5%B9%B4/">2022年 (55)</a></li>
+    
+    <li><a href="https://code0xff.org/years/2023%E5%B9%B4/">2023年 (54)</a></li>
+    
+    <li><a href="https://code0xff.org/years/2024%E5%B9%B4/">2024年 (48)</a></li>
+    
+    <li><a href="https://code0xff.org/years/2025%E5%B9%B4/">2025年 (2)</a></li>
+    
+</ul>
+    </section>
+
+    <section class="widget">
+        <h3 class="widget-title"><a href='/tags/'>标签</a></h3>
+<div class="tagcloud">
+    
+    <a href="https://code0xff.org/tags/ai/">AI </a>
+    
+    <a href="https://code0xff.org/tags/ambari/">Ambari </a>
+    
+    <a href="https://code0xff.org/tags/architecture/">architecture </a>
+    
+    <a href="https://code0xff.org/tags/bigdata/">bigdata </a>
+    
+    <a href="https://code0xff.org/tags/b%E6%A0%91/">B树 </a>
+    
+    <a href="https://code0xff.org/tags/c&#43;&#43;/">C&#43;&#43; </a>
+    
+    <a href="https://code0xff.org/tags/calcite/">calcite </a>
+    
+    <a href="https://code0xff.org/tags/cmu-database/">CMU-Database </a>
+    
+    <a href="https://code0xff.org/tags/data_ingestion/">Data_Ingestion </a>
+    
+    <a href="https://code0xff.org/tags/deltalake/">DeltaLake </a>
+    
+    <a href="https://code0xff.org/tags/doris/">Doris </a>
+    
+    <a href="https://code0xff.org/tags/english/">English </a>
+    
+    <a href="https://code0xff.org/tags/es/">ES </a>
+    
+    <a href="https://code0xff.org/tags/facebook/">Facebook </a>
+    
+    <a href="https://code0xff.org/tags/flink/">flink </a>
+    
+    <a href="https://code0xff.org/tags/flume/">flume </a>
+    
+    <a href="https://code0xff.org/tags/gc/">GC </a>
+    
+    <a href="https://code0xff.org/tags/gluten/">Gluten </a>
+    
+    <a href="https://code0xff.org/tags/hana/">HANA </a>
+    
+    <a href="https://code0xff.org/tags/hive/">Hive </a>
+    
+    <a href="https://code0xff.org/tags/iceberg/">iceberg </a>
+    
+    <a href="https://code0xff.org/tags/impala/">Impala </a>
+    
+    <a href="https://code0xff.org/tags/janino/">janino </a>
+    
+    <a href="https://code0xff.org/tags/k8s/">k8s </a>
+    
+    <a href="https://code0xff.org/tags/kafka/">Kafka </a>
+    
+    <a href="https://code0xff.org/tags/kudu/">kudu </a>
+    
+    <a href="https://code0xff.org/tags/kyuubi/">Kyuubi </a>
+    
+    <a href="https://code0xff.org/tags/lakehouse/">Lakehouse </a>
+    
+    <a href="https://code0xff.org/tags/leveldb/">LevelDB </a>
+    
+    <a href="https://code0xff.org/tags/llamafactory/">LlamaFactory </a>
+    
+    <a href="https://code0xff.org/tags/llvm/">LLVM </a>
+    
+    <a href="https://code0xff.org/tags/manacher/">Manacher </a>
+    
+    <a href="https://code0xff.org/tags/mapreduce/">MapReduce </a>
+    
+    <a href="https://code0xff.org/tags/micro-service/">micro-service </a>
+    
+    <a href="https://code0xff.org/tags/mysql/">MySQL </a>
+    
+    <a href="https://code0xff.org/tags/newsql/">NewSQL </a>
+    
+    <a href="https://code0xff.org/tags/oceanbase/">OceanBase </a>
+    
+    <a href="https://code0xff.org/tags/openlogreplicator/">OpenLogReplicator </a>
+    
+    <a href="https://code0xff.org/tags/parquet/">parquet </a>
+    
+    <a href="https://code0xff.org/tags/paxos/">paxos </a>
+    
+    <a href="https://code0xff.org/tags/presto/">Presto </a>
+    
+    <a href="https://code0xff.org/tags/quick-sql/">quick-sql </a>
+    
+    <a href="https://code0xff.org/tags/raft/">raft </a>
+    
+    <a href="https://code0xff.org/tags/scala/">scala </a>
+    
+    <a href="https://code0xff.org/tags/simd/">SIMD </a>
+    
+    <a href="https://code0xff.org/tags/snowflake/">snowflake </a>
+    
+    <a href="https://code0xff.org/tags/spark/">spark </a>
+    
+    <a href="https://code0xff.org/tags/sre/">SRE </a>
+    
+    <a href="https://code0xff.org/tags/teradata/">TeraData </a>
+    
+    <a href="https://code0xff.org/tags/tpcx-hs/">TPCx-HS </a>
+    
+    <a href="https://code0xff.org/tags/trino/">Trino </a>
+    
+    <a href="https://code0xff.org/tags/tuning/">Tuning </a>
+    
+    <a href="https://code0xff.org/tags/unix/">unix </a>
+    
+    <a href="https://code0xff.org/tags/yarn/">YARN </a>
+    
+    <a href="https://code0xff.org/tags/%E4%BA%8C%E5%88%86%E6%9F%A5%E6%89%BE/">二分查找 </a>
+    
+    <a href="https://code0xff.org/tags/%E4%BA%8C%E5%8F%89%E6%A0%91%E9%81%8D%E5%8E%86/">二叉树遍历 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%88%86%E5%B8%83%E5%BC%8F/">分布式 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%88%97%E5%AD%98/">列存 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%8A%A8%E6%80%81%E6%B3%A8%E5%85%A5/">动态注入 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%8E%86%E5%8F%B2/">历史 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%90%91%E9%87%8F%E5%8C%96/">向量化 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%9B%9E%E6%BA%AF/">回溯 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%9B%BD%E5%86%85%E6%97%85%E8%A1%8C/">国内旅行 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%9B%BD%E5%A4%96%E6%97%85%E8%A1%8C/">国外旅行 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%A4%9A%E7%A7%9F%E6%88%B7/">多租户 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%A4%A7%E6%95%B0%E6%8D%AE/">大数据 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%AD%98%E5%82%A8/">存储 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%B7%A5%E4%BD%9C%E8%AE%B0%E5%BD%95/">工作记录 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%BE%AE%E6%9C%8D%E5%8A%A1/">微服务 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%95%B0%E6%8D%AE%E4%B8%AD%E5%8F%B0/">数据中台 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%95%B0%E6%8D%AE%E5%BA%93/">数据库 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%95%B0%E6%8D%AE%E6%A8%A1%E5%9E%8B/">数据模型 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%95%B0%E6%8D%AE%E8%BF%81%E7%A7%BB/">数据迁移 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%9F%A5%E8%AF%A2%E4%BC%98%E5%8C%96/">查询优化 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%9F%A5%E8%AF%A2%E7%BC%96%E8%AF%91/">查询编译 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%A6%82%E7%8E%87/">概率 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%B1%87%E7%BC%96/">汇编 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%B5%8B%E8%AF%95/">测试 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%94%9F%E6%B4%BB/">生活 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%94%B5%E5%BD%B1/">电影 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%AE%97%E6%B3%95/">算法 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%B4%A2%E5%BC%95/">索引 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BB%8F%E6%B5%8E/">经济 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BC%93%E5%AD%98/">缓存 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BC%96%E8%AF%91%E5%8E%9F%E7%90%86/">编译原理 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BD%91%E7%BB%9C/">网络 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AE%A1%E7%AE%97%E6%A1%86%E6%9E%B6/">计算框架 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AE%BA%E6%96%87/">论文 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AF%BB%E4%B9%A6/">读书 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AF%BB%E4%B9%A6%E7%AC%94%E8%AE%B0/">读书笔记 </a>
+    
+</div>
+    </section>
+
+    
+
+    <section class="widget">
+        <h3 class="widget-title">RSS</h3>
+        <ul class="widget-list">
+            <li><a href="https://code0xff.org/index.xml">文章 RSS</a></li>
+        </ul>
+    </section>
+</div>
+            </div>
+        </div>
+    </div>
+    <footer id="footer">
+    <div>
+        &copy; 2025 <a href="https://code0xff.org/">记录每个瞬间 By 老王</a>
+        
+    </div>
+    <br />
+    <div>
+        <div class="github-badge">
+            <a href="https://gohugo.io/" target="_black" rel="nofollow"><span class="badge-subject">Powered by</span><span class="badge-value bg-blue">Hugo</span></a>
+        </div>
+        <div class="github-badge">
+            <a href="https://github.com/flysnow-org/maupassant-hugo" target="_black"><span class="badge-subject">Theme</span><span class="badge-value bg-yellowgreen">Maupassant</span></a>
+        </div>
+    </div>
+</footer>
+
+
+    
+    <script type="text/javascript">
+        window.MathJax = {
+            tex2jax: {
+                inlineMath: [['$', '$']],
+                processEscapes: true
+                }
+            };
+    </script>
+    <script src='https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.5/MathJax.js?config=TeX-MML-AM_CHTML' async></script><script src="https://cdn.bootcdn.net/ajax/libs/fancybox/3.5.7/jquery.fancybox.min.js"></script>
+
+<a id="rocket" href="#top"></a>
+<script type="text/javascript" src='/js/totop.js?v=0.0.0' async=""></script>
+
+<script type="application/javascript">
+var doNotTrack = false;
+if (!doNotTrack) {
+	window.ga=window.ga||function(){(ga.q=ga.q||[]).push(arguments)};ga.l=+new Date;
+	ga('create', 'GA ID', 'auto');
+	
+	ga('send', 'pageview');
+}
+</script>
+<script async src='https://www.google-analytics.com/analytics.js'></script>
+
+
+
+    <script type="text/javascript" src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js" async></script>
+
+
+
+
+</body>
+
+</html>

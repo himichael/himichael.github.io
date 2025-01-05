@@ -1,0 +1,1005 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    
+    <meta name="referrer" content="no-referrer-when-downgrade">
+    
+
+    <title>k8s 网络 | 记录每个瞬间</title>
+    <meta property="og:title" content="k8s 网络 - 记录每个瞬间">
+    <meta property="og:type" content="article">
+        
+    <meta property="article:published_time" content='2024-11-04T09:08:07&#43;08:00'>
+        
+        
+    <meta property="article:modified_time" content='2024-11-04T09:08:07&#43;08:00'>
+        
+    <meta name="Keywords" content="">
+    <meta name="description" content="k8s 网络">
+        <meta name="author" content="隔壁老王">
+        
+    <meta property="og:url" content="https://code0xff.org/post/2024/11/k8s_networks/">
+    <link rel="shortcut icon" href='/favicon.ico'  type="image/x-icon">
+
+    <link rel="stylesheet" href='/css/normalize.css'>
+    <link rel="stylesheet" href='/css/style.css'>
+    <script type="text/javascript" src="//cdn.bootcdn.net/ajax/libs/jquery/3.4.1/jquery.min.js"></script>
+
+    
+    
+    
+        <link href="https://cdn.bootcdn.net/ajax/libs/fancybox/3.5.7/jquery.fancybox.min.css" rel="stylesheet">
+    
+    
+    
+    
+</head>
+
+
+<body>
+    <header id="header" class="clearfix">
+    <div class="container">
+        <div class="col-group">
+            <div class="site-name ">
+                
+                    <a id="logo" href="https://code0xff.org/">
+                        记录每个瞬间
+                    </a>
+                
+                
+            </div>
+            <div>
+                <nav id="nav-menu" class="clearfix">
+                    <a class="current" href="https://code0xff.org/">首页</a>
+                    
+                    <a  href="https://code0xff.org/linked/" title="链接">链接</a>
+                    
+                    <a  href="https://code0xff.org/archives/" title="归档">归档</a>
+                    
+                    <a  href="https://code0xff.org/about/" title="关于">关于</a>
+                    
+                </nav>
+            </div>
+        </div>
+    </div>
+</header>
+
+    <div id="body">
+        <div class="container">
+            <div class="col-group">
+
+                <div class="col-8" id="main">
+                    
+<div class="res-cons">
+    
+    <article class="post">
+        <header>
+            <h1 class="post-title">k8s 网络</h1>
+        </header>
+        <date class="post-meta meta-date">
+            2024年11月4日
+        </date>
+<nav id="TableOfContents">
+  <ul>
+    <li>
+      <ul>
+        <li><a href="#k8s网络">K8S网络</a>
+          <ul>
+            <li><a href="#覆盖网络">覆盖网络</a></li>
+            <li><a href="#flannel">Flannel</a></li>
+            <li><a href="#calico">Calico</a></li>
+            <li><a href="#网络隔离">网络隔离</a></li>
+            <li><a href="#cni-插件">CNI 插件</a></li>
+            <li><a href="#service">Service</a></li>
+          </ul>
+        </li>
+        <li><a href="#日志">日志</a></li>
+        <li><a href="#调度">调度</a></li>
+        <li><a href="#运行时">运行时</a></li>
+        <li><a href="#参考">参考</a></li>
+      </ul>
+    </li>
+  </ul>
+</nav>
+        
+        <div class="post-meta">
+            
+            <span class="post-meta meta-tags">
+                <ul class="clearfix">
+                    <a href='/categories/%E6%9E%B6%E6%9E%84'>架构</a>
+                </ul>
+            </span>
+            
+        </div>
+        
+        
+        <div class="post-meta">
+            <span id="busuanzi_container_page_pv">|<span id="busuanzi_value_page_pv"></span><span>
+                    阅读</span></span>
+        </div>
+        
+        
+        <div class="post-content">
+            <h2 id="k8s网络">K8S网络</h2>
+<h3 id="覆盖网络">覆盖网络</h3>
+<p>原理 
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/11/17/7AyDS7.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/11/17/7AyDS7.png" />
+        </a>
+    </p>
+<ol>
+<li><strong>Container 1 Creates a TCP Packet</strong></li>
+</ol>
+<ul>
+<li><strong>Container 1</strong> initiates a connection to <strong>Container 3</strong>.</li>
+<li>It creates a <strong>TCP packet</strong>, encapsulated within an <strong>IP packet</strong>:
+<ul>
+<li><strong>Source IP</strong>: Container 1’s IP (e.g., <code>10.244.1.2</code>)</li>
+<li><strong>Destination IP</strong>: Container 3’s IP (e.g., <code>10.244.2.2</code>)</li>
+</ul>
+</li>
+</ul>
+<hr>
+<ol start="2">
+<li><strong>Virtual Ethernet and Host’s Bridge</strong></li>
+</ol>
+<ul>
+<li>The TCP packet is sent out via <strong>Container 1’s <code>eth0</code></strong>.</li>
+<li>The packet travels through the virtual network interface (<strong>veth</strong>) to the host’s virtual bridge (managed by <strong>Flannel</strong> or a similar CNI plugin).</li>
+<li>At this point, the packet is treated as a Layer 2 <strong>Ethernet frame</strong>.</li>
+</ul>
+<hr>
+<ol start="3">
+<li><strong>Flannel VXLAN Processing on Host 1</strong></li>
+</ol>
+<ul>
+<li><strong>Flannel</strong> running in <strong>kernel space</strong> intercepts the packet and determines that the destination IP (<code>10.244.2.2</code>) is on a different host (<strong>Host 2</strong>).</li>
+</ul>
+<p>VXLAN Encapsulation:</p>
+<ul>
+<li>
+<p>Flannel creates a new <strong>outer UDP packet</strong> that encapsulates the original TCP packet.</p>
+</li>
+<li>
+<p>The outer packet includes:</p>
+<ul>
+<li><strong>Outer Ethernet Header</strong>: MAC address of Host 2.</li>
+<li><strong>Outer IP Header</strong>:
+<ul>
+<li>Source: Host 1’s physical IP.</li>
+<li>Destination: Host 2’s physical IP.</li>
+</ul>
+</li>
+<li><strong>Outer UDP Header</strong>: Used for VXLAN tunneling.</li>
+<li><strong>VXLAN Header</strong>: Contains the VXLAN network identifier (VNI) to map the packet to the correct virtual network.</li>
+<li><strong>Inner Ethernet and IP Headers</strong>: The original Layer 2 and Layer 3 information for Container 3.</li>
+</ul>
+</li>
+<li>
+<p>All of this encapsulation happens in <strong>kernel space</strong>, avoiding costly <strong>user space</strong> operations.</p>
+</li>
+</ul>
+<hr>
+<ol start="4">
+<li><strong>Packet Transmission Across the Physical Network</strong></li>
+</ol>
+<ul>
+<li>The encapsulated packet is sent through the <strong>physical network interface</strong> (<code>eth0</code>) on <strong>Host 1</strong>.</li>
+<li>It travels over the physical network, appearing as a standard IP packet between <strong>Host 1</strong> and <strong>Host 2</strong>.</li>
+</ul>
+<hr>
+<ol start="5">
+<li><strong>Flannel VXLAN Processing on Host 2</strong></li>
+</ol>
+<ul>
+<li>When the encapsulated packet arrives at <strong>Host 2</strong>, it is intercepted by <strong>Flannel</strong> in <strong>kernel space</strong>.</li>
+<li><strong>Flannel decapsulates the packet</strong>:
+<ul>
+<li>Strips off the outer Ethernet, IP, UDP, and VXLAN headers.</li>
+<li>Retrieves the original inner packet with <strong>Container 3’s</strong> destination IP (<code>10.244.2.2</code>).</li>
+</ul>
+</li>
+</ul>
+<hr>
+<ol start="6">
+<li><strong>Packet Delivery to Container 3</strong></li>
+</ol>
+<ul>
+<li>The decapsulated packet is passed to the <strong>veth interface</strong> of <strong>Container 3</strong>.</li>
+<li><strong>Container 3</strong> processes the packet as if it had been sent directly from <strong>Container 1</strong>, unaware of the underlying encapsulation and routing.</li>
+</ul>
+<h3 id="flannel">Flannel</h3>
+<p>Flannel 早期的方案，基于 UDP，仅发送就需要三次内核态、用户态切换</p>
+<ul>
+<li>pod 通过 veth 发到 docker0 网桥</li>
+<li>网桥进入到 桥接内核态，内核态转到 flannel 用户态进程</li>
+<li>用户态进程检查网络发送的路由信息，找到目标转发信息</li>
+<li>交给内核态做数据包转发
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/11/17/7AyOiI.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/11/17/7AyOiI.png" />
+        </a>
+    </li>
+</ul>
+<p>新的方案，基于 vxlan，全部是内核态<br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/11/17/7Ayawa.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/11/17/7Ayawa.png" />
+        </a>
+    </p>
+<p>封装的外层数据包
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/11/17/7Aycds.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/11/17/7Aycds.png" />
+        </a>
+    </p>
+<p>host-gw 方案，走的是三层网络，需要保证 所有 pod 二层是可通的</p>
+<ul>
+<li>pod 通过veth 到docker0 网桥</li>
+<li>node1 宿主机上会有一个路由规则，目标pod的下一条地址，是 node2</li>
+<li>于是这个数据包直接转给 node2，node2 接收到后做一些拆封，交给 node2 上的容器</li>
+<li>host-gw 模式的工作原理，其实就是将每个 Flannel 子网（Flannel Subnet，比如：10.244.1.0/24）的“下一跳”，设置成了该子网对应的宿主机的 IP 地址
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/11/17/7Ay1WL.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/11/17/7Ay1WL.png" />
+        </a>
+    </li>
+</ul>
+<h3 id="calico">Calico</h3>
+<p>实现</p>
+<ul>
+<li>不同于 Flannel 通过 Etcd 和宿主机上的 flanneld 来维护路由信息的做法，</li>
+<li>Calico 项目使用了 BGP 自动地在整个集群中分发路由信息</li>
+<li>BGP 的全称是 Border Gateway Protocol，即：边界网关协议</li>
+<li>Calico 用了 BGP 客户端，每个节点都安装这个客户端，将下一跳指向对端</li>
+<li>这种是全网络连接的，一般 N 为100个，太大的就需要专门的节点收集集群节点信息了</li>
+<li>一般采用 Route Reflector 来收集所有节点信息
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/11/17/7AyPXJ.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/11/17/7AyPXJ.png" />
+        </a>
+    </li>
+</ul>
+<p>IPIP</p>
+<ul>
+<li>如果下一跳跟当前不是一个网段，需要将数据包发给 IP 隧道</li>
+<li>linux 内核封装 真实的 目标 ip地址，然后发给路由器，到下一跳</li>
+<li>下一跳再将原先的数据包解开，后面过程就是类似的</li>
+<li>这种方式有性能损失</li>
+<li>Calico 默认都是 <strong>一跳</strong>的方式实现，如果碰到 IPIP，可以采用 两跳的方式</li>
+<li>仍然用 Route Reflector  收集所有节点信息，配置 两跳的路由信息</li>
+<li>这样避免 IPIP 模式，增加性能</li>
+</ul>
+<h3 id="网络隔离">网络隔离</h3>
+<p>Kubernetes 网络插件对 Pod 进行隔离</p>
+<ul>
+<li>其实是靠在宿主机上生成 Network Policy 对应的 iptable 规则来实现的</li>
+<li>这跟传统 IaaS 里面的安全组（Security Group）其实是非常类似的</li>
+<li>Kubernetes 从底层的设计和实现上，更倾向于假设你已经有了一套完整的物理基础设施。然后，Kubernetes 负责在此基础上提供一种“弱多租户”（soft multi-tenancy）的能力</li>
+<li>Kubernetes 项目在云计算生态里的定位，其实是基础设施与 PaaS 之间的中间层。这是非常符合“容器”这个本质上就是进程的抽象粒度的
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/11/17/7AyYmG.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/11/17/7AyYmG.png" />
+        </a>
+    </li>
+</ul>
+<h3 id="cni-插件">CNI 插件</h3>
+<p>k8s 的方案跟 flannel 类似，只不过 docker0 网桥换乘了 cni0 网桥了</p>
+<p>CNI 插件</p>
+<table>
+<thead>
+<tr>
+<th>CNI Plugin</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Flannel</td>
+<td>Simple overlay network using VXLAN or host-gw. Suitable for basic use cases.</td>
+</tr>
+<tr>
+<td>Calico</td>
+<td>Provides both overlay and BGP-based routed networking. Includes network policy enforcement.</td>
+</tr>
+<tr>
+<td>Weave</td>
+<td>Creates a mesh overlay network with encryption and automatic peer discovery.</td>
+</tr>
+<tr>
+<td>Cilium</td>
+<td>Focuses on advanced networking, including eBPF for high performance and security policies.</td>
+</tr>
+<tr>
+<td>Kube-Router</td>
+<td>Combines networking and network policy capabilities, focusing on performance.</td>
+</tr>
+</tbody>
+</table>
+<h3 id="service">Service</h3>
+<p>实现</p>
+<ul>
+<li>Service 是由 kube-proxy 组件，加上 iptables 来共同实现的</li>
+</ul>
+<p>创建一个 service，等于在 iptables 上创建一个规则</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-shell" data-lang="shell"><span style="display:flex;"><span>-A KUBE-SERVICES -d 10.0.1.175/32 -p tcp -m comment --comment <span style="color:#f1fa8c">&#34;default/hostnames: cluster IP&#34;</span> -m tcp --dport <span style="color:#bd93f9">80</span> -j KUBE-SVC-NWV5X2332I4OT4T3
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>解释</p>
+<ul>
+<li>这条 iptables 规则的含义是</li>
+<li>凡是目的地址是 10.0.1.175、目的端口是 80 的 IP 包</li>
+<li>都应该跳转到另外一条名叫 KUBE-SVC-NWV5X2332I4OT4T3 的 iptables 链进行处理</li>
+</ul>
+<p>即将跳转的 KUBE-SVC-NWV5X2332I4OT4T3 规则</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-shell" data-lang="shell"><span style="display:flex;"><span>-A KUBE-SVC-NWV5X2332I4OT4T3 -m comment --comment <span style="color:#f1fa8c">&#34;default/hostnames:&#34;</span> -m statistic --mode random --probability 0.33332999982 -j KUBE-SEP-WNBA2IHDGP2BOBGZ
+</span></span><span style="display:flex;"><span>-A KUBE-SVC-NWV5X2332I4OT4T3 -m comment --comment <span style="color:#f1fa8c">&#34;default/hostnames:&#34;</span> -m statistic --mode random --probability 0.50000000000 -j KUBE-SEP-X3P2623AGDH6CDF3
+</span></span><span style="display:flex;"><span>-A KUBE-SVC-NWV5X2332I4OT4T3 -m comment --comment <span style="color:#f1fa8c">&#34;default/hostnames:&#34;</span> -j KUBE-SEP-57KPRZ3JQVENLNBR
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>这一组规则，实际上是一组随机模式（–mode random）的 iptables 链<br>
+而这三条链指向的最终目的地，其实就是这个 Service 代理的三个 Pod</p>
+<p>serivce 等价的转发原理</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">8
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-shell" data-lang="shell"><span style="display:flex;"><span>-A KUBE-SEP-57KPRZ3JQVENLNBR -s 10.244.3.6/32 -m comment --comment <span style="color:#f1fa8c">&#34;default/hostnames:&#34;</span> -j MARK --set-xmark 0x00004000/0x00004000
+</span></span><span style="display:flex;"><span>-A KUBE-SEP-57KPRZ3JQVENLNBR -p tcp -m comment --comment <span style="color:#f1fa8c">&#34;default/hostnames:&#34;</span> -m tcp -j DNAT --to-destination 10.244.3.6:9376
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>-A KUBE-SEP-WNBA2IHDGP2BOBGZ -s 10.244.1.7/32 -m comment --comment <span style="color:#f1fa8c">&#34;default/hostnames:&#34;</span> -j MARK --set-xmark 0x00004000/0x00004000
+</span></span><span style="display:flex;"><span>-A KUBE-SEP-WNBA2IHDGP2BOBGZ -p tcp -m comment --comment <span style="color:#f1fa8c">&#34;default/hostnames:&#34;</span> -m tcp -j DNAT --to-destination 10.244.1.7:9376
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>-A KUBE-SEP-X3P2623AGDH6CDF3 -s 10.244.2.3/32 -m comment --comment <span style="color:#f1fa8c">&#34;default/hostnames:&#34;</span> -j MARK --set-xmark 0x00004000/0x00004000
+</span></span><span style="display:flex;"><span>-A KUBE-SEP-X3P2623AGDH6CDF3 -p tcp -m comment --comment <span style="color:#f1fa8c">&#34;default/hostnames:&#34;</span> -m tcp -j DNAT --to-destination 10.244.2.3:9376
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>解释</p>
+<ul>
+<li>这三条链，其实是三条 DNAT 规则</li>
+<li>DNAT 规则的作用，就是在 PREROUTING 检查点之前，也就是在路由之前，将流入 IP 包的目的地址和端口，改成–to-destination 所指定的新的目的地址和端口</li>
+<li>访问 Service VIP 的 IP 包经过上述 iptables 处理之后，就已经变成了访问具体某一个后端 Pod 的 IP 包了</li>
+</ul>
+<p>Kubernetes 的 kube-proxy 还支持一种叫作 IPVS 的模式</p>
+<ul>
+<li>一直以来，基于 iptables 的 Service 实现，都是制约 Kubernetes 项目承载更多量级的 Pod 的主要障碍</li>
+<li>IPVS 模式的工作原理，其实跟 iptables 模式类似</li>
+<li>IPVS 在内核中的实现其实也是基于 Netfilter 的 NAT 模式</li>
+<li>只是把对这些“规则”的处理放到了内核态，从而极大地降低了维护这些规则的代价</li>
+</ul>
+<p>两种服务发现</p>
+<ul>
+<li>ClusterIP 模式的 Service 是一个 Pod 的稳定的 IP 地址，即 VIP，这里 Pod 和 Service 的关系是可以通过 Label 确定的</li>
+<li>Headless Service 是一个 Pod 的稳定的 DNS 名字，这个名字是可以通过 Pod 名字和 Service 名字拼接出来的</li>
+</ul>
+<p>从外部访问 Service 的三种方式</p>
+<ul>
+<li>NodePort</li>
+<li>LoadBalancer</li>
+<li>External Name</li>
+</ul>
+<p>Kubernetes 里面的 Service 和 DNS 机制，也都不具备强多租户能力</p>
+<p>Ingress 服务</p>
+<ul>
+<li>全局的、为了代理不同后端 Service 而设置的负载均衡服务</li>
+<li>所谓 Ingress，就是 Service 的“Service”。</li>
+</ul>
+<p>Ingress Controller</p>
+<ul>
+<li>如 example.com 统一入口，根据 /aa， /bb 分发到不同的 service</li>
+<li>常用的实现如： Nginx、HAProxy、Envoy、Traefik</li>
+</ul>
+<p><a href="https://github.com/resouer/kubernetes-ingress/tree/master/examples/complete-example">具体例子</a></p>
+<h2 id="日志">日志</h2>
+<p>日志收集</p>
+<ul>
+<li>第一种，在 Node 上部署 logging agent，将日志文件转发到后端存储里保存起来</li>
+<li>第二种，就是对这种特殊情况的一个处理，即：当容器的日志只能输出到某些文件里的时候，我们可以通过一个 sidecar 容器把这些日志文件重新输出到 sidecar 的 stdout 和 stderr 上，这样就能够继续使用第一种方案了</li>
+<li>第三种方案，就是通过一个 sidecar 容器，直接把应用的日志文件发送到远程存储里面去</li>
+</ul>
+<h2 id="调度">调度</h2>
+<p>架构</p>
+<ul>
+<li>第一个控制循环，我们可以称之为 Informer Path，用来监听 etcd 的变化</li>
+<li>第二个控制循环，是调度器负责 Pod 调度的主循环，我们可以称之为 Scheduling Path
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/11/20/7AhdlP.jpg">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/11/20/7AhdlP.jpg" />
+        </a>
+    </li>
+</ul>
+<p>调度过程中 Predicates 和 Priorities 这两个调度策略<br>
+Predicates 在调度过程中的作用，可以理解为 Filter</p>
+<ul>
+<li>第一种类型，叫作 GeneralPredicates，如CPU是否足够</li>
+<li>第二种类型，是与 Volume 相关的过滤规则</li>
+<li>第三种类型，是宿主机相关的过滤规则</li>
+<li>第四种类型，是 Pod 相关的过滤规则</li>
+</ul>
+<p>Priorities</p>
+<ul>
+<li>工作就是为这些节点打分</li>
+<li>这里打分的范围是 0-10 分，得分最高的节点就是最后被 Pod 绑定的最佳节点</li>
+<li>这个算法实际上就是在选择空闲资源（CPU 和 Memory）最多的宿主机</li>
+</ul>
+<p>Pod 调度失败的情况</p>
+<ul>
+<li>优先级（Priority ）</li>
+<li>抢占（Preemption）</li>
+</ul>
+<p>特殊硬件的调度</p>
+<ul>
+<li>kubelet 关联 Device Plugin，通过gRPC通讯</li>
+<li>通过ListAndWatch获取资源列表</li>
+<li>通过 Allocate() 分配 GPU
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/11/20/7AheVw.jpg">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/11/20/7AheVw.jpg" />
+        </a>
+    </li>
+</ul>
+<p>K8S社区的硬件插件</p>
+<ul>
+<li><a href="https://github.com/hustcat/k8s-rdma-device-plugin">RDMA</a></li>
+<li><a href="https://github.com/k8snetworkplumbingwg/sriov-network-device-plugin">SR-IOV</a></li>
+<li><a href="https://github.com/NVIDIA/k8s-device-plugin">NVIDIA plugin</a></li>
+<li><a href="https://github.com/intel/intel-device-plugins-for-kubernetes">intel plugin</a></li>
+</ul>
+<h2 id="运行时">运行时</h2>
+<p>K8S 中两个不可替代的组件</p>
+<ul>
+<li>kube-apiserver</li>
+<li>kubelet</li>
+</ul>
+<p>kubelet 的工作核心</p>
+<ul>
+<li>一个控制循环，即：SyncLoop（图中的大圆圈）</li>
+<li>Pod 更新事件、Pod 生命周期变化、kubelet 本身设置的执行周期、定时的清理事件</li>
+<li>还有各种小事件：Volume Manager、Image Manager、Node Status Manager</li>
+<li>而当一个 Pod 完成调度、与一个 Node 绑定起来之后， 这个 Pod 的变化就会触发 kubelet 在控制循环里注册的 Handler</li>
+<li>kubelet 调用下层容器运行时的执行过程，并不会直接调用 Docker 的 API</li>
+<li>而是通过一组叫作 CRI（Container Runtime Interface，容器运行时接口）的 gRPC 接口来间接执行的
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/11/20/7AhoJ6.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/11/20/7AhoJ6.png" />
+        </a>
+    </li>
+</ul>
+<p>CRI 之后的架构</p>
+<ul>
+<li>kubelet 当然会通过 SyncLoop 来判断需要执行的具体操作</li>
+<li>kubelet 实际上就会调用一个叫作 GenericRuntime 的通用组件来发起创建 Pod 的 CRI 请求</li>
+<li>CRI shim，实现 CRI 规定的每个接口，然后把具体的 CRI 请求“翻译”成对后端容器项目的请求或者操作
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/11/20/7A8kTO.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/11/20/7A8kTO.png" />
+        </a>
+    </li>
+</ul>
+<p>CRI 分为两组</p>
+<ul>
+<li>RuntimeService。它提供的接口，主要是跟容器相关的操作。比如，创建和启动容器、删除容器、执行 exec 命令等等</li>
+<li>ImageService。它提供的接口，主要是容器镜像相关的操作，比如拉取镜像、删除镜像等等</li>
+</ul>
+<p>长连接</p>
+<ul>
+<li>为了维护 logs，exec 等接口，需要长连接，也就是：Streaming API
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/11/20/7A8BhQ.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/11/20/7A8BhQ.png" />
+        </a>
+    </li>
+</ul>
+<p>基于虚拟化的容器</p>
+<ul>
+<li>Kata Containers，本质就是一个精简后的轻量级虚拟机</li>
+<li>gVisor 项目给容器进程配置一个用 Go 语言实现的、运行在用户态的、极小的“独立内核”</li>
+<li>这两种容器实现的本质，都是给进程分配了一个独立的操作系统内核，从而避免了让容器共享宿主机的内核</li>
+</ul>
+<p>Kata Containers 的本质</p>
+<ul>
+<li>一个标准的虚拟机管理程序（Virtual Machine Manager, VMM）是运行 Kata Containers 必备的一个组件</li>
+<li>原生就带有了 Pod 的概念。即：这个 Kata Containers 启动的虚拟机，就是一个 Pod</li>
+<li>一个特殊的 Init 进程负责管理虚拟机里面的用户容器，并且只为这些容器开启 Mount Namespace</li>
+<li>容器启动后只能看到，被裁减过的 Guest Kernel，以及通过 Hypervisor 虚拟出来的硬件设备</li>
+<li>通过 vhost 技术（比如：vhost-user）来实现 Guest 与 Host 之间的高效的网络通信</li>
+<li>使用 PCI Passthrough （PCI 穿透）技术来让 Guest 里的进程直接访问到宿主机上的物理设备
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/11/20/7A8TYf.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/11/20/7A8TYf.png" />
+        </a>
+    </li>
+</ul>
+<p>gVisor 的设计</p>
+<ul>
+<li>核心是：Sentry 的进程，Go语言重写的，一个对应用进程“冒充”内核的系统组件</li>
+<li>提供一个传统的操作系统内核的能力，即：运行用户程序，执行系统调用</li>
+<li>Sentry 对于 Volume 的操作，则需要通过 9p 协议交给一个叫做 Gofer 的代理进程来完成</li>
+<li>Sentry 并不会真的像虚拟机那样去虚拟出硬件设备、安装 Guest 操作系统。它只是借助 KVM 进行系统调用的拦截，以及处理地址空间切换等细节
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/11/20/7A8mdc.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/11/20/7A8mdc.png" />
+        </a>
+    </li>
+</ul>
+<h2 id="参考">参考</h2>
+<ul>
+<li><a href="https://www.lifewire.com/layers-of-the-osi-model-illustrated-818017">The Layers of the OSI Model Illustrated</a></li>
+<li><a href="https://github.com/flannel-io/flannel">flannel</a></li>
+<li><a href="https://www.tigera.io/project-calico/">calico</a></li>
+<li><a href="https://github.com/fabric8io/kubernetes-client">fabric8 github</a></li>
+<li><a href="https://jimmysong.io/awesome-cloud-native/">Awesome Cloud Native</a></li>
+<li><a href="https://jimmysong.io/blog/">一个k8s使用者的博客</a></li>
+<li><a href="https://katacontainers.io/s">katacontainers</a></li>
+<li><a href="https://object-storage-ca-ymq-1.vexxhost.net/swift/v1/6e4619c416ff4bd19e1c087f27a43eea/www-assets-prod/presentation-media/kata-containers-and-gvisor-a-quantitave-comparison.pdf">kata-container PPT</a></li>
+</ul>
+
+			<script type="text/javascript"
+        async
+        src="https://cdn.bootcss.com/mathjax/2.7.3/MathJax.js?config=TeX-AMS-MML_HTMLorMML">
+MathJax.Hub.Config({
+  tex2jax: {
+    inlineMath: [['$','$'], ['\\(','\\)']],
+    displayMath: [['$$','$$'], ['\[\[','\]\]']],
+    processEscapes: true,
+    processEnvironments: true,
+    skipTags: ['script', 'noscript', 'style', 'textarea', 'pre'],
+    TeX: { equationNumbers: { autoNumber: "AMS" },
+         extensions: ["AMSmath.js", "AMSsymbols.js"] }
+  }
+});
+
+MathJax.Hub.Queue(function() {
+    
+    
+    
+    var all = MathJax.Hub.getAllJax(), i;
+    for(i = 0; i < all.length; i += 1) {
+        all[i].SourceElement().parentNode.className += ' has-jax';
+    }
+});
+</script>
+
+<style>
+code.has-jax {
+    font: inherit;
+    font-size: 100%;
+    background: inherit;
+    border: inherit;
+    color: #515151;
+}
+</style>
+        </div>
+
+        
+
+
+        
+
+<div class="post-archive">
+    <h2>相关文章</h2>
+    <ul class="listing">
+        
+        <li><a href="/post/2022/09/k8s%E4%BD%BF%E7%94%A8/">k8s POD使用总结</a></li>
+        
+    </ul>
+</div>
+
+
+        <div class="post-meta meta-tags">
+            
+            <ul class="clearfix">
+                
+                <li><a href='/tags/k8s'>k8s</a></li>
+                
+            </ul>
+            
+        </div>
+    </article>
+    
+    
+
+    
+    
+    <div class="post bg-white">
+      <script src="https://utteranc.es/client.js"
+            repo= "himichael/hugoblogtalks"
+            issue-term="pathname"
+            theme="github-light"
+            crossorigin="anonymous"
+            async>
+      </script>
+    </div>
+    
+</div>
+
+
+                </div>
+
+                <div id="secondary">
+    <section class="widget">
+        <form id="search" action='https://code0xff.org/search/' method="get" accept-charset="utf-8" target="_blank" _lpchecked="1">
+      
+      <input type="text" name="q" maxlength="20" placeholder="Search">
+      <input type="hidden" name="sitesearch" value="https://code0xff.org/">
+      <button type="submit" class="submit icon-search"></button>
+</form>
+    </section>
+    
+    <section class="widget">
+        <h3 class="widget-title">最近文章</h3>
+<ul class="widget-list">
+    
+    <li>
+        <a href="https://code0xff.org/post/2025/01/spark_register_source/" title="Spark 注册数据源">Spark 注册数据源</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2025/01/spark_core_2/" title="Spark Core相关-2">Spark Core相关-2</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2024/12/llamafactory/" title="Llama Factory">Llama Factory</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2024/11/spark_core/" title="Spark Core相关-1">Spark Core相关-1</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2024/11/sae_tunnel/" title="sea tunnel">sea tunnel</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2024/11/k8s_networks/" title="k8s 网络">k8s 网络</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2024/11/ozone/" title="ozone">ozone</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2024/11/es/" title="ES的简单学习">ES的简单学习</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2025/02/ai/" title="AI的简单学习">AI的简单学习</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2024/11/big_data_investigation/" title="国内几个云厂商大数据平台">国内几个云厂商大数据平台</a>
+    </li>
+    
+</ul>
+    </section>
+
+    
+
+    <section class="widget">
+        <h3 class="widget-title"><a href='/categories/'>分类</a></h3>
+<ul class="widget-list">
+    
+    <li><a href="https://code0xff.org/categories/%E5%88%86%E5%B8%83%E5%BC%8F/">分布式 (6)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E5%8E%9F%E7%90%86%E5%88%86%E6%9E%90/">原理分析 (24)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E5%95%86%E4%B8%9A/">商业 (3)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E5%A4%A7%E6%95%B0%E6%8D%AE/">大数据 (56)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%95%B0%E6%8D%AE%E5%BA%93/">数据库 (41)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%96%87%E5%AD%A6%E5%92%8C%E8%89%BA%E6%9C%AF/">文学和艺术 (3)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%97%85%E8%A1%8C/">旅行 (12)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%9E%B6%E6%9E%84/">架构 (13)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E7%AE%97%E6%B3%95/">算法 (8)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E7%B3%BB%E7%BB%9F/">系统 (7)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E7%BC%96%E7%A8%8B%E8%AF%AD%E8%A8%80/">编程语言 (7)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E8%A1%8C%E4%B8%9A%E8%A7%82%E5%AF%9F/">行业观察 (3)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E8%AF%BB%E4%B9%A6%E7%AC%94%E8%AE%B0/">读书笔记 (14)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E9%9A%8F%E4%BE%BF%E5%86%99%E5%86%99/">随便写写 (3)</a></li>
+    
+</ul>
+    </section>
+
+    <section class="widget">
+        <h3 class="widget-title">归档</a></h3>
+<ul class="widget-list">
+    
+    <li><a href="https://code0xff.org/years/2021%E5%B9%B4/">2021年 (41)</a></li>
+    
+    <li><a href="https://code0xff.org/years/2022%E5%B9%B4/">2022年 (55)</a></li>
+    
+    <li><a href="https://code0xff.org/years/2023%E5%B9%B4/">2023年 (54)</a></li>
+    
+    <li><a href="https://code0xff.org/years/2024%E5%B9%B4/">2024年 (48)</a></li>
+    
+    <li><a href="https://code0xff.org/years/2025%E5%B9%B4/">2025年 (2)</a></li>
+    
+</ul>
+    </section>
+
+    <section class="widget">
+        <h3 class="widget-title"><a href='/tags/'>标签</a></h3>
+<div class="tagcloud">
+    
+    <a href="https://code0xff.org/tags/ai/">AI </a>
+    
+    <a href="https://code0xff.org/tags/ambari/">Ambari </a>
+    
+    <a href="https://code0xff.org/tags/architecture/">architecture </a>
+    
+    <a href="https://code0xff.org/tags/bigdata/">bigdata </a>
+    
+    <a href="https://code0xff.org/tags/b%E6%A0%91/">B树 </a>
+    
+    <a href="https://code0xff.org/tags/c&#43;&#43;/">C&#43;&#43; </a>
+    
+    <a href="https://code0xff.org/tags/calcite/">calcite </a>
+    
+    <a href="https://code0xff.org/tags/cmu-database/">CMU-Database </a>
+    
+    <a href="https://code0xff.org/tags/data_ingestion/">Data_Ingestion </a>
+    
+    <a href="https://code0xff.org/tags/deltalake/">DeltaLake </a>
+    
+    <a href="https://code0xff.org/tags/doris/">Doris </a>
+    
+    <a href="https://code0xff.org/tags/english/">English </a>
+    
+    <a href="https://code0xff.org/tags/es/">ES </a>
+    
+    <a href="https://code0xff.org/tags/facebook/">Facebook </a>
+    
+    <a href="https://code0xff.org/tags/flink/">flink </a>
+    
+    <a href="https://code0xff.org/tags/flume/">flume </a>
+    
+    <a href="https://code0xff.org/tags/gc/">GC </a>
+    
+    <a href="https://code0xff.org/tags/gluten/">Gluten </a>
+    
+    <a href="https://code0xff.org/tags/hana/">HANA </a>
+    
+    <a href="https://code0xff.org/tags/hive/">Hive </a>
+    
+    <a href="https://code0xff.org/tags/iceberg/">iceberg </a>
+    
+    <a href="https://code0xff.org/tags/impala/">Impala </a>
+    
+    <a href="https://code0xff.org/tags/janino/">janino </a>
+    
+    <a href="https://code0xff.org/tags/k8s/">k8s </a>
+    
+    <a href="https://code0xff.org/tags/kafka/">Kafka </a>
+    
+    <a href="https://code0xff.org/tags/kudu/">kudu </a>
+    
+    <a href="https://code0xff.org/tags/kyuubi/">Kyuubi </a>
+    
+    <a href="https://code0xff.org/tags/lakehouse/">Lakehouse </a>
+    
+    <a href="https://code0xff.org/tags/leveldb/">LevelDB </a>
+    
+    <a href="https://code0xff.org/tags/llamafactory/">LlamaFactory </a>
+    
+    <a href="https://code0xff.org/tags/llvm/">LLVM </a>
+    
+    <a href="https://code0xff.org/tags/manacher/">Manacher </a>
+    
+    <a href="https://code0xff.org/tags/mapreduce/">MapReduce </a>
+    
+    <a href="https://code0xff.org/tags/micro-service/">micro-service </a>
+    
+    <a href="https://code0xff.org/tags/mysql/">MySQL </a>
+    
+    <a href="https://code0xff.org/tags/newsql/">NewSQL </a>
+    
+    <a href="https://code0xff.org/tags/oceanbase/">OceanBase </a>
+    
+    <a href="https://code0xff.org/tags/openlogreplicator/">OpenLogReplicator </a>
+    
+    <a href="https://code0xff.org/tags/parquet/">parquet </a>
+    
+    <a href="https://code0xff.org/tags/paxos/">paxos </a>
+    
+    <a href="https://code0xff.org/tags/presto/">Presto </a>
+    
+    <a href="https://code0xff.org/tags/quick-sql/">quick-sql </a>
+    
+    <a href="https://code0xff.org/tags/raft/">raft </a>
+    
+    <a href="https://code0xff.org/tags/scala/">scala </a>
+    
+    <a href="https://code0xff.org/tags/simd/">SIMD </a>
+    
+    <a href="https://code0xff.org/tags/snowflake/">snowflake </a>
+    
+    <a href="https://code0xff.org/tags/spark/">spark </a>
+    
+    <a href="https://code0xff.org/tags/sre/">SRE </a>
+    
+    <a href="https://code0xff.org/tags/teradata/">TeraData </a>
+    
+    <a href="https://code0xff.org/tags/tpcx-hs/">TPCx-HS </a>
+    
+    <a href="https://code0xff.org/tags/trino/">Trino </a>
+    
+    <a href="https://code0xff.org/tags/tuning/">Tuning </a>
+    
+    <a href="https://code0xff.org/tags/unix/">unix </a>
+    
+    <a href="https://code0xff.org/tags/yarn/">YARN </a>
+    
+    <a href="https://code0xff.org/tags/%E4%BA%8C%E5%88%86%E6%9F%A5%E6%89%BE/">二分查找 </a>
+    
+    <a href="https://code0xff.org/tags/%E4%BA%8C%E5%8F%89%E6%A0%91%E9%81%8D%E5%8E%86/">二叉树遍历 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%88%86%E5%B8%83%E5%BC%8F/">分布式 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%88%97%E5%AD%98/">列存 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%8A%A8%E6%80%81%E6%B3%A8%E5%85%A5/">动态注入 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%8E%86%E5%8F%B2/">历史 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%90%91%E9%87%8F%E5%8C%96/">向量化 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%9B%9E%E6%BA%AF/">回溯 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%9B%BD%E5%86%85%E6%97%85%E8%A1%8C/">国内旅行 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%9B%BD%E5%A4%96%E6%97%85%E8%A1%8C/">国外旅行 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%A4%9A%E7%A7%9F%E6%88%B7/">多租户 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%A4%A7%E6%95%B0%E6%8D%AE/">大数据 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%AD%98%E5%82%A8/">存储 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%B7%A5%E4%BD%9C%E8%AE%B0%E5%BD%95/">工作记录 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%BE%AE%E6%9C%8D%E5%8A%A1/">微服务 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%95%B0%E6%8D%AE%E4%B8%AD%E5%8F%B0/">数据中台 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%95%B0%E6%8D%AE%E5%BA%93/">数据库 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%95%B0%E6%8D%AE%E6%A8%A1%E5%9E%8B/">数据模型 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%95%B0%E6%8D%AE%E8%BF%81%E7%A7%BB/">数据迁移 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%9F%A5%E8%AF%A2%E4%BC%98%E5%8C%96/">查询优化 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%9F%A5%E8%AF%A2%E7%BC%96%E8%AF%91/">查询编译 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%A6%82%E7%8E%87/">概率 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%B1%87%E7%BC%96/">汇编 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%B5%8B%E8%AF%95/">测试 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%94%9F%E6%B4%BB/">生活 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%94%B5%E5%BD%B1/">电影 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%AE%97%E6%B3%95/">算法 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%B4%A2%E5%BC%95/">索引 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BB%8F%E6%B5%8E/">经济 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BC%93%E5%AD%98/">缓存 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BC%96%E8%AF%91%E5%8E%9F%E7%90%86/">编译原理 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BD%91%E7%BB%9C/">网络 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AE%A1%E7%AE%97%E6%A1%86%E6%9E%B6/">计算框架 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AE%BA%E6%96%87/">论文 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AF%BB%E4%B9%A6/">读书 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AF%BB%E4%B9%A6%E7%AC%94%E8%AE%B0/">读书笔记 </a>
+    
+</div>
+    </section>
+
+    
+
+    <section class="widget">
+        <h3 class="widget-title">RSS</h3>
+        <ul class="widget-list">
+            <li><a href="https://code0xff.org/index.xml">文章 RSS</a></li>
+        </ul>
+    </section>
+</div>
+            </div>
+        </div>
+    </div>
+    <footer id="footer">
+    <div>
+        &copy; 2025 <a href="https://code0xff.org/">记录每个瞬间 By 老王</a>
+        
+    </div>
+    <br />
+    <div>
+        <div class="github-badge">
+            <a href="https://gohugo.io/" target="_black" rel="nofollow"><span class="badge-subject">Powered by</span><span class="badge-value bg-blue">Hugo</span></a>
+        </div>
+        <div class="github-badge">
+            <a href="https://github.com/flysnow-org/maupassant-hugo" target="_black"><span class="badge-subject">Theme</span><span class="badge-value bg-yellowgreen">Maupassant</span></a>
+        </div>
+    </div>
+</footer>
+
+
+    
+    <script type="text/javascript">
+        window.MathJax = {
+            tex2jax: {
+                inlineMath: [['$', '$']],
+                processEscapes: true
+                }
+            };
+    </script>
+    <script src='https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.5/MathJax.js?config=TeX-MML-AM_CHTML' async></script><script src="https://cdn.bootcdn.net/ajax/libs/fancybox/3.5.7/jquery.fancybox.min.js"></script>
+
+<a id="rocket" href="#top"></a>
+<script type="text/javascript" src='/js/totop.js?v=0.0.0' async=""></script>
+
+<script type="application/javascript">
+var doNotTrack = false;
+if (!doNotTrack) {
+	window.ga=window.ga||function(){(ga.q=ga.q||[]).push(arguments)};ga.l=+new Date;
+	ga('create', 'GA ID', 'auto');
+	
+	ga('send', 'pageview');
+}
+</script>
+<script async src='https://www.google-analytics.com/analytics.js'></script>
+
+
+
+    <script type="text/javascript" src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js" async></script>
+
+
+
+
+</body>
+
+</html>

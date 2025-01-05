@@ -1,0 +1,883 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    
+    <meta name="referrer" content="no-referrer-when-downgrade">
+    
+
+    <title>系统设计 | 记录每个瞬间</title>
+    <meta property="og:title" content="系统设计 - 记录每个瞬间">
+    <meta property="og:type" content="article">
+        
+    <meta property="article:published_time" content='2024-10-20T09:08:07&#43;08:00'>
+        
+        
+    <meta property="article:modified_time" content='2024-10-20T09:08:07&#43;08:00'>
+        
+    <meta name="Keywords" content="">
+    <meta name="description" content="系统设计">
+        <meta name="author" content="隔壁老王">
+        
+    <meta property="og:url" content="https://code0xff.org/post/2025/02/system_design/">
+    <link rel="shortcut icon" href='/favicon.ico'  type="image/x-icon">
+
+    <link rel="stylesheet" href='/css/normalize.css'>
+    <link rel="stylesheet" href='/css/style.css'>
+    <script type="text/javascript" src="//cdn.bootcdn.net/ajax/libs/jquery/3.4.1/jquery.min.js"></script>
+
+    
+    
+    
+        <link href="https://cdn.bootcdn.net/ajax/libs/fancybox/3.5.7/jquery.fancybox.min.css" rel="stylesheet">
+    
+    
+    
+    
+</head>
+
+
+<body>
+    <header id="header" class="clearfix">
+    <div class="container">
+        <div class="col-group">
+            <div class="site-name ">
+                
+                    <a id="logo" href="https://code0xff.org/">
+                        记录每个瞬间
+                    </a>
+                
+                
+            </div>
+            <div>
+                <nav id="nav-menu" class="clearfix">
+                    <a class="current" href="https://code0xff.org/">首页</a>
+                    
+                    <a  href="https://code0xff.org/linked/" title="链接">链接</a>
+                    
+                    <a  href="https://code0xff.org/archives/" title="归档">归档</a>
+                    
+                    <a  href="https://code0xff.org/about/" title="关于">关于</a>
+                    
+                </nav>
+            </div>
+        </div>
+    </div>
+</header>
+
+    <div id="body">
+        <div class="container">
+            <div class="col-group">
+
+                <div class="col-8" id="main">
+                    
+<div class="res-cons">
+    
+    <article class="post">
+        <header>
+            <h1 class="post-title">系统设计</h1>
+        </header>
+        <date class="post-meta meta-date">
+            2024年10月20日
+        </date>
+<nav id="TableOfContents">
+  <ul>
+    <li>
+      <ul>
+        <li><a href="#限流">限流</a>
+          <ul>
+            <li><a href="#reference-materials">Reference materials</a></li>
+          </ul>
+        </li>
+        <li><a href="#一致性hash">一致性hash</a>
+          <ul>
+            <li><a href="#reference-materials-1">Reference materials</a></li>
+          </ul>
+        </li>
+        <li><a href="#kv-存储">KV 存储</a>
+          <ul>
+            <li><a href="#reference-materials-2">Reference materials</a></li>
+          </ul>
+        </li>
+        <li><a href="#分布式id生成器">分布式ID生成器</a>
+          <ul>
+            <li><a href="#reference-materials-3">Reference materials</a></li>
+          </ul>
+        </li>
+        <li><a href="#设计url短链">设计URL短链</a>
+          <ul>
+            <li><a href="#reference-materials-4">Reference materials</a></li>
+          </ul>
+        </li>
+        <li><a href="#参考">参考</a></li>
+      </ul>
+    </li>
+  </ul>
+</nav>
+        
+        <div class="post-meta">
+            
+            <span class="post-meta meta-tags">
+                <ul class="clearfix">
+                    <a href='/categories/%E6%9E%B6%E6%9E%84'>架构</a>
+                </ul>
+            </span>
+            
+        </div>
+        
+        
+        <div class="post-meta">
+            <span id="busuanzi_container_page_pv">|<span id="busuanzi_value_page_pv"></span><span>
+                    阅读</span></span>
+        </div>
+        
+        
+        <div class="post-content">
+            <h2 id="限流">限流</h2>
+<p>限流的例子</p>
+<ul>
+<li>Prevent resource starvation caused by Denial of Service (DoS) attack</li>
+<li>Almost all APIs published by large tech companies enforce some form of rate limiting</li>
+<li>For example, Twitter limits the number of tweets to 300 per 3 hours</li>
+<li>Google docs APIs have the following default limit: 300 per user per 60 seconds for read requests</li>
+<li>固定时间的发帖，一段时间注册，点赞，各种情况都有限制，都可以做限流</li>
+<li>可以在 7层做，或者 4层，或者 3层做限流</li>
+</ul>
+<p>限流算法
+Token bucket algorithm</p>
+<ul>
+<li>设置两个参数，bucket 允许的最大令牌数量</li>
+<li>每秒中，往 bucket 中填充的 令牌数量</li>
+</ul>
+<p>Leaking bucket algorithm</p>
+<ul>
+<li>定义队列的长度，也就是相当于：漏洞的大小</li>
+<li>处理速度，也就是每秒中 从队列中 处理/获取 多少请求来处理</li>
+</ul>
+<p>Fixed window counter algorithm</p>
+<ul>
+<li>如果突然流量正好落在两个窗口之间，会导致流量激增</li>
+</ul>
+<p>Sliding window log algorithm</p>
+<ul>
+<li>解决了固定窗口的问题，需要消耗更多的内存</li>
+</ul>
+<p>Sliding window counter algorithm</p>
+<ul>
+<li>混合了固定窗口，滑动窗口，但是实现更复杂</li>
+</ul>
+<p>Rate limiter in a distributed environment</p>
+<ul>
+<li>Race condition
+<ul>
+<li>Read the counter value from Redis.</li>
+<li>Check if ( counter + 1 ) exceeds the threshold.</li>
+<li>If not, increment the counter value by 1 in Redis.</li>
+<li>因为有分布式条件竞争问题，可能需要 lua 脚本做原子操作</li>
+</ul>
+</li>
+<li>Synchronization issue</li>
+</ul>
+<p>Hard vs soft rate limiting</p>
+<ul>
+<li>Hard: The number of requests cannot exceed the threshold.</li>
+<li>Soft: Requests can exceed the threshold for a short period.</li>
+</ul>
+<p>Avoid being rate limited. Design your client with best practices:</p>
+<ul>
+<li>Use client cache to avoid making frequent API calls.</li>
+<li>Understand the limit and do not send too many requests in a short time frame.</li>
+<li>Include code to catch exceptions or errors so your client can gracefully recover from exceptions.</li>
+<li>Add sufficient back off time to retry logic.</li>
+</ul>
+<h3 id="reference-materials">Reference materials</h3>
+<ul>
+<li>[1] Rate-limiting strategies and techniques: <a href="https://cloud.google.com/solutions/rate-limitingstrategies-techniques">https://cloud.google.com/solutions/rate-limitingstrategies-techniques</a></li>
+<li>[2] Twitter rate limits: <a href="https://developer.twitter.com/en/docs/basics/rate-limits">https://developer.twitter.com/en/docs/basics/rate-limits</a></li>
+<li>[3] Google docs usage limits: <a href="https://developers.google.com/docs/api/limits">https://developers.google.com/docs/api/limits</a></li>
+<li>[4] IBM microservices: <a href="https://www.ibm.com/cloud/learn/microservices">https://www.ibm.com/cloud/learn/microservices</a></li>
+<li>[5] Throttle API requests for better throughput:     <a href="https://docs.aws.amazon.com/apigateway/latest/developerguide/api-gateway-requestthrottling.html">https://docs.aws.amazon.com/apigateway/latest/developerguide/api-gateway-requestthrottling.html</a></li>
+<li>[6] Stripe rate limiters: <a href="https://stripe.com/blog/rate-limiters">https://stripe.com/blog/rate-limiters</a></li>
+<li>[7] Shopify REST Admin API rate limits: <a href="https://help.shopify.com/en/api/reference/restadmin-api-rate-limits">https://help.shopify.com/en/api/reference/restadmin-api-rate-limits</a></li>
+<li>[8] Better Rate Limiting With Redis Sorted Sets: <a href="https://engineering.classdojo.com/blog/2015/02/06/rolling-rate-limiter/">https://engineering.classdojo.com/blog/2015/02/06/rolling-rate-limiter/</a></li>
+<li>[9] System Design — Rate limiter and Data modelling: <a href="https://medium.com/@saisandeepmopuri/system-design-rate-limiter-and-data-modelling9304b0d18250">https://medium.com/@saisandeepmopuri/system-design-rate-limiter-and-data-modelling9304b0d18250</a></li>
+<li>[10] How we built rate limiting capable of scaling to millions of domains: <a href="https://blog.cloudflare.com/counting-things-a-lot-of-different-things/">https://blog.cloudflare.com/counting-things-a-lot-of-different-things/</a></li>
+<li>[11] Redis website: <a href="https://redis.io/">https://redis.io/</a></li>
+<li>[12] Lyft rate limiting: <a href="https://github.com/lyft/ratelimit">https://github.com/lyft/ratelimit</a></li>
+<li>[13] Scaling your API with rate limiters: <a href="https://gist.github.com/ptarjan/e38f45f2dfe601419ca3af937fff574d#request-rate-limiter">https://gist.github.com/ptarjan/e38f45f2dfe601419ca3af937fff574d#request-rate-limiter</a></li>
+<li>[14] What is edge computing: <a href="https://www.cloudflare.com/learning/serverless/glossary/whatis-edge-computing/">https://www.cloudflare.com/learning/serverless/glossary/whatis-edge-computing/</a></li>
+<li>[15] Rate Limit Requests with Iptables: <a href="https://blog.programster.org/rate-limit-requests-withiptables">https://blog.programster.org/rate-limit-requests-withiptables</a></li>
+<li>[16] OSI model: <a href="https://en.wikipedia.org/wiki/OSI_model#Layer_architecture">https://en.wikipedia.org/wiki/OSI_model#Layer_architecture</a></li>
+</ul>
+<h2 id="一致性hash">一致性hash</h2>
+<p>总结</p>
+<ul>
+<li>普通 hash 的问题</li>
+<li>一致性 hash 的优化</li>
+<li>虚拟节点优化</li>
+</ul>
+<h3 id="reference-materials-1">Reference materials</h3>
+<ul>
+<li>[1] Consistent hashing: <a href="https://en.wikipedia.org/wiki/Consistent_hashing">https://en.wikipedia.org/wiki/Consistent_hashing</a></li>
+<li>[2] Consistent Hashing: <a href="https://tom-e-white.com/2007/11/consistent-hashing.html">https://tom-e-white.com/2007/11/consistent-hashing.html</a></li>
+<li>[3] Dynamo: Amazon’s Highly Available Key-value Store: <a href="https://www.allthingsdistributed.com/files/amazon-dynamo-sosp2007.pdf">https://www.allthingsdistributed.com/files/amazon-dynamo-sosp2007.pdf</a></li>
+<li>[4] Cassandra - A Decentralized Structured Storage System: <a href="http://www.cs.cornell.edu/Projects/ladis2009/papers/Lakshman-ladis2009.PDF">http://www.cs.cornell.edu/Projects/ladis2009/papers/Lakshman-ladis2009.PDF</a></li>
+<li>[5] How Discord Scaled Elixir to 5,000,000 Concurrent Users: <a href="https://blog.discord.com/scaling-elixir-f9b8e1e7c29b">https://blog.discord.com/scaling-elixir-f9b8e1e7c29b</a></li>
+<li>[6] CS168: The Modern Algorithmic Toolbox Lecture #1: Introduction and Consistent Hashing: <a href="http://theory.stanford.edu/~tim/s16/l/l1.pdf">http://theory.stanford.edu/~tim/s16/l/l1.pdf</a></li>
+<li>[7] Maglev: A Fast and Reliable Software Network Load Balancer: <a href="https://static.googleusercontent.com/media/research.google.com/en//pubs/archive/44824.pdf">https://static.googleusercontent.com/media/research.google.com/en//pubs/archive/44824.pdf</a></li>
+</ul>
+<h2 id="kv-存储">KV 存储</h2>
+<p>产品</p>
+<ul>
+<li>Amazon dynamo、cassandra</li>
+<li>Memcached、Redis</li>
+<li>BitTable、HBase</li>
+</ul>
+<p>CAP 需要做权衡<br>
+RWN 协议</p>
+<ul>
+<li>三副本的情况下，R = 1，W = 1，可用性很好，读写很快</li>
+<li>R or W &gt; 1，提供更好的一致性</li>
+<li>W + R &gt; N，强一致性</li>
+<li>R = 1 and W = N, the system is optimized for a fast read.</li>
+<li>W = 1 and R = N, the system is optimized for fast write.</li>
+<li>W + R &gt; N, strong consistency is guaranteed (Usually N = 3, W = R = 2).</li>
+<li>W + R &lt;= N, strong consistency is not guaranteed.</li>
+</ul>
+<p>使用 向量时钟 来解决冲突   <br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/10/29/75Fi64.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/10/29/75Fi64.png" />
+        </a>
+    <br>
+表示</p>
+<ul>
+<li>用 a [server, version] 来表示</li>
+<li>如果存在，则更新，不存在则设置 [si,1]</li>
+</ul>
+<p>gossip 协议
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/10/29/75F2Nh.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/10/29/75F2Nh.png" />
+        </a>
+    </p>
+<p>Merkle trees，用来快速查找哪些 key 不匹配<br>
+字底向上的方式创建<br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/10/29/75F6a9.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/10/29/75F6a9.png" />
+        </a>
+    </p>
+<p>Main features of the architecture are listed as follows:</p>
+<ul>
+<li>Clients communicate with the key-value store through simple APIs: get(key) and put(key,
+value).</li>
+<li>A coordinator is a node that acts as a proxy between the client and the key-value store.</li>
+<li>Nodes are distributed on a ring using consistent hashing.</li>
+<li>The system is completely decentralized so adding and moving nodes can be automatic.</li>
+<li>Data is replicated at multiple nodes.</li>
+<li>There is no single point of failure as every node has the same set of responsibilities.</li>
+</ul>
+<p>读写方式</p>
+<ul>
+<li>可以参考 Cassandra</li>
+<li>先写 WAL，再写内存，满了就刷到磁盘，生成 sstable</li>
+<li>读先读内存，有就直接返回，没有就查 sstable，可以用 bloom filter</li>
+</ul>
+<p>总结</p>
+<table>
+<thead>
+<tr>
+<th>Goal/Problems</th>
+<th>Technique</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Ability to store big data</td>
+<td>Use consistent hashing to spread the load across servers</td>
+</tr>
+<tr>
+<td>High availability reads</td>
+<td>Data replication, Multi-data center setup</td>
+</tr>
+<tr>
+<td>Highly available writes</td>
+<td>Versioning and conflict resolution with vector clocks</td>
+</tr>
+<tr>
+<td>Dataset partition</td>
+<td>Consistent Hashing</td>
+</tr>
+<tr>
+<td>Incremental scalability</td>
+<td>Consistent Hashing</td>
+</tr>
+<tr>
+<td>Heterogeneity</td>
+<td>Consistent Hashing</td>
+</tr>
+<tr>
+<td>Tunable consistency</td>
+<td>Quorum consensus</td>
+</tr>
+<tr>
+<td>Handling temporary failures</td>
+<td>Sloppy quorum and hinted handoff</td>
+</tr>
+<tr>
+<td>Handling permanent failures</td>
+<td>Merkle tree</td>
+</tr>
+<tr>
+<td>Handling data center outage</td>
+<td>Cross-data center replication</td>
+</tr>
+</tbody>
+</table>
+<h3 id="reference-materials-2">Reference materials</h3>
+<ul>
+<li>[1] Amazon DynamoDB: <a href="https://aws.amazon.com/dynamodb/">https://aws.amazon.com/dynamodb/</a></li>
+<li>[2] memcached: <a href="https://memcached.org/">https://memcached.org/</a></li>
+<li>[3] Redis: <a href="https://redis.io/">https://redis.io/</a></li>
+<li>[4] Dynamo: Amazon’s Highly Available Key-value Store: <a href="https://www.allthingsdistributed.com/files/amazon-dynamo-sosp2007.pdf">https://www.allthingsdistributed.com/files/amazon-dynamo-sosp2007.pdf</a></li>
+<li>[5] Cassandra: <a href="https://cassandra.apache.org/">https://cassandra.apache.org/</a></li>
+<li>[6] Bigtable: A Distributed Storage System for Structured Data: <a href="https://static.googleusercontent.com/media/research.google.com/en//archive/bigtableosdi06.pdf">https://static.googleusercontent.com/media/research.google.com/en//archive/bigtableosdi06.pdf</a></li>
+<li>[7] Merkle tree: <a href="https://en.wikipedia.org/wiki/Merkle_tree">https://en.wikipedia.org/wiki/Merkle_tree</a></li>
+<li>[8] Cassandra architecture: <a href="https://cassandra.apache.org/doc/latest/architecture/">https://cassandra.apache.org/doc/latest/architecture/</a></li>
+<li>[9] SStable: <a href="https://www.igvita.com/2012/02/06/sstable-and-log-structured-storage-leveldb/">https://www.igvita.com/2012/02/06/sstable-and-log-structured-storage-leveldb/</a></li>
+<li>[10] Bloom filter <a href="https://en.wikipedia.org/wiki/Bloom_filter">https://en.wikipedia.org/wiki/Bloom_filter</a></li>
+</ul>
+<h2 id="分布式id生成器">分布式ID生成器</h2>
+<p>要求</p>
+<ul>
+<li>IDs must be unique.</li>
+<li>IDs are numerical values only.</li>
+<li>IDs fit into 64-bit.</li>
+<li>IDs are ordered by date.</li>
+<li>Ability to generate over 10,000 unique IDs per second</li>
+</ul>
+<p>解决办法</p>
+<ul>
+<li>多主之间用 increment + k 的方式，但是扩展性不好</li>
+<li>UUID，128位太长了，而且时间无法排序</li>
+<li>Ticket Server，用一个中心节点生成 ID，但会有单点问题</li>
+<li>Twitter snowflake</li>
+</ul>
+<table>
+<thead>
+<tr>
+<th>1 bit</th>
+<th>41 bits</th>
+<th>5 bits</th>
+<th>5 bits</th>
+<th>12 bits</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>0</td>
+<td>timestamp</td>
+<td>data center ID</td>
+<td>machine ID</td>
+<td>sequence number</td>
+</tr>
+</tbody>
+</table>
+<p>时间戳是 41 bit，最多可以使用 69 年<br>
+时间戳是 12 bit，也就是 1 ms 可以生成 4096个 ID</p>
+<h3 id="reference-materials-3">Reference materials</h3>
+<ul>
+<li>[1] Universally unique identifier: <a href="https://en.wikipedia.org/wiki/Universally_unique_identifier">https://en.wikipedia.org/wiki/Universally_unique_identifier</a></li>
+<li>[2] Ticket Servers: Distributed Unique Primary Keys on the Cheap: <a href="https://code.flickr.net/2010/02/08/ticket-servers-distributed-unique-primary-keys-on-thecheap/">https://code.flickr.net/2010/02/08/ticket-servers-distributed-unique-primary-keys-on-thecheap/</a></li>
+<li>[3] Announcing Snowflake: <a href="https://blog.twitter.com/engineering/en_us/a/2010/announcingsnowflake.html">https://blog.twitter.com/engineering/en_us/a/2010/announcingsnowflake.html</a></li>
+<li>[4] Network time protocol: <a href="https://en.wikipedia.org/wiki/Network_Time_Protocol">https://en.wikipedia.org/wiki/Network_Time_Protocol</a></li>
+</ul>
+<h2 id="设计url短链">设计URL短链</h2>
+<p>Back of the envelope estimation</p>
+<ul>
+<li>Write operation: 100 million URLs are generated per day.</li>
+<li>Write operation per second: 100 million / 24 /3600 = 1160</li>
+<li>Read operation: Assuming ratio of read operation to write operation is 10:1, read
+operation per second: 1160 * 10 = 11,600</li>
+<li>Assuming the URL shortener service will run for 10 years, this means we must support
+100 million * 365 * 10 = 365 billion records.</li>
+<li>Assume average URL length is 100.</li>
+<li>Storage requirement over 10 years: 365 billion * 100 bytes * 10 years = 365 TB</li>
+</ul>
+<p>跳转</p>
+<ul>
+<li>301，永久重定向</li>
+<li>302，临时重定向</li>
+</ul>
+<p>实现</p>
+<ul>
+<li>使用 bitmap 可以做查询检查</li>
+<li>生成一个 id，然后将 id：2009215674938，映射成 zn9edcu</li>
+<li>映射规则是对这个数做 base 62，也就是 62进制，这样就能得到一个 7 位长的短链接了</li>
+<li>62^7 可以支持 3.65万亿 记录</li>
+<li>post 请求用来创建一个 长URL -&gt; 短URL</li>
+<li>使用 短ULR 访问 web服务，然后 重定向到真实的 长 URL</li>
+</ul>
+<p>扩展</p>
+<ul>
+<li>需要考虑限流问题，IP 地址限流</li>
+<li>web 服务是无状态的很容易扩展，数据库层面做主从复制</li>
+</ul>
+<h3 id="reference-materials-4">Reference materials</h3>
+<ul>
+<li>[1] A RESTful Tutorial: <a href="https://www.restapitutorial.com/index.html">https://www.restapitutorial.com/index.html</a></li>
+<li>[2] Bloom filter: <a href="https://en.wikipedia.org/wiki/Bloom_filter">https://en.wikipedia.org/wiki/Bloom_filter</a></li>
+</ul>
+<h2 id="参考">参考</h2>
+<ul>
+<li><a href="https://github.com/mukul96/System-Design-AlexXu/blob/master/System%20Design%20Interview%20An%20Insider%E2%80%99s%20Guide%20by%20Alex%20Xu%20(z-lib.org).pdf">电子书</a></li>
+</ul>
+
+			<script type="text/javascript"
+        async
+        src="https://cdn.bootcss.com/mathjax/2.7.3/MathJax.js?config=TeX-AMS-MML_HTMLorMML">
+MathJax.Hub.Config({
+  tex2jax: {
+    inlineMath: [['$','$'], ['\\(','\\)']],
+    displayMath: [['$$','$$'], ['\[\[','\]\]']],
+    processEscapes: true,
+    processEnvironments: true,
+    skipTags: ['script', 'noscript', 'style', 'textarea', 'pre'],
+    TeX: { equationNumbers: { autoNumber: "AMS" },
+         extensions: ["AMSmath.js", "AMSsymbols.js"] }
+  }
+});
+
+MathJax.Hub.Queue(function() {
+    
+    
+    
+    var all = MathJax.Hub.getAllJax(), i;
+    for(i = 0; i < all.length; i += 1) {
+        all[i].SourceElement().parentNode.className += ' has-jax';
+    }
+});
+</script>
+
+<style>
+code.has-jax {
+    font: inherit;
+    font-size: 100%;
+    background: inherit;
+    border: inherit;
+    color: #515151;
+}
+</style>
+        </div>
+
+        
+
+
+        
+
+<div class="post-archive">
+    <h2>相关文章</h2>
+    <ul class="listing">
+        
+        <li><a href="/post/2024/10/microservice_architecture/">微服务架构</a></li>
+        
+    </ul>
+</div>
+
+
+        <div class="post-meta meta-tags">
+            
+            <ul class="clearfix">
+                
+                <li><a href='/tags/micro-service'>micro-service</a></li>
+                
+            </ul>
+            
+        </div>
+    </article>
+    
+    
+
+    
+    
+    <div class="post bg-white">
+      <script src="https://utteranc.es/client.js"
+            repo= "himichael/hugoblogtalks"
+            issue-term="pathname"
+            theme="github-light"
+            crossorigin="anonymous"
+            async>
+      </script>
+    </div>
+    
+</div>
+
+
+                </div>
+
+                <div id="secondary">
+    <section class="widget">
+        <form id="search" action='https://code0xff.org/search/' method="get" accept-charset="utf-8" target="_blank" _lpchecked="1">
+      
+      <input type="text" name="q" maxlength="20" placeholder="Search">
+      <input type="hidden" name="sitesearch" value="https://code0xff.org/">
+      <button type="submit" class="submit icon-search"></button>
+</form>
+    </section>
+    
+    <section class="widget">
+        <h3 class="widget-title">最近文章</h3>
+<ul class="widget-list">
+    
+    <li>
+        <a href="https://code0xff.org/post/2025/01/spark_register_source/" title="Spark 注册数据源">Spark 注册数据源</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2025/01/spark_core_2/" title="Spark Core相关-2">Spark Core相关-2</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2024/12/llamafactory/" title="Llama Factory">Llama Factory</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2024/11/spark_core/" title="Spark Core相关-1">Spark Core相关-1</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2024/11/sae_tunnel/" title="sea tunnel">sea tunnel</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2024/11/k8s_networks/" title="k8s 网络">k8s 网络</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2024/11/ozone/" title="ozone">ozone</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2024/11/es/" title="ES的简单学习">ES的简单学习</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2025/02/ai/" title="AI的简单学习">AI的简单学习</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2024/11/big_data_investigation/" title="国内几个云厂商大数据平台">国内几个云厂商大数据平台</a>
+    </li>
+    
+</ul>
+    </section>
+
+    
+
+    <section class="widget">
+        <h3 class="widget-title"><a href='/categories/'>分类</a></h3>
+<ul class="widget-list">
+    
+    <li><a href="https://code0xff.org/categories/%E5%88%86%E5%B8%83%E5%BC%8F/">分布式 (6)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E5%8E%9F%E7%90%86%E5%88%86%E6%9E%90/">原理分析 (24)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E5%95%86%E4%B8%9A/">商业 (3)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E5%A4%A7%E6%95%B0%E6%8D%AE/">大数据 (56)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%95%B0%E6%8D%AE%E5%BA%93/">数据库 (41)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%96%87%E5%AD%A6%E5%92%8C%E8%89%BA%E6%9C%AF/">文学和艺术 (3)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%97%85%E8%A1%8C/">旅行 (12)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%9E%B6%E6%9E%84/">架构 (13)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E7%AE%97%E6%B3%95/">算法 (8)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E7%B3%BB%E7%BB%9F/">系统 (7)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E7%BC%96%E7%A8%8B%E8%AF%AD%E8%A8%80/">编程语言 (7)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E8%A1%8C%E4%B8%9A%E8%A7%82%E5%AF%9F/">行业观察 (3)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E8%AF%BB%E4%B9%A6%E7%AC%94%E8%AE%B0/">读书笔记 (14)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E9%9A%8F%E4%BE%BF%E5%86%99%E5%86%99/">随便写写 (3)</a></li>
+    
+</ul>
+    </section>
+
+    <section class="widget">
+        <h3 class="widget-title">归档</a></h3>
+<ul class="widget-list">
+    
+    <li><a href="https://code0xff.org/years/2021%E5%B9%B4/">2021年 (41)</a></li>
+    
+    <li><a href="https://code0xff.org/years/2022%E5%B9%B4/">2022年 (55)</a></li>
+    
+    <li><a href="https://code0xff.org/years/2023%E5%B9%B4/">2023年 (54)</a></li>
+    
+    <li><a href="https://code0xff.org/years/2024%E5%B9%B4/">2024年 (48)</a></li>
+    
+    <li><a href="https://code0xff.org/years/2025%E5%B9%B4/">2025年 (2)</a></li>
+    
+</ul>
+    </section>
+
+    <section class="widget">
+        <h3 class="widget-title"><a href='/tags/'>标签</a></h3>
+<div class="tagcloud">
+    
+    <a href="https://code0xff.org/tags/ai/">AI </a>
+    
+    <a href="https://code0xff.org/tags/ambari/">Ambari </a>
+    
+    <a href="https://code0xff.org/tags/architecture/">architecture </a>
+    
+    <a href="https://code0xff.org/tags/bigdata/">bigdata </a>
+    
+    <a href="https://code0xff.org/tags/b%E6%A0%91/">B树 </a>
+    
+    <a href="https://code0xff.org/tags/c&#43;&#43;/">C&#43;&#43; </a>
+    
+    <a href="https://code0xff.org/tags/calcite/">calcite </a>
+    
+    <a href="https://code0xff.org/tags/cmu-database/">CMU-Database </a>
+    
+    <a href="https://code0xff.org/tags/data_ingestion/">Data_Ingestion </a>
+    
+    <a href="https://code0xff.org/tags/deltalake/">DeltaLake </a>
+    
+    <a href="https://code0xff.org/tags/doris/">Doris </a>
+    
+    <a href="https://code0xff.org/tags/english/">English </a>
+    
+    <a href="https://code0xff.org/tags/es/">ES </a>
+    
+    <a href="https://code0xff.org/tags/facebook/">Facebook </a>
+    
+    <a href="https://code0xff.org/tags/flink/">flink </a>
+    
+    <a href="https://code0xff.org/tags/flume/">flume </a>
+    
+    <a href="https://code0xff.org/tags/gc/">GC </a>
+    
+    <a href="https://code0xff.org/tags/gluten/">Gluten </a>
+    
+    <a href="https://code0xff.org/tags/hana/">HANA </a>
+    
+    <a href="https://code0xff.org/tags/hive/">Hive </a>
+    
+    <a href="https://code0xff.org/tags/iceberg/">iceberg </a>
+    
+    <a href="https://code0xff.org/tags/impala/">Impala </a>
+    
+    <a href="https://code0xff.org/tags/janino/">janino </a>
+    
+    <a href="https://code0xff.org/tags/k8s/">k8s </a>
+    
+    <a href="https://code0xff.org/tags/kafka/">Kafka </a>
+    
+    <a href="https://code0xff.org/tags/kudu/">kudu </a>
+    
+    <a href="https://code0xff.org/tags/kyuubi/">Kyuubi </a>
+    
+    <a href="https://code0xff.org/tags/lakehouse/">Lakehouse </a>
+    
+    <a href="https://code0xff.org/tags/leveldb/">LevelDB </a>
+    
+    <a href="https://code0xff.org/tags/llamafactory/">LlamaFactory </a>
+    
+    <a href="https://code0xff.org/tags/llvm/">LLVM </a>
+    
+    <a href="https://code0xff.org/tags/manacher/">Manacher </a>
+    
+    <a href="https://code0xff.org/tags/mapreduce/">MapReduce </a>
+    
+    <a href="https://code0xff.org/tags/micro-service/">micro-service </a>
+    
+    <a href="https://code0xff.org/tags/mysql/">MySQL </a>
+    
+    <a href="https://code0xff.org/tags/newsql/">NewSQL </a>
+    
+    <a href="https://code0xff.org/tags/oceanbase/">OceanBase </a>
+    
+    <a href="https://code0xff.org/tags/openlogreplicator/">OpenLogReplicator </a>
+    
+    <a href="https://code0xff.org/tags/parquet/">parquet </a>
+    
+    <a href="https://code0xff.org/tags/paxos/">paxos </a>
+    
+    <a href="https://code0xff.org/tags/presto/">Presto </a>
+    
+    <a href="https://code0xff.org/tags/quick-sql/">quick-sql </a>
+    
+    <a href="https://code0xff.org/tags/raft/">raft </a>
+    
+    <a href="https://code0xff.org/tags/scala/">scala </a>
+    
+    <a href="https://code0xff.org/tags/simd/">SIMD </a>
+    
+    <a href="https://code0xff.org/tags/snowflake/">snowflake </a>
+    
+    <a href="https://code0xff.org/tags/spark/">spark </a>
+    
+    <a href="https://code0xff.org/tags/sre/">SRE </a>
+    
+    <a href="https://code0xff.org/tags/teradata/">TeraData </a>
+    
+    <a href="https://code0xff.org/tags/tpcx-hs/">TPCx-HS </a>
+    
+    <a href="https://code0xff.org/tags/trino/">Trino </a>
+    
+    <a href="https://code0xff.org/tags/tuning/">Tuning </a>
+    
+    <a href="https://code0xff.org/tags/unix/">unix </a>
+    
+    <a href="https://code0xff.org/tags/yarn/">YARN </a>
+    
+    <a href="https://code0xff.org/tags/%E4%BA%8C%E5%88%86%E6%9F%A5%E6%89%BE/">二分查找 </a>
+    
+    <a href="https://code0xff.org/tags/%E4%BA%8C%E5%8F%89%E6%A0%91%E9%81%8D%E5%8E%86/">二叉树遍历 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%88%86%E5%B8%83%E5%BC%8F/">分布式 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%88%97%E5%AD%98/">列存 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%8A%A8%E6%80%81%E6%B3%A8%E5%85%A5/">动态注入 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%8E%86%E5%8F%B2/">历史 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%90%91%E9%87%8F%E5%8C%96/">向量化 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%9B%9E%E6%BA%AF/">回溯 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%9B%BD%E5%86%85%E6%97%85%E8%A1%8C/">国内旅行 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%9B%BD%E5%A4%96%E6%97%85%E8%A1%8C/">国外旅行 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%A4%9A%E7%A7%9F%E6%88%B7/">多租户 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%A4%A7%E6%95%B0%E6%8D%AE/">大数据 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%AD%98%E5%82%A8/">存储 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%B7%A5%E4%BD%9C%E8%AE%B0%E5%BD%95/">工作记录 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%BE%AE%E6%9C%8D%E5%8A%A1/">微服务 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%95%B0%E6%8D%AE%E4%B8%AD%E5%8F%B0/">数据中台 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%95%B0%E6%8D%AE%E5%BA%93/">数据库 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%95%B0%E6%8D%AE%E6%A8%A1%E5%9E%8B/">数据模型 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%95%B0%E6%8D%AE%E8%BF%81%E7%A7%BB/">数据迁移 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%9F%A5%E8%AF%A2%E4%BC%98%E5%8C%96/">查询优化 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%9F%A5%E8%AF%A2%E7%BC%96%E8%AF%91/">查询编译 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%A6%82%E7%8E%87/">概率 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%B1%87%E7%BC%96/">汇编 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%B5%8B%E8%AF%95/">测试 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%94%9F%E6%B4%BB/">生活 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%94%B5%E5%BD%B1/">电影 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%AE%97%E6%B3%95/">算法 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%B4%A2%E5%BC%95/">索引 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BB%8F%E6%B5%8E/">经济 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BC%93%E5%AD%98/">缓存 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BC%96%E8%AF%91%E5%8E%9F%E7%90%86/">编译原理 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BD%91%E7%BB%9C/">网络 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AE%A1%E7%AE%97%E6%A1%86%E6%9E%B6/">计算框架 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AE%BA%E6%96%87/">论文 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AF%BB%E4%B9%A6/">读书 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AF%BB%E4%B9%A6%E7%AC%94%E8%AE%B0/">读书笔记 </a>
+    
+</div>
+    </section>
+
+    
+
+    <section class="widget">
+        <h3 class="widget-title">RSS</h3>
+        <ul class="widget-list">
+            <li><a href="https://code0xff.org/index.xml">文章 RSS</a></li>
+        </ul>
+    </section>
+</div>
+            </div>
+        </div>
+    </div>
+    <footer id="footer">
+    <div>
+        &copy; 2025 <a href="https://code0xff.org/">记录每个瞬间 By 老王</a>
+        
+    </div>
+    <br />
+    <div>
+        <div class="github-badge">
+            <a href="https://gohugo.io/" target="_black" rel="nofollow"><span class="badge-subject">Powered by</span><span class="badge-value bg-blue">Hugo</span></a>
+        </div>
+        <div class="github-badge">
+            <a href="https://github.com/flysnow-org/maupassant-hugo" target="_black"><span class="badge-subject">Theme</span><span class="badge-value bg-yellowgreen">Maupassant</span></a>
+        </div>
+    </div>
+</footer>
+
+
+    
+    <script type="text/javascript">
+        window.MathJax = {
+            tex2jax: {
+                inlineMath: [['$', '$']],
+                processEscapes: true
+                }
+            };
+    </script>
+    <script src='https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.5/MathJax.js?config=TeX-MML-AM_CHTML' async></script><script src="https://cdn.bootcdn.net/ajax/libs/fancybox/3.5.7/jquery.fancybox.min.js"></script>
+
+<a id="rocket" href="#top"></a>
+<script type="text/javascript" src='/js/totop.js?v=0.0.0' async=""></script>
+
+<script type="application/javascript">
+var doNotTrack = false;
+if (!doNotTrack) {
+	window.ga=window.ga||function(){(ga.q=ga.q||[]).push(arguments)};ga.l=+new Date;
+	ga('create', 'GA ID', 'auto');
+	
+	ga('send', 'pageview');
+}
+</script>
+<script async src='https://www.google-analytics.com/analytics.js'></script>
+
+
+
+    <script type="text/javascript" src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js" async></script>
+
+
+
+
+</body>
+
+</html>
