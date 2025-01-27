@@ -1,0 +1,2807 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    
+    <meta name="referrer" content="no-referrer-when-downgrade">
+    
+
+    <title>YARN原理分析 | 记录每个瞬间</title>
+    <meta property="og:title" content="YARN原理分析 - 记录每个瞬间">
+    <meta property="og:type" content="article">
+        
+    <meta property="article:published_time" content='2025-01-11T01:08:07&#43;08:00'>
+        
+        
+    <meta property="article:modified_time" content='2025-01-11T01:08:07&#43;08:00'>
+        
+    <meta name="Keywords" content="">
+    <meta name="description" content="YARN原理分析">
+        <meta name="author" content="隔壁老王">
+        
+    <meta property="og:url" content="https://code0xff.org/post/2025/01/yarn/">
+    <link rel="shortcut icon" href='/favicon.ico'  type="image/x-icon">
+
+    <link rel="stylesheet" href='/css/normalize.css'>
+    <link rel="stylesheet" href='/css/style.css'>
+    <script type="text/javascript" src="//cdn.bootcdn.net/ajax/libs/jquery/3.4.1/jquery.min.js"></script>
+
+    
+    
+    
+        <link href="https://cdn.bootcdn.net/ajax/libs/fancybox/3.5.7/jquery.fancybox.min.css" rel="stylesheet">
+    
+    
+    
+    
+</head>
+
+
+<body>
+    <header id="header" class="clearfix">
+    <div class="container">
+        <div class="col-group">
+            <div class="site-name ">
+                
+                    <a id="logo" href="https://code0xff.org/">
+                        记录每个瞬间
+                    </a>
+                
+                
+            </div>
+            <div>
+                <nav id="nav-menu" class="clearfix">
+                    <a class="current" href="https://code0xff.org/">首页</a>
+                    
+                    <a  href="https://code0xff.org/linked/" title="链接">链接</a>
+                    
+                    <a  href="https://code0xff.org/archives/" title="归档">归档</a>
+                    
+                    <a  href="https://code0xff.org/about/" title="关于">关于</a>
+                    
+                </nav>
+            </div>
+        </div>
+    </div>
+</header>
+
+    <div id="body">
+        <div class="container">
+            <div class="col-group">
+
+                <div class="col-8" id="main">
+                    
+<div class="res-cons">
+    
+    <article class="post">
+        <header>
+            <h1 class="post-title">YARN原理分析</h1>
+        </header>
+        <date class="post-meta meta-date">
+            2025年1月11日
+        </date>
+<nav id="TableOfContents">
+  <ul>
+    <li>
+      <ul>
+        <li><a href="#整体架构">整体架构</a></li>
+        <li><a href="#rpc">RPC</a></li>
+        <li><a href="#applicationmaster">ApplicationMaster</a></li>
+        <li><a href="#resourcemanager">ResourceManager</a>
+          <ul>
+            <li><a href="#模块划分">模块划分</a></li>
+            <li><a href="#状态机">状态机</a></li>
+            <li><a href="#常见行为分析">常见行为分析</a></li>
+          </ul>
+        </li>
+        <li><a href="#资源调度">资源调度</a>
+          <ul>
+            <li><a href="#基本概念">基本概念</a></li>
+            <li><a href="#队列">队列</a></li>
+          </ul>
+        </li>
+        <li><a href="#nodemanage">NodeManage</a>
+          <ul>
+            <li><a href="#模块划分-1">模块划分</a></li>
+            <li><a href="#分布式缓存">分布式缓存</a></li>
+            <li><a href="#状态机-1">状态机</a></li>
+            <li><a href="#container-管理">Container 管理</a></li>
+          </ul>
+        </li>
+        <li><a href="#参考">参考</a></li>
+      </ul>
+    </li>
+  </ul>
+</nav>
+        
+        <div class="post-meta">
+            
+            <span class="post-meta meta-tags">
+                <ul class="clearfix">
+                    <a href='/categories/%E5%8E%9F%E7%90%86%E5%88%86%E6%9E%90'>原理分析</a>
+                </ul>
+            </span>
+            
+        </div>
+        
+        
+        <div class="post-meta">
+            <span id="busuanzi_container_page_pv">|<span id="busuanzi_value_page_pv"></span><span>
+                    阅读</span></span>
+        </div>
+        
+        
+        <div class="post-content">
+            <h2 id="整体架构">整体架构</h2>
+<p>整体架构<br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/05/21/7gEFJ6.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/05/21/7gEFJ6.png" />
+        </a>
+    </p>
+<h2 id="rpc">RPC</h2>
+<p>Apache YARN 的 RPC 协议<br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/01/11/7Wpse9.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2025/01/11/7Wpse9.png" />
+        </a>
+    </p>
+<p>使用了</p>
+<ul>
+<li>protocol buffer</li>
+<li>avro</li>
+</ul>
+<p>reactor 模式</p>
+<ul>
+<li>tomcat、jetty 使用的就是这种模式<br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/01/11/7Wp6wY.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2025/01/11/7Wp6wY.png" />
+        </a>
+    </li>
+</ul>
+<p>Hadoop RPC Server 处理流程<br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/01/11/7WpFSH.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2025/01/11/7WpFSH.png" />
+        </a>
+    </p>
+<p>其他</p>
+<ul>
+<li>使用了状态机</li>
+<li>使用了 事件驱动</li>
+</ul>
+<p>RPC 中的 protocol buffers 封装<br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/01/11/7WpZiZ.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2025/01/11/7WpZiZ.png" />
+        </a>
+    </p>
+<p>事件处理模型
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/01/11/7Wpe7U.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2025/01/11/7Wpe7U.png" />
+        </a>
+    </p>
+<h2 id="applicationmaster">ApplicationMaster</h2>
+<p>ApplicationMaster 和 ResourcManager 通讯流程</p>
+<ul>
+<li>AM启动识，先向 RM 注册，注册信息封装到 protocol buffers 消息中</li>
+<li>AM 通过 RPC 向 RM 申请资源，以 container为单位</li>
+<li>AM 通过 RPC 告诉 RM 应用程序执行完毕<br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/01/12/7WLhsf.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2025/01/12/7WLhsf.png" />
+        </a>
+    </li>
+</ul>
+<p>ApplicationMaster 和 NodeManager 通讯流程</p>
+<ul>
+<li>将申请到的资源二次分配给内部任务，并通过 RPC 和 NM 通讯，启动 Container</li>
+<li>AM 通过 RPC 跟 NM 通讯，获取 container 的运行状态</li>
+<li>当一个container 结束后，AM 会感知到，并 告诉 NM，可以释放资源了
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/01/12/7WL5jj.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2025/01/12/7WL5jj.png" />
+        </a>
+    </li>
+</ul>
+<p>AM - RM 的编程库</p>
+<ul>
+<li>核心逻辑由 AMRMClientImpl 和 AMRMClientAsync 实现</li>
+<li>AMRMClientAsync 提供了异步回调接口
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/01/12/7WLct4.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2025/01/12/7WLct4.png" />
+        </a>
+    </li>
+</ul>
+<p>AM - NM 编程接口</p>
+<ul>
+<li>AN 和 NM 的交互核心逻辑由 NMClientIml 和 NMClientAsync 实现</li>
+<li>NMClientAsync 将事件封装到阻塞队列中，等待后面回调
+<a href="https://v1.ax1x.com/2025/01/12/7WLWGm.png">https://v1.ax1x.com/2025/01/12/7WLWGm.png</a></li>
+</ul>
+<p>YARN 自带的 application 程序实例：</p>
+<ul>
+<li>DistributedShell</li>
+<li>UnManagedAM</li>
+</ul>
+<h2 id="resourcemanager">ResourceManager</h2>
+<h3 id="模块划分">模块划分</h3>
+<p>ResourceManager 相关的 RPC 协议</p>
+<ul>
+<li>与客户端交互，处理来自客户端的请求</li>
+<li>启动和管理 AM，在 AM 失败的时候重启它</li>
+<li>管理 NM，接收 NM 的资源汇报信息，并向 NM 下达管理指令，如杀死Container</li>
+<li>资源管理和调度，接收来自 AM 的资源申请，并为其分配资源
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/01/12/7WLvoh.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2025/01/12/7WLvoh.png" />
+        </a>
+    </li>
+</ul>
+<p>ResourcManager 包含如下一些模块</p>
+<ul>
+<li>用户交互模块
+<ul>
+<li>针对普通用户的 ClientRmService，如提交应用程序、终止、获取运行状态</li>
+<li>AdminService，针对管理员的，动态更新节点列表，更新 ACL，更新队列</li>
+<li>WebApp，真实集群资源使用情况</li>
+</ul>
+</li>
+<li>NM 管理模块
+<ul>
+<li>NMLivelinessMonitor，监控 NM 是否或者，如果一段时间未汇报状态，则认为挂了</li>
+<li>NodesListManager，维护正常节点和异常节点列表，管理白名单、黑名单</li>
+<li>ResourceTrackerService，处理来自 NM 的请求，包括注册(节点ID、可用资源等)，心跳(各个Container状态，运行的Application列表，节点健康状态)</li>
+</ul>
+</li>
+<li>AM 管理模块
+<ul>
+<li>AMLivelinessMonitor，监控 AM 是否或者，一段时间未汇报则认为挂了</li>
+<li>ApplicationMasterLauncher，与某个 NM 通讯，要求它为某个应用程序启动 AM</li>
+<li>ApplicationMasterService(AMS)，处理 AM的请求包含注册(启动节点，对外RPC等)，心跳(所需的资源描述、待释放的Container列表，黑名单列表)</li>
+</ul>
+</li>
+<li>Application 管理模块
+<ul>
+<li>ApplicationACLsManager，管理应用程序访问权利，查看权限、修改权限</li>
+<li>RMAppManager，管理应用程序的启动和关闭</li>
+<li>ContainerAllocationExpirer，当 AM 收到 RM新分配的Container后，必须在一段时间内上报</li>
+</ul>
+</li>
+<li>状态机管理模块
+<ul>
+<li>RMApp，维护一个应用程序，application的整合运行周期，包括启动到结束</li>
+<li>RMAppAttempt，一个应用程序失败后重启，维护了一次运行厂商的整个生命周期</li>
+<li>RMContainer，将资源封装为 container发送给 AM，而AM会在container描述的运行环境中启动任务，所以container和任务的生命周期是一致的</li>
+<li>RMNode，维护 NM 的生命周期，包括启动到结束</li>
+</ul>
+</li>
+<li>安全管理模块
+<ul>
+<li>自带了非常全面的权限管理机制</li>
+<li>AMSecretManager、ContainerTokenSecretManager、ApplicationTokenSecretManager 等模块</li>
+</ul>
+</li>
+<li>资源分片模块
+<ul>
+<li>主要涉及一个组件：ResourceScheduler，是资源调度器</li>
+<li>根据一定的约束条件，如队列容量限制等，将集群资源分配给各个应用程序</li>
+<li>自带了一个批处理调度器 FIFO，和两个多用户调度器 FairScheduler，CapacityScheduler(默认)
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/01/12/7WLDH9.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2025/01/12/7WLDH9.png" />
+        </a>
+    </li>
+</ul>
+</li>
+</ul>
+<p>ResourceManager 内部事件 和 事件处理器交互图<br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/01/12/7WLOUY.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2025/01/12/7WLOUY.png" />
+        </a>
+    </p>
+<p>ApplicationMaster 的启动流程</p>
+<ul>
+<li>用户向 RM 提交应用程序，RM收到后先向资源调度器申请 AM 资源，再由ApplicationMasterLauncher与对应的NM 通讯，从而启动 AM</li>
+<li>AM 启动完成后，ApplicationMasterLauncher 会通过事件的形式，将刚启动的AM 注册到 AMLivelinessMonitor</li>
+<li>AM启动后，先向 ApplicationMasterService注册，将自己的host、port等回报</li>
+<li>AM 运行过程中，周期性的向 ApplicationMasterService回报心跳</li>
+<li>ApplicationMasterService收到心跳，通知AMLivelinessMonitor 更新最新的信息</li>
+<li>当应用程序完成后，AM向ApplicationMasterService 发送请求，注销自己</li>
+<li>ApplicationMasterService收到请求后，标准应用程序为完成，通知AMLivelinessMonitor 移除心跳
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/01/12/7WLS2H.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2025/01/12/7WLS2H.png" />
+        </a>
+    </li>
+</ul>
+<h3 id="状态机">状态机</h3>
+<p>应用程序状态机的组织结构
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/01/12/7WL1EZ.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2025/01/12/7WL1EZ.png" />
+        </a>
+    </p>
+<p>RMApp 状态机<br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/01/12/7WLPcU.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2025/01/12/7WLPcU.png" />
+        </a>
+    </p>
+<p>RMApp 状态机事件来源
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/01/12/7WLRnq.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2025/01/12/7WLRnq.png" />
+        </a>
+    </p>
+<p>RMAppAttempt 状态机</p>
+<ul>
+<li>最重要的组件是 AM，它的当前状态代表整个应用程序的当前状态</li>
+<li>因此 RMAppAttemptlmpl 本质上是维护的 ApplicationMaster 生命周期
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/01/12/7WLrps.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2025/01/12/7WLrps.png" />
+        </a>
+    </li>
+</ul>
+<p>RMAppAttempt 状态机事件来源<br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/01/12/7WLtGa.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2025/01/12/7WLtGa.png" />
+        </a>
+    </p>
+<p>RMApp: The Application State Machine</p>
+<ul>
+<li>Purpose: RMApp represents the global state of an application submitted to the ResourceManager.</li>
+<li>Scope: It oversees the entire application&rsquo;s lifecycle, from submission to completion, irrespective of the attempts made to execute it.</li>
+</ul>
+<p>RMAppAttempt: The Attempt State Machine</p>
+<ul>
+<li>Purpose: RMAppAttempt represents the state of an individual attempt to run the application.</li>
+<li>Scope: Focuses on the execution of a single attempt to run the application&rsquo;s master container (ApplicationMaster or AM).</li>
+</ul>
+<p>RMContainer: Container State Machine</p>
+<ul>
+<li>Purpose: Represents the state of a single container running on a NodeManager.</li>
+<li>Scope: Manages individual containers allocated for tasks (e.g., mapper or reducer in MapReduce).</li>
+</ul>
+<p>RMContainer 状态机
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/01/12/7WLzz7.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2025/01/12/7WLzz7.png" />
+        </a>
+    </p>
+<p>RMContainer 状态机事件来源<br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/01/12/7WL4oI.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2025/01/12/7WL4oI.png" />
+        </a>
+    </p>
+<table>
+<thead>
+<tr>
+<th><strong>Feature</strong></th>
+<th><strong>RMApp</strong></th>
+<th><strong>RMAppAttempt</strong></th>
+<th><strong>RMContainer</strong></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Purpose</strong></td>
+<td>Tracks entire application.</td>
+<td>Tracks a single AM attempt.</td>
+<td>Tracks an individual container.</td>
+</tr>
+<tr>
+<td><strong>Scope</strong></td>
+<td>Manages multiple attempts.</td>
+<td>Focuses on one AM execution.</td>
+<td>Focuses on one task container.</td>
+</tr>
+<tr>
+<td><strong>States</strong></td>
+<td>NEW, SUBMITTED, RUNNING, etc.</td>
+<td>NEW, ALLOCATED, RUNNING, etc.</td>
+<td>NEW, ALLOCATED, RUNNING, etc.</td>
+</tr>
+<tr>
+<td><strong>Handles Retries</strong></td>
+<td>Yes, creates new attempts.</td>
+<td>No, retries are managed by RMApp.</td>
+<td>No, retries require new containers.</td>
+</tr>
+<tr>
+<td><strong>Tracks</strong></td>
+<td>Overall application lifecycle.</td>
+<td>Lifecycle of AM execution.</td>
+<td>Lifecycle of a container.</td>
+</tr>
+<tr>
+<td><strong>Example</strong></td>
+<td>MapReduce job success/failure.</td>
+<td>AM crash/retry monitoring.</td>
+<td>Mapper or Reducer task status.</td>
+</tr>
+</tbody>
+</table>
+<p>RMNode 状态机<br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/01/12/7WLX1L.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2025/01/12/7WLX1L.png" />
+        </a>
+    </p>
+<p>RMNode 状态机事件来源<br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/01/12/7WLJHV.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2025/01/12/7WLJHV.png" />
+        </a>
+    </p>
+<h3 id="常见行为分析">常见行为分析</h3>
+<p>AM 启动流程</p>
+<ol>
+<li>
+<p>RM 中的 ClientRMService 实现了 ApplicationClientProtocol 协议，协调RMAppManager 通知其他服务进一步处理</p>
+</li>
+<li>
+<p>RMAppManager维护期运行状态，判断是否故障，发送 start命令</p>
+</li>
+<li>
+<p>RMAppImpl 收到 start事件后，调用 RMStateStore(其他还有MemoryRMState、FileSystemRMStateStore)，更改运行状态变更为 NEW_SAVING</p>
+</li>
+<li>
+<p>进一步发送 APP_SAVED 事件</p>
+</li>
+<li>
+<p>创建 RMAppAttemptImpl，发送start事件，RMAppImpl的运行状态由NEW_SAVING转移为SUBMITTED</p>
+</li>
+<li>
+<p>RMAppAttemptImpl收到app_added事件，RMAppAttemptImpl状态由NEW转移为SUBMITTED</p>
+</li>
+<li>
+<p>ResourceScheduler收到app_added事件，检查权限，保持应用程序结构，并向RMAppAttemptImpl发送APP_ACCEPTED事件</p>
+</li>
+<li>
+<p>RMAppAttemptImpl收到APP_ACCEPTED事件后，向RMAppImpl发送 APP_ACCEPTED事件，然后向应用程序申请资源，资源描述为：&lt;AM_CONTAINER_PRIORITY, ResourceRequest.ANY, APPaTTEMPT.GETSUBMISSIONcONTEXT(), GETrESOURCE(), 1&gt;</p>
+</li>
+<li>
+<p>ResourceManager为应用程序的ApplicationMaster分配资源后，创建RMContainerImpl，并发送start事件</p>
+</li>
+<li>
+<p>RMContainerImpl收到事件后，向RMAppAttemptImpl发送CONTAINER_ALLOCATED事件，RMContainerImpl状态从NEW转移为ALLOCATED</p>
+</li>
+<li>
+<p>RMAppAttemptImpl 收到CONTAINER_ALLOCATED事件后分配资源，向RMContainerImpl发送ACQUIRED事件，而而RMAppAttemptImpl收到事件后记录STORE_APP_ATTEMPT 日志；RMAppAttemptImpl状态从SCHEDULED转移为ALLOCATED_SAVING</p>
+</li>
+<li>
+<p>RMStateStore 向 RMAppAttemptImpl发送 ATTEMPT_SAVED 事件</p>
+</li>
+<li>
+<p>RMAppAttemptImpl收到事件后，向ApplicationMasterLauncher 发送LAUNCH事件；RMAppAttemptImpl状态从ALLOCATED_SAVING转移为ALLOCATED</p>
+</li>
+<li>
+<p>ApplicationMasterLauncher收到事件后放入队列，等待AMLauncher处理(和NM通讯)，启动AM；再向RMAppAttemptImpl发送LAUNCHED事件，RMAppAttemptImpl会向AMLivelinessMonitor注册监控状态，RMAppAttemptImpl状态从ALLOCATED转移为LAUNCHED</p>
+</li>
+<li>
+<p>NodeManager通过心跳机制汇报ApplicationMaster所在Container已经成功启动，ResourceSchedulerLAUNCHED事件；RMContainerImpl收到该事件后，会从ContainerAllocationExpirer监控列表中移除</p>
+</li>
+<li>
+<p>启动的AM 向RM注册，ApplicationMasterService收到后，向RMAppAttemptImpl发送REGISTERED事件；RMAppAttemptImpl收到后保存其信息，再向RMAppImpl发送ATTEMPT_REGISTERED，RMAppAttemptImpl状态从LAUNCHED转移为RUNNING</p>
+</li>
+<li>
+<p>RMAppImpl收到ATTEMPT_REGISTERED事件后，所做的事情仅是将状态从ACCEPTED转变为RUNNING
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/01/12/7WLj2J.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2025/01/12/7WLj2J.png" />
+        </a>
+    </p>
+</li>
+</ol>
+<hr>
+<p>Container 分配与申请流程</p>
+<ul>
+<li>阶段 1
+<ul>
+<li>AM 向 RM 汇报资源需求，资源描述，等待释放的container，黑名单等</li>
+<li>RM的 ApplicationMasterService 收到请求后，向RMAppAttemptImpl 发送STATUS_UPDATE事件；RMAppAttemptImpl 收到后更新进度并更新AMLivenessMonitor 记录中的时间</li>
+<li>ApplicationMasterService 调用 ResourceScheduler，将AM资源需求汇报给ResourceScheduler</li>
+<li>ResourceScheduler 读取待释放的container列表，向RMContainerImpl 发送RELEASED事件，并返回为该程序分配的资源</li>
+</ul>
+</li>
+<li>阶段 2
+<ul>
+<li>NM 向 RM 汇报各个 container 的运行状态</li>
+<li>RM 中的ResourceTrackerService 处理NM 的请求，并会向RMNodeImpl 发送STATUS_UPDATE事件；RMNodeImpl收集到后更新各个Container运行状态，向ResourceScheduler发送 NODE_UPDATE事件</li>
+<li>ResourceScheduler收到后，如果有空闲资源则将这些资源记录，等待AM 下次心态再来领取
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/01/13/7W3OlZ.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2025/01/13/7W3OlZ.png" />
+        </a>
+    </li>
+</ul>
+</li>
+</ul>
+<hr>
+<p>不存在正在运行的 RMAppAttemptImpl 的情况</p>
+<ul>
+<li>杀掉application 一般是由用户触发的，ResouceScheduler负责处理这个请求</li>
+<li>并向 RMAppImpl 发送KILL 事件</li>
+<li>如果不存在对应的 RMAppAttemptImpl</li>
+<li>则通知 RMNodeImpl，回收资源</li>
+<li>通知 RMAppManager 任务完成
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/01/13/7W3SVU.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2025/01/13/7W3SVU.png" />
+        </a>
+    </li>
+</ul>
+<p>存在正在运行的 RMAppAttemptImpl 情况</p>
+<ul>
+<li>同样，也则通知 RMNodeImpl，回收资源；通知 RMAppManager 任务完成</li>
+<li>真正回收资源操作是由调度器 ResourceScheduler异步完成的</li>
+<li>回收 AM占用资源，向ApplicationMasterLauncher发送CLEANUP事件</li>
+<li>回收 Container资源，向已经启动的RMContainerImpl发送KILL 事件
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/01/13/7W3UXq.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2025/01/13/7W3UXq.png" />
+        </a>
+    </li>
+</ul>
+<hr>
+<p>Container 超时</p>
+<ul>
+<li>又分为 AMContainer 超时</li>
+<li>普通 Container 超时</li>
+</ul>
+<p>AM Container 超时后紫苑回收流程</p>
+<ul>
+<li>NM 没能在一定时间内启动 AM，导致ContainerAllocationExpirer 触发CONTAINER_EXPIRED；而ResourceScheduler 收到后向 RMContainerImpl 发送EXPIRE事件</li>
+<li>RMContainerImpl 收到事件后，从ContainerAllocationExpirer 移除，向AM Container发送CLEANUP_CONTAINER</li>
+<li>RMNodeImpl 收到 CLEANUP_CONTAINER事件后，放入清理列表</li>
+<li>RMAppAttemptImpl 收到CONTAINER_FINISHED 事件后再向RMAppImpl 发送ATTEMPT_FAILED 事件，向ResourceScheduler 发送APP_REMOVED 事件</li>
+<li>ResourceScheduler 做一些清理操作
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/01/14/7WqvS7.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2025/01/14/7WqvS7.png" />
+        </a>
+    </li>
+</ul>
+<p>普通 container 超时</p>
+<ul>
+<li>普通 Container 超时触发的资源回收流程跟 AM Container 的回收流程的前三个步骤是一样的</li>
+<li>RMAppAttemptImpl 收到CONTAINER_FINISHED 事件后会保存</li>
+<li>等下次 AM 心跳过来会告诉它，后面又 AM 决定是重启 还是丢弃
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/01/14/7WqaiI.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2025/01/14/7WqaiI.png" />
+        </a>
+    </li>
+</ul>
+<p>NM 超时后紫苑回收流程</p>
+<ul>
+<li>NMLivenessMonitor 发现 NM 一段时间内未汇报，触发一个 EXPIRE事件</li>
+<li>RMNodeImpl 收到后，分别向ResourceScheduler、NodesListManager 发送NODE_REMOVED 、NODE_UNUSABLE 事件</li>
+<li>ResourceScheduler 收到后向运行在死亡节点的RMContainerImpl 发送KILL事件；
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/01/14/7WqO7V.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2025/01/14/7WqO7V.png" />
+        </a>
+    </li>
+</ul>
+<h2 id="资源调度">资源调度</h2>
+<h3 id="基本概念">基本概念</h3>
+<p>需要继承<code>ResourceScheduler</code>接口<br>
+YARN包括了</p>
+<ul>
+<li>FIFO</li>
+<li>Capacity Scheduler</li>
+<li>Fari Scheduler</li>
+</ul>
+<p>YarnScheduler 接口定义如下：</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">  1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">  2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">  3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">  4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">  5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">  6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">  7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">  8
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">  9
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 10
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 11
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 12
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 13
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 14
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 15
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 16
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 17
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 18
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 19
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 20
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 21
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 22
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 23
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 24
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 25
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 26
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 27
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 28
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 29
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 30
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 31
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 32
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 33
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 34
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 35
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 36
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 37
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 38
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 39
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 40
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 41
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 42
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 43
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 44
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 45
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 46
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 47
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 48
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 49
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 50
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 51
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 52
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 53
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 54
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 55
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 56
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 57
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 58
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 59
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 60
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 61
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 62
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 63
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 64
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 65
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 66
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 67
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 68
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 69
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 70
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 71
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 72
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 73
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 74
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 75
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 76
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 77
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 78
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 79
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 80
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 81
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 82
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 83
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 84
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 85
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 86
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 87
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 88
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 89
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 90
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 91
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 92
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 93
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 94
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 95
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 96
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 97
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 98
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 99
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">100
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">101
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">102
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">103
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">104
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">105
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">106
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">107
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">108
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">109
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">110
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">111
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">112
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">113
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">114
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">115
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">116
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">117
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">118
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">119
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">120
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">121
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">122
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">123
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">124
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">125
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">126
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">127
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">128
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">129
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">130
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">131
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">132
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">133
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">134
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">135
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">136
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">137
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">138
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">139
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">140
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">141
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">142
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">143
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">144
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">145
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">146
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">147
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">148
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">149
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">150
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">151
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">152
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">153
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">154
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">155
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">156
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">157
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">158
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">159
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">160
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">161
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">162
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">163
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">164
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">165
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">166
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">167
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">168
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">169
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">170
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">171
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">172
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">173
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">174
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">175
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">176
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">177
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">178
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">179
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">180
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">181
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">182
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">183
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">184
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">185
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">186
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">187
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">188
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">189
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">190
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">191
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">192
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">193
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">194
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">195
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">196
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">197
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">198
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">199
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">200
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">201
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">202
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">203
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">204
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">205
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">206
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">207
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">208
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">209
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">210
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">211
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">212
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">213
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">214
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">215
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">216
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">217
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">218
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">219
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">220
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">221
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">222
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">223
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">224
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">225
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">226
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">227
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">228
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">229
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">230
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">231
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">232
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">233
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">234
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">235
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">236
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">237
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">238
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">239
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">240
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">241
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">242
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">243
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">244
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">245
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">246
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">247
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">248
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">249
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">250
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">251
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">252
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">253
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">254
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">255
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">256
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">257
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">258
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">259
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">260
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">261
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">262
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">263
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">264
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">265
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">266
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">267
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">268
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">269
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">270
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">271
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">272
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">273
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">274
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">275
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">276
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">277
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">278
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">279
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">280
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">281
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">282
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">283
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">284
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">285
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">286
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">287
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">288
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">289
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">290
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">291
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">292
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">293
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">294
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">295
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">296
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">297
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">298
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">299
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">300
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">301
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">302
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">303
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">304
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">305
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">306
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">307
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">308
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">309
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">310
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">311
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">312
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">313
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">314
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">315
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">316
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">317
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">318
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">319
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">320
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">321
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">322
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">323
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">324
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">325
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">326
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">327
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">328
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">329
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">330
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">331
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">332
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">333
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">334
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">335
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">336
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">337
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">338
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">339
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">340
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">341
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">342
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">343
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">344
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">345
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">346
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">347
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">348
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">349
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">350
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">351
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">352
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">353
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">354
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">355
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">356
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">357
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">358
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">359
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">360
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">361
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">362
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">363
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">364
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">365
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">366
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">367
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">368
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">369
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">370
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">371
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">372
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">373
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">374
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">375
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">376
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">377
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">378
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">379
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">380
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">381
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">382
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-java" data-lang="java"><span style="display:flex;"><span><span style="color:#8be9fd;font-style:italic">public</span> <span style="color:#8be9fd;font-style:italic">interface</span> <span style="color:#50fa7b">YarnScheduler</span> <span style="color:#8be9fd;font-style:italic">extends</span> EventHandler<span style="color:#ff79c6">&lt;</span>SchedulerEvent<span style="color:#ff79c6">&gt;</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>  <span style="color:#6272a4">/**
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * Get queue information.
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   *
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * @param queueName queue name
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * @param includeChildQueues include child queues?
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * @param recursive get children queues?
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * @return queue information
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * @throws IOException an I/O exception has occurred.
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   */</span>
+</span></span><span style="display:flex;"><span>  @Public
+</span></span><span style="display:flex;"><span>  @Stable
+</span></span><span style="display:flex;"><span>  <span style="color:#8be9fd;font-style:italic">public</span> QueueInfo <span style="color:#50fa7b">getQueueInfo</span><span style="color:#ff79c6">(</span>String queueName<span style="color:#ff79c6">,</span> <span style="color:#8be9fd">boolean</span> includeChildQueues<span style="color:#ff79c6">,</span>
+</span></span><span style="display:flex;"><span>      <span style="color:#8be9fd">boolean</span> recursive<span style="color:#ff79c6">)</span> <span style="color:#8be9fd;font-style:italic">throws</span> IOException<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>  <span style="color:#6272a4">/**
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * Get acls for queues for current user.
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * @return acls for queues for current user
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   */</span>
+</span></span><span style="display:flex;"><span>  @Public
+</span></span><span style="display:flex;"><span>  @Stable
+</span></span><span style="display:flex;"><span>  <span style="color:#8be9fd;font-style:italic">public</span> List<span style="color:#ff79c6">&lt;</span>QueueUserACLInfo<span style="color:#ff79c6">&gt;</span> <span style="color:#50fa7b">getQueueUserAclInfo</span><span style="color:#ff79c6">();</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>  <span style="color:#6272a4">/**
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * Get the whole resource capacity of the cluster.
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * @return the whole resource capacity of the cluster.
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   */</span>
+</span></span><span style="display:flex;"><span>  @LimitedPrivate<span style="color:#ff79c6">(</span><span style="color:#f1fa8c">&#34;yarn&#34;</span><span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>  @Unstable
+</span></span><span style="display:flex;"><span>  <span style="color:#8be9fd;font-style:italic">public</span> Resource <span style="color:#50fa7b">getClusterResource</span><span style="color:#ff79c6">();</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>  <span style="color:#6272a4">/**
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * Get minimum allocatable {@link Resource}.
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * @return minimum allocatable resource
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   */</span>
+</span></span><span style="display:flex;"><span>  @Public
+</span></span><span style="display:flex;"><span>  @Stable
+</span></span><span style="display:flex;"><span>  <span style="color:#8be9fd;font-style:italic">public</span> Resource <span style="color:#50fa7b">getMinimumResourceCapability</span><span style="color:#ff79c6">();</span>
+</span></span><span style="display:flex;"><span>  
+</span></span><span style="display:flex;"><span>  <span style="color:#6272a4">/**
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * Get maximum allocatable {@link Resource} at the cluster level.
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * @return maximum allocatable resource
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   */</span>
+</span></span><span style="display:flex;"><span>  @Public
+</span></span><span style="display:flex;"><span>  @Stable
+</span></span><span style="display:flex;"><span>  <span style="color:#8be9fd;font-style:italic">public</span> Resource <span style="color:#50fa7b">getMaximumResourceCapability</span><span style="color:#ff79c6">();</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>  <span style="color:#6272a4">/**
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * Get maximum allocatable {@link Resource} for the queue specified.
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * @param queueName queue name
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * @return maximum allocatable resource
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   */</span>
+</span></span><span style="display:flex;"><span>  @Public
+</span></span><span style="display:flex;"><span>  @Stable
+</span></span><span style="display:flex;"><span>  <span style="color:#8be9fd;font-style:italic">public</span> Resource <span style="color:#50fa7b">getMaximumResourceCapability</span><span style="color:#ff79c6">(</span>String queueName<span style="color:#ff79c6">);</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>  @LimitedPrivate<span style="color:#ff79c6">(</span><span style="color:#f1fa8c">&#34;yarn&#34;</span><span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>  @Evolving
+</span></span><span style="display:flex;"><span>  ResourceCalculator <span style="color:#50fa7b">getResourceCalculator</span><span style="color:#ff79c6">();</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>  <span style="color:#6272a4">/**
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * Get the number of nodes available in the cluster.
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * @return the number of available nodes.
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   */</span>
+</span></span><span style="display:flex;"><span>  @Public
+</span></span><span style="display:flex;"><span>  @Stable
+</span></span><span style="display:flex;"><span>  <span style="color:#8be9fd;font-style:italic">public</span> <span style="color:#8be9fd">int</span> <span style="color:#50fa7b">getNumClusterNodes</span><span style="color:#ff79c6">();</span>
+</span></span><span style="display:flex;"><span>  
+</span></span><span style="display:flex;"><span>  <span style="color:#6272a4">/**
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * The main API between the ApplicationMaster and the Scheduler.
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * The ApplicationMaster may request/update container resources,
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * number of containers, node/rack preference for allocations etc.
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * to the Scheduler.
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * @param appAttemptId the id of the application attempt.
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * @param ask the request made by an application to obtain various allocations
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * like host/rack, resource, number of containers, relaxLocality etc.,
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * see {@link ResourceRequest}.
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * @param schedulingRequests similar to ask, but with added ability to specify
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * allocation tags etc., see {@link SchedulingRequest}.
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * @param release the list of containers to be released.
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * @param blacklistAdditions places (node/rack) to be added to the blacklist.
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * @param blacklistRemovals places (node/rack) to be removed from the
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * blacklist.
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * @param updateRequests container promotion/demotion updates.
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * @return the {@link Allocation} for the application.
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   */</span>
+</span></span><span style="display:flex;"><span>  @Public
+</span></span><span style="display:flex;"><span>  @Stable
+</span></span><span style="display:flex;"><span>  Allocation <span style="color:#50fa7b">allocate</span><span style="color:#ff79c6">(</span>ApplicationAttemptId appAttemptId<span style="color:#ff79c6">,</span>
+</span></span><span style="display:flex;"><span>      List<span style="color:#ff79c6">&lt;</span>ResourceRequest<span style="color:#ff79c6">&gt;</span> ask<span style="color:#ff79c6">,</span> List<span style="color:#ff79c6">&lt;</span>SchedulingRequest<span style="color:#ff79c6">&gt;</span> schedulingRequests<span style="color:#ff79c6">,</span>
+</span></span><span style="display:flex;"><span>      List<span style="color:#ff79c6">&lt;</span>ContainerId<span style="color:#ff79c6">&gt;</span> release<span style="color:#ff79c6">,</span> List<span style="color:#ff79c6">&lt;</span>String<span style="color:#ff79c6">&gt;</span> blacklistAdditions<span style="color:#ff79c6">,</span>
+</span></span><span style="display:flex;"><span>      List<span style="color:#ff79c6">&lt;</span>String<span style="color:#ff79c6">&gt;</span> blacklistRemovals<span style="color:#ff79c6">,</span> ContainerUpdates updateRequests<span style="color:#ff79c6">);</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>  <span style="color:#6272a4">/**
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * Get node resource usage report.
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   *
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * @param nodeId nodeId.
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * @return the {@link SchedulerNodeReport} for the node or null
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * if nodeId does not point to a defined node.
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   */</span>
+</span></span><span style="display:flex;"><span>  @LimitedPrivate<span style="color:#ff79c6">(</span><span style="color:#f1fa8c">&#34;yarn&#34;</span><span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>  @Stable
+</span></span><span style="display:flex;"><span>  <span style="color:#8be9fd;font-style:italic">public</span> SchedulerNodeReport <span style="color:#50fa7b">getNodeReport</span><span style="color:#ff79c6">(</span>NodeId nodeId<span style="color:#ff79c6">);</span>
+</span></span><span style="display:flex;"><span>  
+</span></span><span style="display:flex;"><span>  <span style="color:#6272a4">/**
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * Get the Scheduler app for a given app attempt Id.
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * @param appAttemptId the id of the application attempt
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * @return SchedulerApp for this given attempt.
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   */</span>
+</span></span><span style="display:flex;"><span>  @LimitedPrivate<span style="color:#ff79c6">(</span><span style="color:#f1fa8c">&#34;yarn&#34;</span><span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>  @Stable
+</span></span><span style="display:flex;"><span>  SchedulerAppReport <span style="color:#50fa7b">getSchedulerAppInfo</span><span style="color:#ff79c6">(</span>ApplicationAttemptId appAttemptId<span style="color:#ff79c6">);</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>  <span style="color:#6272a4">/**
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * Get a resource usage report from a given app attempt ID.
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * @param appAttemptId the id of the application attempt
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * @return resource usage report for this given attempt
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   */</span>
+</span></span><span style="display:flex;"><span>  @LimitedPrivate<span style="color:#ff79c6">(</span><span style="color:#f1fa8c">&#34;yarn&#34;</span><span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>  @Evolving
+</span></span><span style="display:flex;"><span>  ApplicationResourceUsageReport <span style="color:#50fa7b">getAppResourceUsageReport</span><span style="color:#ff79c6">(</span>
+</span></span><span style="display:flex;"><span>      ApplicationAttemptId appAttemptId<span style="color:#ff79c6">);</span>
+</span></span><span style="display:flex;"><span>  
+</span></span><span style="display:flex;"><span>  <span style="color:#6272a4">/**
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * Get the root queue for the scheduler.
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * @return the root queue for the scheduler.
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   */</span>
+</span></span><span style="display:flex;"><span>  @LimitedPrivate<span style="color:#ff79c6">(</span><span style="color:#f1fa8c">&#34;yarn&#34;</span><span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>  @Evolving
+</span></span><span style="display:flex;"><span>  QueueMetrics <span style="color:#50fa7b">getRootQueueMetrics</span><span style="color:#ff79c6">();</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>  <span style="color:#6272a4">/**
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * Check if the user has permission to perform the operation.
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * If the user has {@link QueueACL#ADMINISTER_QUEUE} permission,
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * this user can view/modify the applications in this queue.
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   *
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * @param callerUGI caller UserGroupInformation.
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * @param acl queue ACL.
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * @param queueName queue Name.
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * @return &lt;code&gt;true&lt;/code&gt; if the user has the permission,
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   *         &lt;code&gt;false&lt;/code&gt; otherwise
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   */</span>
+</span></span><span style="display:flex;"><span>  <span style="color:#8be9fd">boolean</span> <span style="color:#50fa7b">checkAccess</span><span style="color:#ff79c6">(</span>UserGroupInformation callerUGI<span style="color:#ff79c6">,</span>
+</span></span><span style="display:flex;"><span>      QueueACL acl<span style="color:#ff79c6">,</span> String queueName<span style="color:#ff79c6">);</span>
+</span></span><span style="display:flex;"><span>  
+</span></span><span style="display:flex;"><span>  <span style="color:#6272a4">/**
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * Gets the apps under a given queue
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * @param queueName the name of the queue.
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * @return a collection of app attempt ids in the given queue.
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   */</span>
+</span></span><span style="display:flex;"><span>  @LimitedPrivate<span style="color:#ff79c6">(</span><span style="color:#f1fa8c">&#34;yarn&#34;</span><span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>  @Stable
+</span></span><span style="display:flex;"><span>  <span style="color:#8be9fd;font-style:italic">public</span> List<span style="color:#ff79c6">&lt;</span>ApplicationAttemptId<span style="color:#ff79c6">&gt;</span> <span style="color:#50fa7b">getAppsInQueue</span><span style="color:#ff79c6">(</span>String queueName<span style="color:#ff79c6">);</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>  <span style="color:#6272a4">/**
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * Get the container for the given containerId.
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   *
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * @param containerId the given containerId.
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * @return the container for the given containerId.
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   */</span>
+</span></span><span style="display:flex;"><span>  @LimitedPrivate<span style="color:#ff79c6">(</span><span style="color:#f1fa8c">&#34;yarn&#34;</span><span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>  @Unstable
+</span></span><span style="display:flex;"><span>  <span style="color:#8be9fd;font-style:italic">public</span> RMContainer <span style="color:#50fa7b">getRMContainer</span><span style="color:#ff79c6">(</span>ContainerId containerId<span style="color:#ff79c6">);</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>  <span style="color:#6272a4">/**
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * Moves the given application to the given queue.
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * @param appId application Id
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * @param newQueue the given queue.
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * @return the name of the queue the application was placed into
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * @throws YarnException if the move cannot be carried out
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   */</span>
+</span></span><span style="display:flex;"><span>  @LimitedPrivate<span style="color:#ff79c6">(</span><span style="color:#f1fa8c">&#34;yarn&#34;</span><span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>  @Evolving
+</span></span><span style="display:flex;"><span>  <span style="color:#8be9fd;font-style:italic">public</span> String <span style="color:#50fa7b">moveApplication</span><span style="color:#ff79c6">(</span>ApplicationId appId<span style="color:#ff79c6">,</span> String newQueue<span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>      <span style="color:#8be9fd;font-style:italic">throws</span> YarnException<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>  <span style="color:#6272a4">/**
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   *
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * @param appId Application ID
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * @param newQueue Target QueueName
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * @throws YarnException if the pre-validation for move cannot be carried out
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   */</span>
+</span></span><span style="display:flex;"><span>  @LimitedPrivate<span style="color:#ff79c6">(</span><span style="color:#f1fa8c">&#34;yarn&#34;</span><span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>  @Evolving
+</span></span><span style="display:flex;"><span>  <span style="color:#8be9fd;font-style:italic">public</span> <span style="color:#8be9fd">void</span> <span style="color:#50fa7b">preValidateMoveApplication</span><span style="color:#ff79c6">(</span>ApplicationId appId<span style="color:#ff79c6">,</span>
+</span></span><span style="display:flex;"><span>      String newQueue<span style="color:#ff79c6">)</span> <span style="color:#8be9fd;font-style:italic">throws</span> YarnException<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>  <span style="color:#6272a4">/**
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * Completely drain sourceQueue of applications, by moving all of them to
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * destQueue.
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   *
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * @param sourceQueue sourceQueue.
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * @param destQueue destQueue.
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * @throws YarnException when yarn exception occur.
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   */</span>
+</span></span><span style="display:flex;"><span>  <span style="color:#8be9fd">void</span> <span style="color:#50fa7b">moveAllApps</span><span style="color:#ff79c6">(</span>String sourceQueue<span style="color:#ff79c6">,</span> String destQueue<span style="color:#ff79c6">)</span> <span style="color:#8be9fd;font-style:italic">throws</span> YarnException<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>  <span style="color:#6272a4">/**
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * Terminate all applications in the specified queue.
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   *
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * @param queueName the name of queue to be drained
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * @throws YarnException when yarn exception occur.
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   */</span>
+</span></span><span style="display:flex;"><span>  <span style="color:#8be9fd">void</span> <span style="color:#50fa7b">killAllAppsInQueue</span><span style="color:#ff79c6">(</span>String queueName<span style="color:#ff79c6">)</span> <span style="color:#8be9fd;font-style:italic">throws</span> YarnException<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>  <span style="color:#6272a4">/**
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * Remove an existing queue. Implementations might limit when a queue could be
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * removed (e.g., must have zero entitlement, and no applications running, or
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * must be a leaf, etc..).
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   *
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * @param queueName name of the queue to remove
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * @throws YarnException when yarn exception occur.
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   */</span>
+</span></span><span style="display:flex;"><span>  <span style="color:#8be9fd">void</span> <span style="color:#50fa7b">removeQueue</span><span style="color:#ff79c6">(</span>String queueName<span style="color:#ff79c6">)</span> <span style="color:#8be9fd;font-style:italic">throws</span> YarnException<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>  <span style="color:#6272a4">/**
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * Add to the scheduler a new Queue. Implementations might limit what type of
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * queues can be dynamically added (e.g., Queue must be a leaf, must be
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * attached to existing parent, must have zero entitlement).
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   *
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * @param newQueue the queue being added.
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * @throws YarnException when yarn exception occur.
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * @throws IOException when io exception occur.
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   */</span>
+</span></span><span style="display:flex;"><span>  <span style="color:#8be9fd">void</span> <span style="color:#50fa7b">addQueue</span><span style="color:#ff79c6">(</span>Queue newQueue<span style="color:#ff79c6">)</span> <span style="color:#8be9fd;font-style:italic">throws</span> YarnException<span style="color:#ff79c6">,</span> IOException<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>  <span style="color:#6272a4">/**
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * This method increase the entitlement for current queue (must respect
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * invariants, e.g., no overcommit of parents, non negative, etc.).
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * Entitlement is a general term for weights in FairScheduler, capacity for
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * the CapacityScheduler, etc.
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   *
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * @param queue the queue for which we change entitlement
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * @param entitlement the new entitlement for the queue (capacity,
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   *              maxCapacity, etc..)
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * @throws YarnException when yarn exception occur.
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   */</span>
+</span></span><span style="display:flex;"><span>  <span style="color:#8be9fd">void</span> <span style="color:#50fa7b">setEntitlement</span><span style="color:#ff79c6">(</span>String queue<span style="color:#ff79c6">,</span> QueueEntitlement entitlement<span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>      <span style="color:#8be9fd;font-style:italic">throws</span> YarnException<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>  <span style="color:#6272a4">/**
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * Gets the list of names for queues managed by the Reservation System.
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * @return the list of queues which support reservations
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * @throws YarnException when yarn exception occur.
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   */</span>
+</span></span><span style="display:flex;"><span>  <span style="color:#8be9fd;font-style:italic">public</span> Set<span style="color:#ff79c6">&lt;</span>String<span style="color:#ff79c6">&gt;</span> <span style="color:#50fa7b">getPlanQueues</span><span style="color:#ff79c6">()</span> <span style="color:#8be9fd;font-style:italic">throws</span> YarnException<span style="color:#ff79c6">;</span>  
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>  <span style="color:#6272a4">/**
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * Return a collection of the resource types that are considered when
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * scheduling
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   *
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * @return an EnumSet containing the resource types
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   */</span>
+</span></span><span style="display:flex;"><span>  <span style="color:#8be9fd;font-style:italic">public</span> EnumSet<span style="color:#ff79c6">&lt;</span>SchedulerResourceTypes<span style="color:#ff79c6">&gt;</span> <span style="color:#50fa7b">getSchedulingResourceTypes</span><span style="color:#ff79c6">();</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>  <span style="color:#6272a4">/**
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   *
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * Verify whether a submitted application priority is valid as per configured
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * Queue
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   *
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * @param priorityRequestedByApp
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   *          Submitted Application priority.
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * @param user
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   *          User who submitted the Application
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * @param queuePath
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   *          Name of the Queue
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * @param applicationId
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   *          Application ID
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * @return Updated Priority from scheduler
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * @throws YarnException when yarn exception occur.
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   */</span>
+</span></span><span style="display:flex;"><span>  <span style="color:#8be9fd;font-style:italic">public</span> Priority <span style="color:#50fa7b">checkAndGetApplicationPriority</span><span style="color:#ff79c6">(</span>Priority priorityRequestedByApp<span style="color:#ff79c6">,</span>
+</span></span><span style="display:flex;"><span>      UserGroupInformation user<span style="color:#ff79c6">,</span> String queuePath<span style="color:#ff79c6">,</span> ApplicationId applicationId<span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>      <span style="color:#8be9fd;font-style:italic">throws</span> YarnException<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>  <span style="color:#6272a4">/**
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   *
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * Change application priority of a submitted application at runtime
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   *
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * @param newPriority Submitted Application priority.
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   *
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * @param applicationId Application ID
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   *
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * @param future Sets any type of exception happened from StateStore
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * @param user who submitted the application
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   *
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * @return updated priority
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * @throws YarnException when yarn exception occur.
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   */</span>
+</span></span><span style="display:flex;"><span>  <span style="color:#8be9fd;font-style:italic">public</span> Priority <span style="color:#50fa7b">updateApplicationPriority</span><span style="color:#ff79c6">(</span>Priority newPriority<span style="color:#ff79c6">,</span>
+</span></span><span style="display:flex;"><span>      ApplicationId applicationId<span style="color:#ff79c6">,</span> SettableFuture<span style="color:#ff79c6">&lt;</span>Object<span style="color:#ff79c6">&gt;</span> future<span style="color:#ff79c6">,</span>
+</span></span><span style="display:flex;"><span>      UserGroupInformation user<span style="color:#ff79c6">)</span> <span style="color:#8be9fd;font-style:italic">throws</span> YarnException<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>  <span style="color:#6272a4">/**
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   *
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * Get previous attempts&#39; live containers for work-preserving AM restart.
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   *
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * @param appAttemptId the id of the application attempt
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   *
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * @return list of live containers for the given attempt
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   */</span>
+</span></span><span style="display:flex;"><span>  List<span style="color:#ff79c6">&lt;</span>Container<span style="color:#ff79c6">&gt;</span> <span style="color:#50fa7b">getTransferredContainers</span><span style="color:#ff79c6">(</span>ApplicationAttemptId appAttemptId<span style="color:#ff79c6">);</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>  <span style="color:#6272a4">/**
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * Set the cluster max priority.
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * 
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * @param conf Configuration.
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * @throws YarnException when yarn exception occur.
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   */</span>
+</span></span><span style="display:flex;"><span>  <span style="color:#8be9fd">void</span> <span style="color:#50fa7b">setClusterMaxPriority</span><span style="color:#ff79c6">(</span>Configuration conf<span style="color:#ff79c6">)</span> <span style="color:#8be9fd;font-style:italic">throws</span> YarnException<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>  <span style="color:#6272a4">/**
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * Get pending resource request for specified application attempt.
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   *
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * @param attemptId the id of the application attempt
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * @return pending resource requests.
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   */</span>
+</span></span><span style="display:flex;"><span>  List<span style="color:#ff79c6">&lt;</span>ResourceRequest<span style="color:#ff79c6">&gt;</span> <span style="color:#50fa7b">getPendingResourceRequestsForAttempt</span><span style="color:#ff79c6">(</span>
+</span></span><span style="display:flex;"><span>      ApplicationAttemptId attemptId<span style="color:#ff79c6">);</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>  <span style="color:#6272a4">/**
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * Get pending scheduling request for specified application attempt.
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   *
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * @param attemptId the id of the application attempt
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   *
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * @return pending scheduling requests
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   */</span>
+</span></span><span style="display:flex;"><span>  List<span style="color:#ff79c6">&lt;</span>SchedulingRequest<span style="color:#ff79c6">&gt;</span> <span style="color:#50fa7b">getPendingSchedulingRequestsForAttempt</span><span style="color:#ff79c6">(</span>
+</span></span><span style="display:flex;"><span>      ApplicationAttemptId attemptId<span style="color:#ff79c6">);</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>  <span style="color:#6272a4">/**
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * Get cluster max priority.
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * 
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * @return maximum priority of cluster
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   */</span>
+</span></span><span style="display:flex;"><span>  Priority <span style="color:#50fa7b">getMaxClusterLevelAppPriority</span><span style="color:#ff79c6">();</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>  <span style="color:#6272a4">/**
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * Get SchedulerNode corresponds to nodeId.
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   *
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * @param nodeId the node id of RMNode
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   *
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * @return SchedulerNode corresponds to nodeId
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   */</span>
+</span></span><span style="display:flex;"><span>  SchedulerNode <span style="color:#50fa7b">getSchedulerNode</span><span style="color:#ff79c6">(</span>NodeId nodeId<span style="color:#ff79c6">);</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>  <span style="color:#6272a4">/**
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * Normalize a resource request using scheduler level maximum resource or
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * queue based maximum resource.
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   *
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * @param requestedResource the resource to be normalized
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * @param maxResourceCapability Maximum container allocation value, if null or
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   *          empty scheduler level maximum container allocation value will be
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   *          used
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * @return the normalized resource
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   */</span>
+</span></span><span style="display:flex;"><span>  Resource <span style="color:#50fa7b">getNormalizedResource</span><span style="color:#ff79c6">(</span>Resource requestedResource<span style="color:#ff79c6">,</span>
+</span></span><span style="display:flex;"><span>      Resource maxResourceCapability<span style="color:#ff79c6">);</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>  <span style="color:#6272a4">/**
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * Verify whether a submitted application lifetime is valid as per configured
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * Queue lifetime.
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * @param queueName Name of the Queue
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * @param lifetime configured application lifetime
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * @param app details of app
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * @return valid lifetime as per queue
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   */</span>
+</span></span><span style="display:flex;"><span>  @Public
+</span></span><span style="display:flex;"><span>  @Evolving
+</span></span><span style="display:flex;"><span>  <span style="color:#8be9fd">long</span> <span style="color:#50fa7b">checkAndGetApplicationLifetime</span><span style="color:#ff79c6">(</span>String queueName<span style="color:#ff79c6">,</span> <span style="color:#8be9fd">long</span> lifetime<span style="color:#ff79c6">,</span>
+</span></span><span style="display:flex;"><span>                                      RMAppImpl app<span style="color:#ff79c6">);</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>  <span style="color:#6272a4">/**
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * Get maximum lifetime for a queue.
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * @param queueName to get lifetime
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * @return maximum lifetime in seconds
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   */</span>
+</span></span><span style="display:flex;"><span>  @Public
+</span></span><span style="display:flex;"><span>  @Evolving
+</span></span><span style="display:flex;"><span>  <span style="color:#8be9fd">long</span> <span style="color:#50fa7b">getMaximumApplicationLifetime</span><span style="color:#ff79c6">(</span>String queueName<span style="color:#ff79c6">);</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">}</span>
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>其他一些重要的接口</p>
+<ul>
+<li>Recoverable</li>
+</ul>
+<p>资源调度基本架构<br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/01/18/7W5ovB.png">
+            <img class="mx-auto" alt="31" src="https://v1.ax1x.com/2025/01/18/7W5ovB.png" />
+        </a>
+    </p>
+<p>当前 yarn 支持的调度</p>
+<ul>
+<li>当前 YARN 支持的调度语义包括：</li>
+<li>请求某个特定节点上的特定资源量。比如，请求节点 nodeX 上 5 个这样的 Container：虚拟 CPU 个数为 2，内存量为 2GB。</li>
+<li>请求某个特定机架上的特定资源量。比如，请求机架 rackX 上 3 个这样的 Container：虚拟 CPU 个数为 4，内存量为 3GB。</li>
+<li>将某些节点加入（或移除）黑名单，不再为自己分配这些节点上的资源。比如，ApplicationMaster 发现节点 nodeX 和 nodeY - 失败的任务数目过多，可请求将这两个节点加入黑名单，从而不再收到这两个节点上的资源，过一段时间后，可请求将 nodeX 移除黑名单，从而可再次使用该节点上的资源。</li>
+<li>请求归还某些资源。比如，ApplicationMaster 已获取的来自节点 nodeX 上的 2 个 Container 暂时不用了，可将之归还给集群，这样这些资源可再次分配给其他应用程序。</li>
+</ul>
+<p>YARN 采用了两层调度</p>
+<ul>
+<li>第一层，RM 中的资源调度器将资源分配给各个 AM</li>
+<li>第二层，AM 再进一步将资源分配给它内部的各个任务</li>
+</ul>
+<p>YARN 的资源分配过程</p>
+<ol>
+<li>NodeManager 通过周期性心跳汇报节点信息。</li>
+<li>ResourceManager 为 NodeManager 返回一个心跳应答，包括需释放的 Container 列表等信息。</li>
+<li>ResourceManager 收到来自 NodeManager 的信息后，会触发一个 NODE_UPDATE 事件。</li>
+<li>ResourceScheduler 收到 NODE_UPDATE 事件后，会按照一定的策略将该节点上的资源（步骤 2 中有释放的资源）分配各应用程序，并将分配结果放到一个内存数据结构中。</li>
+<li>应用程序的 ApplicationMaster 向 ResourceManager 发送周期性的心跳，以领取最新分配的 Container。</li>
+<li>ResourceManager 收到来自 ApplicationMaster 心跳信息后，为它分配的 container 将以心跳应答的形式返回给 ApplicationMaster。</li>
+<li>ApplicationMaster 收到新分配的 container 列表后，会将这些 Container 进一步分配给它内部的各个任务。</li>
+</ol>
+<p>
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/01/18/7WAEQf.png">
+            <img class="mx-auto" alt="32" src="https://v1.ax1x.com/2025/01/18/7WAEQf.png" />
+        </a>
+    </p>
+<p>资源抢占发生时机<br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/01/18/7WANI3.png">
+            <img class="mx-auto" alt="33" src="https://v1.ax1x.com/2025/01/18/7WANI3.png" />
+        </a>
+    </p>
+<p>资源抢占流程</p>
+<ul>
+<li>SchedulingEditPolicy 告诉 RM要抢占 资源</li>
+<li>RM更新资源</li>
+<li>等下一次 AM 心跳来时，将这些待释放的资源和待抢占的 container列表发给他</li>
+<li>让 AM kill这些 container</li>
+<li>对于一段时间内未自行 kill 调的 container，则会他通知到 RM</li>
+<li>RM 通知 NM 杀掉这些 container
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/01/18/7WAuLj.png">
+            <img class="mx-auto" alt="34" src="https://v1.ax1x.com/2025/01/18/7WAuLj.png" />
+        </a>
+    </li>
+</ul>
+<p>资源抢占资源量计算方法</p>
+<ul>
+<li>这里假设有三个队列 a，b，c</li>
+<li>最小资源量 24、16、40
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/01/18/7WAy4m.png">
+            <img class="mx-auto" alt="35" src="https://v1.ax1x.com/2025/01/18/7WAy4m.png" />
+        </a>
+    </li>
+</ul>
+<p>t1 时刻 第一轮计算结果，wQassigned = 90，unassigned = 10</p>
+<table>
+<thead>
+<tr>
+<th>Queue</th>
+<th>normalizedGuarantee</th>
+<th>wQavail</th>
+<th>accepted</th>
+<th>wQidle</th>
+<th>idealAssigned</th>
+<th>wQdone</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>QueueA</td>
+<td>24/(24+16+40)=0.3</td>
+<td>100*0.3=30</td>
+<td>20</td>
+<td>10</td>
+<td>20</td>
+<td>20</td>
+</tr>
+<tr>
+<td>QueueB</td>
+<td>16/(24+16+40)=0.2</td>
+<td>100*0.2=20</td>
+<td>20</td>
+<td>0</td>
+<td>20</td>
+<td>20</td>
+</tr>
+<tr>
+<td>QueueC</td>
+<td>40/(24+16+40)=0.5</td>
+<td>100*0.5=50</td>
+<td>50</td>
+<td>0</td>
+<td>50</td>
+<td>50</td>
+</tr>
+</tbody>
+</table>
+<p>第二轮计算结果，wQassigned = 95，unassigned = 5<br>
+由于 queueA、queueB 的 wQdone 为 0，不再进入下一轮</p>
+<table>
+<thead>
+<tr>
+<th>Queue</th>
+<th>normalizedGuarantee</th>
+<th>wQavail</th>
+<th>accepted</th>
+<th>wQidle</th>
+<th>idealAssigned</th>
+<th>wQdone</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>QueueA</td>
+<td>24/(24+16+40)=0.3</td>
+<td>10*0.3=3</td>
+<td>0</td>
+<td>3</td>
+<td>20</td>
+<td>0</td>
+</tr>
+<tr>
+<td>QueueB</td>
+<td>16/(24+16+40)=0.2</td>
+<td>10*0.2=2</td>
+<td>0</td>
+<td>2</td>
+<td>20</td>
+<td>0</td>
+</tr>
+<tr>
+<td>QueueC</td>
+<td>40/(24+16+40)=0.5</td>
+<td>10*0.5=5</td>
+<td>5</td>
+<td>0</td>
+<td>55</td>
+<td>5</td>
+</tr>
+</tbody>
+</table>
+<p>三轮计算结果，unassinged = 0，所有资源都已经分配完毕，退出计算</p>
+<table>
+<thead>
+<tr>
+<th>Queue</th>
+<th>normalizedGuarantee</th>
+<th>wQavail</th>
+<th>accepted</th>
+<th>wQidle</th>
+<th>idealAssigned</th>
+<th>wQdone</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>QueueC</td>
+<td>40/(40)=1.0</td>
+<td>5*1.0=5</td>
+<td>5</td>
+<td>0</td>
+<td>60</td>
+<td>5</td>
+</tr>
+</tbody>
+</table>
+<hr>
+<p>假设 t2 时刻，用户向 queueA 提交了一批应用，使的资源需求量从 0 变为 100<br>
+第一轮计算结果如下</p>
+<table>
+<thead>
+<tr>
+<th>Queue</th>
+<th>normalizedGuarantee</th>
+<th>wQavail</th>
+<th>accepted</th>
+<th>wQidle</th>
+<th>idealAssigned</th>
+<th>wQdone</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>QueueA</td>
+<td>24/(24+16+40)=0.3</td>
+<td>100*0.3=30</td>
+<td>30</td>
+<td>0</td>
+<td>30</td>
+<td>30</td>
+</tr>
+<tr>
+<td>QueueB</td>
+<td>16/(24+16+40)=0.2</td>
+<td>100*0.2=20</td>
+<td>20</td>
+<td>0</td>
+<td>20</td>
+<td>20</td>
+</tr>
+<tr>
+<td>QueueC</td>
+<td>40/(24+16+40)=0.5</td>
+<td>100*0.5=50</td>
+<td>50</td>
+<td>0</td>
+<td>50</td>
+<td>50</td>
+</tr>
+</tbody>
+</table>
+<p>之后会抢占资源</p>
+<ul>
+<li>杀死正在使用的 container 实现的，但尽可能避免直接杀死 正在运行的 container</li>
+<li>选择低优先级的 container 作为抢占对象</li>
+<li>RM 将准备杀掉的 container 列表，发给 AM，由 AM 来决定</li>
+<li>如果 AM 一直未杀掉，则 RM 去强制杀掉</li>
+</ul>
+<h3 id="队列">队列</h3>
+<p>层级管理方式</p>
+<ul>
+<li>子队列，可以嵌套</li>
+<li>最少容量，可以使用父队列的容量比</li>
+<li>调度器有限选择当前资源使用率最低的</li>
+<li>最大容量</li>
+<li>用户权限管理</li>
+</ul>
+<p>capacity scheduler 列子</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">15
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">16
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">17
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">18
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">19
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">20
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">21
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">22
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">23
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">24
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">25
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">26
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">27
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">28
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">29
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">30
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">31
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">32
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">33
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">34
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">35
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">36
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">37
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">38
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">39
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">40
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">41
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">42
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">43
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">44
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">45
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">46
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">47
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">48
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">49
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">50
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">51
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">52
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">53
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">54
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">55
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">56
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">57
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">58
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">59
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">60
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">61
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">62
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">63
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">64
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">65
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">66
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">67
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">68
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">69
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">70
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">71
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">72
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">73
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">74
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">75
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">76
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">77
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">78
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">79
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">80
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">81
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">82
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">83
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">84
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">85
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">86
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">87
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">88
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">89
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">90
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">91
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">92
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">93
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">94
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">95
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">96
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-xml" data-lang="xml"><span style="display:flex;"><span><span style="color:#ff79c6">&lt;configuration&gt;</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#6272a4">&lt;!-- Define the Capacity Scheduler properties --&gt;</span>
+</span></span><span style="display:flex;"><span>    
+</span></span><span style="display:flex;"><span>    <span style="color:#6272a4">&lt;!-- Enable Capacity Scheduler --&gt;</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">&lt;property&gt;</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">&lt;name&gt;</span>yarn.scheduler.capacity.enabled<span style="color:#ff79c6">&lt;/name&gt;</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">&lt;value&gt;</span>true<span style="color:#ff79c6">&lt;/value&gt;</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">&lt;/property&gt;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#6272a4">&lt;!-- Define the root queue capacity --&gt;</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">&lt;property&gt;</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">&lt;name&gt;</span>yarn.scheduler.capacity.root.capacity<span style="color:#ff79c6">&lt;/name&gt;</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">&lt;value&gt;</span>100<span style="color:#ff79c6">&lt;/value&gt;</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">&lt;/property&gt;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#6272a4">&lt;!-- Define the queues under root --&gt;</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">&lt;property&gt;</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">&lt;name&gt;</span>yarn.scheduler.capacity.root.default.capacity<span style="color:#ff79c6">&lt;/name&gt;</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">&lt;value&gt;</span>50<span style="color:#ff79c6">&lt;/value&gt;</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">&lt;/property&gt;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">&lt;property&gt;</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">&lt;name&gt;</span>yarn.scheduler.capacity.root.marketing.capacity<span style="color:#ff79c6">&lt;/name&gt;</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">&lt;value&gt;</span>30<span style="color:#ff79c6">&lt;/value&gt;</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">&lt;/property&gt;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">&lt;property&gt;</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">&lt;name&gt;</span>yarn.scheduler.capacity.root.sales.capacity<span style="color:#ff79c6">&lt;/name&gt;</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">&lt;value&gt;</span>20<span style="color:#ff79c6">&lt;/value&gt;</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">&lt;/property&gt;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#6272a4">&lt;!-- Define the queue capacities and ensure no queue can exceed its share --&gt;</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">&lt;property&gt;</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">&lt;name&gt;</span>yarn.scheduler.capacity.root.default.maximum-capacity<span style="color:#ff79c6">&lt;/name&gt;</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">&lt;value&gt;</span>50<span style="color:#ff79c6">&lt;/value&gt;</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">&lt;/property&gt;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">&lt;property&gt;</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">&lt;name&gt;</span>yarn.scheduler.capacity.root.marketing.maximum-capacity<span style="color:#ff79c6">&lt;/name&gt;</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">&lt;value&gt;</span>30<span style="color:#ff79c6">&lt;/value&gt;</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">&lt;/property&gt;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">&lt;property&gt;</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">&lt;name&gt;</span>yarn.scheduler.capacity.root.sales.maximum-capacity<span style="color:#ff79c6">&lt;/name&gt;</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">&lt;value&gt;</span>30<span style="color:#ff79c6">&lt;/value&gt;</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">&lt;/property&gt;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#6272a4">&lt;!-- Configure the minimum resource guarantees for each queue --&gt;</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">&lt;property&gt;</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">&lt;name&gt;</span>yarn.scheduler.capacity.root.default.minimum-capacity<span style="color:#ff79c6">&lt;/name&gt;</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">&lt;value&gt;</span>10<span style="color:#ff79c6">&lt;/value&gt;</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">&lt;/property&gt;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">&lt;property&gt;</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">&lt;name&gt;</span>yarn.scheduler.capacity.root.marketing.minimum-capacity<span style="color:#ff79c6">&lt;/name&gt;</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">&lt;value&gt;</span>10<span style="color:#ff79c6">&lt;/value&gt;</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">&lt;/property&gt;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">&lt;property&gt;</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">&lt;name&gt;</span>yarn.scheduler.capacity.root.sales.minimum-capacity<span style="color:#ff79c6">&lt;/name&gt;</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">&lt;value&gt;</span>10<span style="color:#ff79c6">&lt;/value&gt;</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">&lt;/property&gt;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#6272a4">&lt;!-- Preemption settings: enabling preemption for root queues --&gt;</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">&lt;property&gt;</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">&lt;name&gt;</span>yarn.scheduler.capacity.root.default.preemption<span style="color:#ff79c6">&lt;/name&gt;</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">&lt;value&gt;</span>true<span style="color:#ff79c6">&lt;/value&gt;</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">&lt;/property&gt;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">&lt;property&gt;</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">&lt;name&gt;</span>yarn.scheduler.capacity.root.marketing.preemption<span style="color:#ff79c6">&lt;/name&gt;</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">&lt;value&gt;</span>false<span style="color:#ff79c6">&lt;/value&gt;</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">&lt;/property&gt;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">&lt;property&gt;</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">&lt;name&gt;</span>yarn.scheduler.capacity.root.sales.preemption<span style="color:#ff79c6">&lt;/name&gt;</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">&lt;value&gt;</span>false<span style="color:#ff79c6">&lt;/value&gt;</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">&lt;/property&gt;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#6272a4">&lt;!-- Other optional settings: User/Queue ACLs, access control, etc. --&gt;</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">&lt;property&gt;</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">&lt;name&gt;</span>yarn.scheduler.capacity.root.default.user-limit-factor<span style="color:#ff79c6">&lt;/name&gt;</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">&lt;value&gt;</span>1.0<span style="color:#ff79c6">&lt;/value&gt;</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">&lt;/property&gt;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">&lt;property&gt;</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">&lt;name&gt;</span>yarn.scheduler.capacity.root.marketing.user-limit-factor<span style="color:#ff79c6">&lt;/name&gt;</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">&lt;value&gt;</span>1.0<span style="color:#ff79c6">&lt;/value&gt;</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">&lt;/property&gt;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">&lt;property&gt;</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">&lt;name&gt;</span>yarn.scheduler.capacity.root.sales.user-limit-factor<span style="color:#ff79c6">&lt;/name&gt;</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">&lt;value&gt;</span>1.0<span style="color:#ff79c6">&lt;/value&gt;</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">&lt;/property&gt;</span>
+</span></span><span style="display:flex;"><span>    
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">&lt;/configuration&gt;</span>
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>Capacity 资源分配流程</p>
+<ul>
+<li>从根节点开始遍历子节点，一直到叶子节点，是 DFS 的过程</li>
+<li>找到叶子节点的应用后，根据时间排序，选择时间最早的应用</li>
+<li>选择container，对同一个应用程序，根据 container的各种资源组合的优先级做调度
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/01/18/7WAc4a.png">
+            <img class="mx-auto" alt="36" src="https://v1.ax1x.com/2025/01/18/7WAc4a.png" />
+        </a>
+    </li>
+</ul>
+<hr>
+<p>Fair scheduler 调度器</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">15
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">16
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">17
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">18
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">19
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">20
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">21
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">22
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">23
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">24
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">25
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">26
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">27
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">28
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">29
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">30
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">31
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">32
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">33
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">34
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">35
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">36
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">37
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">38
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">39
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">40
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">41
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">42
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">43
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">44
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">45
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">46
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">47
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">48
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">49
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">50
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">51
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">52
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">53
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">54
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">55
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">56
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">57
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">58
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">59
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">60
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">61
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">62
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">63
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">64
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">65
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">66
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">67
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">68
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">69
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">70
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">71
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">72
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">73
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">74
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">75
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">76
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-xml" data-lang="xml"><span style="display:flex;"><span><span style="color:#ff79c6">&lt;configuration&gt;</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#6272a4">&lt;!-- Define the Fair Scheduler properties --&gt;</span>
+</span></span><span style="display:flex;"><span>    
+</span></span><span style="display:flex;"><span>    <span style="color:#6272a4">&lt;!-- Enable Fair Scheduler --&gt;</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">&lt;property&gt;</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">&lt;name&gt;</span>yarn.scheduler.fair.enable<span style="color:#ff79c6">&lt;/name&gt;</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">&lt;value&gt;</span>true<span style="color:#ff79c6">&lt;/value&gt;</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">&lt;/property&gt;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#6272a4">&lt;!-- Define the root pool --&gt;</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">&lt;property&gt;</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">&lt;name&gt;</span>yarn.scheduler.fair.allocation.file<span style="color:#ff79c6">&lt;/name&gt;</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">&lt;value&gt;</span>/etc/hadoop/fair-scheduler.xml<span style="color:#ff79c6">&lt;/value&gt;</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">&lt;/property&gt;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#6272a4">&lt;!-- Pool configuration for different applications --&gt;</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">&lt;property&gt;</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">&lt;name&gt;</span>yarn.scheduler.fair.pool.root.capacity<span style="color:#ff79c6">&lt;/name&gt;</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">&lt;value&gt;</span>100<span style="color:#ff79c6">&lt;/value&gt;</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">&lt;/property&gt;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#6272a4">&lt;!-- Sub-pool under the root pool --&gt;</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">&lt;property&gt;</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">&lt;name&gt;</span>yarn.scheduler.fair.pool.root.default.capacity<span style="color:#ff79c6">&lt;/name&gt;</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">&lt;value&gt;</span>60<span style="color:#ff79c6">&lt;/value&gt;</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">&lt;/property&gt;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">&lt;property&gt;</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">&lt;name&gt;</span>yarn.scheduler.fair.pool.root.sales.capacity<span style="color:#ff79c6">&lt;/name&gt;</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">&lt;value&gt;</span>20<span style="color:#ff79c6">&lt;/value&gt;</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">&lt;/property&gt;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">&lt;property&gt;</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">&lt;name&gt;</span>yarn.scheduler.fair.pool.root.marketing.capacity<span style="color:#ff79c6">&lt;/name&gt;</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">&lt;value&gt;</span>20<span style="color:#ff79c6">&lt;/value&gt;</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">&lt;/property&gt;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#6272a4">&lt;!-- Ensure fair allocation between pools --&gt;</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">&lt;property&gt;</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">&lt;name&gt;</span>yarn.scheduler.fair.pool.root.default.fair-share<span style="color:#ff79c6">&lt;/name&gt;</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">&lt;value&gt;</span>1000<span style="color:#ff79c6">&lt;/value&gt;</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">&lt;/property&gt;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">&lt;property&gt;</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">&lt;name&gt;</span>yarn.scheduler.fair.pool.root.sales.fair-share<span style="color:#ff79c6">&lt;/name&gt;</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">&lt;value&gt;</span>500<span style="color:#ff79c6">&lt;/value&gt;</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">&lt;/property&gt;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">&lt;property&gt;</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">&lt;name&gt;</span>yarn.scheduler.fair.pool.root.marketing.fair-share<span style="color:#ff79c6">&lt;/name&gt;</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">&lt;value&gt;</span>500<span style="color:#ff79c6">&lt;/value&gt;</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">&lt;/property&gt;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#6272a4">&lt;!-- Minimum resource allocation per pool --&gt;</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">&lt;property&gt;</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">&lt;name&gt;</span>yarn.scheduler.fair.pool.root.default.minimum-share<span style="color:#ff79c6">&lt;/name&gt;</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">&lt;value&gt;</span>50<span style="color:#ff79c6">&lt;/value&gt;</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">&lt;/property&gt;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">&lt;property&gt;</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">&lt;name&gt;</span>yarn.scheduler.fair.pool.root.sales.minimum-share<span style="color:#ff79c6">&lt;/name&gt;</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">&lt;value&gt;</span>50<span style="color:#ff79c6">&lt;/value&gt;</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">&lt;/property&gt;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">&lt;property&gt;</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">&lt;name&gt;</span>yarn.scheduler.fair.pool.root.marketing.minimum-share<span style="color:#ff79c6">&lt;/name&gt;</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">&lt;value&gt;</span>50<span style="color:#ff79c6">&lt;/value&gt;</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">&lt;/property&gt;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#6272a4">&lt;!-- Preemption configuration (optional) --&gt;</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">&lt;property&gt;</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">&lt;name&gt;</span>yarn.scheduler.fair.pool.root.default.preemption<span style="color:#ff79c6">&lt;/name&gt;</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">&lt;value&gt;</span>true<span style="color:#ff79c6">&lt;/value&gt;</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">&lt;/property&gt;</span>
+</span></span><span style="display:flex;"><span>    
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">&lt;/configuration&gt;</span>
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>调度策略</p>
+<ul>
+<li>跟 capacity 一样也是三步骤</li>
+<li>先 DFS 方式选择队列</li>
+<li>选择应用程序，最后选择 container</li>
+</ul>
+<table>
+<thead>
+<tr>
+<th></th>
+<th><strong>Capacity Scheduler</strong></th>
+<th><strong>Fair Scheduler</strong></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>目标</strong></td>
+<td>提供一种多用户共享 Hadoop 集群的方法，以提高资源利用率和减小集群管理成本</td>
+<td>基于最大最小公平算法将资源分配给各个资源池或用户</td>
+</tr>
+<tr>
+<td><strong>设计思想</strong></td>
+<td>资源按比例分配给各个队列，并添加各种严格的限制防止个别用户或队列独占资源</td>
+<td>基于最大最小公平算法将资源分配给各个资源池或用户</td>
+</tr>
+<tr>
+<td><strong>是否支持动态加载配置文件</strong></td>
+<td>是</td>
+<td>是</td>
+</tr>
+<tr>
+<td><strong>是否支持负载均衡</strong></td>
+<td>否</td>
+<td>是</td>
+</tr>
+<tr>
+<td><strong>是否支持资源抢占</strong></td>
+<td>是</td>
+<td>是</td>
+</tr>
+<tr>
+<td><strong>是否支持批量调度</strong></td>
+<td>是</td>
+<td>是</td>
+</tr>
+<tr>
+<td><strong>Container 请求资源需求度</strong></td>
+<td>最小资源量的整倍数，比如 Container 请求量是 1.5GB，最小资源量 1GB，Container 请求量自动被归一化为 2GB</td>
+<td>有专门的内存规范化参数控制，精度更小，Container 请求量是 1.5GB，规范化值为 128MB，则 Container 请求不变</td>
+</tr>
+<tr>
+<td><strong>本地任务调度优化</strong></td>
+<td>基于跳过次数的延迟调度</td>
+<td>资源使用率低者优先</td>
+</tr>
+<tr>
+<td><strong>队列内资源分配方式</strong></td>
+<td>FIFO 或者 DRF</td>
+<td>Fair, FIFO 或者 DRF</td>
+</tr>
+</tbody>
+</table>
+<p>其他调度器</p>
+<ul>
+<li>自适应调度器，根据用户期望时间自动分配</li>
+<li>自学习调度器，根据贝叶斯分类算法的调度器</li>
+<li>动态优先级调度器</li>
+</ul>
+<h2 id="nodemanage">NodeManage</h2>
+<h3 id="模块划分-1">模块划分</h3>
+<p>NodeManage 相关的 RPC 协议<br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/01/18/7WAoZ9.png">
+            <img class="mx-auto" alt="37" src="https://v1.ax1x.com/2025/01/18/7WAoZ9.png" />
+        </a>
+    </p>
+<p>NodeManage 内部架构图</p>
+<ul>
+<li>NodeStatusUpdater，是 NM 和 RM 通讯的通道，负责汇报可用 container状态，包括完成和各种其他状态</li>
+<li>ContainerManager，最核心的组件之一，包括很多子组件
+<ul>
+<li>RPC Server，AM 和 NM 通讯的通道</li>
+<li>ResourceLocalizationService，负责 container所需资源的本地化</li>
+<li>ContainerLauncher，维护线程池完成 container相关操作，启动或者kill</li>
+<li>AuxServices，NM 允许用户通过配置扩展功能，可以增加一些定制化的服务，如MR  的shuffleHTTPServer，就是封装后的附属服务</li>
+<li>ContainersMonitor，负责container的资源使用量，实现隔离和共享，发现超过资源使用则kill</li>
+<li>LoHandler，可插拔的，控制container日志保存方式</li>
+<li>ContainerEventDispatcher，container事件调度器，将对应的事件交给container的状态机</li>
+<li>ApplicationEventDispatcher，Application事件调度器，将对应事件交给Application状态机</li>
+</ul>
+</li>
+<li>ContainerExecutor，可与底层操作系统交互，安全存放container需要的文件和目录，进而以一种方案的方式启动和清除container对应的进程，其中两个实现的LinuxContainerExecutor以 cgroup方式控制</li>
+<li>NodeHealthCheckerService，周期性的运行自定义脚本，向磁盘写文件，检查节点健康状态，RM检查到不健康的节点后就不再为其分配</li>
+<li>DeletionService，NM 将文件删除功能服务化，提供异步删除失效文件</li>
+<li>Security
+<ul>
+<li>包括ApplicationACLsManager，确保访问 NM的用户是合法的</li>
+<li>ContainerTokenSecretManager，确保资源被RM授权过</li>
+</ul>
+</li>
+<li>WebServer，web管理界面
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/01/18/7WVkqY.png">
+            <img class="mx-auto" alt="38" src="https://v1.ax1x.com/2025/01/18/7WVkqY.png" />
+        </a>
+    </li>
+</ul>
+<p>NodeManage 内部事件与事件处理器的交互图<br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/01/18/7WVBDH.png">
+            <img class="mx-auto" alt="39" src="https://v1.ax1x.com/2025/01/18/7WVBDH.png" />
+        </a>
+    </p>
+<p>自定义健康检查</p>
+<ul>
+<li>作为对 YARN 的cpu、内存之外的资源的检测</li>
+<li>检查 磁盘，网络的情况，负载高的时候返回 ERROR，于是检测服务会返回 unhealthy</li>
+<li>此时 RM就会放入黑名单，等 NM 恢复后会继续分配</li>
+<li>也可以作为手工升级，人为修改监控脚本</li>
+</ul>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-shell" data-lang="shell"><span style="display:flex;"><span><span style="color:#ff79c6">#!/bin/bash
+</span></span></span><span style="display:flex;"><span><span style="color:#ff79c6"></span><span style="color:#8be9fd;font-style:italic">MEMORY_RATIO</span><span style="color:#ff79c6">=</span>0.1
+</span></span><span style="display:flex;"><span><span style="color:#8be9fd;font-style:italic">freeMem</span><span style="color:#ff79c6">=</span><span style="color:#f1fa8c">`</span>grep MemFree /proc/meminfo | awk <span style="color:#f1fa8c">&#39;{print $2}&#39;</span><span style="color:#f1fa8c">`</span>
+</span></span><span style="display:flex;"><span><span style="color:#8be9fd;font-style:italic">totalMem</span><span style="color:#ff79c6">=</span><span style="color:#f1fa8c">`</span>grep MemTotal /proc/meminfo | awk <span style="color:#f1fa8c">&#39;{print $2}&#39;</span><span style="color:#f1fa8c">`</span>
+</span></span><span style="display:flex;"><span><span style="color:#8be9fd;font-style:italic">limitMem</span><span style="color:#ff79c6">=</span><span style="color:#f1fa8c">`</span><span style="color:#8be9fd;font-style:italic">echo</span> | awk <span style="color:#f1fa8c">&#39;{print int(&#34;&#39;</span><span style="color:#f1fa8c">&#34;</span><span style="color:#8be9fd;font-style:italic">$totalMem</span><span style="color:#f1fa8c">&#34;</span><span style="color:#f1fa8c">&#39;&#34;*&#34;&#39;</span><span style="color:#f1fa8c">&#34;</span><span style="color:#8be9fd;font-style:italic">$MEMORY_RATIO</span><span style="color:#f1fa8c">&#39;&#34;&#34;)}&#39;`
+</span></span></span><span style="display:flex;"><span><span style="color:#f1fa8c">if [ </span><span style="color:#8be9fd;font-style:italic">$freeMem</span><span style="color:#f1fa8c"> -lt </span><span style="color:#8be9fd;font-style:italic">$limitMem</span><span style="color:#f1fa8c"> ];then
+</span></span></span><span style="display:flex;"><span><span style="color:#f1fa8c">  echo &#34;</span>ERROR, <span style="color:#8be9fd;font-style:italic">totalMem</span><span style="color:#ff79c6">=</span><span style="color:#8be9fd;font-style:italic">$totalMem</span>, <span style="color:#8be9fd;font-style:italic">freeMem</span><span style="color:#ff79c6">=</span><span style="color:#8be9fd;font-style:italic">$freeMem</span>, <span style="color:#8be9fd;font-style:italic">limitMem</span><span style="color:#ff79c6">=</span><span style="color:#8be9fd;font-style:italic">$limitMem</span><span style="color:#f1fa8c">&#34;
+</span></span></span><span style="display:flex;"><span><span style="color:#f1fa8c">else
+</span></span></span><span style="display:flex;"><span><span style="color:#f1fa8c">  echo &#34;</span>OK, <span style="color:#8be9fd;font-style:italic">totalMem</span><span style="color:#ff79c6">=</span><span style="color:#8be9fd;font-style:italic">$totalMem</span>, <span style="color:#8be9fd;font-style:italic">freeMem</span><span style="color:#ff79c6">=</span><span style="color:#8be9fd;font-style:italic">$freeMem</span>, <span style="color:#8be9fd;font-style:italic">limitMem</span><span style="color:#ff79c6">=</span><span style="color:#8be9fd;font-style:italic">$limitMem</span><span style="color:#f1fa8c">&#34;
+</span></span></span><span style="display:flex;"><span><span style="color:#f1fa8c">fi
+</span></span></span></code></pre></td></tr></table>
+</div>
+</div><h3 id="分布式缓存">分布式缓存</h3>
+<p>将用户应用程序执行时需要的外部文件资源，自动的下载并缓存到各个节点上<br>
+YARN 分布式缓存工作流程具体如下：</p>
+<ol>
+<li>客户端将应用程序所需的文件资源（外部字典、JAR 包、二进制文件等）提交到 HDFS 上。</li>
+<li>客户端将应用程序提交到 ResourceManager 上。</li>
+<li>ResourceManager 与某个 NodeManager 通信，启动应用程序 ApplicationMaster，NodeManager 收到命令后，首先从 HDFS 下载文件（缓存），然后启动 ApplicationMaster。</li>
+<li>ApplicationMaster 与 ResourceManager 通信，以请求和获取计算资源。</li>
+<li>ApplicationMaster 收到新分配的计算资源后，与对应的 NodeManager 通信，以启动任务。</li>
+<li>如果该应用程序第一次在该节点上启动任务，则 NodeManager 首先从 HDFS 上下载文件缓存到本地，然后启动任务。</li>
+<li>NodeManager 后续收到启动任务请求后，如果文件已在本地缓存，则直接运行任务，否则等待文件缓存完成后再启动。</li>
+</ol>
+<p>
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/01/19/7WVTMZ.png">
+            <img class="mx-auto" alt="40" src="https://v1.ax1x.com/2025/01/19/7WVTMZ.png" />
+        </a>
+    </p>
+<p>NM 资源可见性分类</p>
+<ul>
+<li>public，所有用户都可见</li>
+<li>private同一节点上所有应用程序共享该资源</li>
+<li>application，节点上同一应用程序的所有 container共享
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/01/19/7WVp3U.png">
+            <img class="mx-auto" alt="41" src="https://v1.ax1x.com/2025/01/19/7WVp3U.png" />
+        </a>
+    </li>
+</ul>
+<p>资源类型</p>
+<ul>
+<li>archive，包括：jar、zip、tar.gz。tgz，tar</li>
+<li>file</li>
+<li>pattern</li>
+<li>如果是 jar类型，会自动加入到 classpath 中</li>
+</ul>
+<p>判断方式</p>
+<ul>
+<li>比较：resource、timestampe，type、pattern 是否两个资源相同</li>
+</ul>
+<p>实现</p>
+<ul>
+<li>public资源，放在${yarn.nodemanage.local-dir}/filecache 目录下</li>
+<li>private，${yarn.nodemanage.local-dir}/usercache/${user}/filecache 目录下</li>
+<li>application，${yarn.nodemanage.local-dir}/usercache/${user}/appache/${appid}/filecache 目录下</li>
+<li>container，${yarn.nodemanage.local-dir}/usercache/${user}/appache/${appid}/${containerid} 目录下</li>
+<li>container中的资源会使用软链接
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/01/19/7WV0Cs.png">
+            <img class="mx-auto" alt="42" src="https://v1.ax1x.com/2025/01/19/7WV0Cs.png" />
+        </a>
+    </li>
+</ul>
+<p>NM 资源下载流程<br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/01/19/7WVLAq.png">
+            <img class="mx-auto" alt="43" src="https://v1.ax1x.com/2025/01/19/7WVLAq.png" />
+        </a>
+    </p>
+<p>数据目录组织方式</p>
+<ul>
+<li>可以挂 N 个盘</li>
+<li>为避免竞争，将 /nmt/disk1  分给 container0，将 /nmt/disk2 分给 container1<br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/01/19/7WV7g7.png">
+            <img class="mx-auto" alt="44" src="https://v1.ax1x.com/2025/01/19/7WV7g7.png" />
+        </a>
+    </li>
+</ul>
+<p>日志目录管理</p>
+<ul>
+<li>同样也可以管理多个日志目录</li>
+<li>注意是 container 运行日志，而不是 NM 服务产生的日志</li>
+<li>NM 的日志存放在另外的目录中</li>
+<li>包括 stdout，stderr，syslog(log4j的)</li>
+<li>日志也会定期清理(可配置)，也提供了日志轮转
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/01/19/7WVlBa.png">
+            <img class="mx-auto" alt="45" src="https://v1.ax1x.com/2025/01/19/7WVlBa.png" />
+        </a>
+    </li>
+</ul>
+<p>日志上传</p>
+<ul>
+<li>本地的一旦结束，日志就会上传到 HDFS</li>
+<li>支持三种，上传所有 container日志</li>
+<li>上传 application master 产生的日志</li>
+<li>上传am 和 container 的失败日志</li>
+<li>上传之后就由 JobHistory 这样的组件负责清理了，跟 NM 没关系了
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/01/19/7WVERI.png">
+            <img class="mx-auto" alt="46" src="https://v1.ax1x.com/2025/01/19/7WVERI.png" />
+        </a>
+    </li>
+</ul>
+<p>查看一个应用程序产生的所有日志，命令如下：</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-shell" data-lang="shell"><span style="display:flex;"><span>bin/yarn logs -applicationId application_1304487270789_0001
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>查看一个 Container 产生的日志，命令如下：</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-shell" data-lang="shell"><span style="display:flex;"><span>bin/yarn logs -applicationId application_1304487270789_0001 -containerId container_1304487270789_0001_000002 -nodeAddress 127.0.0.1_45454
+</span></span></code></pre></td></tr></table>
+</div>
+</div><h3 id="状态机-1">状态机</h3>
+<p>Application 状态机<br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/01/19/7WVquL.png">
+            <img class="mx-auto" alt="47" src="https://v1.ax1x.com/2025/01/19/7WVquL.png" />
+        </a>
+    </p>
+<p>Application 状态机的事件来源<br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/01/19/7WVQZV.png">
+            <img class="mx-auto" alt="48" src="https://v1.ax1x.com/2025/01/19/7WVQZV.png" />
+        </a>
+    </p>
+<hr>
+<p>Container 状态机<br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/01/19/7WVwfG.png">
+            <img class="mx-auto" alt="49" src="https://v1.ax1x.com/2025/01/19/7WVwfG.png" />
+        </a>
+    </p>
+<p>container 状态机的事件来源<br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/01/19/7WVuDJ.png">
+            <img class="mx-auto" alt="50" src="https://v1.ax1x.com/2025/01/19/7WVuDJ.png" />
+        </a>
+    </p>
+<hr>
+<p>LocalizedResource 状态机<br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/01/19/7WVHlB.png">
+            <img class="mx-auto" alt="51" src="https://v1.ax1x.com/2025/01/19/7WVHlB.png" />
+        </a>
+    </p>
+<h3 id="container-管理">Container 管理</h3>
+<p>container启动过程主要如下：</p>
+<ul>
+<li>资源本地化，包括应用程序初始化(日志、track，通常由第一个container完成)、container本地化</li>
+<li>启动，由 ContainerLauncher 完成，进一步调用可插拔的ContainerExecutor(DefaultContainerExecutor，另一个是LinuxContainerExecutor)</li>
+<li>资源清理</li>
+</ul>
+<p>来自 ApplicationMaster 的第一个 Container 本地化过程</p>
+<ul>
+<li>ContainerManagerImpl 收到 AM的请求，创建 ContainerImpl</li>
+<li>ApplicationImpl 收到INIT 事件，设置 LogHandler</li>
+<li>ResourceLocalizationService 收到事件后，为private和appllication 资源创建 track</li>
+<li>ContainerImpl 收到 INIT 后向附属服务 AuxService 发送 事件，通知container启动</li>
+<li>可以概括为：</li>
+<li>资源本地化过程是在 NM 上同一个应用程序的所有 ContainerImpl 异步向资源服务 ResourceLoclizationService发送下载资源</li>
+<li>ResourceLocalizationService下载完一类资源后，通知依赖该紫苑的所有Container</li>
+<li>一旦container依赖下载完，则container进入运行阶段
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/01/19/7WVKAt.png">
+            <img class="mx-auto" alt="52" src="https://v1.ax1x.com/2025/01/19/7WVKAt.png" />
+        </a>
+    </li>
+</ul>
+<p>来自 ApplicationMaster 的非第一个 Container 本地化过程</p>
+<ul>
+<li>复用之前下载过的文件</li>
+<li>如果之前还有没下载完的则继续下载，之后启动 
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/01/19/7WVbJb.png">
+            <img class="mx-auto" alt="53" src="https://v1.ax1x.com/2025/01/19/7WVbJb.png" />
+        </a>
+    </li>
+</ul>
+<p>container运行过程</p>
+<ul>
+<li>由ContainerLauncher服务实现的，将等待运行的container 所需的环境变量和运行命令写入到脚本</li>
+<li>launch_container.sh 中；之后将启动命令写入到 default_container_executor.sh 中，通过命令启动container</li>
+<li>脚本最后会调用具体实现类，如YarnClient，如 MR的，spark的来启动真实服务
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/01/19/7WVhBe.png">
+            <img class="mx-auto" alt="54" src="https://v1.ax1x.com/2025/01/19/7WVhBe.png" />
+        </a>
+    </li>
+</ul>
+<p>container 资源清理过程</p>
+<ul>
+<li>会依次删除： ${yarn.nodemanager.local-dirs}/usercache/${user}/appcache/${appid}/${containerid}</li>
+<li>${yarn.nodemanager.local-dirs}/nmPrivate/${user}/appcache/${appid}/${containerid}</li>
+<li>这两个目录存放 tokens文件、shell 脚本</li>
+</ul>
+<p>
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/01/19/7WVGYw.png">
+            <img class="mx-auto" alt="55" src="https://v1.ax1x.com/2025/01/19/7WVGYw.png" />
+        </a>
+    </p>
+<p>container分布</p>
+<ul>
+<li>由于各个 container 之间可能有依赖关系，比如 shuffle</li>
+<li>的中间数据，所以不会立即删除，等所有container运行完后再删除</li>
+<li>NM 会通知 RM，最后再由 NM 删除
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/01/19/7WV8gP.png">
+            <img class="mx-auto" alt="56" src="https://v1.ax1x.com/2025/01/19/7WV8gP.png" />
+        </a>
+    </li>
+</ul>
+<p>资源控制</p>
+<ul>
+<li>默认使用，独立线程监控，java启动时：fork+exec，子进程启动可能会内存翻倍，监控时额外做了判断</li>
+<li>基于cgourp的方式，限制 cpu 和内存</li>
+<li>cgourp方式启动，java 调用了一个 c语言实现的工具类完成 启动、清理等工作</li>
+</ul>
+<h2 id="参考">参考</h2>
+<ul>
+<li><a href="https://liebing.org.cn/collections/calcite/#%E7%9B%AE%E5%BD%95">Apache Calcite原理与实践</a></li>
+<li><a href="https://blog.csdn.net/zhanglong_4444/article/details/111830496">Hadoop3.2.x YARN源码分析目录汇总</a></li>
+<li><a href="https://yoelee.github.io/tags/yarn/">yarn源码分析汇总</a></li>
+<li><a href="https://www.cnblogs.com/shuofxz/tag/Yarn/">深入浅出 Yarn 架构与实现</a></li>
+</ul>
+
+			<script type="text/javascript"
+        async
+        src="https://cdn.bootcss.com/mathjax/2.7.3/MathJax.js?config=TeX-AMS-MML_HTMLorMML">
+MathJax.Hub.Config({
+  tex2jax: {
+    inlineMath: [['$','$'], ['\\(','\\)']],
+    displayMath: [['$$','$$'], ['\[\[','\]\]']],
+    processEscapes: true,
+    processEnvironments: true,
+    skipTags: ['script', 'noscript', 'style', 'textarea', 'pre'],
+    TeX: { equationNumbers: { autoNumber: "AMS" },
+         extensions: ["AMSmath.js", "AMSsymbols.js"] }
+  }
+});
+
+MathJax.Hub.Queue(function() {
+    
+    
+    
+    var all = MathJax.Hub.getAllJax(), i;
+    for(i = 0; i < all.length; i += 1) {
+        all[i].SourceElement().parentNode.className += ' has-jax';
+    }
+});
+</script>
+
+<style>
+code.has-jax {
+    font: inherit;
+    font-size: 100%;
+    background: inherit;
+    border: inherit;
+    color: #515151;
+}
+</style>
+        </div>
+
+        
+
+
+        
+
+<div class="post-archive">
+    <h2>相关文章</h2>
+    <ul class="listing">
+        
+        <li><a href="/post/2024/03/yarn_summary/">YARN 简单总结</a></li>
+        
+    </ul>
+</div>
+
+
+        <div class="post-meta meta-tags">
+            
+            <ul class="clearfix">
+                
+                <li><a href='/tags/yarn'>YARN</a></li>
+                
+            </ul>
+            
+        </div>
+    </article>
+    
+    
+
+    
+    
+    <div class="post bg-white">
+      <script src="https://utteranc.es/client.js"
+            repo= "himichael/hugoblogtalks"
+            issue-term="pathname"
+            theme="github-light"
+            crossorigin="anonymous"
+            async>
+      </script>
+    </div>
+    
+</div>
+
+
+                </div>
+
+                <div id="secondary">
+    <section class="widget">
+        <form id="search" action='https://code0xff.org/search/' method="get" accept-charset="utf-8" target="_blank" _lpchecked="1">
+      
+      <input type="text" name="q" maxlength="20" placeholder="Search">
+      <input type="hidden" name="sitesearch" value="https://code0xff.org/">
+      <button type="submit" class="submit icon-search"></button>
+</form>
+    </section>
+    
+    <section class="widget">
+        <h3 class="widget-title">最近文章</h3>
+<ul class="widget-list">
+    
+    <li>
+        <a href="https://code0xff.org/post/2025/01/logs_collection_based_cloud/" title="云环境中的日志收集和处理方案">云环境中的日志收集和处理方案</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2025/01/btrace/" title="BTrace">BTrace</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2025/01/yarn/" title="YARN原理分析">YARN原理分析</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2025/01/spark_register_source/" title="Spark 注册数据源">Spark 注册数据源</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2025/01/spark_core_2/" title="Spark Core相关-2">Spark Core相关-2</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2024/12/llamafactory/" title="Llama Factory">Llama Factory</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2024/11/spark_core/" title="Spark Core相关-1">Spark Core相关-1</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2024/11/sae_tunnel/" title="sea tunnel">sea tunnel</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2024/11/k8s_networks/" title="k8s 网络">k8s 网络</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2024/11/ozone/" title="ozone">ozone</a>
+    </li>
+    
+</ul>
+    </section>
+
+    
+
+    <section class="widget">
+        <h3 class="widget-title"><a href='/categories/'>分类</a></h3>
+<ul class="widget-list">
+    
+    <li><a href="https://code0xff.org/categories/%E5%88%86%E5%B8%83%E5%BC%8F/">分布式 (6)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E5%8E%9F%E7%90%86%E5%88%86%E6%9E%90/">原理分析 (26)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E5%95%86%E4%B8%9A/">商业 (3)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E5%A4%A7%E6%95%B0%E6%8D%AE/">大数据 (56)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%95%B0%E6%8D%AE%E5%BA%93/">数据库 (41)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%96%87%E5%AD%A6%E5%92%8C%E8%89%BA%E6%9C%AF/">文学和艺术 (3)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%97%85%E8%A1%8C/">旅行 (12)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%9E%B6%E6%9E%84/">架构 (14)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E7%AE%97%E6%B3%95/">算法 (8)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E7%B3%BB%E7%BB%9F/">系统 (7)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E7%BC%96%E7%A8%8B%E8%AF%AD%E8%A8%80/">编程语言 (7)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E8%A1%8C%E4%B8%9A%E8%A7%82%E5%AF%9F/">行业观察 (3)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E8%AF%BB%E4%B9%A6%E7%AC%94%E8%AE%B0/">读书笔记 (14)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E9%9A%8F%E4%BE%BF%E5%86%99%E5%86%99/">随便写写 (3)</a></li>
+    
+</ul>
+    </section>
+
+    <section class="widget">
+        <h3 class="widget-title">归档</a></h3>
+<ul class="widget-list">
+    
+    <li><a href="https://code0xff.org/years/2021%E5%B9%B4/">2021年 (41)</a></li>
+    
+    <li><a href="https://code0xff.org/years/2022%E5%B9%B4/">2022年 (55)</a></li>
+    
+    <li><a href="https://code0xff.org/years/2023%E5%B9%B4/">2023年 (54)</a></li>
+    
+    <li><a href="https://code0xff.org/years/2024%E5%B9%B4/">2024年 (48)</a></li>
+    
+    <li><a href="https://code0xff.org/years/2025%E5%B9%B4/">2025年 (5)</a></li>
+    
+</ul>
+    </section>
+
+    <section class="widget">
+        <h3 class="widget-title"><a href='/tags/'>标签</a></h3>
+<div class="tagcloud">
+    
+    <a href="https://code0xff.org/tags/ai/">AI </a>
+    
+    <a href="https://code0xff.org/tags/ambari/">Ambari </a>
+    
+    <a href="https://code0xff.org/tags/architecture/">architecture </a>
+    
+    <a href="https://code0xff.org/tags/bigdata/">bigdata </a>
+    
+    <a href="https://code0xff.org/tags/btrace/">BTrace </a>
+    
+    <a href="https://code0xff.org/tags/b%E6%A0%91/">B树 </a>
+    
+    <a href="https://code0xff.org/tags/c&#43;&#43;/">C&#43;&#43; </a>
+    
+    <a href="https://code0xff.org/tags/calcite/">calcite </a>
+    
+    <a href="https://code0xff.org/tags/cmu-database/">CMU-Database </a>
+    
+    <a href="https://code0xff.org/tags/data_ingestion/">Data_Ingestion </a>
+    
+    <a href="https://code0xff.org/tags/deltalake/">DeltaLake </a>
+    
+    <a href="https://code0xff.org/tags/doris/">Doris </a>
+    
+    <a href="https://code0xff.org/tags/english/">English </a>
+    
+    <a href="https://code0xff.org/tags/es/">ES </a>
+    
+    <a href="https://code0xff.org/tags/facebook/">Facebook </a>
+    
+    <a href="https://code0xff.org/tags/flink/">flink </a>
+    
+    <a href="https://code0xff.org/tags/flume/">flume </a>
+    
+    <a href="https://code0xff.org/tags/gc/">GC </a>
+    
+    <a href="https://code0xff.org/tags/gluten/">Gluten </a>
+    
+    <a href="https://code0xff.org/tags/hana/">HANA </a>
+    
+    <a href="https://code0xff.org/tags/hive/">Hive </a>
+    
+    <a href="https://code0xff.org/tags/iceberg/">iceberg </a>
+    
+    <a href="https://code0xff.org/tags/impala/">Impala </a>
+    
+    <a href="https://code0xff.org/tags/janino/">janino </a>
+    
+    <a href="https://code0xff.org/tags/k8s/">k8s </a>
+    
+    <a href="https://code0xff.org/tags/kafka/">Kafka </a>
+    
+    <a href="https://code0xff.org/tags/kudu/">kudu </a>
+    
+    <a href="https://code0xff.org/tags/kyuubi/">Kyuubi </a>
+    
+    <a href="https://code0xff.org/tags/lakehouse/">Lakehouse </a>
+    
+    <a href="https://code0xff.org/tags/leveldb/">LevelDB </a>
+    
+    <a href="https://code0xff.org/tags/llamafactory/">LlamaFactory </a>
+    
+    <a href="https://code0xff.org/tags/llvm/">LLVM </a>
+    
+    <a href="https://code0xff.org/tags/log4j/">log4j </a>
+    
+    <a href="https://code0xff.org/tags/manacher/">Manacher </a>
+    
+    <a href="https://code0xff.org/tags/mapreduce/">MapReduce </a>
+    
+    <a href="https://code0xff.org/tags/micro-service/">micro-service </a>
+    
+    <a href="https://code0xff.org/tags/mysql/">MySQL </a>
+    
+    <a href="https://code0xff.org/tags/newsql/">NewSQL </a>
+    
+    <a href="https://code0xff.org/tags/oceanbase/">OceanBase </a>
+    
+    <a href="https://code0xff.org/tags/openlogreplicator/">OpenLogReplicator </a>
+    
+    <a href="https://code0xff.org/tags/parquet/">parquet </a>
+    
+    <a href="https://code0xff.org/tags/paxos/">paxos </a>
+    
+    <a href="https://code0xff.org/tags/presto/">Presto </a>
+    
+    <a href="https://code0xff.org/tags/quick-sql/">quick-sql </a>
+    
+    <a href="https://code0xff.org/tags/raft/">raft </a>
+    
+    <a href="https://code0xff.org/tags/scala/">scala </a>
+    
+    <a href="https://code0xff.org/tags/simd/">SIMD </a>
+    
+    <a href="https://code0xff.org/tags/snowflake/">snowflake </a>
+    
+    <a href="https://code0xff.org/tags/spark/">spark </a>
+    
+    <a href="https://code0xff.org/tags/sre/">SRE </a>
+    
+    <a href="https://code0xff.org/tags/teradata/">TeraData </a>
+    
+    <a href="https://code0xff.org/tags/tpcx-hs/">TPCx-HS </a>
+    
+    <a href="https://code0xff.org/tags/trino/">Trino </a>
+    
+    <a href="https://code0xff.org/tags/tuning/">Tuning </a>
+    
+    <a href="https://code0xff.org/tags/unix/">unix </a>
+    
+    <a href="https://code0xff.org/tags/yarn/">YARN </a>
+    
+    <a href="https://code0xff.org/tags/%E4%BA%8C%E5%88%86%E6%9F%A5%E6%89%BE/">二分查找 </a>
+    
+    <a href="https://code0xff.org/tags/%E4%BA%8C%E5%8F%89%E6%A0%91%E9%81%8D%E5%8E%86/">二叉树遍历 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%88%86%E5%B8%83%E5%BC%8F/">分布式 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%88%97%E5%AD%98/">列存 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%8A%A8%E6%80%81%E6%B3%A8%E5%85%A5/">动态注入 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%8E%86%E5%8F%B2/">历史 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%90%91%E9%87%8F%E5%8C%96/">向量化 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%9B%9E%E6%BA%AF/">回溯 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%9B%BD%E5%86%85%E6%97%85%E8%A1%8C/">国内旅行 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%9B%BD%E5%A4%96%E6%97%85%E8%A1%8C/">国外旅行 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%A4%9A%E7%A7%9F%E6%88%B7/">多租户 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%A4%A7%E6%95%B0%E6%8D%AE/">大数据 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%AD%98%E5%82%A8/">存储 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%B7%A5%E4%BD%9C%E8%AE%B0%E5%BD%95/">工作记录 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%BE%AE%E6%9C%8D%E5%8A%A1/">微服务 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%95%B0%E6%8D%AE%E4%B8%AD%E5%8F%B0/">数据中台 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%95%B0%E6%8D%AE%E5%BA%93/">数据库 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%95%B0%E6%8D%AE%E6%A8%A1%E5%9E%8B/">数据模型 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%95%B0%E6%8D%AE%E8%BF%81%E7%A7%BB/">数据迁移 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%9F%A5%E8%AF%A2%E4%BC%98%E5%8C%96/">查询优化 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%9F%A5%E8%AF%A2%E7%BC%96%E8%AF%91/">查询编译 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%A6%82%E7%8E%87/">概率 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%B1%87%E7%BC%96/">汇编 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%B5%8B%E8%AF%95/">测试 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%94%9F%E6%B4%BB/">生活 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%94%B5%E5%BD%B1/">电影 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%AE%97%E6%B3%95/">算法 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%B4%A2%E5%BC%95/">索引 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BB%8F%E6%B5%8E/">经济 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BC%93%E5%AD%98/">缓存 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BC%96%E8%AF%91%E5%8E%9F%E7%90%86/">编译原理 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BD%91%E7%BB%9C/">网络 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AE%A1%E7%AE%97%E6%A1%86%E6%9E%B6/">计算框架 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AE%BA%E6%96%87/">论文 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AF%BB%E4%B9%A6/">读书 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AF%BB%E4%B9%A6%E7%AC%94%E8%AE%B0/">读书笔记 </a>
+    
+</div>
+    </section>
+
+    
+
+    <section class="widget">
+        <h3 class="widget-title">RSS</h3>
+        <ul class="widget-list">
+            <li><a href="https://code0xff.org/index.xml">文章 RSS</a></li>
+        </ul>
+    </section>
+</div>
+            </div>
+        </div>
+    </div>
+    <footer id="footer">
+    <div>
+        &copy; 2025 <a href="https://code0xff.org/">记录每个瞬间 By 老王</a>
+        
+    </div>
+    <br />
+    <div>
+        <div class="github-badge">
+            <a href="https://gohugo.io/" target="_black" rel="nofollow"><span class="badge-subject">Powered by</span><span class="badge-value bg-blue">Hugo</span></a>
+        </div>
+        <div class="github-badge">
+            <a href="https://github.com/flysnow-org/maupassant-hugo" target="_black"><span class="badge-subject">Theme</span><span class="badge-value bg-yellowgreen">Maupassant</span></a>
+        </div>
+    </div>
+</footer>
+
+
+    
+    <script type="text/javascript">
+        window.MathJax = {
+            tex2jax: {
+                inlineMath: [['$', '$']],
+                processEscapes: true
+                }
+            };
+    </script>
+    <script src='https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.5/MathJax.js?config=TeX-MML-AM_CHTML' async></script><script src="https://cdn.bootcdn.net/ajax/libs/fancybox/3.5.7/jquery.fancybox.min.js"></script>
+
+<a id="rocket" href="#top"></a>
+<script type="text/javascript" src='/js/totop.js?v=0.0.0' async=""></script>
+
+<script type="application/javascript">
+var doNotTrack = false;
+if (!doNotTrack) {
+	window.ga=window.ga||function(){(ga.q=ga.q||[]).push(arguments)};ga.l=+new Date;
+	ga('create', 'GA ID', 'auto');
+	
+	ga('send', 'pageview');
+}
+</script>
+<script async src='https://www.google-analytics.com/analytics.js'></script>
+
+
+
+    <script type="text/javascript" src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js" async></script>
+
+
+
+
+</body>
+
+</html>
