@@ -1,0 +1,988 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    
+    <meta name="referrer" content="no-referrer-when-downgrade">
+    
+
+    <title>eBPF 容器 | 记录每个瞬间</title>
+    <meta property="og:title" content="eBPF 容器 - 记录每个瞬间">
+    <meta property="og:type" content="article">
+        
+    <meta property="article:published_time" content='2025-07-26T09:10:12&#43;08:00'>
+        
+        
+    <meta property="article:modified_time" content='2025-07-26T09:10:12&#43;08:00'>
+        
+    <meta name="Keywords" content="">
+    <meta name="description" content="eBPF 容器">
+        <meta name="author" content="隔壁老王">
+        
+    <meta property="og:url" content="https://code0xff.org/post/2025/07/ebpf_container/">
+    <link rel="shortcut icon" href='/favicon.ico'  type="image/x-icon">
+
+    <link rel="stylesheet" href='/css/normalize.css'>
+    <link rel="stylesheet" href='/css/style.css'>
+    <script type="text/javascript" src="//cdn.bootcdn.net/ajax/libs/jquery/3.4.1/jquery.min.js"></script>
+
+    
+    
+    
+        <link href="https://cdn.bootcdn.net/ajax/libs/fancybox/3.5.7/jquery.fancybox.min.css" rel="stylesheet">
+    
+    
+    
+    
+</head>
+
+
+<body>
+    <header id="header" class="clearfix">
+    <div class="container">
+        <div class="col-group">
+            <div class="site-name ">
+                
+                    <a id="logo" href="https://code0xff.org/">
+                        记录每个瞬间
+                    </a>
+                
+                
+            </div>
+            <div>
+                <nav id="nav-menu" class="clearfix">
+                    <a class="current" href="https://code0xff.org/">首页</a>
+                    
+                    <a  href="https://code0xff.org/linked/" title="链接">链接</a>
+                    
+                    <a  href="https://code0xff.org/archives/" title="归档">归档</a>
+                    
+                    <a  href="https://code0xff.org/about/" title="关于">关于</a>
+                    
+                </nav>
+            </div>
+        </div>
+    </div>
+</header>
+
+    <div id="body">
+        <div class="container">
+            <div class="col-group">
+
+                <div class="col-8" id="main">
+                    
+<script type="module">
+  import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs';
+  mermaid.initialize({ startOnLoad: true });
+</script>
+<script>
+  document.addEventListener('DOMContentLoaded', () => {
+    document.querySelectorAll('code.language-mermaid').forEach(el => {
+      const container = document.createElement('div');
+      container.className = 'mermaid';
+      container.innerHTML = el.innerHTML;
+      el.parentNode.replaceChild(container, el);
+    });
+  });
+</script>
+<div class="res-cons">
+    
+    <article class="post">
+        <header>
+            <h1 class="post-title">eBPF 容器</h1>
+        </header>
+        <date class="post-meta meta-date">
+            2025年7月26日
+        </date>
+<nav id="TableOfContents">
+  <ul>
+    <li>
+      <ul>
+        <li><a href="#背景">背景</a></li>
+        <li><a href="#实验">实验</a></li>
+        <li><a href="#参考">参考</a></li>
+      </ul>
+    </li>
+  </ul>
+</nav>
+        
+        <div class="post-meta">
+            
+            <span class="post-meta meta-tags">
+                <ul class="clearfix">
+                    <a href='/categories/%E7%B3%BB%E7%BB%9F'>系统</a>
+                </ul>
+            </span>
+            
+        </div>
+        
+        
+        <div class="post-meta">
+            <span id="busuanzi_container_page_pv">|<span id="busuanzi_value_page_pv"></span><span>
+                    阅读</span></span>
+        </div>
+        
+        
+        <div class="post-content">
+            <h2 id="背景">背景</h2>
+<p>容器的安全性依赖</p>
+<ul>
+<li>命名空间</li>
+<li>cgroups</li>
+<li>Linux 权限控制 Capabilities</li>
+</ul>
+<p>eBPF 可以做的</p>
+<ul>
+<li>安全监控</li>
+<li>安全控制</li>
+</ul>
+<p>业界的容器安全解决方案</p>
+<ul>
+<li><a href="https://github.com/draios/sysdig">Sysdig</a></li>
+<li><a href="https://www.aquasec.com/">Aqua Security</a></li>
+<li><a href="https://www.datadoghq.com/">Datadog</a></li>
+</ul>
+<p>开源项目</p>
+<ul>
+<li><a href="https://falco.org/">falco</a></li>
+<li><a href="https://aquasecurity.github.io/tracee/dev/">Tracee</a></li>
+<li><a href="https://docs.docker.com/engine/security/apparmor/">AppArmor</a></li>
+<li><a href="https://docs.docker.com/engine/security/seccomp/">Seccomp </a></li>
+<li><a href="https://man7.org/linux/man-pages/man7/capabilities.7.html">linux capabilities机制</a></li>
+<li><a href="https://github.com/aquasecurity">Aqua Security github 项目组</a></li>
+</ul>
+<p>Falco</p>
+<ul>
+<li>开发者 / 维护者：由 Sysdig 发起，现由 CNCF（Cloud Native Computing Foundation）托管。</li>
+<li>核心功能：开源的运行时安全监控工具，专注于检测系统和容器中的异常行为（如未授权文件访问、特权升级、异常网络连接等）。通过实时分析系统调用、进程行为等事件，结合预定义规则（或自定义规则）触发告警。</li>
+<li>eBPF 使用情况：支持 eBPF 作为事件收集的核心方式。早期依赖 Sysdig 内核模块，后期为减少内核兼容性问题，引入 eBPF 探针作为更优方案（无需手动加载内核模块，适配更多内核版本），目前 eBPF 是其推荐的事件源。</li>
+</ul>
+<p>Tracee</p>
+<ul>
+<li>开发者 / 维护者：由 Aqua Security 开发并开源。</li>
+<li>核心功能：基于 eBPF 的系统行为追踪与威胁检测工具，专注于捕获进程、容器的细粒度行为（如系统调用、文件操作、网络交互、内核事件等），通过内置规则引擎识别可疑行为（如恶意代码执行、容器逃逸尝试等）。</li>
+<li>eBPF 使用情况：完全基于 eBPF 实现。通过 eBPF 程序附着到内核钩子（如系统调用、kprobes、uprobes 等），直接从内核层收集事件，无需依赖传统内核模块，是其核心技术支柱</li>
+</ul>
+<p>AppArmor</p>
+<ul>
+<li>开发者 / 维护者：起源于 SUSE，现由 Linux 社区维护，是 Linux 内核官方支持的安全模块。</li>
+<li>核心功能：强制访问控制（MAC）工具，通过配置文件（Profile）定义进程的访问权限（如允许访问的文件、网络端口、系统调用等），限制程序的 “越权行为”，属于预防性安全机制。</li>
+<li>eBPF 使用情况：不使用 eBPF。基于 Linux 内核的 LSM（Linux Security Modules）框架实现，通过内核内置的访问控制钩子生效，与 eBPF 技术无关</li>
+</ul>
+<table>
+<thead>
+<tr>
+<th>对比维度</th>
+<th>Falco</th>
+<th>Tracee</th>
+<th>AppArmor</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>核心定位</td>
+<td>运行时安全监控与异常检测</td>
+<td>基于 eBPF 的系统行为追踪与威胁检测</td>
+<td>强制访问控制（预防性安全）</td>
+</tr>
+<tr>
+<td>是否使用 eBPF</td>
+<td>是（支持 eBPF 作为事件收集方式，替代传统内核模块）</td>
+<td>是（完全基于 eBPF 实现事件捕获）</td>
+<td>否（基于 LSM 框架）</td>
+</tr>
+<tr>
+<td>技术依赖</td>
+<td>可选择 eBPF 或 Sysdig 内核模块；依赖规则引擎</td>
+<td>依赖 eBPF 内核支持（需内核版本≥4.15）；规则引擎</td>
+<td>依赖 Linux 内核 LSM 框架（内核≥2.6.36）</td>
+</tr>
+<tr>
+<td>核心功能</td>
+<td>检测违反规则的异常行为（如特权升级、异常文件访问）</td>
+<td>细粒度追踪进程 / 容器行为，检测可疑操作（如恶意系统调用）</td>
+<td>限制进程访问权限（如文件、网络、系统调用）</td>
+</tr>
+<tr>
+<td>应用场景</td>
+<td>容器 / 主机运行时安全监控、入侵检测（IDS）</td>
+<td>容器安全审计、威胁狩猎、行为分析</td>
+<td>进程权限限制、减少攻击面（如 Web 服务加固）</td>
+</tr>
+<tr>
+<td>优势</td>
+<td>规则生态丰富，支持多数据源，CNCF 背书</td>
+<td>完全基于 eBPF，轻量、低侵入，适合容器环境</td>
+<td>配置简单，内核原生支持，性能开销低</td>
+</tr>
+<tr>
+<td>典型用户</td>
+<td>云原生环境（K8s 集群）、企业安全监控</td>
+<td>容器平台（Docker、K8s）、安全研究</td>
+<td>服务器加固、嵌入式系统安全</td>
+</tr>
+</tbody>
+</table>
+<p>对比</p>
+<ul>
+<li>eBPF 相关性：Falco 和 Tracee 均依赖 eBPF（Tracee 完全基于 eBPF，Falco 可选 eBPF），而 AppArmor 不涉及 eBPF，依赖传统内核 LSM 机制。</li>
+<li>功能差异：Falco 和 Tracee 偏向 “检测”（发现已发生的异常），AppArmor 偏向 “预防”（限制可能的危险行为）。</li>
+<li>技术选型：若需轻量、低侵入的容器行为追踪，优先 Tracee；若需成熟的多场景安全监控，选 Falco；若需限制进程权限以减少风险，选 AppArmor。</li>
+</ul>
+<hr>
+<p>分析和诊断</p>
+<ul>
+<li>通过实时监控内核的行为，再根据不断丰富的特征库做检查匹配，就能找到安全问题</li>
+<li><a href="https://aquasecurity.github.io/tracee/dev/docs/overview/">Tracee 项目</a>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/07/26/EGVbAJ.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2025/07/26/EGVbAJ.png" />
+        </a>
+    </li>
+</ul>
+<p>事件监测</p>
+<ul>
+<li>通过 bpf 来监测各种行为，开销非常低，而且避免了采样的不准确</li>
+<li><a href="https://www.brendangregg.com/Slides/BSidesSF2017_BPF_security_monitoring.pdf">Security Monitoring with eBPF</a>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/07/26/EGVyfV.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2025/07/26/EGVyfV.png" />
+        </a>
+    </li>
+</ul>
+<p>安全策略执行</p>
+<ul>
+<li>安全计算（seccomp）、Linux 安全模块（LSM）等已有的安全机制，可通过 eBPF 进行安全审计和决策执行</li>
+<li>可以通过辅助函数 kill 非法进程</li>
+<li>可以在网络协议栈处理之前，实时监控网络行为，实现丢包处理，效率非常高</li>
+<li>如下，KubeArmor 限制容器中进程执行、文件访问、网络连接等各种违反安全策略的操作
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/07/26/EGVKlL.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2025/07/26/EGVKlL.png" />
+        </a>
+    </li>
+</ul>
+<p>Introduction to LSM:​​<br>
+Linux Security Modules (LSM) is a framework in the Linux kernel that enables ​​mandatory access control (MAC)​​. Unlike discretionary access control (DAC), LSM allows system-wide security policies that enforce rules regardless of user permissions. Key features:</p>
+<ul>
+<li>Hook-based Architecture​​: Places security hooks at critical kernel operations</li>
+<li>​​Module-based​​: Supports multiple security modules (SELinux, AppArmor, Smack)</li>
+<li>​​Policy Enforcement​​: Centralized enforcement of security rules</li>
+<li>​​System-wide Protection​​: Protects against privilege escalation and resource abuse</li>
+</ul>
+<p>LSM inserts security checks at over 200 critical points including:</p>
+<ul>
+<li>File operations (open, execve)</li>
+<li>Network operations (socket, bind)</li>
+<li>Process control (fork, kill)</li>
+<li>Module loading (init_module)</li>
+</ul>
+<pre tabindex="0"><code class="language-mermaid" data-lang="mermaid">graph TD
+    A[System Call] --&gt; B[Kernel Operation]
+    B --&gt; C[LSM Hook]
+    C --&gt; D{Policy Check}
+    D --&gt;|Allowed| E[Operation Proceeds]
+    D --&gt;|Denied| F[Permission Error]
+</code></pre><p>LSM vs eBPF Security</p>
+<pre tabindex="0"><code class="language-mermaid" data-lang="mermaid">graph LR
+    LSM[Traditional LSM] --&gt;|Built-in| K[Kernel]
+    eBPF[eBPF Security] --&gt;|Dynamic| H[Hooks]
+    
+    K --&gt; A[Static Policies]
+    H --&gt; B[Dynamic Programs]
+    
+    style LSM stroke:#f90
+    style eBPF stroke:#09f
+</code></pre><p>Why eBPF Excels in Security​​<br>
+​​1. Kernel-Level Visibility​​</p>
+<ul>
+<li>eBPF programs run directly in the Linux kernel, enabling deep inspection of system calls, network packets, file operations, and process behavior without requiring kernel modifications.</li>
+<li>This provides ​​unprecedented visibility​​ into low-level activities, including container escapes, privilege escalations, and malicious payload execution.
+​​</li>
+</ul>
+<ol start="2">
+<li>Minimal Performance Overhead​​</li>
+</ol>
+<ul>
+<li>Unlike traditional security agents that operate in userspace, eBPF reduces context-switching and data-copying overhead.</li>
+<li>For example, eBPF-based network filtering (XDP) processes packets at ​​line-rate speeds​​ (100Gbps+), making it viable for high-traffic environments.
+​​</li>
+</ul>
+<ol start="3">
+<li>Dynamic Programmability​​</li>
+</ol>
+<ul>
+<li>Security policies can be ​​hot-reloaded​​ into production systems.</li>
+<li>This allows real-time responses to threats, such as blocking malicious IPs or patching zero-day vulnerabilities by intercepting vulnerable system calls.
+​​</li>
+</ul>
+<ol start="4">
+<li>Context-Aware Enforcement​​</li>
+</ol>
+<ul>
+<li>eBPF correlates kernel events with user/container identities.</li>
+<li>For instance:</li>
+<li>Link network traffic to specific Kubernetes pods.</li>
+<li>Associate file access with containerized processes.</li>
+<li>This context is critical for auditing and blocking attacks in microservices environments.
+​​</li>
+</ul>
+<ol start="5">
+<li>Bypass Kernel Bypass Attacks​​</li>
+</ol>
+<ul>
+<li>Malware that evades userspace monitoring (e.g., rootkits) can be detected via eBPF’s kernel hooks,</li>
+<li>as it operates ​​beneath​​ traditional security layers.</li>
+</ul>
+<h2 id="实验">实验</h2>
+<p>参考</p>
+<ul>
+<li><a href="https://elixir.bootlin.com/linux/v6.14/source/include/linux/sched.h#L791">6.14 内核 struct task_struct</a></li>
+<li><a href="https://elixir.bootlin.com/linux/v6.14/source/include/linux/nsproxy.h#L32">6.14 内核 struct nsproxy</a></li>
+</ul>
+<p>监控主机、容器内执行的命令：</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">15
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">16
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">17
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">18
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-cpp" data-lang="cpp"><span style="display:flex;"><span><span style="color:#ff79c6">#!/usr/bin/env bpftrace
+</span></span></span><span style="display:flex;"><span><span style="color:#ff79c6"></span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">#include</span> <span style="color:#ff79c6">&lt;linux/sched.h&gt;</span><span style="color:#ff79c6">
+</span></span></span><span style="display:flex;"><span><span style="color:#ff79c6">#include</span> <span style="color:#ff79c6">&lt;linux/nsproxy.h&gt;</span><span style="color:#ff79c6">
+</span></span></span><span style="display:flex;"><span><span style="color:#ff79c6">#include</span> <span style="color:#ff79c6">&lt;linux/utsname.h&gt;</span><span style="color:#ff79c6">
+</span></span></span><span style="display:flex;"><span><span style="color:#ff79c6">#include</span> <span style="color:#ff79c6">&lt;linux/pid_namespace.h&gt;</span><span style="color:#ff79c6">
+</span></span></span><span style="display:flex;"><span><span style="color:#ff79c6"></span>
+</span></span><span style="display:flex;"><span>BEGIN {
+</span></span><span style="display:flex;"><span>  printf(<span style="color:#f1fa8c">&#34;%-12s %-8s %-6s %-6s %-8s %s</span><span style="color:#f1fa8c">\n</span><span style="color:#f1fa8c">&#34;</span>, <span style="color:#f1fa8c">&#34;PIDNS&#34;</span>, <span style="color:#f1fa8c">&#34;CONTAINER&#34;</span>, <span style="color:#f1fa8c">&#34;PPID&#34;</span>, <span style="color:#f1fa8c">&#34;PID&#34;</span>, <span style="color:#f1fa8c">&#34;COMM&#34;</span>, <span style="color:#f1fa8c">&#34;ARGS&#34;</span>);
+</span></span><span style="display:flex;"><span>}
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#8be9fd;font-style:italic">tracepoint</span>:<span style="color:#8be9fd;font-style:italic">syscalls</span>:sys_enter_execve,
+</span></span><span style="display:flex;"><span><span style="color:#8be9fd;font-style:italic">tracepoint</span>:<span style="color:#8be9fd;font-style:italic">syscalls</span>:sys_enter_execveat {
+</span></span><span style="display:flex;"><span>  $task <span style="color:#ff79c6">=</span> (<span style="color:#ff79c6">struct</span> <span style="color:#50fa7b">task_struct</span> <span style="color:#ff79c6">*</span>)curtask;
+</span></span><span style="display:flex;"><span>  $pidns <span style="color:#ff79c6">=</span> $task<span style="color:#ff79c6">-&gt;</span>nsproxy<span style="color:#ff79c6">-&gt;</span>pid_ns_for_children<span style="color:#ff79c6">-&gt;</span>ns.inum;
+</span></span><span style="display:flex;"><span>  $cname <span style="color:#ff79c6">=</span> $task<span style="color:#ff79c6">-&gt;</span>nsproxy<span style="color:#ff79c6">-&gt;</span>uts_ns<span style="color:#ff79c6">-&gt;</span>name.nodename;
+</span></span><span style="display:flex;"><span>  printf(<span style="color:#f1fa8c">&#34;%-12ld %-8s %-6d %-6d %-8s&#34;</span>, (uint64)$pidns, $cname, curtask<span style="color:#ff79c6">-&gt;</span>parent<span style="color:#ff79c6">-&gt;</span>pid, pid, comm); join(args<span style="color:#ff79c6">-&gt;</span>argv);
+</span></span><span style="display:flex;"><span>}
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>在 宿主机、容器中 分别执行 curl</p>
+<ul>
+<li>095c4b4fcc2e，就是容器的 hostname</li>
+<li>test-VMware-Virtual-Platform，主机的 hostname</li>
+</ul>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">5
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-shell" data-lang="shell"><span style="display:flex;"><span>./execsnoop-container.bt
+</span></span><span style="display:flex;"><span>Attaching <span style="color:#bd93f9">3</span> probes...
+</span></span><span style="display:flex;"><span>PIDNS        CONTAINER PPID   PID    COMM     ARGS
+</span></span><span style="display:flex;"><span><span style="color:#bd93f9">4026532610</span>   095c4b4fcc2e <span style="color:#bd93f9">3835</span>   <span style="color:#bd93f9">3881</span>   sh      curl baidu.com
+</span></span><span style="display:flex;"><span><span style="color:#bd93f9">4026531836</span>   test-VMware-Virtual-Platform <span style="color:#bd93f9">3808</span>   <span style="color:#bd93f9">3882</span>   bash    curl baidu.com
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>跟踪用户态</p>
+<ul>
+<li>容器文件系统在不同的 mount 命令空间中</li>
+<li>对于每个进程来说，Linux 都在 /proc/[pid]/root 处创建了一个链接</li>
+<li><a href="https://man7.org/linux/man-pages/man5/proc.5.html">proc 文档</a></li>
+</ul>
+<p>在容器内执行</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-shell" data-lang="shell"><span style="display:flex;"><span>lsns -t pid
+</span></span><span style="display:flex;"><span>        NS TYPE NPROCS PID USER COMMAND
+</span></span><span style="display:flex;"><span><span style="color:#bd93f9">4026532610</span> pid       <span style="color:#bd93f9">3</span>   <span style="color:#bd93f9">1</span> root /bin/sh
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>之后 写一个脚本，模拟kill 行为，杀掉容器中执行的命令：</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">15
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">16
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">17
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">18
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-cpp" data-lang="cpp"><span style="display:flex;"><span><span style="color:#ff79c6">#!/usr/bin/env bpftrace
+</span></span></span><span style="display:flex;"><span><span style="color:#ff79c6"></span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">#include</span> <span style="color:#ff79c6">&lt;linux/sched.h&gt;</span><span style="color:#ff79c6">
+</span></span></span><span style="display:flex;"><span><span style="color:#ff79c6">#include</span> <span style="color:#ff79c6">&lt;linux/nsproxy.h&gt;</span><span style="color:#ff79c6">
+</span></span></span><span style="display:flex;"><span><span style="color:#ff79c6">#include</span> <span style="color:#ff79c6">&lt;linux/utsname.h&gt;</span><span style="color:#ff79c6">
+</span></span></span><span style="display:flex;"><span><span style="color:#ff79c6">#include</span> <span style="color:#ff79c6">&lt;linux/pid_namespace.h&gt;</span><span style="color:#ff79c6">
+</span></span></span><span style="display:flex;"><span><span style="color:#ff79c6"></span>
+</span></span><span style="display:flex;"><span><span style="color:#8be9fd;font-style:italic">tracepoint</span>:<span style="color:#8be9fd;font-style:italic">syscalls</span>:sys_enter_execve,
+</span></span><span style="display:flex;"><span><span style="color:#8be9fd;font-style:italic">tracepoint</span>:<span style="color:#8be9fd;font-style:italic">syscalls</span>:sys_enter_execveat
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">/</span>comm <span style="color:#ff79c6">==</span> <span style="color:#f1fa8c">&#34;bash&#34;</span> <span style="color:#ff79c6">||</span> comm <span style="color:#ff79c6">==</span> <span style="color:#f1fa8c">&#34;sh&#34;</span><span style="color:#ff79c6">/</span> {
+</span></span><span style="display:flex;"><span>  $task <span style="color:#ff79c6">=</span> (<span style="color:#ff79c6">struct</span> <span style="color:#50fa7b">task_struct</span> <span style="color:#ff79c6">*</span>)curtask;
+</span></span><span style="display:flex;"><span>  $pidns <span style="color:#ff79c6">=</span> $task<span style="color:#ff79c6">-&gt;</span>nsproxy<span style="color:#ff79c6">-&gt;</span>pid_ns_for_children<span style="color:#ff79c6">-&gt;</span>ns.inum;
+</span></span><span style="display:flex;"><span>  $cname <span style="color:#ff79c6">=</span> $task<span style="color:#ff79c6">-&gt;</span>nsproxy<span style="color:#ff79c6">-&gt;</span>uts_ns<span style="color:#ff79c6">-&gt;</span>name.nodename;
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">if</span> ($pidns <span style="color:#ff79c6">!=</span> <span style="color:#bd93f9">4026531836</span>) {
+</span></span><span style="display:flex;"><span>    printf(<span style="color:#f1fa8c">&#34;Killing shell command in container %s (pidns: %ld): %s &#34;</span>, $cname, $pidns, comm); join(args<span style="color:#ff79c6">-&gt;</span>argv);
+</span></span><span style="display:flex;"><span>    signal(<span style="color:#bd93f9">9</span>);
+</span></span><span style="display:flex;"><span>  }
+</span></span><span style="display:flex;"><span>}
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>执行</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-shell" data-lang="shell"><span style="display:flex;"><span>bpftrace --unsafe xx.bt
+</span></span><span style="display:flex;"><span>Attaching <span style="color:#bd93f9">2</span> probes...
+</span></span><span style="display:flex;"><span>Killing shell <span style="color:#8be9fd;font-style:italic">command</span> in container 095c4b4fcc2e <span style="color:#ff79c6">(</span>pidns: 4026532610<span style="color:#ff79c6">)</span>: sh ls
+</span></span><span style="display:flex;"><span>Killing shell <span style="color:#8be9fd;font-style:italic">command</span> in container 095c4b4fcc2e <span style="color:#ff79c6">(</span>pidns: 4026532610<span style="color:#ff79c6">)</span>: sh curl baidu.com
+</span></span></code></pre></td></tr></table>
+</div>
+</div><h2 id="参考">参考</h2>
+<ul>
+<li><a href="https://ebpf.io/what-is-ebpf/">bpf 官方文档</a></li>
+<li><a href="https://www.kernel.org/doc/html/latest/bpf/index.html/">BPF 内核文档</a></li>
+<li><a href="https://github.com/iovisor/bcc/blob/master/docs/reference_guide.md">bcc Reference Guide</a></li>
+<li><a href="https://ebpf.io/">ebpf</a></li>
+<li><a href="https://github.com/iovisor/bcc">bcc tools</a></li>
+<li><a href="https://github.com/bpftrace/bpftrace/blob/master/man/adoc/bpftrace.adoc">bpftrace文档</a></li>
+<li><a href="https://en.wikipedia.org/wiki/Application_binary_interface">Application binary interface</a></li>
+<li><a href="https://9p.io/sys/doc/asm.html">A Manual for the Plan 9 assembler</a></li>
+<li><a href="https://mermaid.js.org/intro/">About Mermaid</a></li>
+<li><a href="https://www.cnblogs.com/ywsun/p/14271547.html">整理Markdown 公式编辑常用数学符号</a></li>
+<li><a href="https://www.thebyte.com.cn/">《深入高可用系统原理与设计》</a></li>
+<li><a href="https://github.com/feiskyer/ebpf-apps/tree/main/loadbalancer/sockops">github sockops</a></li>
+<li><a href="https://github.com/libbpf/libbpf-bootstrap">libbpf-bootstrap</a></li>
+<li><a href="https://docs.alpinelinux.org/user-handbook/0.1a/index.html">alpine linux</a></li>
+<li><a href="https://archive.kernel.org/oldlinux/htmldocs/networking/">Linux Networking and Network Devices APIs</a></li>
+<li><a href="https://archive.kernel.org/oldlinux/htmldocs/">Linux Kernel HTML Documentation</a></li>
+<li><a href="https://linux-kernel-labs.github.io/refs/heads/master/so2/index.html">Operating Systems 2</a></li>
+<li><a href="https://elixir.bootlin.com/linux/v6.15.6/source">linux内核源码</a></li>
+<li><a href="https://lpc.events/event/11/contributions/939/attachments/771/1551/xdp-multi-buff.pdf">Bringing TSO/GRO and Jumbo
+frames to XDP</a></li>
+<li><a href="https://lpc.events/event/7/contributions/671/attachments/561/992/xdp-multiprog.pdf">Multiple XDP programs per
+interface: Status and
+outstanding issues</a></li>
+<li><a href="https://blog.csdn.net/jjj_web/article/details/147994999">在Ubuntu 24.04上搭建eBPF/XDP开发环境</a></li>
+<li><a href="https://www.ebpf.top/post/linux_process_mgr/">Linux 进程管理</a></li>
+<li><a href="https://www.ebpf.top/">Head First eBPF</a></li>
+<li><a href="https://developer.aliyun.com/article/899162">深入浅出 eBPF 安全项目 Tracee</a></li>
+<li><a href="https://developer.aliyun.com/article/1542402">深入探索Linux的lsns命令</a></li>
+</ul>
+
+			<script type="text/javascript"
+        async
+        src="https://cdn.bootcss.com/mathjax/2.7.3/MathJax.js?config=TeX-AMS-MML_HTMLorMML">
+MathJax.Hub.Config({
+  tex2jax: {
+    inlineMath: [['$','$'], ['\\(','\\)']],
+    displayMath: [['$$','$$'], ['\[\[','\]\]']],
+    processEscapes: true,
+    processEnvironments: true,
+    skipTags: ['script', 'noscript', 'style', 'textarea', 'pre'],
+    TeX: { equationNumbers: { autoNumber: "AMS" },
+         extensions: ["AMSmath.js", "AMSsymbols.js"] }
+  }
+});
+
+MathJax.Hub.Queue(function() {
+    
+    
+    
+    var all = MathJax.Hub.getAllJax(), i;
+    for(i = 0; i < all.length; i += 1) {
+        all[i].SourceElement().parentNode.className += ' has-jax';
+    }
+});
+</script>
+
+<style>
+code.has-jax {
+    font: inherit;
+    font-size: 100%;
+    background: inherit;
+    border: inherit;
+    color: #515151;
+}
+</style>
+        </div>
+
+        
+
+
+        
+
+<div class="post-archive">
+    <h2>相关文章</h2>
+    <ul class="listing">
+        
+        <li><a href="/post/2025/07/ebpf_networks/">eBPF 网络</a></li>
+        
+        <li><a href="/post/2025/07/ebpf_user/">eBPF 用户态跟踪</a></li>
+        
+        <li><a href="/post/2025/06/ebpf_kernal/">eBPF 内核跟踪</a></li>
+        
+        <li><a href="/post/2025/05/ebpf_hello/">eBPF hello-world</a></li>
+        
+    </ul>
+</div>
+
+
+        <div class="post-meta meta-tags">
+            
+            <ul class="clearfix">
+                
+                <li><a href='/tags/ebpf'>eBPF</a></li>
+                
+            </ul>
+            
+        </div>
+    </article>
+    
+    
+
+    
+    
+    <div class="post bg-white">
+      <script src="https://utteranc.es/client.js"
+            repo= "himichael/hugoblogtalks"
+            issue-term="pathname"
+            theme="github-light"
+            crossorigin="anonymous"
+            async>
+      </script>
+    </div>
+    
+</div>
+
+
+                </div>
+
+                <div id="secondary">
+    <section class="widget">
+        <form id="search" action='https://code0xff.org/search/' method="get" accept-charset="utf-8" target="_blank" _lpchecked="1">
+      
+      <input type="text" name="q" maxlength="20" placeholder="Search">
+      <input type="hidden" name="sitesearch" value="https://code0xff.org/">
+      <button type="submit" class="submit icon-search"></button>
+</form>
+    </section>
+    
+    <section class="widget">
+        <h3 class="widget-title">最近文章</h3>
+<ul class="widget-list">
+    
+    <li>
+        <a href="https://code0xff.org/post/2026/02/yunnan_west/" title="云南滇西大环线">云南滇西大环线</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2026/01/2015_2025/" title="2015年 -- 2025年">2015年 -- 2025年</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2026/01/longhorn/" title="longhorn">longhorn</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2025/12/ai_infrastructure/" title="关于AI 的生态">关于AI 的生态</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2025/11/ai_bubble/" title="关于AI泡沫">关于AI泡沫</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2025/10/china_beihai/" title="南边的北海">南边的北海</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2025/09/bpf_http/" title="eBPF的 http跟踪">eBPF的 http跟踪</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2025/09/spark_flink/" title="Spark和Flink的对比总结（包含Operator）">Spark和Flink的对比总结（包含Operator）</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2025/08/juicefs/" title="JuiceFS">JuiceFS</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2025/08/bpftrace_12_lessons/" title="bpftrace 12个小命令">bpftrace 12个小命令</a>
+    </li>
+    
+</ul>
+    </section>
+
+    
+
+    <section class="widget">
+        <h3 class="widget-title"><a href='/categories/'>分类</a></h3>
+<ul class="widget-list">
+    
+    <li><a href="https://code0xff.org/categories/%E5%88%86%E5%B8%83%E5%BC%8F/">分布式 (8)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E5%8E%9F%E7%90%86%E5%88%86%E6%9E%90/">原理分析 (33)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E5%95%86%E4%B8%9A/">商业 (6)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E5%A4%A7%E6%95%B0%E6%8D%AE/">大数据 (59)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%95%B0%E6%8D%AE%E5%BA%93/">数据库 (41)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%96%87%E5%AD%A6%E5%92%8C%E8%89%BA%E6%9C%AF/">文学和艺术 (3)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%97%85%E8%A1%8C/">旅行 (15)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%9E%B6%E6%9E%84/">架构 (13)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E7%AE%97%E6%B3%95%E5%92%8Cai/">算法和AI (11)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E7%B3%BB%E7%BB%9F/">系统 (16)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E7%BC%96%E7%A8%8B%E8%AF%AD%E8%A8%80/">编程语言 (8)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E8%A1%8C%E4%B8%9A%E8%A7%82%E5%AF%9F/">行业观察 (3)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E8%AF%BB%E4%B9%A6%E7%AC%94%E8%AE%B0/">读书笔记 (19)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E9%9A%8F%E4%BE%BF%E5%86%99%E5%86%99/">随便写写 (4)</a></li>
+    
+</ul>
+    </section>
+
+    <section class="widget">
+        <h3 class="widget-title">归档</a></h3>
+<ul class="widget-list">
+    
+    <li><a href="https://code0xff.org/years/2021%E5%B9%B4/">2021年 (41)</a></li>
+    
+    <li><a href="https://code0xff.org/years/2022%E5%B9%B4/">2022年 (55)</a></li>
+    
+    <li><a href="https://code0xff.org/years/2023%E5%B9%B4/">2023年 (54)</a></li>
+    
+    <li><a href="https://code0xff.org/years/2024%E5%B9%B4/">2024年 (48)</a></li>
+    
+    <li><a href="https://code0xff.org/years/2025%E5%B9%B4/">2025年 (38)</a></li>
+    
+    <li><a href="https://code0xff.org/years/2026%E5%B9%B4/">2026年 (3)</a></li>
+    
+</ul>
+    </section>
+
+    <section class="widget">
+        <h3 class="widget-title"><a href='/tags/'>标签</a></h3>
+<div class="tagcloud">
+    
+    <a href="https://code0xff.org/tags/ai/">AI </a>
+    
+    <a href="https://code0xff.org/tags/ambari/">Ambari </a>
+    
+    <a href="https://code0xff.org/tags/architecture/">architecture </a>
+    
+    <a href="https://code0xff.org/tags/bigdata/">bigdata </a>
+    
+    <a href="https://code0xff.org/tags/btrace/">BTrace </a>
+    
+    <a href="https://code0xff.org/tags/b%E6%A0%91/">B树 </a>
+    
+    <a href="https://code0xff.org/tags/c&#43;&#43;/">C&#43;&#43; </a>
+    
+    <a href="https://code0xff.org/tags/calcite/">calcite </a>
+    
+    <a href="https://code0xff.org/tags/cmu-database/">CMU-Database </a>
+    
+    <a href="https://code0xff.org/tags/data_ingestion/">Data_Ingestion </a>
+    
+    <a href="https://code0xff.org/tags/deltalake/">DeltaLake </a>
+    
+    <a href="https://code0xff.org/tags/doris/">Doris </a>
+    
+    <a href="https://code0xff.org/tags/ebpf/">eBPF </a>
+    
+    <a href="https://code0xff.org/tags/english/">English </a>
+    
+    <a href="https://code0xff.org/tags/es/">ES </a>
+    
+    <a href="https://code0xff.org/tags/facebook/">Facebook </a>
+    
+    <a href="https://code0xff.org/tags/flink/">flink </a>
+    
+    <a href="https://code0xff.org/tags/flume/">flume </a>
+    
+    <a href="https://code0xff.org/tags/gc/">GC </a>
+    
+    <a href="https://code0xff.org/tags/gluten/">Gluten </a>
+    
+    <a href="https://code0xff.org/tags/hana/">HANA </a>
+    
+    <a href="https://code0xff.org/tags/hive/">Hive </a>
+    
+    <a href="https://code0xff.org/tags/iceberg/">iceberg </a>
+    
+    <a href="https://code0xff.org/tags/impala/">Impala </a>
+    
+    <a href="https://code0xff.org/tags/janino/">janino </a>
+    
+    <a href="https://code0xff.org/tags/juicefs/">JuiceFS </a>
+    
+    <a href="https://code0xff.org/tags/k8s/">k8s </a>
+    
+    <a href="https://code0xff.org/tags/kafka/">Kafka </a>
+    
+    <a href="https://code0xff.org/tags/kudu/">kudu </a>
+    
+    <a href="https://code0xff.org/tags/kyuubi/">Kyuubi </a>
+    
+    <a href="https://code0xff.org/tags/lakehouse/">Lakehouse </a>
+    
+    <a href="https://code0xff.org/tags/leveldb/">LevelDB </a>
+    
+    <a href="https://code0xff.org/tags/llamafactory/">LlamaFactory </a>
+    
+    <a href="https://code0xff.org/tags/llvm/">LLVM </a>
+    
+    <a href="https://code0xff.org/tags/log4j/">log4j </a>
+    
+    <a href="https://code0xff.org/tags/longhorn/">longhorn </a>
+    
+    <a href="https://code0xff.org/tags/manacher/">Manacher </a>
+    
+    <a href="https://code0xff.org/tags/mapreduce/">MapReduce </a>
+    
+    <a href="https://code0xff.org/tags/micro-service/">micro-service </a>
+    
+    <a href="https://code0xff.org/tags/mysql/">MySQL </a>
+    
+    <a href="https://code0xff.org/tags/newsql/">NewSQL </a>
+    
+    <a href="https://code0xff.org/tags/oceanbase/">OceanBase </a>
+    
+    <a href="https://code0xff.org/tags/openldap/">OpenLDAP </a>
+    
+    <a href="https://code0xff.org/tags/openlogreplicator/">OpenLogReplicator </a>
+    
+    <a href="https://code0xff.org/tags/parquet/">parquet </a>
+    
+    <a href="https://code0xff.org/tags/paxos/">paxos </a>
+    
+    <a href="https://code0xff.org/tags/presto/">Presto </a>
+    
+    <a href="https://code0xff.org/tags/pytorch/">PyTorch </a>
+    
+    <a href="https://code0xff.org/tags/quick-sql/">quick-sql </a>
+    
+    <a href="https://code0xff.org/tags/raft/">raft </a>
+    
+    <a href="https://code0xff.org/tags/scala/">scala </a>
+    
+    <a href="https://code0xff.org/tags/simd/">SIMD </a>
+    
+    <a href="https://code0xff.org/tags/snowflake/">snowflake </a>
+    
+    <a href="https://code0xff.org/tags/spark/">spark </a>
+    
+    <a href="https://code0xff.org/tags/sre/">SRE </a>
+    
+    <a href="https://code0xff.org/tags/teradata/">TeraData </a>
+    
+    <a href="https://code0xff.org/tags/tpcx-hs/">TPCx-HS </a>
+    
+    <a href="https://code0xff.org/tags/trino/">Trino </a>
+    
+    <a href="https://code0xff.org/tags/tuning/">Tuning </a>
+    
+    <a href="https://code0xff.org/tags/unix/">unix </a>
+    
+    <a href="https://code0xff.org/tags/yarn/">YARN </a>
+    
+    <a href="https://code0xff.org/tags/%E4%BA%8C%E5%88%86%E6%9F%A5%E6%89%BE/">二分查找 </a>
+    
+    <a href="https://code0xff.org/tags/%E4%BA%8C%E5%8F%89%E6%A0%91%E9%81%8D%E5%8E%86/">二叉树遍历 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%88%86%E5%B8%83%E5%BC%8F/">分布式 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%88%97%E5%AD%98/">列存 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%8A%A8%E6%80%81%E6%B3%A8%E5%85%A5/">动态注入 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%8E%86%E5%8F%B2/">历史 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%90%91%E9%87%8F%E5%8C%96/">向量化 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%95%86%E4%B8%9A/">商业 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%9B%9E%E6%BA%AF/">回溯 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%9B%BD%E5%86%85%E6%97%85%E8%A1%8C/">国内旅行 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%9B%BD%E5%A4%96%E6%97%85%E8%A1%8C/">国外旅行 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%A4%9A%E7%A7%9F%E6%88%B7/">多租户 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%A4%A7%E6%95%B0%E6%8D%AE/">大数据 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%AD%98%E5%82%A8/">存储 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%B7%A5%E4%BD%9C%E8%AE%B0%E5%BD%95/">工作记录 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%BE%AE%E6%9C%8D%E5%8A%A1/">微服务 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%95%B0%E6%8D%AE%E4%B8%AD%E5%8F%B0/">数据中台 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%95%B0%E6%8D%AE%E5%BA%93/">数据库 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%95%B0%E6%8D%AE%E6%A8%A1%E5%9E%8B/">数据模型 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%95%B0%E6%8D%AE%E8%BF%81%E7%A7%BB/">数据迁移 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%9F%A5%E8%AF%A2%E4%BC%98%E5%8C%96/">查询优化 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%9F%A5%E8%AF%A2%E7%BC%96%E8%AF%91/">查询编译 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%A6%82%E7%8E%87/">概率 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%B1%87%E7%BC%96/">汇编 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%B5%8B%E8%AF%95/">测试 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%94%9F%E6%B4%BB/">生活 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%94%B5%E5%BD%B1/">电影 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%AE%97%E6%B3%95/">算法 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%B4%A2%E5%BC%95/">索引 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BB%8F%E6%B5%8E/">经济 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BB%8F%E6%B5%8E%E5%88%86%E6%9E%90/">经济分析 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BC%93%E5%AD%98/">缓存 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BC%96%E8%AF%91%E5%8E%9F%E7%90%86/">编译原理 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BD%91%E7%BB%9C/">网络 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AE%A1%E7%AE%97%E6%A1%86%E6%9E%B6/">计算框架 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AE%BA%E6%96%87/">论文 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AF%BB%E4%B9%A6/">读书 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AF%BB%E4%B9%A6%E7%AC%94%E8%AE%B0/">读书笔记 </a>
+    
+</div>
+    </section>
+
+    
+
+    <section class="widget">
+        <h3 class="widget-title">RSS</h3>
+        <ul class="widget-list">
+            <li><a href="https://code0xff.org/index.xml">文章 RSS</a></li>
+        </ul>
+    </section>
+</div>
+            </div>
+        </div>
+    </div>
+    <footer id="footer">
+    <div>
+        &copy; 2026 <a href="https://code0xff.org/">记录每个瞬间 By 老王</a>
+        
+    </div>
+    <br />
+    <div>
+        <div class="github-badge">
+            <a href="https://gohugo.io/" target="_black" rel="nofollow"><span class="badge-subject">Powered by</span><span class="badge-value bg-blue">Hugo</span></a>
+        </div>
+        <div class="github-badge">
+            <a href="https://github.com/flysnow-org/maupassant-hugo" target="_black"><span class="badge-subject">Theme</span><span class="badge-value bg-yellowgreen">Maupassant</span></a>
+        </div>
+    </div>
+</footer>
+
+
+    
+    <script type="text/javascript">
+        window.MathJax = {
+            tex2jax: {
+                inlineMath: [['$', '$']],
+                processEscapes: true
+                }
+            };
+    </script>
+    <script src='https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.5/MathJax.js?config=TeX-MML-AM_CHTML' async></script><script src="https://cdn.bootcdn.net/ajax/libs/fancybox/3.5.7/jquery.fancybox.min.js"></script>
+
+<a id="rocket" href="#top"></a>
+<script type="text/javascript" src='/js/totop.js?v=0.0.0' async=""></script>
+
+<script type="application/javascript">
+var doNotTrack = false;
+if (!doNotTrack) {
+	window.ga=window.ga||function(){(ga.q=ga.q||[]).push(arguments)};ga.l=+new Date;
+	ga('create', 'GA ID', 'auto');
+	
+	ga('send', 'pageview');
+}
+</script>
+<script async src='https://www.google-analytics.com/analytics.js'></script>
+
+
+
+    <script type="text/javascript" src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js" async></script>
+
+
+
+
+</body>
+
+</html>

@@ -1,0 +1,1387 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    
+    <meta name="referrer" content="no-referrer-when-downgrade">
+    
+
+    <title>Flink执行图的生成 | 记录每个瞬间</title>
+    <meta property="og:title" content="Flink执行图的生成 - 记录每个瞬间">
+    <meta property="og:type" content="article">
+        
+    <meta property="article:published_time" content='2025-02-08T09:10:12&#43;08:00'>
+        
+        
+    <meta property="article:modified_time" content='2025-02-08T09:10:12&#43;08:00'>
+        
+    <meta name="Keywords" content="">
+    <meta name="description" content="Flink执行图的生成">
+        <meta name="author" content="隔壁老王">
+        
+    <meta property="og:url" content="https://code0xff.org/post/2025/02/flink_inner/">
+    <link rel="shortcut icon" href='/favicon.ico'  type="image/x-icon">
+
+    <link rel="stylesheet" href='/css/normalize.css'>
+    <link rel="stylesheet" href='/css/style.css'>
+    <script type="text/javascript" src="//cdn.bootcdn.net/ajax/libs/jquery/3.4.1/jquery.min.js"></script>
+
+    
+    
+    
+        <link href="https://cdn.bootcdn.net/ajax/libs/fancybox/3.5.7/jquery.fancybox.min.css" rel="stylesheet">
+    
+    
+    
+    
+</head>
+
+
+<body>
+    <header id="header" class="clearfix">
+    <div class="container">
+        <div class="col-group">
+            <div class="site-name ">
+                
+                    <a id="logo" href="https://code0xff.org/">
+                        记录每个瞬间
+                    </a>
+                
+                
+            </div>
+            <div>
+                <nav id="nav-menu" class="clearfix">
+                    <a class="current" href="https://code0xff.org/">首页</a>
+                    
+                    <a  href="https://code0xff.org/linked/" title="链接">链接</a>
+                    
+                    <a  href="https://code0xff.org/archives/" title="归档">归档</a>
+                    
+                    <a  href="https://code0xff.org/about/" title="关于">关于</a>
+                    
+                </nav>
+            </div>
+        </div>
+    </div>
+</header>
+
+    <div id="body">
+        <div class="container">
+            <div class="col-group">
+
+                <div class="col-8" id="main">
+                    <div class="res-cons">
+    
+    <article class="post">
+        <header>
+            <h1 class="post-title">Flink执行图的生成</h1>
+        </header>
+        <date class="post-meta meta-date">
+            2025年2月8日
+        </date>
+<nav id="TableOfContents">
+  <ul>
+    <li>
+      <ul>
+        <li><a href="#flink的执行图">Flink的执行图</a>
+          <ul>
+            <li><a href="#streamgraph">StreamGraph</a></li>
+            <li><a href="#plan">Plan</a></li>
+            <li><a href="#jobgraph">JobGraph</a></li>
+            <li><a href="#executiongraph">ExecutionGraph</a></li>
+          </ul>
+        </li>
+        <li><a href="#参考">参考</a></li>
+      </ul>
+    </li>
+  </ul>
+</nav>
+        
+        <div class="post-meta">
+            
+            <span class="post-meta meta-tags">
+                <ul class="clearfix">
+                    <a href='/categories/%E5%8E%9F%E7%90%86%E5%88%86%E6%9E%90'>原理分析</a>
+                </ul>
+            </span>
+            
+        </div>
+        
+        
+        <div class="post-meta">
+            <span id="busuanzi_container_page_pv">|<span id="busuanzi_value_page_pv"></span><span>
+                    阅读</span></span>
+        </div>
+        
+        
+        <div class="post-content">
+            <h2 id="flink的执行图">Flink的执行图</h2>
+<h3 id="streamgraph">StreamGraph</h3>
+<p>一个例子</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">15
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">16
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">17
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">18
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">19
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">20
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">21
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">22
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">23
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">24
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">25
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">26
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">27
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">28
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">29
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">30
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">31
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">32
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">33
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">34
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">35
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">36
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">37
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">38
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">39
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">40
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">41
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">42
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">43
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">44
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">45
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">46
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">47
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">48
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">49
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">50
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">51
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">52
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">53
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-java" data-lang="java"><span style="display:flex;"><span><span style="color:#6272a4">// nc -lk 8888
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span><span style="color:#8be9fd;font-style:italic">public</span> <span style="color:#8be9fd">void</span> <span style="color:#50fa7b">go</span><span style="color:#ff79c6">()</span> <span style="color:#8be9fd;font-style:italic">throws</span> Exception <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>	<span style="color:#6272a4">// 1.准备环境-env
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>	StreamExecutionEnvironment env <span style="color:#ff79c6">=</span> StreamExecutionEnvironment<span style="color:#ff79c6">.</span><span style="color:#50fa7b">getExecutionEnvironment</span><span style="color:#ff79c6">();</span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4">//        env.setRuntimeMode(RuntimeExecutionMode.AUTOMATIC);
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>	 env<span style="color:#ff79c6">.</span><span style="color:#50fa7b">setRuntimeMode</span><span style="color:#ff79c6">(</span>RuntimeExecutionMode<span style="color:#ff79c6">.</span><span style="color:#50fa7b">STREAMING</span><span style="color:#ff79c6">);</span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4">//         env.setRuntimeMode(RuntimeExecutionMode.BATCH);
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>	<span style="color:#6272a4">//默认是RuntimeExecutionMode.STREAMING
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>	env<span style="color:#ff79c6">.</span><span style="color:#50fa7b">setParallelism</span><span style="color:#ff79c6">(</span>1<span style="color:#ff79c6">);</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>	<span style="color:#6272a4">// 2.准备数据-source
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>	DataStream<span style="color:#ff79c6">&lt;</span>String<span style="color:#ff79c6">&gt;</span> linesDS <span style="color:#ff79c6">=</span>
+</span></span><span style="display:flex;"><span>			env<span style="color:#ff79c6">.</span><span style="color:#50fa7b">fromElements</span><span style="color:#ff79c6">(</span><span style="color:#f1fa8c">&#34;flink,hadoop,hive&#34;</span><span style="color:#ff79c6">,</span> <span style="color:#f1fa8c">&#34;flink,hadoop,hive&#34;</span><span style="color:#ff79c6">,</span> <span style="color:#f1fa8c">&#34;flink,hadoop&#34;</span><span style="color:#ff79c6">,</span> <span style="color:#f1fa8c">&#34;flink&#34;</span><span style="color:#ff79c6">);</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>	<span style="color:#6272a4">// 3.处理数据-transformation
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>	DataStream<span style="color:#ff79c6">&lt;</span>String<span style="color:#ff79c6">&gt;</span> wordsDS <span style="color:#ff79c6">=</span> linesDS<span style="color:#ff79c6">.</span><span style="color:#50fa7b">flatMap</span><span style="color:#ff79c6">(</span><span style="color:#ff79c6">new</span> FlatMapFunction<span style="color:#ff79c6">&lt;</span>String<span style="color:#ff79c6">,</span> String<span style="color:#ff79c6">&gt;()</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>		@Override
+</span></span><span style="display:flex;"><span>		<span style="color:#8be9fd;font-style:italic">public</span> <span style="color:#8be9fd">void</span> <span style="color:#50fa7b">flatMap</span><span style="color:#ff79c6">(</span>String value<span style="color:#ff79c6">,</span> Collector<span style="color:#ff79c6">&lt;</span>String<span style="color:#ff79c6">&gt;</span> out<span style="color:#ff79c6">)</span> <span style="color:#8be9fd;font-style:italic">throws</span> Exception <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>			<span style="color:#6272a4">// value就是一行行的数据
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>			String<span style="color:#ff79c6">[]</span> words <span style="color:#ff79c6">=</span> value<span style="color:#ff79c6">.</span><span style="color:#50fa7b">split</span><span style="color:#ff79c6">(</span><span style="color:#f1fa8c">&#34;,&#34;</span><span style="color:#ff79c6">);</span>
+</span></span><span style="display:flex;"><span>			<span style="color:#ff79c6">for</span> <span style="color:#ff79c6">(</span>String word <span style="color:#ff79c6">:</span> words<span style="color:#ff79c6">)</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>				out<span style="color:#ff79c6">.</span><span style="color:#50fa7b">collect</span><span style="color:#ff79c6">(</span>word<span style="color:#ff79c6">);</span><span style="color:#6272a4">// 将切割处理的一个个的单词收集起来并返回
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>			<span style="color:#ff79c6">}</span>
+</span></span><span style="display:flex;"><span>		<span style="color:#ff79c6">}</span>
+</span></span><span style="display:flex;"><span>	<span style="color:#ff79c6">});</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>	DataStream<span style="color:#ff79c6">&lt;</span>Tuple2<span style="color:#ff79c6">&lt;</span>String<span style="color:#ff79c6">,</span> Integer<span style="color:#ff79c6">&gt;&gt;</span> wordAndOnesDS <span style="color:#ff79c6">=</span> wordsDS<span style="color:#ff79c6">.</span><span style="color:#50fa7b">map</span><span style="color:#ff79c6">(</span><span style="color:#ff79c6">new</span> MapFunction<span style="color:#ff79c6">&lt;</span>String<span style="color:#ff79c6">,</span>
+</span></span><span style="display:flex;"><span>	Tuple2<span style="color:#ff79c6">&lt;</span>String<span style="color:#ff79c6">,</span> Integer<span style="color:#ff79c6">&gt;&gt;()</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>		@Override
+</span></span><span style="display:flex;"><span>		<span style="color:#8be9fd;font-style:italic">public</span> Tuple2<span style="color:#ff79c6">&lt;</span>String<span style="color:#ff79c6">,</span> Integer<span style="color:#ff79c6">&gt;</span> <span style="color:#50fa7b">map</span><span style="color:#ff79c6">(</span>String value<span style="color:#ff79c6">)</span> <span style="color:#8be9fd;font-style:italic">throws</span> Exception <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>			<span style="color:#6272a4">// value就是进来一个个的单词
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>			<span style="color:#ff79c6">return</span> Tuple2<span style="color:#ff79c6">.</span><span style="color:#50fa7b">of</span><span style="color:#ff79c6">(</span>value<span style="color:#ff79c6">,</span> 1<span style="color:#ff79c6">);</span>
+</span></span><span style="display:flex;"><span>		<span style="color:#ff79c6">}</span>
+</span></span><span style="display:flex;"><span>	<span style="color:#ff79c6">});</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>	<span style="color:#6272a4">//DataSet中分组是groupBy，DataStream分组是keyBy
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>	KeyedStream<span style="color:#ff79c6">&lt;</span>Tuple2<span style="color:#ff79c6">&lt;</span>String<span style="color:#ff79c6">,</span> Integer<span style="color:#ff79c6">&gt;,</span> String<span style="color:#ff79c6">&gt;</span> groupedDS <span style="color:#ff79c6">=</span> wordAndOnesDS<span style="color:#ff79c6">.</span><span style="color:#50fa7b">keyBy</span><span style="color:#ff79c6">(</span>
+</span></span><span style="display:flex;"><span>	<span style="color:#ff79c6">new</span> KeySelector<span style="color:#ff79c6">&lt;</span>Tuple2<span style="color:#ff79c6">&lt;</span>String<span style="color:#ff79c6">,</span> Integer<span style="color:#ff79c6">&gt;,</span> String<span style="color:#ff79c6">&gt;()</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>		@Override
+</span></span><span style="display:flex;"><span>		<span style="color:#8be9fd;font-style:italic">public</span> String <span style="color:#50fa7b">getKey</span><span style="color:#ff79c6">(</span>Tuple2<span style="color:#ff79c6">&lt;</span>String<span style="color:#ff79c6">,</span> Integer<span style="color:#ff79c6">&gt;</span> value<span style="color:#ff79c6">)</span> <span style="color:#8be9fd;font-style:italic">throws</span> Exception <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>			<span style="color:#ff79c6">return</span> value<span style="color:#ff79c6">.</span><span style="color:#50fa7b">f0</span><span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span>		<span style="color:#ff79c6">}</span>
+</span></span><span style="display:flex;"><span>	<span style="color:#ff79c6">});</span>
+</span></span><span style="display:flex;"><span>	DataStream<span style="color:#ff79c6">&lt;</span>Tuple2<span style="color:#ff79c6">&lt;</span>String<span style="color:#ff79c6">,</span> Integer<span style="color:#ff79c6">&gt;&gt;</span> result <span style="color:#ff79c6">=</span> groupedDS<span style="color:#ff79c6">.</span><span style="color:#50fa7b">sum</span><span style="color:#ff79c6">(</span>1<span style="color:#ff79c6">);</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>	<span style="color:#6272a4">// 4.输出结果-sink
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">//        result.print();
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>	result<span style="color:#ff79c6">.</span><span style="color:#50fa7b">addSink</span><span style="color:#ff79c6">(</span><span style="color:#ff79c6">new</span> PrintSinkFunction<span style="color:#ff79c6">&lt;&gt;());</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>	<span style="color:#6272a4">// 5.触发执行-execute
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>	<span style="color:#6272a4">// env.execute();// DataStream需要调用execute
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>	env<span style="color:#ff79c6">.</span><span style="color:#50fa7b">execute</span><span style="color:#ff79c6">(</span><span style="color:#f1fa8c">&#34;word count stream&#34;</span><span style="color:#ff79c6">);</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">}</span>
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/02/20/7WfoLG.png">
+            <img class="mx-auto" alt="17" src="https://v1.ax1x.com/2025/02/20/7WfoLG.png" />
+        </a>
+    </p>
+<p>算子的转换<br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/02/21/7WsCTZ.png">
+            <img class="mx-auto" alt="19" src="https://v1.ax1x.com/2025/02/21/7WsCTZ.png" />
+        </a>
+    </p>
+<p>执行到：env.execute 时</p>
+<ul>
+<li>会根据 stream、batch 做转换<br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/02/09/7Wr6KJ.png">
+            <img class="mx-auto" alt="1" src="https://v1.ax1x.com/2025/02/09/7Wr6KJ.png" />
+        </a>
+    </li>
+</ul>
+<p>接口 Pipeline 的实现类：</p>
+<ul>
+<li>StreamGraph，流的拓扑</li>
+<li>Plan       ，批的拓扑</li>
+</ul>
+<p>StreamGraph 会生成一个 DAT图，其内部有一个很重要的<code>streamNodes</code>，用来表示 有向图之间节点的关系</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">15
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">16
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-java" data-lang="java"><span style="display:flex;"><span>streamNodes <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">{</span>HashMap@2283<span style="color:#ff79c6">}</span>  size <span style="color:#ff79c6">=</span> 5
+</span></span><span style="display:flex;"><span> <span style="color:#ff79c6">{</span>Integer@2309<span style="color:#ff79c6">}</span> 1 <span style="color:#ff79c6">-&gt;</span> <span style="color:#ff79c6">{</span>StreamNode@2310<span style="color:#ff79c6">}</span> <span style="color:#f1fa8c">&#34;Source: Collection Source-1&#34;</span>
+</span></span><span style="display:flex;"><span>  key <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">{</span>Integer@2309<span style="color:#ff79c6">}</span> 1
+</span></span><span style="display:flex;"><span>  value <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">{</span>StreamNode@2310<span style="color:#ff79c6">}</span> <span style="color:#f1fa8c">&#34;Source: Collection Source-1&#34;</span>
+</span></span><span style="display:flex;"><span> <span style="color:#ff79c6">{</span>Integer@2311<span style="color:#ff79c6">}</span> 2 <span style="color:#ff79c6">-&gt;</span> <span style="color:#ff79c6">{</span>StreamNode@2312<span style="color:#ff79c6">}</span> <span style="color:#f1fa8c">&#34;Flat Map-2&#34;</span>
+</span></span><span style="display:flex;"><span>  key <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">{</span>Integer@2311<span style="color:#ff79c6">}</span> 2
+</span></span><span style="display:flex;"><span>  value <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">{</span>StreamNode@2312<span style="color:#ff79c6">}</span> <span style="color:#f1fa8c">&#34;Flat Map-2&#34;</span>
+</span></span><span style="display:flex;"><span> <span style="color:#ff79c6">{</span>Integer@2313<span style="color:#ff79c6">}</span> 3 <span style="color:#ff79c6">-&gt;</span> <span style="color:#ff79c6">{</span>StreamNode@2314<span style="color:#ff79c6">}</span> <span style="color:#f1fa8c">&#34;Map-3&#34;</span>
+</span></span><span style="display:flex;"><span>  key <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">{</span>Integer@2313<span style="color:#ff79c6">}</span> 3
+</span></span><span style="display:flex;"><span>  value <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">{</span>StreamNode@2314<span style="color:#ff79c6">}</span> <span style="color:#f1fa8c">&#34;Map-3&#34;</span>
+</span></span><span style="display:flex;"><span> <span style="color:#ff79c6">{</span>Integer@2315<span style="color:#ff79c6">}</span> 5 <span style="color:#ff79c6">-&gt;</span> <span style="color:#ff79c6">{</span>StreamNode@2316<span style="color:#ff79c6">}</span> <span style="color:#f1fa8c">&#34;Keyed Aggregation-5&#34;</span>
+</span></span><span style="display:flex;"><span>  key <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">{</span>Integer@2315<span style="color:#ff79c6">}</span> 5
+</span></span><span style="display:flex;"><span>  value <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">{</span>StreamNode@2316<span style="color:#ff79c6">}</span> <span style="color:#f1fa8c">&#34;Keyed Aggregation-5&#34;</span>
+</span></span><span style="display:flex;"><span> <span style="color:#ff79c6">{</span>Integer@2317<span style="color:#ff79c6">}</span> 6 <span style="color:#ff79c6">-&gt;</span> <span style="color:#ff79c6">{</span>StreamNode@2318<span style="color:#ff79c6">}</span> <span style="color:#f1fa8c">&#34;Sink: Unnamed-6&#34;</span>
+</span></span><span style="display:flex;"><span>  key <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">{</span>Integer@2317<span style="color:#ff79c6">}</span> 6
+</span></span><span style="display:flex;"><span>  value <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">{</span>StreamNode@2318<span style="color:#ff79c6">}</span> <span style="color:#f1fa8c">&#34;Sink: Unnamed-6&#34;</span>
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>和 spark 的对比</p>
+<table>
+<thead>
+<tr>
+<th>Feature</th>
+<th>Spark (DAG Scheduler)</th>
+<th>Flink (StreamGraph)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Job Splitting</strong></td>
+<td>Split into <strong>Stages</strong> based on <strong>Shuffle Boundaries</strong></td>
+<td><strong>Single DAG (StreamGraph)</strong> for the entire job</td>
+</tr>
+<tr>
+<td><strong>Shuffle Handling</strong></td>
+<td>Happens <strong>before execution</strong> (defining stages)</td>
+<td>Happens <strong>during execution</strong> (JobGraph phase)</td>
+</tr>
+<tr>
+<td><strong>Execution Plan</strong></td>
+<td>Spark <strong>materializes RDDs</strong> and <strong>pipelines stages</strong></td>
+<td>Flink <strong>creates one DAG</strong> and <strong>chains operators</strong> dynamically</td>
+</tr>
+<tr>
+<td><strong>Network Shuffle</strong></td>
+<td>Happens at <strong>stage boundaries</strong> (causes slowdowns)</td>
+<td>Happens at <strong>keyBy or repartitioning</strong> but optimizes via chaining</td>
+</tr>
+</tbody>
+</table>
+<p>StreamGraph</p>
+<ul>
+<li>chaining：用于设置是否开启链接。如果开启，则可能实现把多个算子链接在一起，这样就可以把它们部署到一个任务中执行</li>
+<li>scheduleMode：ScheduleMode类型，表示调度策略</li>
+<li>allVerticesInSameSlotSharingGroupByDefault：用于设置是否把所有节点放入同一个SlotSharingGroup。默认值为true</li>
+<li>streamNodes：Map&lt;Integer, StreamNode&gt;类型，表示一个会被执行的任务节点</li>
+<li>virtualSelectNodes：Map&lt;Integer, Tuple2&lt;Integer, <!-- raw HTML omitted -->&raquo;类型，表示虚拟的select节点</li>
+<li>virtualSideOutputNodes：Map&lt;Integer, Tuple2&lt;Integer, OutputTag&raquo;类型，表示虚拟的side output节点</li>
+<li>virtualPartitionNodes：Map&lt;Integer, Tuple3&lt;Integer, StreamPartitioner<!-- raw HTML omitted -->, Shufflemode&raquo;类型，表示虚拟的partition节点</li>
+</ul>
+<p>解释</p>
+<ul>
+<li>StreamNode 包含了List&lt;&gt; 出边，以及List 入边</li>
+<li>以及包含的 jobVertexClass，如：OneInputStreamTask
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/02/09/7WrFPG.png">
+            <img class="mx-auto" alt="2" src="https://v1.ax1x.com/2025/02/09/7WrFPG.png" />
+        </a>
+    </li>
+</ul>
+<p>一些常见的算子的类图，这里省略了很多子类<br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/02/09/7WrZFB.png">
+            <img class="mx-auto" alt="3" src="https://v1.ax1x.com/2025/02/09/7WrZFB.png" />
+        </a>
+    </p>
+<h3 id="plan">Plan</h3>
+<p>例子</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">15
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">16
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">17
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">18
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">19
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">20
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">21
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">22
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">23
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">24
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">25
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">26
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">27
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">28
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">29
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-java" data-lang="java"><span style="display:flex;"><span><span style="color:#8be9fd;font-style:italic">public</span> <span style="color:#8be9fd">void</span> <span style="color:#50fa7b">go</span><span style="color:#ff79c6">()</span> <span style="color:#8be9fd;font-style:italic">throws</span> Exception <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>	<span style="color:#6272a4">// 1. Create Flink batch execution environment
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>	ExecutionEnvironment env <span style="color:#ff79c6">=</span> ExecutionEnvironment<span style="color:#ff79c6">.</span><span style="color:#50fa7b">getExecutionEnvironment</span><span style="color:#ff79c6">();</span>
+</span></span><span style="display:flex;"><span>	env<span style="color:#ff79c6">.</span><span style="color:#50fa7b">setParallelism</span><span style="color:#ff79c6">(</span>1<span style="color:#ff79c6">);</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>	<span style="color:#6272a4">// 2. Prepare data source
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>	DataSet<span style="color:#ff79c6">&lt;</span>String<span style="color:#ff79c6">&gt;</span> ds <span style="color:#ff79c6">=</span> env<span style="color:#ff79c6">.</span><span style="color:#50fa7b">fromElements</span><span style="color:#ff79c6">(</span>
+</span></span><span style="display:flex;"><span>			<span style="color:#f1fa8c">&#34;flink hadoop hive&#34;</span><span style="color:#ff79c6">,</span>
+</span></span><span style="display:flex;"><span>			<span style="color:#f1fa8c">&#34;flink hadoop hive&#34;</span><span style="color:#ff79c6">,</span>
+</span></span><span style="display:flex;"><span>			<span style="color:#f1fa8c">&#34;flink hadoop flink&#34;</span>
+</span></span><span style="display:flex;"><span>	<span style="color:#ff79c6">);</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>	ds<span style="color:#ff79c6">.</span><span style="color:#50fa7b">flatMap</span><span style="color:#ff79c6">((</span>FlatMapFunction<span style="color:#ff79c6">&lt;</span>String<span style="color:#ff79c6">,</span> Tuple2<span style="color:#ff79c6">&lt;</span>String<span style="color:#ff79c6">,</span> Integer<span style="color:#ff79c6">&gt;&gt;)</span> <span style="color:#ff79c6">(</span>value<span style="color:#ff79c6">,</span> out<span style="color:#ff79c6">)</span> <span style="color:#ff79c6">-&gt;</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>		<span style="color:#6272a4">// Split input line into words
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>		String<span style="color:#ff79c6">[]</span> words <span style="color:#ff79c6">=</span> value<span style="color:#ff79c6">.</span><span style="color:#50fa7b">split</span><span style="color:#ff79c6">(</span><span style="color:#f1fa8c">&#34; &#34;</span><span style="color:#ff79c6">);</span>
+</span></span><span style="display:flex;"><span>		<span style="color:#ff79c6">for</span> <span style="color:#ff79c6">(</span>String word <span style="color:#ff79c6">:</span> words<span style="color:#ff79c6">)</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>			out<span style="color:#ff79c6">.</span><span style="color:#50fa7b">collect</span><span style="color:#ff79c6">(</span><span style="color:#ff79c6">new</span> Tuple2<span style="color:#ff79c6">&lt;&gt;(</span>word<span style="color:#ff79c6">,</span> 1<span style="color:#ff79c6">));</span>
+</span></span><span style="display:flex;"><span>		<span style="color:#ff79c6">}</span>
+</span></span><span style="display:flex;"><span>	<span style="color:#ff79c6">})</span>
+</span></span><span style="display:flex;"><span>	<span style="color:#ff79c6">.</span><span style="color:#50fa7b">returns</span><span style="color:#ff79c6">(</span>TypeInformation<span style="color:#ff79c6">.</span><span style="color:#50fa7b">of</span><span style="color:#ff79c6">(</span><span style="color:#ff79c6">new</span> TypeHint<span style="color:#ff79c6">&lt;</span>Tuple2<span style="color:#ff79c6">&lt;</span>String<span style="color:#ff79c6">,</span> Integer<span style="color:#ff79c6">&gt;&gt;()</span> <span style="color:#ff79c6">{}))</span> 
+</span></span><span style="display:flex;"><span>	<span style="color:#ff79c6">.</span><span style="color:#50fa7b">map</span><span style="color:#ff79c6">((</span>MapFunction<span style="color:#ff79c6">&lt;</span>Tuple2<span style="color:#ff79c6">&lt;</span>String<span style="color:#ff79c6">,</span> Integer<span style="color:#ff79c6">&gt;,</span> Tuple2<span style="color:#ff79c6">&lt;</span>String<span style="color:#ff79c6">,</span> Integer<span style="color:#ff79c6">&gt;&gt;)</span> 
+</span></span><span style="display:flex;"><span>		value <span style="color:#ff79c6">-&gt;</span> Tuple2<span style="color:#ff79c6">.</span><span style="color:#50fa7b">of</span><span style="color:#ff79c6">(</span>value<span style="color:#ff79c6">.</span><span style="color:#50fa7b">f0</span><span style="color:#ff79c6">,</span> value<span style="color:#ff79c6">.</span><span style="color:#50fa7b">f1</span><span style="color:#ff79c6">))</span>
+</span></span><span style="display:flex;"><span>	<span style="color:#ff79c6">.</span><span style="color:#50fa7b">returns</span><span style="color:#ff79c6">(</span>TypeInformation<span style="color:#ff79c6">.</span><span style="color:#50fa7b">of</span><span style="color:#ff79c6">(</span><span style="color:#ff79c6">new</span> TypeHint<span style="color:#ff79c6">&lt;</span>Tuple2<span style="color:#ff79c6">&lt;</span>String<span style="color:#ff79c6">,</span> Integer<span style="color:#ff79c6">&gt;&gt;()</span> <span style="color:#ff79c6">{}))</span>
+</span></span><span style="display:flex;"><span>	<span style="color:#ff79c6">.</span><span style="color:#50fa7b">groupBy</span><span style="color:#ff79c6">(</span>0<span style="color:#ff79c6">)</span> <span style="color:#6272a4">// Group by word (Tuple2&lt;String, Integer&gt; is now recognized)
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>	<span style="color:#ff79c6">.</span><span style="color:#50fa7b">sum</span><span style="color:#ff79c6">(</span>1<span style="color:#ff79c6">)</span>     <span style="color:#6272a4">// Sum the second field (integer count)
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>	<span style="color:#ff79c6">.</span><span style="color:#50fa7b">print</span><span style="color:#ff79c6">();</span> 
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>	env<span style="color:#ff79c6">.</span><span style="color:#50fa7b">execute</span><span style="color:#ff79c6">(</span><span style="color:#f1fa8c">&#34;word count stream&#34;</span><span style="color:#ff79c6">);</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">}</span>
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>这里构建过程也是递归的</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">15
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">16
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">17
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">18
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">19
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">20
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">21
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">22
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">23
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">24
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">25
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">26
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">27
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">28
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">29
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">30
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">31
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">32
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">33
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">34
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">35
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">36
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">37
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">38
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">39
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">40
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">41
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">42
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">43
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">44
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-java" data-lang="java"><span style="display:flex;"><span><span style="color:#8be9fd;font-style:italic">public</span> <span style="color:#8be9fd;font-style:italic">class</span> <span style="color:#50fa7b">OperatorTranslation</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>	
+</span></span><span style="display:flex;"><span>	<span style="color:#8be9fd;font-style:italic">private</span> <span style="color:#ff79c6">&lt;</span>T<span style="color:#ff79c6">&gt;</span> Operator<span style="color:#ff79c6">&lt;</span>T<span style="color:#ff79c6">&gt;</span> <span style="color:#50fa7b">translate</span><span style="color:#ff79c6">(</span>DataSet<span style="color:#ff79c6">&lt;</span>T<span style="color:#ff79c6">&gt;</span> dataSet<span style="color:#ff79c6">)</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>		Operator<span style="color:#ff79c6">&lt;</span>T<span style="color:#ff79c6">&gt;</span> dataFlowOp<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span>		<span style="color:#ff79c6">if</span> <span style="color:#ff79c6">(</span>dataSet <span style="color:#ff79c6">instanceof</span> DataSource<span style="color:#ff79c6">)</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>		
+</span></span><span style="display:flex;"><span>		<span style="color:#ff79c6">}</span> <span style="color:#ff79c6">else</span> <span style="color:#ff79c6">if</span> <span style="color:#ff79c6">(</span>dataSet <span style="color:#ff79c6">instanceof</span> SingleInputOperator<span style="color:#ff79c6">)</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>			dataFlowOp <span style="color:#ff79c6">=</span> translateSingleInputOperator<span style="color:#ff79c6">(</span>singleInputOperator<span style="color:#ff79c6">);</span>
+</span></span><span style="display:flex;"><span>		<span style="color:#ff79c6">}</span> <span style="color:#ff79c6">else</span> <span style="color:#ff79c6">if</span> <span style="color:#ff79c6">(</span>dataSet <span style="color:#ff79c6">instanceof</span> TwoInputOperator<span style="color:#ff79c6">)</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>			dataFlowOp <span style="color:#ff79c6">=</span> translateTwoInputOperator<span style="color:#ff79c6">(</span>twoInputOperator<span style="color:#ff79c6">);</span>
+</span></span><span style="display:flex;"><span>		<span style="color:#ff79c6">}</span> <span style="color:#ff79c6">else</span> <span style="color:#ff79c6">if</span> <span style="color:#ff79c6">(</span>dataSet <span style="color:#ff79c6">instanceof</span> BulkIterationResultSet<span style="color:#ff79c6">)</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>		
+</span></span><span style="display:flex;"><span>		<span style="color:#ff79c6">}</span> <span style="color:#ff79c6">else</span> <span style="color:#ff79c6">if</span> <span style="color:#ff79c6">(</span>dataSet <span style="color:#ff79c6">instanceof</span> DeltaIterationResultSet<span style="color:#ff79c6">)</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>		
+</span></span><span style="display:flex;"><span>		<span style="color:#ff79c6">}</span> <span style="color:#ff79c6">else</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>		
+</span></span><span style="display:flex;"><span>		<span style="color:#ff79c6">}</span>
+</span></span><span style="display:flex;"><span>		
+</span></span><span style="display:flex;"><span>	<span style="color:#ff79c6">}</span>
+</span></span><span style="display:flex;"><span>	
+</span></span><span style="display:flex;"><span>	<span style="color:#8be9fd;font-style:italic">private</span> <span style="color:#ff79c6">&lt;</span>I<span style="color:#ff79c6">,</span> O<span style="color:#ff79c6">&gt;</span> Operator<span style="color:#ff79c6">&lt;</span>O<span style="color:#ff79c6">&gt;</span> <span style="color:#50fa7b">translateSingleInputOperator</span><span style="color:#ff79c6">(</span>SingleInputOperator<span style="color:#ff79c6">&lt;?,</span> <span style="color:#ff79c6">?,</span> <span style="color:#ff79c6">?&gt;</span> op<span style="color:#ff79c6">)</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>		<span style="color:#6272a4">// 递归调用
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>		Operator<span style="color:#ff79c6">&lt;</span>I<span style="color:#ff79c6">&gt;</span> input <span style="color:#ff79c6">=</span> translate<span style="color:#ff79c6">(</span>typedInput<span style="color:#ff79c6">);</span>
+</span></span><span style="display:flex;"><span>		dataFlowOp <span style="color:#ff79c6">=</span>
+</span></span><span style="display:flex;"><span>                typedOp<span style="color:#ff79c6">.</span><span style="color:#50fa7b">translateToDataFlow</span><span style="color:#ff79c6">(</span>input<span style="color:#ff79c6">);</span>
+</span></span><span style="display:flex;"><span>		<span style="color:#6272a4">// ...
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>		<span style="color:#6272a4">// ...
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>		<span style="color:#ff79c6">return</span> dataFlowOp<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span>	<span style="color:#ff79c6">}</span>
+</span></span><span style="display:flex;"><span>	
+</span></span><span style="display:flex;"><span>	<span style="color:#8be9fd;font-style:italic">private</span> <span style="color:#ff79c6">&lt;</span>I<span style="color:#ff79c6">,</span> O<span style="color:#ff79c6">&gt;</span> Operator<span style="color:#ff79c6">&lt;</span>O<span style="color:#ff79c6">&gt;</span> <span style="color:#50fa7b">translateTwoInputOperator</span><span style="color:#ff79c6">(</span>SingleInputOperator<span style="color:#ff79c6">&lt;?,</span> <span style="color:#ff79c6">?,</span> <span style="color:#ff79c6">?&gt;</span> op<span style="color:#ff79c6">)</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>		DataSet<span style="color:#ff79c6">&lt;</span>I1<span style="color:#ff79c6">&gt;</span> typedInput1 <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">(</span>DataSet<span style="color:#ff79c6">&lt;</span>I1<span style="color:#ff79c6">&gt;)</span> op<span style="color:#ff79c6">.</span><span style="color:#50fa7b">getInput1</span><span style="color:#ff79c6">();</span>
+</span></span><span style="display:flex;"><span>        DataSet<span style="color:#ff79c6">&lt;</span>I2<span style="color:#ff79c6">&gt;</span> typedInput2 <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">(</span>DataSet<span style="color:#ff79c6">&lt;</span>I2<span style="color:#ff79c6">&gt;)</span> op<span style="color:#ff79c6">.</span><span style="color:#50fa7b">getInput2</span><span style="color:#ff79c6">();</span>
+</span></span><span style="display:flex;"><span>		<span style="color:#6272a4">// 递归调用
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>        Operator<span style="color:#ff79c6">&lt;</span>I1<span style="color:#ff79c6">&gt;</span> input1 <span style="color:#ff79c6">=</span> translate<span style="color:#ff79c6">(</span>typedInput1<span style="color:#ff79c6">);</span>
+</span></span><span style="display:flex;"><span>        Operator<span style="color:#ff79c6">&lt;</span>I2<span style="color:#ff79c6">&gt;</span> input2 <span style="color:#ff79c6">=</span> translate<span style="color:#ff79c6">(</span>typedInput2<span style="color:#ff79c6">);</span>
+</span></span><span style="display:flex;"><span>		dataFlowOp <span style="color:#ff79c6">=</span>
+</span></span><span style="display:flex;"><span>                typedOp<span style="color:#ff79c6">.</span><span style="color:#50fa7b">translateToDataFlow</span><span style="color:#ff79c6">(</span>input1<span style="color:#ff79c6">,</span> input2<span style="color:#ff79c6">);</span>
+</span></span><span style="display:flex;"><span>		<span style="color:#6272a4">// ...
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>		<span style="color:#6272a4">// ...
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>		<span style="color:#ff79c6">return</span> dataFlowOp<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span>	<span style="color:#ff79c6">}</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">}</span>
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>Visitable、Visitor</p>
+<ul>
+<li>Plan 继承 Visitor，后面对 Plan 做优化可以用访问者模式遍历<br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/02/09/7WreNt.png">
+            <img class="mx-auto" alt="4" src="https://v1.ax1x.com/2025/02/09/7WreNt.png" />
+        </a>
+    </li>
+</ul>
+<p>Plan debug内部过程</p>
+<ul>
+<li>sink不断展开，可以看到 input</li>
+<li>最后的 input 就是 DataSource<br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/02/09/7Wroab.png">
+            <img class="mx-auto" alt="5" src="https://v1.ax1x.com/2025/02/09/7Wroab.png" />
+        </a>
+    </li>
+</ul>
+<h3 id="jobgraph">JobGraph</h3>
+<p>类图如下</p>
+<ul>
+<li>Flink的类图之间还是比较清晰的</li>
+<li>StreamGraph和Plan 都会委托 FlinkPipelineTranslator 生成 JobGraph</li>
+<li>而JobGraph 会将任务根据 shuffle 做拆分，为后续真正调度做准备
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/02/15/7WnH7f.png">
+            <img class="mx-auto" alt="6" src="https://v1.ax1x.com/2025/02/15/7WnH7f.png" />
+        </a>
+    </li>
+</ul>
+<p>StreamGraphTranslator的translateToJobGraph()方法如下<br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/02/15/7WnKWc.jpg">
+            <img class="mx-auto" alt="7" src="https://v1.ax1x.com/2025/02/15/7WnKWc.jpg" />
+        </a>
+    </p>
+<p>StreamingJobGraphGenerator</p>
+<ul>
+<li>是JobGraph的生成器，它的核心字段如下</li>
+<li>streamGraph：StreamGraph类型。</li>
+<li>jobVertices：Map&lt;Integer, JobVertex&gt;类型，用于维护JobGraph中的节点。</li>
+<li>jobGraph：JobGraph类型</li>
+<li>builtVertices：Collection<!-- raw HTML omitted -->类型，用于维护已经构建的StreamNode的id</li>
+<li>physicalEdgesInOrder：StreamEdge类型，表示物理边的集合，排除了链接内部的边</li>
+<li>chainedConfigs：Map&lt;Integer, Map&lt;Integer, StreamConfig&raquo; 类型，保存链接信息</li>
+<li>vertexConfigs：Map&lt;Integer, StreamConfig&gt;类型，保存节点信息</li>
+<li>chainedNames：Map&lt;Integer, String&gt;类型，表示链接的名称</li>
+</ul>
+<p>createJobGraph的过程如下：</p>
+<p>createJobGraph</p>
+<ol>
+<li>进行一些转换前的验证，比如检验配置是否有冲突等</li>
+<li>设置调度方式、计算哈希值等</li>
+<li>将任务链接在一起，创建节点JobVertex和边JobEdge。这是整个过程中最重要的一步</li>
+<li>设置物理边，用于给StreamConfig添加物理边</li>
+<li>设置共享槽组</li>
+<li>设置内存占比</li>
+<li>配置检查点、保存点参数</li>
+<li>设置分布式缓存文件</li>
+<li>设置运行时的配置</li>
+<li>返回完整的JobGraph对象</li>
+</ol>
+<p>From a source code perspective, the setChaining() method in StreamingJobGraphGenerator:</p>
+<ul>
+<li>Iterates over the stream nodes in the topology,</li>
+<li>Determines chaining eligibility by comparing operator chaining modes and partitioning strategies,</li>
+<li>Propagates the “chainable” flag along eligible subgraphs,</li>
+<li>Ultimately groups operators into chains so that during execution they run in a single task (reducing serialization, network overhead, and context switching).</li>
+</ul>
+<p>ASCII</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">15
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">16
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">17
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">18
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">19
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">20
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">21
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">22
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">23
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">24
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">25
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">26
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">27
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">28
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">29
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">30
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">31
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">32
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">33
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">34
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-java" data-lang="java"><span style="display:flex;"><span>                   STREAM 1                             STREAM 2
+</span></span><span style="display:flex;"><span>                   <span style="color:#ff79c6">---------</span>                            <span style="color:#ff79c6">---------</span>
+</span></span><span style="display:flex;"><span>                  <span style="color:#ff79c6">+---------+</span>                          <span style="color:#ff79c6">+---------+</span>
+</span></span><span style="display:flex;"><span>                  <span style="color:#ff79c6">|</span> Source1 <span style="color:#ff79c6">|</span>                          <span style="color:#ff79c6">|</span> Source2 <span style="color:#ff79c6">|</span>
+</span></span><span style="display:flex;"><span>                  <span style="color:#ff79c6">+----+----+</span>                          <span style="color:#ff79c6">+----+----+</span>
+</span></span><span style="display:flex;"><span>                       <span style="color:#ff79c6">|</span>                                      <span style="color:#ff79c6">|</span>
+</span></span><span style="display:flex;"><span>                       v                                      v
+</span></span><span style="display:flex;"><span>                  <span style="color:#ff79c6">+---------+</span>                           <span style="color:#ff79c6">+---------+</span>
+</span></span><span style="display:flex;"><span>                  <span style="color:#ff79c6">|</span>  Map1   <span style="color:#ff79c6">|</span>                           <span style="color:#ff79c6">|</span>  Map2   <span style="color:#ff79c6">|</span>
+</span></span><span style="display:flex;"><span>                  <span style="color:#ff79c6">+----+----+</span>                           <span style="color:#ff79c6">+----+----+</span>
+</span></span><span style="display:flex;"><span>                       <span style="color:#ff79c6">|</span>                                      <span style="color:#ff79c6">|</span>
+</span></span><span style="display:flex;"><span>                       v                                      v
+</span></span><span style="display:flex;"><span>                  <span style="color:#ff79c6">+---------+</span>                           <span style="color:#ff79c6">+---------+</span>
+</span></span><span style="display:flex;"><span>                  <span style="color:#ff79c6">|</span> Filter1 <span style="color:#ff79c6">|</span>                           <span style="color:#ff79c6">|</span> Filter2 <span style="color:#ff79c6">|</span>
+</span></span><span style="display:flex;"><span>                  <span style="color:#ff79c6">+---------+</span>                           <span style="color:#ff79c6">+---------+</span>
+</span></span><span style="display:flex;"><span>                       <span style="color:#ff79c6">|</span>                                      <span style="color:#ff79c6">|</span>
+</span></span><span style="display:flex;"><span>                       <span style="color:#ff79c6">|</span>         <span style="color:#ff79c6">(</span>Both Chains A <span style="color:#ff79c6">&amp;</span> B<span style="color:#ff79c6">)</span>          <span style="color:#ff79c6">|</span>
+</span></span><span style="display:flex;"><span>                       <span style="color:#ff79c6">|</span>______________________________________<span style="color:#ff79c6">|</span>
+</span></span><span style="display:flex;"><span>                                      <span style="color:#ff79c6">|</span>   <span style="color:#ff79c6">(</span>Shuffle<span style="color:#ff79c6">/</span>Exchange<span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>                                      v
+</span></span><span style="display:flex;"><span>                                <span style="color:#ff79c6">+------------+</span>
+</span></span><span style="display:flex;"><span>                                <span style="color:#ff79c6">|</span>   Join     <span style="color:#ff79c6">|</span>
+</span></span><span style="display:flex;"><span>                                <span style="color:#ff79c6">|</span> <span style="color:#ff79c6">(</span>Stage Break<span style="color:#ff79c6">)</span> <span style="color:#ff79c6">|</span>
+</span></span><span style="display:flex;"><span>                                <span style="color:#ff79c6">+------------+</span>
+</span></span><span style="display:flex;"><span>                                      <span style="color:#ff79c6">|</span>
+</span></span><span style="display:flex;"><span>                                      v
+</span></span><span style="display:flex;"><span>                                <span style="color:#ff79c6">+------------+</span>
+</span></span><span style="display:flex;"><span>                                <span style="color:#ff79c6">|</span> PostJoinMap<span style="color:#ff79c6">|</span>
+</span></span><span style="display:flex;"><span>                                <span style="color:#ff79c6">+------------+</span>
+</span></span><span style="display:flex;"><span>                                      <span style="color:#ff79c6">|</span>
+</span></span><span style="display:flex;"><span>                                      v
+</span></span><span style="display:flex;"><span>                                <span style="color:#ff79c6">+------------+</span>
+</span></span><span style="display:flex;"><span>                                <span style="color:#ff79c6">|</span>   Sink     <span style="color:#ff79c6">|</span>
+</span></span><span style="display:flex;"><span>                                <span style="color:#ff79c6">+------------+</span>
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>总结起来，isChainable()方法中的判断条件如下</p>
+<ul>
+<li>该出边的上游算子是该出边的下游算子的唯一输入。</li>
+<li>上下游的StreamOperatorFactory对象的值不能为null。</li>
+<li>上下游处于同一个SlotSharingGroup。</li>
+<li>下游的ChainingStrategy为ALWAYS。</li>
+<li>上游的ChainingStrategy为ALWAYS或HEAD。</li>
+<li>该出边的分区器为ForwardPartitioner，即没有进行重分区等。</li>
+<li>该出边的ShuffleMode不为BATCH。</li>
+<li>上下游的并行度相同。</li>
+<li>StreamGraph的chaining属性的值为true</li>
+</ul>
+<p>JobGraph和相关的类</p>
+<ul>
+<li>JobVertex</li>
+<li>JobEdge</li>
+<li>IntermediateDataSet
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/02/15/7Wnbj3.png">
+            <img class="mx-auto" alt="8" src="https://v1.ax1x.com/2025/02/15/7Wnbj3.png" />
+        </a>
+    </li>
+</ul>
+<p>Plan 转换过程中会有一些优化步骤，类图如下</p>
+<ul>
+<li>PlanTranslator 是负责转换Plan 的</li>
+<li>这会生成 JobVertex、JobEdge
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/02/15/7Wn885.png">
+            <img class="mx-auto" alt="9" src="https://v1.ax1x.com/2025/02/15/7Wn885.png" />
+        </a>
+    </li>
+</ul>
+<h3 id="executiongraph">ExecutionGraph</h3>
+<p>类似于将 优化后的 执行计划 -&gt; 转换为可以被调度的 物理计划<br>
+JobGraph和ExecutionGraph的关系如下：  <br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/02/15/7WnGtm.jpg">
+            <img class="mx-auto" alt="10" src="https://v1.ax1x.com/2025/02/15/7WnGtm.jpg" />
+        </a>
+    </p>
+<p>一个执行例子的 ascii 图</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">15
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">16
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">17
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">18
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">19
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">20
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">21
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">22
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">23
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">24
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">25
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">26
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">27
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">28
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-java" data-lang="java"><span style="display:flex;"><span><span style="color:#8be9fd;font-style:italic">JobGraph:</span>
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">[</span>KafkaSource<span style="color:#ff79c6">]</span> <span style="color:#ff79c6">---&gt;</span> <span style="color:#ff79c6">[</span>HDFSSink<span style="color:#ff79c6">]</span>
+</span></span><span style="display:flex;"><span><span style="color:#8be9fd;font-style:italic">
+</span></span></span><span style="display:flex;"><span><span style="color:#8be9fd;font-style:italic">DefaultExecutionGraphBuilder:</span>
+</span></span><span style="display:flex;"><span>  For each JobVertex<span style="color:#ff79c6">:</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">+---------------------+</span>         <span style="color:#ff79c6">+---------------------+</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">|</span> KafkaSource <span style="color:#ff79c6">(</span>Job<span style="color:#ff79c6">)</span>   <span style="color:#ff79c6">|</span>         <span style="color:#ff79c6">|</span> HDFSSink <span style="color:#ff79c6">(</span>Job<span style="color:#ff79c6">)</span>      <span style="color:#ff79c6">|</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">+---------------------+</span>         <span style="color:#ff79c6">+---------------------+</span>
+</span></span><span style="display:flex;"><span>           <span style="color:#ff79c6">|</span>                                 <span style="color:#ff79c6">|</span>
+</span></span><span style="display:flex;"><span>           v                                 v
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">+---------------------+</span>         <span style="color:#ff79c6">+---------------------+</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">|</span> ExecutionJobVertex  <span style="color:#ff79c6">|</span>         <span style="color:#ff79c6">|</span> ExecutionJobVertex  <span style="color:#ff79c6">|</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">|</span> <span style="color:#ff79c6">for</span> KafkaSource     <span style="color:#ff79c6">|</span>         <span style="color:#ff79c6">|</span> <span style="color:#ff79c6">for</span> HDFSSink        <span style="color:#ff79c6">|</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">|</span> <span style="color:#ff79c6">(</span>with 4 subtasks<span style="color:#ff79c6">)</span>   <span style="color:#ff79c6">|</span>         <span style="color:#ff79c6">|</span> <span style="color:#ff79c6">(</span>with 4 subtasks<span style="color:#ff79c6">)</span>   <span style="color:#ff79c6">|</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">+---------------------+</span>         <span style="color:#ff79c6">+---------------------+</span>
+</span></span><span style="display:flex;"><span>           <span style="color:#ff79c6">|</span>                                 <span style="color:#ff79c6">|</span>
+</span></span><span style="display:flex;"><span>           <span style="color:#ff79c6">|---</span> Create Intermediate Result  <span style="color:#ff79c6">|</span>  <span style="color:#ff79c6">&lt;---</span> Wire input<span style="color:#ff79c6">/</span>output connections
+</span></span><span style="display:flex;"><span>           <span style="color:#ff79c6">|</span>    <span style="color:#ff79c6">(</span>data partitions<span style="color:#ff79c6">)</span>            <span style="color:#ff79c6">|</span>
+</span></span><span style="display:flex;"><span>           v                                 v
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">[</span>IntermediateResultPartitions connecting source and sink<span style="color:#ff79c6">]</span>
+</span></span><span style="display:flex;"><span>           <span style="color:#ff79c6">|</span>                                 <span style="color:#ff79c6">|</span>
+</span></span><span style="display:flex;"><span>           v                                 v
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">+-------------------------------------------------+</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">|</span>          Fully Constructed ExecutionGraph       <span style="color:#ff79c6">|</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">+-------------------------------------------------+</span>
+</span></span><span style="display:flex;"><span>                   <span style="color:#ff79c6">|</span>
+</span></span><span style="display:flex;"><span>                   v
+</span></span><span style="display:flex;"><span>         Scheduler uses <span style="color:#ff79c6">this</span> graph
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>From a source-code perspective, the DefaultExecutionGraphBuilder:</p>
+<ul>
+<li>Takes a high-level JobGraph,</li>
+<li>Instantiates ExecutionJobVertices for each job vertex,</li>
+<li>Wires them together via intermediate results,</li>
+<li>Sets scheduling, resource, and fault-tolerance parameters,</li>
+<li>And finally produces an ExecutionGraph that the Flink scheduler deploys on your cluster.</li>
+</ul>
+<p>ExecutionGraph</p>
+<ul>
+<li>是协调分布式任务执行的关键的数据结构</li>
+<li>持有每一个任务的并行实例并维护它们的运行状态</li>
+</ul>
+<p>
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/02/15/7Wnxe4.png">
+            <img class="mx-auto" alt="11" src="https://v1.ax1x.com/2025/02/15/7Wnxe4.png" />
+        </a>
+    </p>
+<p>ExecutionGraph 的字段</p>
+<ul>
+<li>jobInformation：JobInformation类型，包含作业名称、作业id等信息。</li>
+<li>tasks：Map&lt;JobVertexID, ExecutionJobVertex&gt;类型，表示将 JobVertexID 与 ExecutionGraph 中的任务节点 ExecutionJobVertex 映射起来。</li>
+<li>verticesInCreationOrder：ExecutionJobVertex类型，表示按照创建顺序维护的ExecutionJobVertex列表。</li>
+<li>intermediateResults：Map&lt;IntermediateDataSetID, IntermediateResult&gt;类型，维护所有的IntermediateResult对象。</li>
+<li>currentExecutions：Map&lt;ExecutionAttemptID, Execution&gt;类型，表示当前执行的任务。</li>
+<li>jobStatusListeners：JobStatusListener类型，表示作业状态的监听器。</li>
+<li>failoverStrategy：FailoverStrategy类型，表示作业失败后的策略。</li>
+<li>restartStrategy：RestartStrategy类型，表示重启策略</li>
+<li>slotProviderStrategy：SlotProviderStrategy类型，用于给任务提供槽位的策略。</li>
+<li>scheduleMode：ScheduleMode类型，表示调度方式。</li>
+<li>verticesFinished：表示已完成的节点个数。</li>
+<li>state：JobStatus类型，表示作业的状态。</li>
+<li>checkpointCoordinator：CheckpointCoordinator类型，表示检查点的协调器</li>
+</ul>
+<p>ExecutionJobVertex、ExecutionVertex和Execution</p>
+<ul>
+<li>ExecutionJobVertex (&ldquo;Map&rdquo;): Represents the overall Map operator.</li>
+<li>ExecutionVertex #i: Represents the i-th parallel instance of the Map operator.</li>
+<li>Execution: Each subtask’s current execution attempt (its state, timing, etc.).</li>
+</ul>
+<p>执行关系图如下：</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-java" data-lang="java"><span style="display:flex;"><span>                       JobGraph
+</span></span><span style="display:flex;"><span>                        <span style="color:#ff79c6">[</span>Map<span style="color:#ff79c6">]</span>
+</span></span><span style="display:flex;"><span>                          <span style="color:#ff79c6">|</span>
+</span></span><span style="display:flex;"><span>                <span style="color:#ff79c6">---------------------</span>
+</span></span><span style="display:flex;"><span>                <span style="color:#ff79c6">|</span>                   <span style="color:#ff79c6">|</span>
+</span></span><span style="display:flex;"><span>     ExecutionJobVertex <span style="color:#ff79c6">(</span><span style="color:#f1fa8c">&#34;Map&#34;</span><span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>                <span style="color:#ff79c6">|</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">-----------------------------------------</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">|</span>           <span style="color:#ff79c6">|</span>           <span style="color:#ff79c6">|</span>             <span style="color:#ff79c6">|</span>
+</span></span><span style="display:flex;"><span>ExecutionVertex   ExecutionVertex   ExecutionVertex   ExecutionVertex
+</span></span><span style="display:flex;"><span>    #1              #2              #3              #4
+</span></span><span style="display:flex;"><span>     <span style="color:#ff79c6">|</span>               <span style="color:#ff79c6">|</span>               <span style="color:#ff79c6">|</span>               <span style="color:#ff79c6">|</span>
+</span></span><span style="display:flex;"><span> Execution          Execution       Execution       <span style="color:#50fa7b">Execution</span>
+</span></span><span style="display:flex;"><span> <span style="color:#ff79c6">(</span>RUNNING<span style="color:#ff79c6">)</span>         <span style="color:#ff79c6">(</span>RUNNING<span style="color:#ff79c6">)</span>       <span style="color:#ff79c6">(</span>RUNNING<span style="color:#ff79c6">)</span>       <span style="color:#ff79c6">(</span>RUNNING<span style="color:#ff79c6">)</span>
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>IntermediateResult</p>
+<ul>
+<li>逻辑表示，由job vertex 产生</li>
+<li>在 ExecutionGraph 中，为作业顶点的每个输出边创建一个IntermediateResult</li>
+<li>通过 IntermediateDataSet 构建出 IntermediateResult</li>
+</ul>
+<p>IntermediateResultPartition</p>
+<ul>
+<li>物理表示，当 job vertex 完成后会产生IntermediateResult</li>
+<li>拆分为多个物理的：IntermediateResultPartition</li>
+</ul>
+<p>JobGraph  &ndash;&gt; ExecutionGraph</p>
+<ul>
+<li>In the JobGraph, the plan is static and just represents the logical operators and data flow.
+<ul>
+<li>The JobGraph is a high-level, immutable representation of a submitted Flink job. It is constructed by the Flink client based on the user’s program and defines the logical dataflow as a directed acyclic graph (DAG).</li>
+<li>It contains job vertices (logical operators), the connections between them (edges), user-specified parallelism, and other metadata like checkpointing settings.</li>
+</ul>
+</li>
+<li>The ExecutionGraph expands each logical operator into multiple execution tasks (ExecutionVertices) and adds runtime information necessary for scheduling and fault tolerance.
+<ul>
+<li>The ExecutionGraph is the runtime representation of the job. It is derived from the JobGraph (typically by the DefaultExecutionGraphBuilder) and enriched with runtime details necessary for scheduling, execution, fault tolerance, and state management.</li>
+<li>It “expands” the logical job by breaking each job vertex into multiple execution vertices (subtasks) according to the defined parallelism. It also holds runtime state for each subtask and information such as execution attempt IDs and resource allocations.</li>
+</ul>
+</li>
+</ul>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">15
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">16
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">17
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">18
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">19
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-java" data-lang="java"><span style="display:flex;"><span>JobGraph <span style="color:#ff79c6">(</span>Logical Plan<span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>   <span style="color:#ff79c6">+----------------+</span>      <span style="color:#ff79c6">+----------------+</span>      <span style="color:#ff79c6">+----------------+</span>
+</span></span><span style="display:flex;"><span>   <span style="color:#ff79c6">|</span>    Source      <span style="color:#ff79c6">|</span> <span style="color:#ff79c6">---&gt;</span> <span style="color:#ff79c6">|</span>     Map        <span style="color:#ff79c6">|</span> <span style="color:#ff79c6">---&gt;</span> <span style="color:#ff79c6">|</span>     Sink       <span style="color:#ff79c6">|</span>
+</span></span><span style="display:flex;"><span>   <span style="color:#ff79c6">|</span>  parallelism<span style="color:#ff79c6">=</span>4 <span style="color:#ff79c6">|</span>      <span style="color:#ff79c6">|</span>  parallelism<span style="color:#ff79c6">=</span>4 <span style="color:#ff79c6">|</span>      <span style="color:#ff79c6">|</span>  parallelism<span style="color:#ff79c6">=</span>4 <span style="color:#ff79c6">|</span>
+</span></span><span style="display:flex;"><span>   <span style="color:#ff79c6">+----------------+</span>      <span style="color:#ff79c6">+----------------+</span>      <span style="color:#ff79c6">+----------------+</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>   Transformation via DefaultExecutionGraphBuilder
+</span></span><span style="display:flex;"><span>                     <span style="color:#ff79c6">|</span>
+</span></span><span style="display:flex;"><span>                     V
+</span></span><span style="display:flex;"><span><span style="color:#50fa7b">ExecutionGraph</span> <span style="color:#ff79c6">(</span>Runtime Plan<span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>   <span style="color:#ff79c6">+-----------------------+</span>         <span style="color:#ff79c6">+-----------------------+</span>         <span style="color:#ff79c6">+-----------------------+</span>
+</span></span><span style="display:flex;"><span>   <span style="color:#ff79c6">|</span> ExecutionJobVertex    <span style="color:#ff79c6">|</span>         <span style="color:#ff79c6">|</span> ExecutionJobVertex    <span style="color:#ff79c6">|</span>         <span style="color:#ff79c6">|</span> ExecutionJobVertex    <span style="color:#ff79c6">|</span>
+</span></span><span style="display:flex;"><span>   <span style="color:#ff79c6">|</span> <span style="color:#ff79c6">for</span> Source <span style="color:#ff79c6">(</span>4 tasks<span style="color:#ff79c6">)</span>  <span style="color:#ff79c6">|</span>         <span style="color:#ff79c6">|</span> <span style="color:#ff79c6">for</span> Map <span style="color:#ff79c6">(</span>4 tasks<span style="color:#ff79c6">)</span>     <span style="color:#ff79c6">|</span>         <span style="color:#ff79c6">|</span> <span style="color:#ff79c6">for</span> Sink <span style="color:#ff79c6">(</span>4 tasks<span style="color:#ff79c6">)</span>    <span style="color:#ff79c6">|</span>
+</span></span><span style="display:flex;"><span>   <span style="color:#ff79c6">+-----------------------+</span>         <span style="color:#ff79c6">+-----------------------+</span>         <span style="color:#ff79c6">+-----------------------+</span>
+</span></span><span style="display:flex;"><span>           <span style="color:#ff79c6">|</span>                                  <span style="color:#ff79c6">|</span>                                     <span style="color:#ff79c6">|</span>
+</span></span><span style="display:flex;"><span>           V                                  V                                     V
+</span></span><span style="display:flex;"><span>   <span style="color:#ff79c6">+---------+</span>  <span style="color:#ff79c6">+---------+</span> <span style="color:#ff79c6">...</span> <span style="color:#ff79c6">+---------+</span> <span style="color:#ff79c6">+---------+</span>  <span style="color:#ff79c6">+---------+</span> <span style="color:#ff79c6">...</span> <span style="color:#ff79c6">+---------+</span> <span style="color:#ff79c6">+---------+</span>  <span style="color:#ff79c6">+---------+</span> <span style="color:#ff79c6">...</span> <span style="color:#ff79c6">+---------+</span>
+</span></span><span style="display:flex;"><span>   <span style="color:#ff79c6">|</span>  Task 1 <span style="color:#ff79c6">|</span>  <span style="color:#ff79c6">|</span>  Task 2 <span style="color:#ff79c6">|</span> <span style="color:#ff79c6">...</span> <span style="color:#ff79c6">|</span>  Task 4 <span style="color:#ff79c6">|</span> <span style="color:#ff79c6">|</span>  Task 1 <span style="color:#ff79c6">|</span>  <span style="color:#ff79c6">|</span>  Task 2 <span style="color:#ff79c6">|</span> <span style="color:#ff79c6">...</span> <span style="color:#ff79c6">|</span>  Task 4 <span style="color:#ff79c6">|</span> <span style="color:#ff79c6">|</span>  Task 1 <span style="color:#ff79c6">|</span>  <span style="color:#ff79c6">|</span>  Task 2 <span style="color:#ff79c6">|</span> <span style="color:#ff79c6">...</span> <span style="color:#ff79c6">|</span>  Task 4 <span style="color:#ff79c6">|</span>
+</span></span><span style="display:flex;"><span>   <span style="color:#ff79c6">+---------+</span>  <span style="color:#ff79c6">+---------+</span> <span style="color:#ff79c6">...</span> <span style="color:#ff79c6">+---------+</span> <span style="color:#ff79c6">+---------+</span>  <span style="color:#ff79c6">+---------+</span> <span style="color:#ff79c6">...</span> <span style="color:#ff79c6">+---------+</span> <span style="color:#ff79c6">+---------+</span>  <span style="color:#ff79c6">+---------+</span> <span style="color:#ff79c6">...</span> <span style="color:#ff79c6">+---------+</span>
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>一个转换图 
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/02/19/7WfjpZ.png">
+            <img class="mx-auto" alt="15" src="https://v1.ax1x.com/2025/02/19/7WfjpZ.png" />
+        </a>
+    </p>
+<p>转换过程<br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/02/20/7Wi9xB.png">
+            <img class="mx-auto" alt="18" src="https://v1.ax1x.com/2025/02/20/7Wi9xB.png" />
+        </a>
+    </p>
+<h2 id="参考">参考</h2>
+<ul>
+<li><a href="https://nightlies.apache.org/flink/flink-docs-release-1.20/">1.20 官方文档</a></li>
+<li><a href="https://cloud.tencent.com/developer/column/93187?tag=11033">Lansonli技术博客</a></li>
+<li><a href="https://juejin.cn/post/7111510381956169764">深入浅出理解Flink运行时架构</a></li>
+<li><a href="https://0x90e.github.io/flink-execution-graph/">Flink Execution Graph</a></li>
+</ul>
+
+			<script type="text/javascript"
+        async
+        src="https://cdn.bootcss.com/mathjax/2.7.3/MathJax.js?config=TeX-AMS-MML_HTMLorMML">
+MathJax.Hub.Config({
+  tex2jax: {
+    inlineMath: [['$','$'], ['\\(','\\)']],
+    displayMath: [['$$','$$'], ['\[\[','\]\]']],
+    processEscapes: true,
+    processEnvironments: true,
+    skipTags: ['script', 'noscript', 'style', 'textarea', 'pre'],
+    TeX: { equationNumbers: { autoNumber: "AMS" },
+         extensions: ["AMSmath.js", "AMSsymbols.js"] }
+  }
+});
+
+MathJax.Hub.Queue(function() {
+    
+    
+    
+    var all = MathJax.Hub.getAllJax(), i;
+    for(i = 0; i < all.length; i += 1) {
+        all[i].SourceElement().parentNode.className += ' has-jax';
+    }
+});
+</script>
+
+<style>
+code.has-jax {
+    font: inherit;
+    font-size: 100%;
+    background: inherit;
+    border: inherit;
+    color: #515151;
+}
+</style>
+        </div>
+
+        
+
+
+        
+
+
+        <div class="post-meta meta-tags">
+            
+            <ul class="clearfix">
+                
+                <li><a href='/tags/flink'>Flink</a></li>
+                
+            </ul>
+            
+        </div>
+    </article>
+    
+    
+
+    
+    
+    <div class="post bg-white">
+      <script src="https://utteranc.es/client.js"
+            repo= "himichael/hugoblogtalks"
+            issue-term="pathname"
+            theme="github-light"
+            crossorigin="anonymous"
+            async>
+      </script>
+    </div>
+    
+</div>
+
+
+                </div>
+
+                <div id="secondary">
+    <section class="widget">
+        <form id="search" action='https://code0xff.org/search/' method="get" accept-charset="utf-8" target="_blank" _lpchecked="1">
+      
+      <input type="text" name="q" maxlength="20" placeholder="Search">
+      <input type="hidden" name="sitesearch" value="https://code0xff.org/">
+      <button type="submit" class="submit icon-search"></button>
+</form>
+    </section>
+    
+    <section class="widget">
+        <h3 class="widget-title">最近文章</h3>
+<ul class="widget-list">
+    
+    <li>
+        <a href="https://code0xff.org/post/2026/02/yunnan_west/" title="云南滇西大环线">云南滇西大环线</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2026/01/2015_2025/" title="2015年 -- 2025年">2015年 -- 2025年</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2026/01/longhorn/" title="longhorn">longhorn</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2025/12/ai_infrastructure/" title="关于AI 的生态">关于AI 的生态</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2025/11/ai_bubble/" title="关于AI泡沫">关于AI泡沫</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2025/10/china_beihai/" title="南边的北海">南边的北海</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2025/09/bpf_http/" title="eBPF的 http跟踪">eBPF的 http跟踪</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2025/09/spark_flink/" title="Spark和Flink的对比总结（包含Operator）">Spark和Flink的对比总结（包含Operator）</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2025/08/juicefs/" title="JuiceFS">JuiceFS</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2025/08/bpftrace_12_lessons/" title="bpftrace 12个小命令">bpftrace 12个小命令</a>
+    </li>
+    
+</ul>
+    </section>
+
+    
+
+    <section class="widget">
+        <h3 class="widget-title"><a href='/categories/'>分类</a></h3>
+<ul class="widget-list">
+    
+    <li><a href="https://code0xff.org/categories/%E5%88%86%E5%B8%83%E5%BC%8F/">分布式 (8)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E5%8E%9F%E7%90%86%E5%88%86%E6%9E%90/">原理分析 (33)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E5%95%86%E4%B8%9A/">商业 (6)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E5%A4%A7%E6%95%B0%E6%8D%AE/">大数据 (59)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%95%B0%E6%8D%AE%E5%BA%93/">数据库 (41)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%96%87%E5%AD%A6%E5%92%8C%E8%89%BA%E6%9C%AF/">文学和艺术 (3)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%97%85%E8%A1%8C/">旅行 (15)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%9E%B6%E6%9E%84/">架构 (13)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E7%AE%97%E6%B3%95%E5%92%8Cai/">算法和AI (11)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E7%B3%BB%E7%BB%9F/">系统 (16)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E7%BC%96%E7%A8%8B%E8%AF%AD%E8%A8%80/">编程语言 (8)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E8%A1%8C%E4%B8%9A%E8%A7%82%E5%AF%9F/">行业观察 (3)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E8%AF%BB%E4%B9%A6%E7%AC%94%E8%AE%B0/">读书笔记 (19)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E9%9A%8F%E4%BE%BF%E5%86%99%E5%86%99/">随便写写 (4)</a></li>
+    
+</ul>
+    </section>
+
+    <section class="widget">
+        <h3 class="widget-title">归档</a></h3>
+<ul class="widget-list">
+    
+    <li><a href="https://code0xff.org/years/2021%E5%B9%B4/">2021年 (41)</a></li>
+    
+    <li><a href="https://code0xff.org/years/2022%E5%B9%B4/">2022年 (55)</a></li>
+    
+    <li><a href="https://code0xff.org/years/2023%E5%B9%B4/">2023年 (54)</a></li>
+    
+    <li><a href="https://code0xff.org/years/2024%E5%B9%B4/">2024年 (48)</a></li>
+    
+    <li><a href="https://code0xff.org/years/2025%E5%B9%B4/">2025年 (38)</a></li>
+    
+    <li><a href="https://code0xff.org/years/2026%E5%B9%B4/">2026年 (3)</a></li>
+    
+</ul>
+    </section>
+
+    <section class="widget">
+        <h3 class="widget-title"><a href='/tags/'>标签</a></h3>
+<div class="tagcloud">
+    
+    <a href="https://code0xff.org/tags/ai/">AI </a>
+    
+    <a href="https://code0xff.org/tags/ambari/">Ambari </a>
+    
+    <a href="https://code0xff.org/tags/architecture/">architecture </a>
+    
+    <a href="https://code0xff.org/tags/bigdata/">bigdata </a>
+    
+    <a href="https://code0xff.org/tags/btrace/">BTrace </a>
+    
+    <a href="https://code0xff.org/tags/b%E6%A0%91/">B树 </a>
+    
+    <a href="https://code0xff.org/tags/c&#43;&#43;/">C&#43;&#43; </a>
+    
+    <a href="https://code0xff.org/tags/calcite/">calcite </a>
+    
+    <a href="https://code0xff.org/tags/cmu-database/">CMU-Database </a>
+    
+    <a href="https://code0xff.org/tags/data_ingestion/">Data_Ingestion </a>
+    
+    <a href="https://code0xff.org/tags/deltalake/">DeltaLake </a>
+    
+    <a href="https://code0xff.org/tags/doris/">Doris </a>
+    
+    <a href="https://code0xff.org/tags/ebpf/">eBPF </a>
+    
+    <a href="https://code0xff.org/tags/english/">English </a>
+    
+    <a href="https://code0xff.org/tags/es/">ES </a>
+    
+    <a href="https://code0xff.org/tags/facebook/">Facebook </a>
+    
+    <a href="https://code0xff.org/tags/flink/">flink </a>
+    
+    <a href="https://code0xff.org/tags/flume/">flume </a>
+    
+    <a href="https://code0xff.org/tags/gc/">GC </a>
+    
+    <a href="https://code0xff.org/tags/gluten/">Gluten </a>
+    
+    <a href="https://code0xff.org/tags/hana/">HANA </a>
+    
+    <a href="https://code0xff.org/tags/hive/">Hive </a>
+    
+    <a href="https://code0xff.org/tags/iceberg/">iceberg </a>
+    
+    <a href="https://code0xff.org/tags/impala/">Impala </a>
+    
+    <a href="https://code0xff.org/tags/janino/">janino </a>
+    
+    <a href="https://code0xff.org/tags/juicefs/">JuiceFS </a>
+    
+    <a href="https://code0xff.org/tags/k8s/">k8s </a>
+    
+    <a href="https://code0xff.org/tags/kafka/">Kafka </a>
+    
+    <a href="https://code0xff.org/tags/kudu/">kudu </a>
+    
+    <a href="https://code0xff.org/tags/kyuubi/">Kyuubi </a>
+    
+    <a href="https://code0xff.org/tags/lakehouse/">Lakehouse </a>
+    
+    <a href="https://code0xff.org/tags/leveldb/">LevelDB </a>
+    
+    <a href="https://code0xff.org/tags/llamafactory/">LlamaFactory </a>
+    
+    <a href="https://code0xff.org/tags/llvm/">LLVM </a>
+    
+    <a href="https://code0xff.org/tags/log4j/">log4j </a>
+    
+    <a href="https://code0xff.org/tags/longhorn/">longhorn </a>
+    
+    <a href="https://code0xff.org/tags/manacher/">Manacher </a>
+    
+    <a href="https://code0xff.org/tags/mapreduce/">MapReduce </a>
+    
+    <a href="https://code0xff.org/tags/micro-service/">micro-service </a>
+    
+    <a href="https://code0xff.org/tags/mysql/">MySQL </a>
+    
+    <a href="https://code0xff.org/tags/newsql/">NewSQL </a>
+    
+    <a href="https://code0xff.org/tags/oceanbase/">OceanBase </a>
+    
+    <a href="https://code0xff.org/tags/openldap/">OpenLDAP </a>
+    
+    <a href="https://code0xff.org/tags/openlogreplicator/">OpenLogReplicator </a>
+    
+    <a href="https://code0xff.org/tags/parquet/">parquet </a>
+    
+    <a href="https://code0xff.org/tags/paxos/">paxos </a>
+    
+    <a href="https://code0xff.org/tags/presto/">Presto </a>
+    
+    <a href="https://code0xff.org/tags/pytorch/">PyTorch </a>
+    
+    <a href="https://code0xff.org/tags/quick-sql/">quick-sql </a>
+    
+    <a href="https://code0xff.org/tags/raft/">raft </a>
+    
+    <a href="https://code0xff.org/tags/scala/">scala </a>
+    
+    <a href="https://code0xff.org/tags/simd/">SIMD </a>
+    
+    <a href="https://code0xff.org/tags/snowflake/">snowflake </a>
+    
+    <a href="https://code0xff.org/tags/spark/">spark </a>
+    
+    <a href="https://code0xff.org/tags/sre/">SRE </a>
+    
+    <a href="https://code0xff.org/tags/teradata/">TeraData </a>
+    
+    <a href="https://code0xff.org/tags/tpcx-hs/">TPCx-HS </a>
+    
+    <a href="https://code0xff.org/tags/trino/">Trino </a>
+    
+    <a href="https://code0xff.org/tags/tuning/">Tuning </a>
+    
+    <a href="https://code0xff.org/tags/unix/">unix </a>
+    
+    <a href="https://code0xff.org/tags/yarn/">YARN </a>
+    
+    <a href="https://code0xff.org/tags/%E4%BA%8C%E5%88%86%E6%9F%A5%E6%89%BE/">二分查找 </a>
+    
+    <a href="https://code0xff.org/tags/%E4%BA%8C%E5%8F%89%E6%A0%91%E9%81%8D%E5%8E%86/">二叉树遍历 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%88%86%E5%B8%83%E5%BC%8F/">分布式 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%88%97%E5%AD%98/">列存 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%8A%A8%E6%80%81%E6%B3%A8%E5%85%A5/">动态注入 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%8E%86%E5%8F%B2/">历史 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%90%91%E9%87%8F%E5%8C%96/">向量化 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%95%86%E4%B8%9A/">商业 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%9B%9E%E6%BA%AF/">回溯 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%9B%BD%E5%86%85%E6%97%85%E8%A1%8C/">国内旅行 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%9B%BD%E5%A4%96%E6%97%85%E8%A1%8C/">国外旅行 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%A4%9A%E7%A7%9F%E6%88%B7/">多租户 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%A4%A7%E6%95%B0%E6%8D%AE/">大数据 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%AD%98%E5%82%A8/">存储 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%B7%A5%E4%BD%9C%E8%AE%B0%E5%BD%95/">工作记录 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%BE%AE%E6%9C%8D%E5%8A%A1/">微服务 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%95%B0%E6%8D%AE%E4%B8%AD%E5%8F%B0/">数据中台 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%95%B0%E6%8D%AE%E5%BA%93/">数据库 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%95%B0%E6%8D%AE%E6%A8%A1%E5%9E%8B/">数据模型 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%95%B0%E6%8D%AE%E8%BF%81%E7%A7%BB/">数据迁移 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%9F%A5%E8%AF%A2%E4%BC%98%E5%8C%96/">查询优化 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%9F%A5%E8%AF%A2%E7%BC%96%E8%AF%91/">查询编译 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%A6%82%E7%8E%87/">概率 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%B1%87%E7%BC%96/">汇编 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%B5%8B%E8%AF%95/">测试 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%94%9F%E6%B4%BB/">生活 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%94%B5%E5%BD%B1/">电影 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%AE%97%E6%B3%95/">算法 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%B4%A2%E5%BC%95/">索引 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BB%8F%E6%B5%8E/">经济 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BB%8F%E6%B5%8E%E5%88%86%E6%9E%90/">经济分析 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BC%93%E5%AD%98/">缓存 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BC%96%E8%AF%91%E5%8E%9F%E7%90%86/">编译原理 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BD%91%E7%BB%9C/">网络 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AE%A1%E7%AE%97%E6%A1%86%E6%9E%B6/">计算框架 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AE%BA%E6%96%87/">论文 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AF%BB%E4%B9%A6/">读书 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AF%BB%E4%B9%A6%E7%AC%94%E8%AE%B0/">读书笔记 </a>
+    
+</div>
+    </section>
+
+    
+
+    <section class="widget">
+        <h3 class="widget-title">RSS</h3>
+        <ul class="widget-list">
+            <li><a href="https://code0xff.org/index.xml">文章 RSS</a></li>
+        </ul>
+    </section>
+</div>
+            </div>
+        </div>
+    </div>
+    <footer id="footer">
+    <div>
+        &copy; 2026 <a href="https://code0xff.org/">记录每个瞬间 By 老王</a>
+        
+    </div>
+    <br />
+    <div>
+        <div class="github-badge">
+            <a href="https://gohugo.io/" target="_black" rel="nofollow"><span class="badge-subject">Powered by</span><span class="badge-value bg-blue">Hugo</span></a>
+        </div>
+        <div class="github-badge">
+            <a href="https://github.com/flysnow-org/maupassant-hugo" target="_black"><span class="badge-subject">Theme</span><span class="badge-value bg-yellowgreen">Maupassant</span></a>
+        </div>
+    </div>
+</footer>
+
+
+    
+    <script type="text/javascript">
+        window.MathJax = {
+            tex2jax: {
+                inlineMath: [['$', '$']],
+                processEscapes: true
+                }
+            };
+    </script>
+    <script src='https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.5/MathJax.js?config=TeX-MML-AM_CHTML' async></script><script src="https://cdn.bootcdn.net/ajax/libs/fancybox/3.5.7/jquery.fancybox.min.js"></script>
+
+<a id="rocket" href="#top"></a>
+<script type="text/javascript" src='/js/totop.js?v=0.0.0' async=""></script>
+
+<script type="application/javascript">
+var doNotTrack = false;
+if (!doNotTrack) {
+	window.ga=window.ga||function(){(ga.q=ga.q||[]).push(arguments)};ga.l=+new Date;
+	ga('create', 'GA ID', 'auto');
+	
+	ga('send', 'pageview');
+}
+</script>
+<script async src='https://www.google-analytics.com/analytics.js'></script>
+
+
+
+    <script type="text/javascript" src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js" async></script>
+
+
+
+
+</body>
+
+</html>

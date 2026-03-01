@@ -1,0 +1,782 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    
+    <meta name="referrer" content="no-referrer-when-downgrade">
+    
+
+    <title>Flink 内存管理 | 记录每个瞬间</title>
+    <meta property="og:title" content="Flink 内存管理 - 记录每个瞬间">
+    <meta property="og:type" content="article">
+        
+    <meta property="article:published_time" content='2025-03-29T10:10:12&#43;08:00'>
+        
+        
+    <meta property="article:modified_time" content='2025-03-29T10:10:12&#43;08:00'>
+        
+    <meta name="Keywords" content="">
+    <meta name="description" content="Flink 内存管理">
+        <meta name="author" content="隔壁老王">
+        
+    <meta property="og:url" content="https://code0xff.org/post/2025/03/flink_memory/">
+    <link rel="shortcut icon" href='/favicon.ico'  type="image/x-icon">
+
+    <link rel="stylesheet" href='/css/normalize.css'>
+    <link rel="stylesheet" href='/css/style.css'>
+    <script type="text/javascript" src="//cdn.bootcdn.net/ajax/libs/jquery/3.4.1/jquery.min.js"></script>
+
+    
+    
+    
+        <link href="https://cdn.bootcdn.net/ajax/libs/fancybox/3.5.7/jquery.fancybox.min.css" rel="stylesheet">
+    
+    
+    
+    
+</head>
+
+
+<body>
+    <header id="header" class="clearfix">
+    <div class="container">
+        <div class="col-group">
+            <div class="site-name ">
+                
+                    <a id="logo" href="https://code0xff.org/">
+                        记录每个瞬间
+                    </a>
+                
+                
+            </div>
+            <div>
+                <nav id="nav-menu" class="clearfix">
+                    <a class="current" href="https://code0xff.org/">首页</a>
+                    
+                    <a  href="https://code0xff.org/linked/" title="链接">链接</a>
+                    
+                    <a  href="https://code0xff.org/archives/" title="归档">归档</a>
+                    
+                    <a  href="https://code0xff.org/about/" title="关于">关于</a>
+                    
+                </nav>
+            </div>
+        </div>
+    </div>
+</header>
+
+    <div id="body">
+        <div class="container">
+            <div class="col-group">
+
+                <div class="col-8" id="main">
+                    <div class="res-cons">
+    
+    <article class="post">
+        <header>
+            <h1 class="post-title">Flink 内存管理</h1>
+        </header>
+        <date class="post-meta meta-date">
+            2025年3月29日
+        </date>
+<nav id="TableOfContents">
+  <ul>
+    <li>
+      <ul>
+        <li><a href="#概述">概述</a></li>
+        <li><a href="#memorysegment">MemorySegment</a></li>
+        <li><a href="#datainputview-和-dataoutputview">DataInputView 和 DataOutputView</a></li>
+        <li><a href="#序列化和反序列化">序列化和反序列化</a></li>
+        <li><a href="#参考">参考</a></li>
+      </ul>
+    </li>
+  </ul>
+</nav>
+        
+        <div class="post-meta">
+            
+            <span class="post-meta meta-tags">
+                <ul class="clearfix">
+                    <a href='/categories/%E5%8E%9F%E7%90%86%E5%88%86%E6%9E%90'>原理分析</a>
+                </ul>
+            </span>
+            
+        </div>
+        
+        
+        <div class="post-meta">
+            <span id="busuanzi_container_page_pv">|<span id="busuanzi_value_page_pv"></span><span>
+                    阅读</span></span>
+        </div>
+        
+        
+        <div class="post-content">
+            <h2 id="概述">概述</h2>
+<p>Flink数据序列化操作</p>
+<ul>
+<li>MemorySegment 是Flink的最小内存分配单元</li>
+<li>默认 32KB</li>
+<li>先放到内存中，也可以序列化，借助KryoSerializer等</li>
+<li>内存不够序列化到 磁盘
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/03/29/7a78Um.png">
+            <img class="mx-auto" alt="flink_4/4.jpg" src="https://v1.ax1x.com/2025/03/29/7a78Um.png" />
+        </a>
+    </li>
+</ul>
+<p>Flink内存模型</p>
+<ul>
+<li>托管内存是由Flink负责分配和管理的本地（堆外）内存</li>
+<li>在流处理作业中用于RocksDBStateBackend状态存储后端</li>
+<li>在批处理作业中用于排序、哈希表及缓存中间结果<br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/03/29/7a7Gs4.png">
+            <img class="mx-auto" alt="flink_4/5.jpg" src="https://v1.ax1x.com/2025/03/29/7a7Gs4.png" />
+        </a>
+    </li>
+</ul>
+<h2 id="memorysegment">MemorySegment</h2>
+<p>MemorySegment 相关类图</p>
+<ul>
+<li>HeapMemorySegment 提供了操作堆内存的方法</li>
+<li>HybridMemorySegment 中提供了创建和操作堆内存和堆外内存的方法
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/03/30/7avkc6.png">
+            <img class="mx-auto" alt="flink_4/6.jpg" src="https://v1.ax1x.com/2025/03/30/7avkc6.png" />
+        </a>
+    </li>
+</ul>
+<p>分析</p>
+<ul>
+<li>DataOutputView 扩展了 java.io.DataOuput，提供多个写入视图</li>
+<li>DataInputView 接口扩展了 java.io.DataInput，提供多个读取视图</li>
+<li>MemoryManager主要用于管理排序、哈希和缓存等操作对应的内存空间，且这些操作主要集中在离线计算场景中</li>
+<li>NetworkBufferPool通过MemorySegmentFactory申请用于存储NetworkBuffer的MemorySegment内存空间</li>
+</ul>
+<p>MemorySegment</p>
+<ul>
+<li>提供了 copy，get，put 的函数</li>
+<li>将 byte[] 读取返回 java.io.DataInput</li>
+<li>将 DataOutput 写入到 byte[]</li>
+<li>各种 long，double，int 写入到 byte[]</li>
+<li>还有 比较，offst 复制等等</li>
+</ul>
+<p>管理和调用过程</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-shell" data-lang="shell"><span style="display:flex;"><span>TaskManager --&gt; TaskSlot  --&gt; MemorySegment --&gt; MemorySegment
+</span></span><span style="display:flex;"><span>  
+</span></span></code></pre></td></tr></table>
+</div>
+</div><h2 id="datainputview-和-dataoutputview">DataInputView 和 DataOutputView</h2>
+<p>DataInputView 与 DataOutputView 相关类图 
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/03/30/7avBnO.png">
+            <img class="mx-auto" alt="flink_4/7.jpg" src="https://v1.ax1x.com/2025/03/30/7avBnO.png" />
+        </a>
+    </p>
+<p>Input 相关主要实现有三种</p>
+<ul>
+<li>DataInputDeserializer，实现了简单且高效的反序列化器</li>
+<li>DataInputViewStreamWrapper，对DataInputStream接口进行拓展，直接将InputStream数据转换为DataInputView输入数据</li>
+<li>AbstractPagedInputView，实现了基于多个内存页的数据输入，且具有不同的实现类</li>
+</ul>
+<p>Output 相关主要实现类有三个</p>
+<ul>
+<li>DataOutputSerializer，基于 DataOutput接口实现了简单且高效的序列化器</li>
+<li>DataOutputViewStreamWrapper，主要将内存中的二进制数据直接转换为DataOutputStream</li>
+<li>AbstractPagedOutputView，基于多个内存页的输出视图</li>
+</ul>
+<p>序列化</p>
+<ul>
+<li>DataInputDeserializer</li>
+<li>DataOutputSerializer</li>
+</ul>
+<p>包装类</p>
+<ul>
+<li>DataInputViewStreamWrapper</li>
+<li>DataOutputViewStreamWrapper</li>
+</ul>
+<p>多个 MemorySegment 内存块的操作</p>
+<ul>
+<li>AbstractPagedInputView</li>
+<li>AbstractPagedOutputView</li>
+</ul>
+<p>AbstractPagedInputView 相关类图<br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/03/30/7avmLQ.png">
+            <img class="mx-auto" alt="flink_4/8.jpg" src="https://v1.ax1x.com/2025/03/30/7avmLQ.png" />
+        </a>
+    </p>
+<p>出入 实现类介绍</p>
+<ul>
+<li>AbstractChannelReaderInputView：底层基于FileIOChannel实现</li>
+<li>ChannelReaderInputView：底层通过BlockChannelReader实现从FileIOChannel中读取数据</li>
+<li>HeaderlessChannelReaderInputView：功能和ChannelReaderInputView基本一致</li>
+<li>CompressedHeaderlessChannelReaderInputView：底层基于BufferFileReader实现从文件中读取数据</li>
+<li>RandomAccessInputView：实现了SeekableDataInputView接口，提供了随机访问内存的输入视图</li>
+<li>SeekableFileChannelInputView：底层由BlockChannelReader支持的DataInputView实现</li>
+<li>FileChannelInputView：和SeekableFileChannelInputView相比，不具备检索功能，即必须连续读取数据</li>
+<li>LongHashPaLongHashPartition和BinaryHashPartition则用于Flink SQL模块</li>
+</ul>
+<p>AbstractPagedOutputView 相关类图 
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/03/30/7avpGf.png">
+            <img class="mx-auto" alt="flink_4/9.jpg" src="https://v1.ax1x.com/2025/03/30/7avpGf.png" />
+        </a>
+    </p>
+<p>输出 实现类介绍</p>
+<ul>
+<li>ChannelWriterOutputView：AbstractChannelWriterOutputView的实现类</li>
+<li>AbstractChannelWriterOutputView：基于FileIOChannel的抽象实现</li>
+<li>HeaderlessChannelWriterOutputView：内部FileIOChannel的实现类为BlockChannelWriter</li>
+<li>CompressedHeaderlessChannelWriterOutputView：底层FileIOChannel实现为BufferFileWriter</li>
+<li>FileChannelOutputView：底层基于BlockChannelWriter将MemorySegment中的数据输出到磁盘</li>
+<li>RandomAccessOutputView：通过SeekableDataOutputView.setWritePosition()方法实现数据的随机写入</li>
+<li>SpllingBuffer：主要实现内存数据的溢写操作</li>
+<li>SimpleCollectingOutputView：该视图具有完整的MemorySegment列表</li>
+</ul>
+<h2 id="序列化和反序列化">序列化和反序列化</h2>
+<p>TypeInformation</p>
+<ul>
+<li>用来定义和管理数据类型</li>
+<li>用户自定义函数输入或返回值的类型信息都是通过TypeInformation实现的</li>
+<li>充当了生成序列化器、比较器以及执行语义检查（例如是否存在用作Join/grouping主键字段）的工具</li>
+</ul>
+<p>TypeInformation 相关类图<br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/03/30/7avLzc.png">
+            <img class="mx-auto" alt="flink_4/10.jpg" src="https://v1.ax1x.com/2025/03/30/7avLzc.png" />
+        </a>
+    </p>
+<p>TypeInformation根据数据类型不同主要分为以下几种实现类型</p>
+<ul>
+<li>BasicTypeInfo：用于所有Java基础类型以及String、Date、Void、BigInteger、BigDecimal等类型</li>
+<li>BasicArrayTypeInfo：用于由Java基础类型及String构成的数组类型</li>
+<li>CompositeType：复合类型数据</li>
+<li>WritableTypeInfo：用于支持扩展Hadoop Writable接口的数据类型</li>
+<li>GenericTypeInfo：用于泛型类型数据</li>
+</ul>
+<p>TypeSerializer数据序列化<br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/03/30/7av393.png">
+            <img class="mx-auto" alt="flink_4/11.jpg" src="https://v1.ax1x.com/2025/03/30/7av393.png" />
+        </a>
+    </p>
+<p>对StreamRecord 的序列化和反序列化操作</p>
+<ul>
+<li>RecordSerializer</li>
+<li>Recorddeserializer</li>
+</ul>
+<p>StreamTaskNetworkInput 整体设计图</p>
+<ul>
+<li>​data ingestion from the network into a Flink task (e.g., StreamTask)</li>
+<li>It manages deserialization, buffering, and spilling to disk when data exceeds memory limits
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/03/30/7avlHj.png">
+            <img class="mx-auto" alt="flink_4/12.jpg" src="https://v1.ax1x.com/2025/03/30/7avlHj.png" />
+        </a>
+    </li>
+</ul>
+<h2 id="参考">参考</h2>
+<ul>
+<li><a href="https://nightlies.apache.org/flink/flink-docs-release-1.20/">1.20 官方文档</a></li>
+<li><a href="https://cloud.tencent.com/developer/column/93187?tag=11033">Lansonli技术博客</a></li>
+<li><a href="https://juejin.cn/post/7111510381956169764">深入浅出理解Flink运行时架构</a></li>
+<li><a href="https://0x90e.github.io/flink-execution-graph/">Flink Execution Graph</a></li>
+<li><a href="https://zhuanlan.zhihu.com/p/668625467">Flink实战(11)-Exactly-Once语义之两阶段提交</a></li>
+<li><a href="https://juejin.cn/post/7150837768346681374">Flink on k8s 讲解与实战操作</a></li>
+<li><a href="https://tech.youzan.com/flink_checkpoint_mechanism/">Flink Checkpoint 原理流程以及常见失败原因分析</a></li>
+<li><a href="https://nightlies.apache.org/flink/flink-docs-master/docs/concepts/stateful-stream-processing/">Stateful Stream Processing</a></li>
+<li><a href="https://flink.apache.org/2019/06/05/a-deep-dive-into-flinks-network-stack/">A Deep-Dive into Flink&rsquo;s Network Stack</a></li>
+<li><a href="https://www.alibabacloud.com/blog/596632">Analysis of Network Flow Control and Back Pressure: Flink Advanced Tutorials</a></li>
+<li><a href="https://mp.weixin.qq.com/s?__biz=MzU3MzgwNTU2Mg==&amp;mid=2247484943&amp;idx=2&amp;sn=505faecd7c823e184c3ca5df0c2d95f3&amp;chksm=fca7a7026833d629d06485ffcd8ab3f625042c3dcb66004642fac2108b5a319b3486f515025c#rd">批流统一计算引擎的动力源泉—Flink Shuffle机制的重构与优化</a></li>
+<li><a href="https://zhuanlan.zhihu.com/p/462338206">业界RemoteShuffleService实现汇总</a></li>
+<li><a href="https://zhuanlan.zhihu.com/p/496894076">Flink Pluggable ShuffleService源码阅读</a></li>
+<li><a href="https://cloud.tencent.com/developer/article/2005235?from=15425">Flink Remote Shuffle 开源：面向流批一体与云原生的 Shuffle 服务</a></li>
+<li><a href="https://www.cnblogs.com/binlovetech/p/16442598.html">详细图解 Netty Reactor 启动全流程 | 万字长文 | 多图预警 </a></li>
+<li><a href="https://www.processon.com/view/607631346376891132cea911">Netty Reactor 工作架构图</a></li>
+<li><a href="https://www.cnblogs.com/nightbreeze/p/10942536.html">Flink架构，源码及debug </a></li>
+<li><a href="https://mp.weixin.qq.com/mp/appmsgalbum?__biz=Mzg2NTU4NzU4Mw==&amp;action=getalbum&amp;album_id=3869001464617844743&amp;subscene=159&amp;subscene=&amp;scenenote=https%3A%2F%2Fmp.weixin.qq.com%2Fs%3F__biz%3DMzg2NTU4NzU4Mw%3D%3D%26mid%3D2247484560%26idx%3D1%26sn%3Dae7624c621db19a70b06abdff16dd2e3%26chksm%3Dcf245876e6e7376c215d74eb3e453e1dc5db7f09ace2573334618debc6faa62a0ffe481619d1%23rd&amp;nolastread=1#wechat_redirect">白话 FLIP</a></li>
+<li><a href="https://mp.weixin.qq.com/s?__biz=Mzg2NTU4NzU4Mw==&amp;mid=2247484560&amp;idx=1&amp;sn=ae7624c621db19a70b06abdff16dd2e3&amp;chksm=cf245876e6e7376c215d74eb3e453e1dc5db7f09ace2573334618debc6faa62a0ffe481619d1#rd">白话Apache Flink FLIP-18: 让排序飞起来：代码生成让性能提升一大截</a></li>
+</ul>
+
+			<script type="text/javascript"
+        async
+        src="https://cdn.bootcss.com/mathjax/2.7.3/MathJax.js?config=TeX-AMS-MML_HTMLorMML">
+MathJax.Hub.Config({
+  tex2jax: {
+    inlineMath: [['$','$'], ['\\(','\\)']],
+    displayMath: [['$$','$$'], ['\[\[','\]\]']],
+    processEscapes: true,
+    processEnvironments: true,
+    skipTags: ['script', 'noscript', 'style', 'textarea', 'pre'],
+    TeX: { equationNumbers: { autoNumber: "AMS" },
+         extensions: ["AMSmath.js", "AMSsymbols.js"] }
+  }
+});
+
+MathJax.Hub.Queue(function() {
+    
+    
+    
+    var all = MathJax.Hub.getAllJax(), i;
+    for(i = 0; i < all.length; i += 1) {
+        all[i].SourceElement().parentNode.className += ' has-jax';
+    }
+});
+</script>
+
+<style>
+code.has-jax {
+    font: inherit;
+    font-size: 100%;
+    background: inherit;
+    border: inherit;
+    color: #515151;
+}
+</style>
+        </div>
+
+        
+
+
+        
+
+<div class="post-archive">
+    <h2>相关文章</h2>
+    <ul class="listing">
+        
+        <li><a href="/post/2025/03/flink_rpc/">Flink RPC</a></li>
+        
+        <li><a href="/post/2025/03/flink_state/">Flink 状态管理</a></li>
+        
+        <li><a href="/post/2025/03/flink_cluster/">Flink 集群管理</a></li>
+        
+        <li><a href="/post/2025/03/flink_submit/">Flink 任务提交</a></li>
+        
+        <li><a href="/post/2025/02/flink_datastream/">Flink-DataStraem</a></li>
+        
+    </ul>
+</div>
+
+
+        <div class="post-meta meta-tags">
+            
+            <ul class="clearfix">
+                
+                <li><a href='/tags/flink'>Flink</a></li>
+                
+            </ul>
+            
+        </div>
+    </article>
+    
+    
+
+    
+    
+    <div class="post bg-white">
+      <script src="https://utteranc.es/client.js"
+            repo= "himichael/hugoblogtalks"
+            issue-term="pathname"
+            theme="github-light"
+            crossorigin="anonymous"
+            async>
+      </script>
+    </div>
+    
+</div>
+
+
+                </div>
+
+                <div id="secondary">
+    <section class="widget">
+        <form id="search" action='https://code0xff.org/search/' method="get" accept-charset="utf-8" target="_blank" _lpchecked="1">
+      
+      <input type="text" name="q" maxlength="20" placeholder="Search">
+      <input type="hidden" name="sitesearch" value="https://code0xff.org/">
+      <button type="submit" class="submit icon-search"></button>
+</form>
+    </section>
+    
+    <section class="widget">
+        <h3 class="widget-title">最近文章</h3>
+<ul class="widget-list">
+    
+    <li>
+        <a href="https://code0xff.org/post/2026/02/yunnan_west/" title="云南滇西大环线">云南滇西大环线</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2026/01/2015_2025/" title="2015年 -- 2025年">2015年 -- 2025年</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2026/01/longhorn/" title="longhorn">longhorn</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2025/12/ai_infrastructure/" title="关于AI 的生态">关于AI 的生态</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2025/11/ai_bubble/" title="关于AI泡沫">关于AI泡沫</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2025/10/china_beihai/" title="南边的北海">南边的北海</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2025/09/bpf_http/" title="eBPF的 http跟踪">eBPF的 http跟踪</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2025/09/spark_flink/" title="Spark和Flink的对比总结（包含Operator）">Spark和Flink的对比总结（包含Operator）</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2025/08/juicefs/" title="JuiceFS">JuiceFS</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2025/08/bpftrace_12_lessons/" title="bpftrace 12个小命令">bpftrace 12个小命令</a>
+    </li>
+    
+</ul>
+    </section>
+
+    
+
+    <section class="widget">
+        <h3 class="widget-title"><a href='/categories/'>分类</a></h3>
+<ul class="widget-list">
+    
+    <li><a href="https://code0xff.org/categories/%E5%88%86%E5%B8%83%E5%BC%8F/">分布式 (8)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E5%8E%9F%E7%90%86%E5%88%86%E6%9E%90/">原理分析 (33)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E5%95%86%E4%B8%9A/">商业 (6)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E5%A4%A7%E6%95%B0%E6%8D%AE/">大数据 (59)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%95%B0%E6%8D%AE%E5%BA%93/">数据库 (41)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%96%87%E5%AD%A6%E5%92%8C%E8%89%BA%E6%9C%AF/">文学和艺术 (3)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%97%85%E8%A1%8C/">旅行 (15)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%9E%B6%E6%9E%84/">架构 (13)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E7%AE%97%E6%B3%95%E5%92%8Cai/">算法和AI (11)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E7%B3%BB%E7%BB%9F/">系统 (16)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E7%BC%96%E7%A8%8B%E8%AF%AD%E8%A8%80/">编程语言 (8)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E8%A1%8C%E4%B8%9A%E8%A7%82%E5%AF%9F/">行业观察 (3)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E8%AF%BB%E4%B9%A6%E7%AC%94%E8%AE%B0/">读书笔记 (19)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E9%9A%8F%E4%BE%BF%E5%86%99%E5%86%99/">随便写写 (4)</a></li>
+    
+</ul>
+    </section>
+
+    <section class="widget">
+        <h3 class="widget-title">归档</a></h3>
+<ul class="widget-list">
+    
+    <li><a href="https://code0xff.org/years/2021%E5%B9%B4/">2021年 (41)</a></li>
+    
+    <li><a href="https://code0xff.org/years/2022%E5%B9%B4/">2022年 (55)</a></li>
+    
+    <li><a href="https://code0xff.org/years/2023%E5%B9%B4/">2023年 (54)</a></li>
+    
+    <li><a href="https://code0xff.org/years/2024%E5%B9%B4/">2024年 (48)</a></li>
+    
+    <li><a href="https://code0xff.org/years/2025%E5%B9%B4/">2025年 (38)</a></li>
+    
+    <li><a href="https://code0xff.org/years/2026%E5%B9%B4/">2026年 (3)</a></li>
+    
+</ul>
+    </section>
+
+    <section class="widget">
+        <h3 class="widget-title"><a href='/tags/'>标签</a></h3>
+<div class="tagcloud">
+    
+    <a href="https://code0xff.org/tags/ai/">AI </a>
+    
+    <a href="https://code0xff.org/tags/ambari/">Ambari </a>
+    
+    <a href="https://code0xff.org/tags/architecture/">architecture </a>
+    
+    <a href="https://code0xff.org/tags/bigdata/">bigdata </a>
+    
+    <a href="https://code0xff.org/tags/btrace/">BTrace </a>
+    
+    <a href="https://code0xff.org/tags/b%E6%A0%91/">B树 </a>
+    
+    <a href="https://code0xff.org/tags/c&#43;&#43;/">C&#43;&#43; </a>
+    
+    <a href="https://code0xff.org/tags/calcite/">calcite </a>
+    
+    <a href="https://code0xff.org/tags/cmu-database/">CMU-Database </a>
+    
+    <a href="https://code0xff.org/tags/data_ingestion/">Data_Ingestion </a>
+    
+    <a href="https://code0xff.org/tags/deltalake/">DeltaLake </a>
+    
+    <a href="https://code0xff.org/tags/doris/">Doris </a>
+    
+    <a href="https://code0xff.org/tags/ebpf/">eBPF </a>
+    
+    <a href="https://code0xff.org/tags/english/">English </a>
+    
+    <a href="https://code0xff.org/tags/es/">ES </a>
+    
+    <a href="https://code0xff.org/tags/facebook/">Facebook </a>
+    
+    <a href="https://code0xff.org/tags/flink/">flink </a>
+    
+    <a href="https://code0xff.org/tags/flume/">flume </a>
+    
+    <a href="https://code0xff.org/tags/gc/">GC </a>
+    
+    <a href="https://code0xff.org/tags/gluten/">Gluten </a>
+    
+    <a href="https://code0xff.org/tags/hana/">HANA </a>
+    
+    <a href="https://code0xff.org/tags/hive/">Hive </a>
+    
+    <a href="https://code0xff.org/tags/iceberg/">iceberg </a>
+    
+    <a href="https://code0xff.org/tags/impala/">Impala </a>
+    
+    <a href="https://code0xff.org/tags/janino/">janino </a>
+    
+    <a href="https://code0xff.org/tags/juicefs/">JuiceFS </a>
+    
+    <a href="https://code0xff.org/tags/k8s/">k8s </a>
+    
+    <a href="https://code0xff.org/tags/kafka/">Kafka </a>
+    
+    <a href="https://code0xff.org/tags/kudu/">kudu </a>
+    
+    <a href="https://code0xff.org/tags/kyuubi/">Kyuubi </a>
+    
+    <a href="https://code0xff.org/tags/lakehouse/">Lakehouse </a>
+    
+    <a href="https://code0xff.org/tags/leveldb/">LevelDB </a>
+    
+    <a href="https://code0xff.org/tags/llamafactory/">LlamaFactory </a>
+    
+    <a href="https://code0xff.org/tags/llvm/">LLVM </a>
+    
+    <a href="https://code0xff.org/tags/log4j/">log4j </a>
+    
+    <a href="https://code0xff.org/tags/longhorn/">longhorn </a>
+    
+    <a href="https://code0xff.org/tags/manacher/">Manacher </a>
+    
+    <a href="https://code0xff.org/tags/mapreduce/">MapReduce </a>
+    
+    <a href="https://code0xff.org/tags/micro-service/">micro-service </a>
+    
+    <a href="https://code0xff.org/tags/mysql/">MySQL </a>
+    
+    <a href="https://code0xff.org/tags/newsql/">NewSQL </a>
+    
+    <a href="https://code0xff.org/tags/oceanbase/">OceanBase </a>
+    
+    <a href="https://code0xff.org/tags/openldap/">OpenLDAP </a>
+    
+    <a href="https://code0xff.org/tags/openlogreplicator/">OpenLogReplicator </a>
+    
+    <a href="https://code0xff.org/tags/parquet/">parquet </a>
+    
+    <a href="https://code0xff.org/tags/paxos/">paxos </a>
+    
+    <a href="https://code0xff.org/tags/presto/">Presto </a>
+    
+    <a href="https://code0xff.org/tags/pytorch/">PyTorch </a>
+    
+    <a href="https://code0xff.org/tags/quick-sql/">quick-sql </a>
+    
+    <a href="https://code0xff.org/tags/raft/">raft </a>
+    
+    <a href="https://code0xff.org/tags/scala/">scala </a>
+    
+    <a href="https://code0xff.org/tags/simd/">SIMD </a>
+    
+    <a href="https://code0xff.org/tags/snowflake/">snowflake </a>
+    
+    <a href="https://code0xff.org/tags/spark/">spark </a>
+    
+    <a href="https://code0xff.org/tags/sre/">SRE </a>
+    
+    <a href="https://code0xff.org/tags/teradata/">TeraData </a>
+    
+    <a href="https://code0xff.org/tags/tpcx-hs/">TPCx-HS </a>
+    
+    <a href="https://code0xff.org/tags/trino/">Trino </a>
+    
+    <a href="https://code0xff.org/tags/tuning/">Tuning </a>
+    
+    <a href="https://code0xff.org/tags/unix/">unix </a>
+    
+    <a href="https://code0xff.org/tags/yarn/">YARN </a>
+    
+    <a href="https://code0xff.org/tags/%E4%BA%8C%E5%88%86%E6%9F%A5%E6%89%BE/">二分查找 </a>
+    
+    <a href="https://code0xff.org/tags/%E4%BA%8C%E5%8F%89%E6%A0%91%E9%81%8D%E5%8E%86/">二叉树遍历 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%88%86%E5%B8%83%E5%BC%8F/">分布式 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%88%97%E5%AD%98/">列存 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%8A%A8%E6%80%81%E6%B3%A8%E5%85%A5/">动态注入 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%8E%86%E5%8F%B2/">历史 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%90%91%E9%87%8F%E5%8C%96/">向量化 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%95%86%E4%B8%9A/">商业 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%9B%9E%E6%BA%AF/">回溯 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%9B%BD%E5%86%85%E6%97%85%E8%A1%8C/">国内旅行 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%9B%BD%E5%A4%96%E6%97%85%E8%A1%8C/">国外旅行 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%A4%9A%E7%A7%9F%E6%88%B7/">多租户 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%A4%A7%E6%95%B0%E6%8D%AE/">大数据 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%AD%98%E5%82%A8/">存储 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%B7%A5%E4%BD%9C%E8%AE%B0%E5%BD%95/">工作记录 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%BE%AE%E6%9C%8D%E5%8A%A1/">微服务 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%95%B0%E6%8D%AE%E4%B8%AD%E5%8F%B0/">数据中台 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%95%B0%E6%8D%AE%E5%BA%93/">数据库 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%95%B0%E6%8D%AE%E6%A8%A1%E5%9E%8B/">数据模型 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%95%B0%E6%8D%AE%E8%BF%81%E7%A7%BB/">数据迁移 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%9F%A5%E8%AF%A2%E4%BC%98%E5%8C%96/">查询优化 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%9F%A5%E8%AF%A2%E7%BC%96%E8%AF%91/">查询编译 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%A6%82%E7%8E%87/">概率 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%B1%87%E7%BC%96/">汇编 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%B5%8B%E8%AF%95/">测试 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%94%9F%E6%B4%BB/">生活 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%94%B5%E5%BD%B1/">电影 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%AE%97%E6%B3%95/">算法 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%B4%A2%E5%BC%95/">索引 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BB%8F%E6%B5%8E/">经济 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BB%8F%E6%B5%8E%E5%88%86%E6%9E%90/">经济分析 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BC%93%E5%AD%98/">缓存 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BC%96%E8%AF%91%E5%8E%9F%E7%90%86/">编译原理 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BD%91%E7%BB%9C/">网络 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AE%A1%E7%AE%97%E6%A1%86%E6%9E%B6/">计算框架 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AE%BA%E6%96%87/">论文 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AF%BB%E4%B9%A6/">读书 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AF%BB%E4%B9%A6%E7%AC%94%E8%AE%B0/">读书笔记 </a>
+    
+</div>
+    </section>
+
+    
+
+    <section class="widget">
+        <h3 class="widget-title">RSS</h3>
+        <ul class="widget-list">
+            <li><a href="https://code0xff.org/index.xml">文章 RSS</a></li>
+        </ul>
+    </section>
+</div>
+            </div>
+        </div>
+    </div>
+    <footer id="footer">
+    <div>
+        &copy; 2026 <a href="https://code0xff.org/">记录每个瞬间 By 老王</a>
+        
+    </div>
+    <br />
+    <div>
+        <div class="github-badge">
+            <a href="https://gohugo.io/" target="_black" rel="nofollow"><span class="badge-subject">Powered by</span><span class="badge-value bg-blue">Hugo</span></a>
+        </div>
+        <div class="github-badge">
+            <a href="https://github.com/flysnow-org/maupassant-hugo" target="_black"><span class="badge-subject">Theme</span><span class="badge-value bg-yellowgreen">Maupassant</span></a>
+        </div>
+    </div>
+</footer>
+
+
+    
+    <script type="text/javascript">
+        window.MathJax = {
+            tex2jax: {
+                inlineMath: [['$', '$']],
+                processEscapes: true
+                }
+            };
+    </script>
+    <script src='https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.5/MathJax.js?config=TeX-MML-AM_CHTML' async></script><script src="https://cdn.bootcdn.net/ajax/libs/fancybox/3.5.7/jquery.fancybox.min.js"></script>
+
+<a id="rocket" href="#top"></a>
+<script type="text/javascript" src='/js/totop.js?v=0.0.0' async=""></script>
+
+<script type="application/javascript">
+var doNotTrack = false;
+if (!doNotTrack) {
+	window.ga=window.ga||function(){(ga.q=ga.q||[]).push(arguments)};ga.l=+new Date;
+	ga('create', 'GA ID', 'auto');
+	
+	ga('send', 'pageview');
+}
+</script>
+<script async src='https://www.google-analytics.com/analytics.js'></script>
+
+
+
+    <script type="text/javascript" src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js" async></script>
+
+
+
+
+</body>
+
+</html>

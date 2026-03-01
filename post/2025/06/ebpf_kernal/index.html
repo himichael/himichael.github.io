@@ -1,0 +1,1950 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    
+    <meta name="referrer" content="no-referrer-when-downgrade">
+    
+
+    <title>eBPF 内核跟踪 | 记录每个瞬间</title>
+    <meta property="og:title" content="eBPF 内核跟踪 - 记录每个瞬间">
+    <meta property="og:type" content="article">
+        
+    <meta property="article:published_time" content='2025-06-14T10:10:12&#43;08:00'>
+        
+        
+    <meta property="article:modified_time" content='2025-06-14T10:10:12&#43;08:00'>
+        
+    <meta name="Keywords" content="">
+    <meta name="description" content="eBPF 内核跟踪">
+        <meta name="author" content="隔壁老王">
+        
+    <meta property="og:url" content="https://code0xff.org/post/2025/06/ebpf_kernal/">
+    <link rel="shortcut icon" href='/favicon.ico'  type="image/x-icon">
+
+    <link rel="stylesheet" href='/css/normalize.css'>
+    <link rel="stylesheet" href='/css/style.css'>
+    <script type="text/javascript" src="//cdn.bootcdn.net/ajax/libs/jquery/3.4.1/jquery.min.js"></script>
+
+    
+    
+    
+        <link href="https://cdn.bootcdn.net/ajax/libs/fancybox/3.5.7/jquery.fancybox.min.css" rel="stylesheet">
+    
+    
+    
+    
+</head>
+
+
+<body>
+    <header id="header" class="clearfix">
+    <div class="container">
+        <div class="col-group">
+            <div class="site-name ">
+                
+                    <a id="logo" href="https://code0xff.org/">
+                        记录每个瞬间
+                    </a>
+                
+                
+            </div>
+            <div>
+                <nav id="nav-menu" class="clearfix">
+                    <a class="current" href="https://code0xff.org/">首页</a>
+                    
+                    <a  href="https://code0xff.org/linked/" title="链接">链接</a>
+                    
+                    <a  href="https://code0xff.org/archives/" title="归档">归档</a>
+                    
+                    <a  href="https://code0xff.org/about/" title="关于">关于</a>
+                    
+                </nav>
+            </div>
+        </div>
+    </div>
+</header>
+
+    <div id="body">
+        <div class="container">
+            <div class="col-group">
+
+                <div class="col-8" id="main">
+                    <div class="res-cons">
+    
+    <article class="post">
+        <header>
+            <h1 class="post-title">eBPF 内核跟踪</h1>
+        </header>
+        <date class="post-meta meta-date">
+            2025年6月14日
+        </date>
+<nav id="TableOfContents">
+  <ul>
+    <li>
+      <ul>
+        <li><a href="#查找内核">查找内核</a></li>
+        <li><a href="#bpftrace">bpftrace</a></li>
+        <li><a href="#bcc">bcc</a></li>
+        <li><a href="#libbpf">libbpf</a></li>
+        <li><a href="#参考">参考</a></li>
+      </ul>
+    </li>
+  </ul>
+</nav>
+        
+        <div class="post-meta">
+            
+            <span class="post-meta meta-tags">
+                <ul class="clearfix">
+                    <a href='/categories/%E7%B3%BB%E7%BB%9F'>系统</a>
+                </ul>
+            </span>
+            
+        </div>
+        
+        
+        <div class="post-meta">
+            <span id="busuanzi_container_page_pv">|<span id="busuanzi_value_page_pv"></span><span>
+                    阅读</span></span>
+        </div>
+        
+        
+        <div class="post-content">
+            <h2 id="查找内核">查找内核</h2>
+<p>内核函数是一个非稳定 API，在新版本中可能会发生变化<br>
+挂载的内核函数在<code>/proc/kallsyms</code></p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-shell" data-lang="shell"><span style="display:flex;"><span>cat /proc/kallsyms | wc -l
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4"># 结果</span>
+</span></span><span style="display:flex;"><span><span style="color:#bd93f9">231892</span>
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>系统调试文件<a href="https://www.kernel.org/doc/html/latest/filesystems/debugfs.html">DebugFS</a></p>
+<ul>
+<li>提供内核调试所需的基本信息</li>
+<li>如内核符号列表、跟踪点、函数跟踪（ftrace）状态以及参数格式等</li>
+</ul>
+<p>查询  execve  系统调用的参数格式</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">15
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">16
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-shell" data-lang="shell"><span style="display:flex;"><span>cat /sys/kernel/debug/tracing/events/syscalls/sys_enter_execve/format
+</span></span><span style="display:flex;"><span>name: sys_enter_execve
+</span></span><span style="display:flex;"><span>ID: <span style="color:#bd93f9">817</span>
+</span></span><span style="display:flex;"><span>format:
+</span></span><span style="display:flex;"><span>        field:unsigned short common_type;       offset:0;       size:2; signed:0;
+</span></span><span style="display:flex;"><span>        field:unsigned char common_flags;       offset:2;       size:1; signed:0;
+</span></span><span style="display:flex;"><span>        field:unsigned char common_preempt_count;       offset:3;       size:1; signed:0;
+</span></span><span style="display:flex;"><span>        field:int common_pid;   offset:4;       size:4; signed:1;
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>        field:int __syscall_nr; offset:8;       size:4; signed:1;
+</span></span><span style="display:flex;"><span>        field:const char * filename;    offset:16;      size:8; signed:0;
+</span></span><span style="display:flex;"><span>        field:const char *const * argv; offset:24;      size:8; signed:0;
+</span></span><span style="display:flex;"><span>        field:const char *const * envp; offset:32;      size:8; signed:0;
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>print fmt: <span style="color:#f1fa8c">&#34;filename: 0x%08lx, argv: 0x%08lx, envp: 0x%08lx&#34;</span>,
+</span></span><span style="display:flex;"><span> <span style="color:#ff79c6">((</span>unsigned long<span style="color:#ff79c6">)(</span>REC-&gt;filename<span style="color:#ff79c6">))</span>, <span style="color:#ff79c6">((</span>unsigned long<span style="color:#ff79c6">)(</span>REC-&gt;argv<span style="color:#ff79c6">))</span>, <span style="color:#ff79c6">((</span>unsigned long<span style="color:#ff79c6">)(</span>REC-&gt;envp<span style="color:#ff79c6">))</span>
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>eBPF 程序的执行也依赖于调试文件系统<br>
+挂载调试文件</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-shell" data-lang="shell"><span style="display:flex;"><span>sudo mount -t debugfs debugfs /sys/kernel/debug
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>也可以通过 perf 来查询，不过返回的结果非常非常多</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-shell" data-lang="shell"><span style="display:flex;"><span>perf list
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>更好的查找方式: bpftrace</p>
+<p>用<code>perf</code>记录</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">7
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-shell" data-lang="shell"><span style="display:flex;"><span><span style="color:#6272a4"># 查看</span>
+</span></span><span style="display:flex;"><span>perf list <span style="color:#f1fa8c">&#39;syscalls:*&#39;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>sudo perf record -e <span style="color:#f1fa8c">&#39;syscalls:sys_enter_mkdir&#39;</span> -a -g -- sleep <span style="color:#bd93f9">30</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4"># 分析，在 3.1 的老内核上也可以使用</span>
+</span></span><span style="display:flex;"><span>perf script -i perf.data
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>结果</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">15
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">16
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">17
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">18
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">19
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">20
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">21
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">22
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">23
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">24
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">25
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">26
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">27
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-shell" data-lang="shell"><span style="display:flex;"><span>systemd-journal   <span style="color:#bd93f9">517</span> <span style="color:#ff79c6">[</span>001<span style="color:#ff79c6">]</span> 1215680.725699: syscalls:sys_enter_mkdir: pathname: 0x7ffd4bf86cc0, 
+</span></span><span style="display:flex;"><span>mode: 0x000001ed
+</span></span><span style="display:flex;"><span>            7fc6e75ab6a7 __GI___mkdir+0x7 <span style="color:#ff79c6">(</span>/usr/lib64/libc-2.17.so<span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>            563c1c67754f <span style="color:#ff79c6">[</span>unknown<span style="color:#ff79c6">]</span> <span style="color:#ff79c6">(</span>/usr/lib/systemd/systemd-journald<span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>            563c1c677a3f <span style="color:#ff79c6">[</span>unknown<span style="color:#ff79c6">]</span> <span style="color:#ff79c6">(</span>/usr/lib/systemd/systemd-journald<span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>systemd-journal   <span style="color:#bd93f9">517</span> <span style="color:#ff79c6">[</span>001<span style="color:#ff79c6">]</span> 1215680.725814: syscalls:sys_enter_mkdir: pathname: 0x7ffd4bf86ad0, 
+</span></span><span style="display:flex;"><span>mode: 0x000001ed
+</span></span><span style="display:flex;"><span>            7fc6e75ab6a7 __GI___mkdir+0x7 <span style="color:#ff79c6">(</span>/usr/lib64/libc-2.17.so<span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>            563c1c676c0e <span style="color:#ff79c6">[</span>unknown<span style="color:#ff79c6">]</span> <span style="color:#ff79c6">(</span>/usr/lib/systemd/systemd-journald<span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>systemd-journal   <span style="color:#bd93f9">517</span> <span style="color:#ff79c6">[</span>001<span style="color:#ff79c6">]</span> 1215680.725699: syscalls:sys_enter_mkdir: pathname: 0x7ffd4bf86cc0, 
+</span></span><span style="display:flex;"><span>mode: 0x000001ed
+</span></span><span style="display:flex;"><span>            7fc6e75ab6a7 __GI___mkdir+0x7 <span style="color:#ff79c6">(</span>/usr/lib64/libc-2.17.so<span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>            563c1c67754f <span style="color:#ff79c6">[</span>unknown<span style="color:#ff79c6">]</span> <span style="color:#ff79c6">(</span>/usr/lib/systemd/systemd-journald<span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>            563c1c677a3f <span style="color:#ff79c6">[</span>unknown<span style="color:#ff79c6">]</span> <span style="color:#ff79c6">(</span>/usr/lib/systemd/systemd-journald<span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>systemd-journal   <span style="color:#bd93f9">517</span> <span style="color:#ff79c6">[</span>001<span style="color:#ff79c6">]</span> 1215680.725814: syscalls:sys_enter_mkdir: pathname: 0x7ffd4bf86ad0, 
+</span></span><span style="display:flex;"><span>mode: 0x000001ed
+</span></span><span style="display:flex;"><span>            7fc6e75ab6a7 __GI___mkdir+0x7 <span style="color:#ff79c6">(</span>/usr/lib64/libc-2.17.so<span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>            563c1c676c0e <span style="color:#ff79c6">[</span>unknown<span style="color:#ff79c6">]</span> <span style="color:#ff79c6">(</span>/usr/lib/systemd/systemd-journald<span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>            563c1c67754f <span style="color:#ff79c6">[</span>unknown<span style="color:#ff79c6">]</span> <span style="color:#ff79c6">(</span>/usr/lib/systemd/systemd-journald<span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>            563c1c677a3f <span style="color:#ff79c6">[</span>unknown<span style="color:#ff79c6">]</span> <span style="color:#ff79c6">(</span>/usr/lib/systemd/systemd-journald<span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>systemd     <span style="color:#bd93f9">1</span> <span style="color:#ff79c6">[</span>001<span style="color:#ff79c6">]</span> 1215680.863208: syscalls:sys_enter_mkdir: pathname: 0x558b8a098240, 
+</span></span><span style="display:flex;"><span>mode: 0x000001ed
+</span></span><span style="display:flex;"><span>            7f38463106a7 __GI___mkdir+0x7 <span style="color:#ff79c6">(</span>/usr/lib64/libc-2.17.so<span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>        c30173fffff0013d <span style="color:#ff79c6">[</span>unknown<span style="color:#ff79c6">]</span> <span style="color:#ff79c6">([</span>unknown<span style="color:#ff79c6">])</span>
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>生成火焰图</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">6
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-shell" data-lang="shell"><span style="display:flex;"><span><span style="color:#6272a4"># 1. Export stacks</span>
+</span></span><span style="display:flex;"><span>perf script -i perf.data &gt; out.stacks
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4"># 2. Generate flame graph</span>
+</span></span><span style="display:flex;"><span>git clone https://github.com/brendangregg/FlameGraph
+</span></span><span style="display:flex;"><span>FlameGraph/stackcollapse-perf.pl &lt; out.stacks | FlameGraph/flamegraph.pl &gt; syscalls.svg
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>perf 调用（用户和内核的交互）
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/06/30/7oeAAt.png">
+            <img class="mx-auto" alt="2025\06\bpf\14.jpg" src="https://v1.ax1x.com/2025/06/30/7oeAAt.png" />
+        </a>
+    </p>
+<p>对比 bpf 调用（用户和内核的交互）<br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/06/30/7oe5lB.png">
+            <img class="mx-auto" alt="2025\06\bpf\15.jpg" src="https://v1.ax1x.com/2025/06/30/7oe5lB.png" />
+        </a>
+    </p>
+<p>perf 的问题</p>
+<ul>
+<li>基于 /sys/kernel/debug/tracing/events，不在这个内核暴露的目录中，就无法跟踪了</li>
+<li>返回的内容是固定格式的，比如 进程名、地址之类的，而 bpf 是自定义的格式</li>
+<li>用户 &lt;&ndash;&gt; 内核有频繁交互，性能比如 BPF</li>
+<li>像文件系统、网络、调度，perf 就跟踪不了</li>
+</ul>
+<h2 id="bpftrace">bpftrace</h2>
+<p>bpftrace 是构建在 bcc 之上的，简化了很多</p>
+<p>工作原理如下：<br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/06/14/7nl6w3.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2025/06/14/7nl6w3.png" />
+        </a>
+    <br>
+<a href="https://github.com/bpftrace/bpftrace/blob/master/docs/internals_development.md">bpftrace Internals</a></p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">8
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-shell" data-lang="shell"><span style="display:flex;"><span><span style="color:#6272a4"># 查询所有内核插桩和跟踪点</span>
+</span></span><span style="display:flex;"><span>sudo bpftrace -l
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4"># 使用通配符查询所有的系统调用跟踪点</span>
+</span></span><span style="display:flex;"><span>sudo bpftrace -l <span style="color:#f1fa8c">&#39;tracepoint:syscalls:*&#39;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4"># 使用通配符查询所有名字包含&#34;execve&#34;的跟踪点</span>
+</span></span><span style="display:flex;"><span>sudo bpftrace -l <span style="color:#f1fa8c">&#39;*execve*&#39;</span>
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>主要包括</p>
+<ul>
+<li>内核插桩（kprobe）</li>
+<li>跟踪点（tracepoint）</li>
+</ul>
+<p>kprobe 通过 int3 中断，保存当前的系统调用信息，转而执行用户的函数，可以执行所有内核</p>
+<p>跟踪点（tracepoint），open.c 内核函数大致如下</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">6
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-cpp" data-lang="cpp"><span style="display:flex;"><span>SYSCALL_DEFINE3(open, <span style="color:#ff79c6">const</span> <span style="color:#8be9fd">char</span> __user <span style="color:#ff79c6">*</span>, filename, <span style="color:#8be9fd">int</span>, flags, umode_t, mode) 
+</span></span><span style="display:flex;"><span>{  
+</span></span><span style="display:flex;"><span>    <span style="color:#6272a4">// ...  
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>    trace_sys_enter_open(filename, flags, mode);  <span style="color:#6272a4">// &lt;-- TRACEPOINT STUB CALL  
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>    <span style="color:#ff79c6">return</span> <span style="color:#50fa7b">do_sys_open</span>(AT_FDCWD, filename, flags, mode);  
+</span></span><span style="display:flex;"><span>}  
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>如果 trace_sys_enter_open 被注册，则会转而执行自定义的函数<br>
+如果没有注册，则执行 nop 指令不占用时间</p>
+<p>查询 execve 的参数</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">6
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-shell" data-lang="shell"><span style="display:flex;"><span>sudo bpftrace -lv tracepoint:syscalls:sys_enter_execve
+</span></span><span style="display:flex;"><span>tracepoint:syscalls:sys_enter_execve
+</span></span><span style="display:flex;"><span>    int __syscall_nr
+</span></span><span style="display:flex;"><span>    const char * filename
+</span></span><span style="display:flex;"><span>    const char *const * argv
+</span></span><span style="display:flex;"><span>    const char *const * envp
+</span></span></code></pre></td></tr></table>
+</div>
+</div><table>
+<thead>
+<tr>
+<th>Feature/Category</th>
+<th>bpftrace</th>
+<th>BCC</th>
+<th>libbpf</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Primary Use Case</strong></td>
+<td>Quick system troubleshooting and diagnostics</td>
+<td>Complex eBPF program development</td>
+<td>Production deployment and distribution</td>
+</tr>
+<tr>
+<td><strong>Development Style</strong></td>
+<td>Single-line scripts</td>
+<td>Full C/Python programs with helpers</td>
+<td>Complete BPF application development</td>
+</tr>
+<tr>
+<td><strong>Execution Pattern</strong></td>
+<td>Interactive one-liners</td>
+<td>Compiled at runtime on target machine</td>
+<td>Compile-once, run-anywhere</td>
+</tr>
+<tr>
+<td><strong>Complexity Level</strong></td>
+<td>Simple programs only</td>
+<td>Supports complex implementations</td>
+<td>Supports complex implementations</td>
+</tr>
+<tr>
+<td><strong>Dependencies</strong></td>
+<td>Requires BCC and LLVM on target</td>
+<td>Requires LLVM and kernel headers on target</td>
+<td>No LLVM/kernel headers on target</td>
+</tr>
+<tr>
+<td><strong>Kernel Requirements</strong></td>
+<td>Any kernel (BPF support only)</td>
+<td>Any kernel (BPF support)</td>
+<td><strong>BTF required</strong> (CONFIG_DEBUG_INFO_BTF=y)</td>
+</tr>
+<tr>
+<td><strong>Deployment</strong></td>
+<td>Tool must run on target</td>
+<td>Tool+compiler must run on target</td>
+<td>Single binary distribution</td>
+</tr>
+<tr>
+<td><strong>Portability</strong></td>
+<td>Manual re-run on different kernels</td>
+<td>Recompiles automatically on target</td>
+<td>Works across distros (kernels ≥5.8)</td>
+</tr>
+<tr>
+<td><strong>Example Distros</strong></td>
+<td>All Linux with kernel 4.1+</td>
+<td>All Linux with kernel 4.1+</td>
+<td>RHEL 8.2+, Ubuntu 20.10+, Fedora 34+</td>
+</tr>
+<tr>
+<td><strong>Strengths</strong></td>
+<td>Ad-hoc debugging, rapid prototyping</td>
+<td>Comprehensive tracing tools, rich libraries</td>
+<td>Production stability, minimal overhead</td>
+</tr>
+<tr>
+<td><strong>Limitations</strong></td>
+<td>Limited program complexity</td>
+<td>Heavy runtime dependencies, memory overhead</td>
+<td>Requires modern kernel (BTF support)</td>
+</tr>
+<tr>
+<td><strong>Performance Impact</strong></td>
+<td>Medium (runtime compilation)</td>
+<td>High (JIT compilation at runtime)</td>
+<td>Low (pre-compiled)</td>
+</tr>
+<tr>
+<td><strong>Main Users</strong></td>
+<td>Sysadmins, quick diagnostics</td>
+<td>Developers, complex tracing</td>
+<td>Production systems, embedded environments</td>
+</tr>
+</tbody>
+</table>
+<p>命令</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">8
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">9
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-shell" data-lang="shell"><span style="display:flex;"><span>sudo bpftrace -e <span style="color:#f1fa8c">&#39;
+</span></span></span><span style="display:flex;"><span><span style="color:#f1fa8c">tracepoint:syscalls:sys_enter_execve,
+</span></span></span><span style="display:flex;"><span><span style="color:#f1fa8c">tracepoint:syscalls:sys_enter_execveat
+</span></span></span><span style="display:flex;"><span><span style="color:#f1fa8c">{
+</span></span></span><span style="display:flex;"><span><span style="color:#f1fa8c">   printf(&#34;%-6d %-8s&#34;, pid, comm);
+</span></span></span><span style="display:flex;"><span><span style="color:#f1fa8c">   join(args-&gt;argv);
+</span></span></span><span style="display:flex;"><span><span style="color:#f1fa8c">}&#39;</span>
+</span></span><span style="display:flex;"><span>Attaching <span style="color:#bd93f9">2</span> probes...
+</span></span><span style="display:flex;"><span><span style="color:#bd93f9">4760</span>   bash    ls --color<span style="color:#ff79c6">=</span>auto
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>bpf 内置的</p>
+<ul>
+<li><a href="https://github.com/bpftrace/bpftrace/blob/master/man/adoc/bpftrace.adoc#builtins">变量</a></li>
+<li><a href="https://github.com/bpftrace/bpftrace/blob/master/man/adoc/bpftrace.adoc#functions">函数</a></li>
+</ul>
+<p>打印出 AST 和 LLVM 字节码</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-shell" data-lang="shell"><span style="display:flex;"><span>bpftrace -d -e <span style="color:#f1fa8c">&#39;tracepoint:syscalls:sys_enter_execve {
+</span></span></span><span style="display:flex;"><span><span style="color:#f1fa8c">  cat(&#34;/proc/%d/maps&#34;, pid);
+</span></span></span><span style="display:flex;"><span><span style="color:#f1fa8c">}&#39;</span>
+</span></span></code></pre></td></tr></table>
+</div>
+</div><h2 id="bcc">bcc</h2>
+<p>c 代码</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">15
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">16
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">17
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">18
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">19
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">20
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">21
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">22
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">23
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">24
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">25
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">26
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">27
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">28
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">29
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">30
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">31
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">32
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">33
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">34
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">35
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">36
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">37
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">38
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">39
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">40
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">41
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">42
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">43
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">44
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">45
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">46
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">47
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">48
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">49
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">50
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">51
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">52
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">53
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">54
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">55
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">56
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">57
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">58
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">59
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">60
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">61
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">62
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">63
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">64
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">65
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">66
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">67
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">68
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">69
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">70
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">71
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">72
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">73
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">74
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">75
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">76
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">77
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">78
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">79
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">80
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">81
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">82
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">83
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">84
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">85
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">86
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">87
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">88
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">89
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">90
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">91
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">92
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">93
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">94
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">95
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-cpp" data-lang="cpp"><span style="display:flex;"><span><span style="color:#ff79c6">#include</span> <span style="color:#ff79c6">&lt;linux/sched.h&gt;</span><span style="color:#ff79c6">
+</span></span></span><span style="display:flex;"><span><span style="color:#ff79c6">#include</span> <span style="color:#ff79c6">&lt;linux/fs.h&gt;</span><span style="color:#ff79c6">
+</span></span></span><span style="display:flex;"><span><span style="color:#ff79c6"></span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4">// consts for arguments (ensure below stack size limit 512)
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span><span style="color:#ff79c6">#define ARGSIZE 64
+</span></span></span><span style="display:flex;"><span><span style="color:#ff79c6">#define TOTAL_MAX_ARGS 5
+</span></span></span><span style="display:flex;"><span><span style="color:#ff79c6">#define FULL_MAX_ARGS_ARR (TOTAL_MAX_ARGS * ARGSIZE)
+</span></span></span><span style="display:flex;"><span><span style="color:#ff79c6">#define LAST_ARG (FULL_MAX_ARGS_ARR - ARGSIZE)
+</span></span></span><span style="display:flex;"><span><span style="color:#ff79c6"></span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4">// perf event map (sharing data to userspace) and hash map (sharing data between tracepoints)
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span><span style="color:#ff79c6">struct</span> <span style="color:#50fa7b">data_t</span> {
+</span></span><span style="display:flex;"><span>        u32 pid;
+</span></span><span style="display:flex;"><span>        <span style="color:#8be9fd">char</span> comm[TASK_COMM_LEN];
+</span></span><span style="display:flex;"><span>        <span style="color:#8be9fd">int</span> retval;
+</span></span><span style="display:flex;"><span>        <span style="color:#8be9fd">unsigned</span> <span style="color:#8be9fd">int</span> args_size;
+</span></span><span style="display:flex;"><span>        <span style="color:#8be9fd">char</span> argv[FULL_MAX_ARGS_ARR];
+</span></span><span style="display:flex;"><span>};
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4">// 这句是创建一个 ring_buffer，名字叫 events，也可以改成 haha_events
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">// 后面python 代码获取的时候就要读取 haha_events
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">// In kernel-space, use events.perf_submit(ctx, &amp;data, size) to send data
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">// In userspace (Python/C), access it via b[&#34;events&#34;] and attach a callback with open_perf_buffer()
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>BPF_PERF_OUTPUT(events);
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4">// 相当于定义了一个 hash-map，名字叫：tasks， key 是 u32类型的，value 就是上面定义的：data_t
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>BPF_HASH(tasks, u32, <span style="color:#ff79c6">struct</span> <span style="color:#50fa7b">data_t</span>);
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4">// helper function to read string from userspace.
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span><span style="color:#ff79c6">static</span> <span style="color:#8be9fd">int</span> <span style="color:#50fa7b">__bpf_read_arg_str</span>(<span style="color:#ff79c6">struct</span> <span style="color:#50fa7b">data_t</span> <span style="color:#ff79c6">*</span>data, <span style="color:#ff79c6">const</span> <span style="color:#8be9fd">char</span> <span style="color:#ff79c6">*</span>ptr)
+</span></span><span style="display:flex;"><span>{
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">if</span> (data<span style="color:#ff79c6">-&gt;</span>args_size <span style="color:#ff79c6">&gt;</span> LAST_ARG) {
+</span></span><span style="display:flex;"><span>                <span style="color:#ff79c6">return</span> <span style="color:#ff79c6">-</span><span style="color:#bd93f9">1</span>;
+</span></span><span style="display:flex;"><span>        }
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>        <span style="color:#8be9fd">int</span> ret <span style="color:#ff79c6">=</span> bpf_probe_read_user_str(<span style="color:#ff79c6">&amp;</span>data<span style="color:#ff79c6">-&gt;</span>argv[data<span style="color:#ff79c6">-&gt;</span>args_size], ARGSIZE,
+</span></span><span style="display:flex;"><span>                                          (<span style="color:#8be9fd">void</span> <span style="color:#ff79c6">*</span>)ptr);
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">if</span> (ret <span style="color:#ff79c6">&gt;</span> ARGSIZE <span style="color:#ff79c6">||</span> ret <span style="color:#ff79c6">&lt;</span> <span style="color:#bd93f9">0</span>) {
+</span></span><span style="display:flex;"><span>                <span style="color:#ff79c6">return</span> <span style="color:#ff79c6">-</span><span style="color:#bd93f9">1</span>;
+</span></span><span style="display:flex;"><span>        }
+</span></span><span style="display:flex;"><span>        <span style="color:#6272a4">// increase the args size. the first tailing &#39;\0&#39; is not counted and hence it
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>        <span style="color:#6272a4">// would be overwritten by the next call.
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>        data<span style="color:#ff79c6">-&gt;</span>args_size <span style="color:#ff79c6">+=</span> (ret <span style="color:#ff79c6">-</span> <span style="color:#bd93f9">1</span>);
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">return</span> <span style="color:#bd93f9">0</span>;
+</span></span><span style="display:flex;"><span>}
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4">// sys_enter_execve tracepoint.
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>TRACEPOINT_PROBE(syscalls, sys_enter_execve)
+</span></span><span style="display:flex;"><span>{
+</span></span><span style="display:flex;"><span>        <span style="color:#6272a4">// variables definitions
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>        <span style="color:#8be9fd">unsigned</span> <span style="color:#8be9fd">int</span> ret <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">0</span>;
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">const</span> <span style="color:#8be9fd">char</span> <span style="color:#ff79c6">**</span>argv <span style="color:#ff79c6">=</span> (<span style="color:#ff79c6">const</span> <span style="color:#8be9fd">char</span> <span style="color:#ff79c6">**</span>)(args<span style="color:#ff79c6">-&gt;</span>argv);
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>        <span style="color:#6272a4">// get the pid and comm
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>        <span style="color:#ff79c6">struct</span> <span style="color:#50fa7b">data_t</span> data <span style="color:#ff79c6">=</span> { };
+</span></span><span style="display:flex;"><span>        u32 pid <span style="color:#ff79c6">=</span> bpf_get_current_pid_tgid();
+</span></span><span style="display:flex;"><span>        data.pid <span style="color:#ff79c6">=</span> pid;
+</span></span><span style="display:flex;"><span>        bpf_get_current_comm(<span style="color:#ff79c6">&amp;</span>data.comm, <span style="color:#ff79c6">sizeof</span>(data.comm));
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>        <span style="color:#6272a4">// get the binary name (first argment)
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>        <span style="color:#ff79c6">if</span> (__bpf_read_arg_str(<span style="color:#ff79c6">&amp;</span>data, (<span style="color:#ff79c6">const</span> <span style="color:#8be9fd">char</span> <span style="color:#ff79c6">*</span>)argv[<span style="color:#bd93f9">0</span>]) <span style="color:#ff79c6">&lt;</span> <span style="color:#bd93f9">0</span>) {
+</span></span><span style="display:flex;"><span>                <span style="color:#ff79c6">goto</span> out;
+</span></span><span style="display:flex;"><span>        }
+</span></span><span style="display:flex;"><span>        <span style="color:#6272a4">// get other arguments (skip first arg because it has already been read)
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span><span style="color:#ff79c6">#pragma unroll
+</span></span></span><span style="display:flex;"><span><span style="color:#ff79c6"></span>        <span style="color:#ff79c6">for</span> (<span style="color:#8be9fd">int</span> i <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">1</span>; i <span style="color:#ff79c6">&lt;</span> TOTAL_MAX_ARGS; i<span style="color:#ff79c6">++</span>) {
+</span></span><span style="display:flex;"><span>                <span style="color:#ff79c6">if</span> (__bpf_read_arg_str(<span style="color:#ff79c6">&amp;</span>data, (<span style="color:#ff79c6">const</span> <span style="color:#8be9fd">char</span> <span style="color:#ff79c6">*</span>)argv[i]) <span style="color:#ff79c6">&lt;</span> <span style="color:#bd93f9">0</span>) {
+</span></span><span style="display:flex;"><span>                        <span style="color:#ff79c6">goto</span> out;
+</span></span><span style="display:flex;"><span>                }
+</span></span><span style="display:flex;"><span>        }
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span> <span style="color:#8be9fd;font-style:italic">out</span>:
+</span></span><span style="display:flex;"><span>        <span style="color:#6272a4">// store the data in hash map
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>        tasks.update(<span style="color:#ff79c6">&amp;</span>pid, <span style="color:#ff79c6">&amp;</span>data);
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">return</span> <span style="color:#bd93f9">0</span>;
+</span></span><span style="display:flex;"><span>}
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4">// sys_exit_execve tracepoint
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>TRACEPOINT_PROBE(syscalls, sys_exit_execve)
+</span></span><span style="display:flex;"><span>{
+</span></span><span style="display:flex;"><span>        <span style="color:#6272a4">// query the data from hash map
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>        u32 pid <span style="color:#ff79c6">=</span> bpf_get_current_pid_tgid();
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">struct</span> <span style="color:#50fa7b">data_t</span> <span style="color:#ff79c6">*</span>data <span style="color:#ff79c6">=</span> tasks.lookup(<span style="color:#ff79c6">&amp;</span>pid);
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>        <span style="color:#6272a4">// submit perf events after getting the retval
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>        <span style="color:#ff79c6">if</span> (data <span style="color:#ff79c6">!=</span> <span style="color:#8be9fd;font-style:italic">NULL</span>) {
+</span></span><span style="display:flex;"><span>                data<span style="color:#ff79c6">-&gt;</span>retval <span style="color:#ff79c6">=</span> args<span style="color:#ff79c6">-&gt;</span>ret;
+</span></span><span style="display:flex;"><span>                events.perf_submit(args, data, <span style="color:#ff79c6">sizeof</span>(<span style="color:#ff79c6">struct</span> <span style="color:#50fa7b">data_t</span>));
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>                <span style="color:#6272a4">// clean up the hash map
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>                tasks.<span style="color:#ff79c6">delete</span>(<span style="color:#ff79c6">&amp;</span>pid);
+</span></span><span style="display:flex;"><span>        }
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">return</span> <span style="color:#bd93f9">0</span>;
+</span></span><span style="display:flex;"><span>}
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>上面 c 代码的调用关系如下：<br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/06/29/7oYDT5.png">
+            <img class="mx-auto" alt="2025\06\bpf\9.jpg" src="https://v1.ax1x.com/2025/06/29/7oYDT5.png" />
+        </a>
+    </p>
+<p>python 代码</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">15
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">16
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">17
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">18
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">19
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">20
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">21
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">22
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">23
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">24
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">25
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">26
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">27
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">28
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">29
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-python" data-lang="python"><span style="display:flex;"><span><span style="color:#ff79c6">from</span> bcc <span style="color:#ff79c6">import</span> BPF
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">from</span> bcc.utils <span style="color:#ff79c6">import</span> printb
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>b <span style="color:#ff79c6">=</span> BPF(src_file<span style="color:#ff79c6">=</span><span style="color:#f1fa8c">&#34;execsnoop.c&#34;</span>)
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#8be9fd;font-style:italic">print</span>(<span style="color:#f1fa8c">&#34;</span><span style="color:#f1fa8c">%-6s</span><span style="color:#f1fa8c"> </span><span style="color:#f1fa8c">%-16s</span><span style="color:#f1fa8c"> </span><span style="color:#f1fa8c">%-3s</span><span style="color:#f1fa8c"> </span><span style="color:#f1fa8c">%s</span><span style="color:#f1fa8c">&#34;</span> <span style="color:#ff79c6">%</span> (<span style="color:#f1fa8c">&#34;PID&#34;</span>, <span style="color:#f1fa8c">&#34;COMM&#34;</span>, <span style="color:#f1fa8c">&#34;RET&#34;</span>, <span style="color:#f1fa8c">&#34;ARGS&#34;</span>))
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">def</span> <span style="color:#50fa7b">print_event</span>(cpu, data, size):
+</span></span><span style="display:flex;"><span>    <span style="color:#6272a4"># References the BPF_PERF_OUTPUT(events) map declared in eBPF C code. </span>
+</span></span><span style="display:flex;"><span>	<span style="color:#6272a4"># This is a PerfEventArray for streaming data from kernel to userspace</span>
+</span></span><span style="display:flex;"><span>    event <span style="color:#ff79c6">=</span> b[<span style="color:#f1fa8c">&#34;events&#34;</span>]<span style="color:#ff79c6">.</span>event(data)
+</span></span><span style="display:flex;"><span>    printb(<span style="color:#f1fa8c">b</span><span style="color:#f1fa8c">&#34;</span><span style="color:#f1fa8c">%-6d</span><span style="color:#f1fa8c"> </span><span style="color:#f1fa8c">%-16s</span><span style="color:#f1fa8c"> </span><span style="color:#f1fa8c">%-3d</span><span style="color:#f1fa8c"> </span><span style="color:#f1fa8c">%-16s</span><span style="color:#f1fa8c">&#34;</span> <span style="color:#ff79c6">%</span> (event<span style="color:#ff79c6">.</span>pid, event<span style="color:#ff79c6">.</span>comm, event<span style="color:#ff79c6">.</span>retval, event<span style="color:#ff79c6">.</span>argv))
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4"># ​​Action​​: Initializes the perf buffer named events (defined </span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4"># in the eBPF C code) and links it to the print_event callback</span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4"># ​​Kernel ↔ Userspace​​: The eBPF program submits events via perf_submit(), </span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4"># which are asynchronously handled in userspace by print_event.</span>
+</span></span><span style="display:flex;"><span>b[<span style="color:#f1fa8c">&#34;events&#34;</span>]<span style="color:#ff79c6">.</span>open_perf_buffer(print_event)
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">while</span> <span style="color:#bd93f9">1</span>:
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">try</span>:
+</span></span><span style="display:flex;"><span>	    <span style="color:#6272a4"># ​​Blocking Poll​​: perf_buffer_poll() waits indefinitely for new events from the kernel</span>
+</span></span><span style="display:flex;"><span>		<span style="color:#6272a4"># When data arrives in the &#34;events&#34; buffer, </span>
+</span></span><span style="display:flex;"><span>		<span style="color:#6272a4"># BCC ​​automatically calls print_event​​ and ​​populates its arguments​​ with:</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#6272a4"># The CPU ID where the eBPF program submitted the event.</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#6272a4"># The raw event data (as a byte buffer).</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#6272a4"># The size of that buffer.</span>
+</span></span><span style="display:flex;"><span>        b<span style="color:#ff79c6">.</span>perf_buffer_poll()
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">except</span> KeyboardInterrupt:
+</span></span><span style="display:flex;"><span>        exit()
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>python 代码 和 c 代码交互的过程：<br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/06/29/7orKEH.png">
+            <img class="mx-auto" alt="2025\06\bpf\10.jpg" src="https://v1.ax1x.com/2025/06/29/7orKEH.png" />
+        </a>
+    </p>
+<p><a href="https://github.com/feiskyer/ebpf-apps/blob/main/bcc-apps/python/execsnoop.c">参考例子</a></p>
+<h2 id="libbpf">libbpf</h2>
+<p>使用 libbpf 开发 eBPF 程序就可以通过以下四个步骤完成</p>
+<ol>
+<li>使用 bpftool 生成内核数据结构定义头文件</li>
+<li>开发 eBPF 程序部分，也就是内核态的代码，eBPF 程序的源码文件一般命名为  &lt;程序名&gt;.bpf.c</li>
+<li>编译 eBPF 程序为字节码，再用 bpftool 生成 脚手架头文件（Skeleton Header）；这个头文件包含了 eBPF 字节码以及相关的加载、挂载和卸载函数，可在用户态程序中直接调用</li>
+<li>开发用户态代码，并完整最终编译，生成可执行文件</li>
+</ol>
+<p>生成内核头文件</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-shell" data-lang="shell"><span style="display:flex;"><span>sudo bpftool btf dump file /sys/kernel/btf/vmlinux format c &gt; vmlinux.h
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>execsnoop.h 头文件</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">15
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">16
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">17
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">18
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">19
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">20
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">21
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-cpp" data-lang="cpp"><span style="display:flex;"><span><span style="color:#ff79c6">#ifndef __HELLO_H
+</span></span></span><span style="display:flex;"><span><span style="color:#ff79c6">#define __HELLO_H
+</span></span></span><span style="display:flex;"><span><span style="color:#ff79c6"></span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">#define ARGSIZE  128
+</span></span></span><span style="display:flex;"><span><span style="color:#ff79c6">#define TASK_COMM_LEN 16
+</span></span></span><span style="display:flex;"><span><span style="color:#ff79c6">#define TOTAL_MAX_ARGS 60
+</span></span></span><span style="display:flex;"><span><span style="color:#ff79c6">#define FULL_MAX_ARGS_ARR (TOTAL_MAX_ARGS * ARGSIZE)
+</span></span></span><span style="display:flex;"><span><span style="color:#ff79c6">#define BASE_EVENT_SIZE (size_t)(&amp;((struct event*)0)-&gt;args)
+</span></span></span><span style="display:flex;"><span><span style="color:#ff79c6">#define EVENT_SIZE(e) (BASE_EVENT_SIZE + e-&gt;args_size)
+</span></span></span><span style="display:flex;"><span><span style="color:#ff79c6">#define LAST_ARG (FULL_MAX_ARGS_ARR - ARGSIZE)
+</span></span></span><span style="display:flex;"><span><span style="color:#ff79c6"></span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">struct</span> <span style="color:#50fa7b">event</span> {
+</span></span><span style="display:flex;"><span>        <span style="color:#8be9fd">char</span> comm[TASK_COMM_LEN];
+</span></span><span style="display:flex;"><span>        pid_t pid;
+</span></span><span style="display:flex;"><span>        <span style="color:#8be9fd">int</span> retval;
+</span></span><span style="display:flex;"><span>        <span style="color:#8be9fd">int</span> args_count;
+</span></span><span style="display:flex;"><span>        <span style="color:#8be9fd">unsigned</span> <span style="color:#8be9fd">int</span> args_size;
+</span></span><span style="display:flex;"><span>        <span style="color:#8be9fd">char</span> args[FULL_MAX_ARGS_ARR];
+</span></span><span style="display:flex;"><span>};
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">#endif
+</span></span></span></code></pre></td></tr></table>
+</div>
+</div><p>execsnoop.bpf.c 代码</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">  1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">  2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">  3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">  4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">  5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">  6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">  7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">  8
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">  9
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 10
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 11
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 12
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 13
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 14
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 15
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 16
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 17
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 18
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 19
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 20
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 21
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 22
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 23
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 24
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 25
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 26
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 27
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 28
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 29
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 30
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 31
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 32
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 33
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 34
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 35
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 36
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 37
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 38
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 39
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 40
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 41
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 42
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 43
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 44
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 45
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 46
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 47
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 48
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 49
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 50
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 51
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 52
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 53
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 54
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 55
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 56
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 57
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 58
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 59
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 60
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 61
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 62
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 63
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 64
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 65
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 66
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 67
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 68
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 69
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 70
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 71
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 72
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 73
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 74
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 75
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 76
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 77
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 78
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 79
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 80
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 81
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 82
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 83
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 84
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 85
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 86
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 87
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 88
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 89
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 90
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 91
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 92
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 93
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 94
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 95
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 96
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 97
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 98
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 99
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">100
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">101
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">102
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">103
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">104
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">105
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">106
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">107
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">108
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">109
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">110
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">111
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">112
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">113
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">114
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">115
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">116
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">117
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">118
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">119
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">120
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">121
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">122
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">123
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">124
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">125
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">126
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">127
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">128
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">129
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">130
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">131
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">132
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">133
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">134
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">135
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-cpp" data-lang="cpp"><span style="display:flex;"><span><span style="color:#ff79c6">#include</span> <span style="color:#ff79c6">&#34;vmlinux.h&#34;</span><span style="color:#ff79c6">
+</span></span></span><span style="display:flex;"><span><span style="color:#ff79c6">#include</span> <span style="color:#ff79c6">&lt;bpf/bpf_helpers.h&gt;</span><span style="color:#ff79c6">
+</span></span></span><span style="display:flex;"><span><span style="color:#ff79c6">#include</span> <span style="color:#ff79c6">&#34;execsnoop.h&#34;</span><span style="color:#ff79c6">
+</span></span></span><span style="display:flex;"><span><span style="color:#ff79c6"></span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">static</span> <span style="color:#ff79c6">const</span> <span style="color:#ff79c6">struct</span> <span style="color:#50fa7b">event</span> empty_event <span style="color:#ff79c6">=</span> { };
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4">// define hash map and perf event map
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">// 下面是分别定义：
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">// Map type attribute、size attribute、type attribute、Value type attribute
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span><span style="color:#ff79c6">struct</span> {
+</span></span><span style="display:flex;"><span>        __uint(type, BPF_MAP_TYPE_HASH);
+</span></span><span style="display:flex;"><span>        __uint(max_entries, <span style="color:#bd93f9">10240</span>);
+</span></span><span style="display:flex;"><span>        __type(key, pid_t);
+</span></span><span style="display:flex;"><span>        __type(value, <span style="color:#ff79c6">struct</span> <span style="color:#50fa7b">event</span>);
+</span></span><span style="display:flex;"><span>} execs <span style="color:#50fa7b">SEC</span>(<span style="color:#f1fa8c">&#34;.maps&#34;</span>); <span style="color:#6272a4">// Map variable name
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4">// Old approach (deprecated)
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span><span style="color:#6272a4">/*
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">struct bpf_map_def SEC(&#34;maps&#34;) execs = {
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">    .type = BPF_MAP_TYPE_HASH,
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">    .key_size = sizeof(pid_t),
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">    .value_size = sizeof(struct event),
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">    .max_entries = 10240,
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">};
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">*/</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">struct</span> {
+</span></span><span style="display:flex;"><span>        __uint(type, BPF_MAP_TYPE_PERF_EVENT_ARRAY);
+</span></span><span style="display:flex;"><span>        __uint(key_size, <span style="color:#ff79c6">sizeof</span>(u32));
+</span></span><span style="display:flex;"><span>        __uint(value_size, <span style="color:#ff79c6">sizeof</span>(u32));
+</span></span><span style="display:flex;"><span>}
+</span></span><span style="display:flex;"><span>events <span style="color:#50fa7b">SEC</span>(<span style="color:#f1fa8c">&#34;.maps&#34;</span>);
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4">// tracepoint for sys_enter_execve.
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>SEC(<span style="color:#f1fa8c">&#34;tracepoint/syscalls/sys_enter_execve&#34;</span>)
+</span></span><span style="display:flex;"><span><span style="color:#8be9fd">int</span> tracepoint__syscalls__sys_enter_execve(<span style="color:#ff79c6">struct</span> <span style="color:#50fa7b">trace_event_raw_sys_enter</span>
+</span></span><span style="display:flex;"><span>                                           <span style="color:#ff79c6">*</span>ctx)
+</span></span><span style="display:flex;"><span>{
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">struct</span> <span style="color:#50fa7b">event</span> <span style="color:#ff79c6">*</span>event;
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">const</span> <span style="color:#8be9fd">char</span> <span style="color:#ff79c6">**</span>args <span style="color:#ff79c6">=</span> (<span style="color:#ff79c6">const</span> <span style="color:#8be9fd">char</span> <span style="color:#ff79c6">**</span>)(ctx<span style="color:#ff79c6">-&gt;</span>args[<span style="color:#bd93f9">1</span>]);
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">const</span> <span style="color:#8be9fd">char</span> <span style="color:#ff79c6">*</span>argp;
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>        <span style="color:#6272a4">// get the PID
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>        u64 id <span style="color:#ff79c6">=</span> bpf_get_current_pid_tgid();
+</span></span><span style="display:flex;"><span>        pid_t pid <span style="color:#ff79c6">=</span> (pid_t) id;
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>        <span style="color:#6272a4">// update the exec metadata to execs map
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>        <span style="color:#ff79c6">if</span> (bpf_map_update_elem(<span style="color:#ff79c6">&amp;</span>execs, <span style="color:#ff79c6">&amp;</span>pid, <span style="color:#ff79c6">&amp;</span>empty_event, BPF_NOEXIST)) {
+</span></span><span style="display:flex;"><span>                <span style="color:#ff79c6">return</span> <span style="color:#bd93f9">0</span>;
+</span></span><span style="display:flex;"><span>        }
+</span></span><span style="display:flex;"><span>        event <span style="color:#ff79c6">=</span> bpf_map_lookup_elem(<span style="color:#ff79c6">&amp;</span>execs, <span style="color:#ff79c6">&amp;</span>pid);
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">if</span> (<span style="color:#ff79c6">!</span>event) {
+</span></span><span style="display:flex;"><span>                <span style="color:#ff79c6">return</span> <span style="color:#bd93f9">0</span>;
+</span></span><span style="display:flex;"><span>        }
+</span></span><span style="display:flex;"><span>        <span style="color:#6272a4">// update event metadata
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>        event<span style="color:#ff79c6">-&gt;</span>pid <span style="color:#ff79c6">=</span> pid;
+</span></span><span style="display:flex;"><span>        event<span style="color:#ff79c6">-&gt;</span>args_count <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">0</span>;
+</span></span><span style="display:flex;"><span>        event<span style="color:#ff79c6">-&gt;</span>args_size <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">0</span>;
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>        <span style="color:#6272a4">// query the first parameter
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>        <span style="color:#8be9fd">unsigned</span> <span style="color:#8be9fd">int</span> ret <span style="color:#ff79c6">=</span> bpf_probe_read_user_str(event<span style="color:#ff79c6">-&gt;</span>args, ARGSIZE,
+</span></span><span style="display:flex;"><span>                                                   (<span style="color:#ff79c6">const</span> <span style="color:#8be9fd">char</span> <span style="color:#ff79c6">*</span>)ctx<span style="color:#ff79c6">-&gt;</span>args[<span style="color:#bd93f9">0</span>]);
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">if</span> (ret <span style="color:#ff79c6">&lt;=</span> ARGSIZE) {
+</span></span><span style="display:flex;"><span>                event<span style="color:#ff79c6">-&gt;</span>args_size <span style="color:#ff79c6">+=</span> ret;
+</span></span><span style="display:flex;"><span>        } <span style="color:#ff79c6">else</span> {
+</span></span><span style="display:flex;"><span>                <span style="color:#6272a4">/* write an empty string */</span>
+</span></span><span style="display:flex;"><span>                event<span style="color:#ff79c6">-&gt;</span>args[<span style="color:#bd93f9">0</span>] <span style="color:#ff79c6">=</span> <span style="color:#f1fa8c">&#39;\0&#39;</span>;
+</span></span><span style="display:flex;"><span>                event<span style="color:#ff79c6">-&gt;</span>args_size<span style="color:#ff79c6">++</span>;
+</span></span><span style="display:flex;"><span>        }
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>        <span style="color:#6272a4">// query the extra parameters
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>        event<span style="color:#ff79c6">-&gt;</span>args_count<span style="color:#ff79c6">++</span>;
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">#pragma unroll
+</span></span></span><span style="display:flex;"><span><span style="color:#ff79c6"></span>        <span style="color:#ff79c6">for</span> (<span style="color:#8be9fd">int</span> i <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">1</span>; i <span style="color:#ff79c6">&lt;</span> TOTAL_MAX_ARGS; i<span style="color:#ff79c6">++</span>) {
+</span></span><span style="display:flex;"><span>                bpf_probe_read_user(<span style="color:#ff79c6">&amp;</span>argp, <span style="color:#ff79c6">sizeof</span>(argp), <span style="color:#ff79c6">&amp;</span>args[i]);
+</span></span><span style="display:flex;"><span>                <span style="color:#ff79c6">if</span> (<span style="color:#ff79c6">!</span>argp)
+</span></span><span style="display:flex;"><span>                        <span style="color:#ff79c6">return</span> <span style="color:#bd93f9">0</span>;
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>                <span style="color:#ff79c6">if</span> (event<span style="color:#ff79c6">-&gt;</span>args_size <span style="color:#ff79c6">&gt;</span> LAST_ARG)
+</span></span><span style="display:flex;"><span>                        <span style="color:#ff79c6">return</span> <span style="color:#bd93f9">0</span>;
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>                ret <span style="color:#ff79c6">=</span>
+</span></span><span style="display:flex;"><span>                    bpf_probe_read_user_str(<span style="color:#ff79c6">&amp;</span>event<span style="color:#ff79c6">-&gt;</span>args[event<span style="color:#ff79c6">-&gt;</span>args_size],
+</span></span><span style="display:flex;"><span>                                            ARGSIZE, argp);
+</span></span><span style="display:flex;"><span>                <span style="color:#ff79c6">if</span> (ret <span style="color:#ff79c6">&gt;</span> ARGSIZE)
+</span></span><span style="display:flex;"><span>                        <span style="color:#ff79c6">return</span> <span style="color:#bd93f9">0</span>;
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>                event<span style="color:#ff79c6">-&gt;</span>args_count<span style="color:#ff79c6">++</span>;
+</span></span><span style="display:flex;"><span>                event<span style="color:#ff79c6">-&gt;</span>args_size <span style="color:#ff79c6">+=</span> ret;
+</span></span><span style="display:flex;"><span>        }
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>        <span style="color:#6272a4">/* try to read one more argument to check if there is one */</span>
+</span></span><span style="display:flex;"><span>        bpf_probe_read_user(<span style="color:#ff79c6">&amp;</span>argp, <span style="color:#ff79c6">sizeof</span>(argp), <span style="color:#ff79c6">&amp;</span>args[TOTAL_MAX_ARGS]);
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">if</span> (<span style="color:#ff79c6">!</span>argp)
+</span></span><span style="display:flex;"><span>                <span style="color:#ff79c6">return</span> <span style="color:#bd93f9">0</span>;
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>        <span style="color:#6272a4">/* pointer to max_args+1 isn&#39;t null, assume we have more arguments */</span>
+</span></span><span style="display:flex;"><span>        event<span style="color:#ff79c6">-&gt;</span>args_count<span style="color:#ff79c6">++</span>;
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">return</span> <span style="color:#bd93f9">0</span>;
+</span></span><span style="display:flex;"><span>}
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4">// tracepoint for sys_exit_execve.
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>SEC(<span style="color:#f1fa8c">&#34;tracepoint/syscalls/sys_exit_execve&#34;</span>)
+</span></span><span style="display:flex;"><span><span style="color:#8be9fd">int</span> tracepoint__syscalls__sys_exit_execve(<span style="color:#ff79c6">struct</span> <span style="color:#50fa7b">trace_event_raw_sys_exit</span> <span style="color:#ff79c6">*</span>ctx)
+</span></span><span style="display:flex;"><span>{
+</span></span><span style="display:flex;"><span>        u64 id;
+</span></span><span style="display:flex;"><span>        pid_t pid;
+</span></span><span style="display:flex;"><span>        <span style="color:#8be9fd">int</span> ret;
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">struct</span> <span style="color:#50fa7b">event</span> <span style="color:#ff79c6">*</span>event;
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>        <span style="color:#6272a4">// get the exec metadata from execs map
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>        id <span style="color:#ff79c6">=</span> bpf_get_current_pid_tgid();
+</span></span><span style="display:flex;"><span>        pid <span style="color:#ff79c6">=</span> (pid_t) id;
+</span></span><span style="display:flex;"><span>        event <span style="color:#ff79c6">=</span> bpf_map_lookup_elem(<span style="color:#ff79c6">&amp;</span>execs, <span style="color:#ff79c6">&amp;</span>pid);
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">if</span> (<span style="color:#ff79c6">!</span>event)
+</span></span><span style="display:flex;"><span>                <span style="color:#ff79c6">return</span> <span style="color:#bd93f9">0</span>;
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>        <span style="color:#6272a4">// update event retval
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>        ret <span style="color:#ff79c6">=</span> ctx<span style="color:#ff79c6">-&gt;</span>ret;
+</span></span><span style="display:flex;"><span>        event<span style="color:#ff79c6">-&gt;</span>retval <span style="color:#ff79c6">=</span> ret;
+</span></span><span style="display:flex;"><span>        bpf_get_current_comm(<span style="color:#ff79c6">&amp;</span>event<span style="color:#ff79c6">-&gt;</span>comm, <span style="color:#ff79c6">sizeof</span>(event<span style="color:#ff79c6">-&gt;</span>comm));
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>        <span style="color:#6272a4">// submit to perf event
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>        size_t len <span style="color:#ff79c6">=</span> EVENT_SIZE(event);
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">if</span> (len <span style="color:#ff79c6">&lt;=</span> <span style="color:#ff79c6">sizeof</span>(<span style="color:#ff79c6">*</span>event))
+</span></span><span style="display:flex;"><span>                bpf_perf_event_output(ctx, <span style="color:#ff79c6">&amp;</span>events, BPF_F_CURRENT_CPU, event,
+</span></span><span style="display:flex;"><span>                                      len);
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>        <span style="color:#6272a4">// cleanup exec from hash map
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>        bpf_map_delete_elem(<span style="color:#ff79c6">&amp;</span>execs, <span style="color:#ff79c6">&amp;</span>pid);
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">return</span> <span style="color:#bd93f9">0</span>;
+</span></span><span style="display:flex;"><span>}
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#8be9fd">char</span> LICENSE[] SEC(<span style="color:#f1fa8c">&#34;license&#34;</span>) <span style="color:#ff79c6">=</span> <span style="color:#f1fa8c">&#34;Dual BSD/GPL&#34;</span>;
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>程序，编译器，ELF文件格式，内核的交互过程<br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/06/29/7o2As3.png">
+            <img class="mx-auto" alt="2025\06\bpf\11.jpg" src="https://v1.ax1x.com/2025/06/29/7o2As3.png" />
+        </a>
+    </p>
+<p>编译</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-shell" data-lang="shell"><span style="display:flex;"><span>clang -g -O2 -target bpf -D__TARGET_ARCH_x86_64 -I/usr/include/x86_64-linux-gnu -I. <span style="color:#f1fa8c">\
+</span></span></span><span style="display:flex;"><span><span style="color:#f1fa8c"></span>-c execsnoop.bpf.c -o execsnoop.bpf.o
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>生成 骨架文件</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-shell" data-lang="shell"><span style="display:flex;"><span>bpftool gen skeleton execsnoop.bpf.o &gt; execsnoop.skel.h
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>用户态代码 execsnoop.c</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">  1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">  2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">  3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">  4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">  5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">  6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">  7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">  8
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">  9
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 10
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 11
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 12
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 13
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 14
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 15
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 16
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 17
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 18
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 19
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 20
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 21
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 22
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 23
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 24
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 25
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 26
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 27
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 28
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 29
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 30
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 31
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 32
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 33
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 34
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 35
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 36
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 37
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 38
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 39
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 40
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 41
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 42
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 43
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 44
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 45
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 46
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 47
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 48
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 49
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 50
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 51
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 52
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 53
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 54
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 55
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 56
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 57
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 58
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 59
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 60
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 61
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 62
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 63
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 64
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 65
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 66
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 67
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 68
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 69
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 70
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 71
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 72
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 73
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 74
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 75
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 76
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 77
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 78
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 79
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 80
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 81
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 82
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 83
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 84
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 85
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 86
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 87
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 88
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 89
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 90
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 91
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 92
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 93
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 94
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 95
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 96
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 97
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 98
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 99
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">100
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">101
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">102
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">103
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">104
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">105
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">106
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">107
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">108
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">109
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">110
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">111
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">112
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">113
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">114
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">115
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">116
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">117
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">118
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">119
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">120
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">121
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-cpp" data-lang="cpp"><span style="display:flex;"><span><span style="color:#ff79c6">#include</span> <span style="color:#ff79c6">&lt;stdio.h&gt;</span><span style="color:#ff79c6">
+</span></span></span><span style="display:flex;"><span><span style="color:#ff79c6">#include</span> <span style="color:#ff79c6">&lt;unistd.h&gt;</span><span style="color:#ff79c6">
+</span></span></span><span style="display:flex;"><span><span style="color:#ff79c6">#include</span> <span style="color:#ff79c6">&lt;stdlib.h&gt;</span><span style="color:#ff79c6">
+</span></span></span><span style="display:flex;"><span><span style="color:#ff79c6">#include</span> <span style="color:#ff79c6">&lt;sys/resource.h&gt;</span><span style="color:#ff79c6">
+</span></span></span><span style="display:flex;"><span><span style="color:#ff79c6">#include</span> <span style="color:#ff79c6">&lt;bpf/libbpf.h&gt;</span><span style="color:#ff79c6">
+</span></span></span><span style="display:flex;"><span><span style="color:#ff79c6">#include</span> <span style="color:#ff79c6">&lt;time.h&gt;</span><span style="color:#ff79c6">
+</span></span></span><span style="display:flex;"><span><span style="color:#ff79c6">#include</span> <span style="color:#ff79c6">&#34;execsnoop.h&#34;</span><span style="color:#ff79c6">
+</span></span></span><span style="display:flex;"><span><span style="color:#ff79c6">#include</span> <span style="color:#ff79c6">&#34;execsnoop.skel.h&#34;</span><span style="color:#ff79c6">
+</span></span></span><span style="display:flex;"><span><span style="color:#ff79c6"></span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4">// Handler for libbpf errors and debug info callback.
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span><span style="color:#ff79c6">static</span> <span style="color:#8be9fd">int</span> <span style="color:#50fa7b">libbpf_print_fn</span>(<span style="color:#ff79c6">enum</span> <span style="color:#50fa7b">libbpf_print_level</span> level, <span style="color:#ff79c6">const</span> <span style="color:#8be9fd">char</span> <span style="color:#ff79c6">*</span>format,
+</span></span><span style="display:flex;"><span>                           va_list args)
+</span></span><span style="display:flex;"><span>{
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">#ifdef DEBUGBPF
+</span></span></span><span style="display:flex;"><span><span style="color:#ff79c6"></span>        <span style="color:#ff79c6">return</span> vfprintf(stderr, format, args);
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">#else
+</span></span></span><span style="display:flex;"><span><span style="color:#ff79c6"></span>        <span style="color:#ff79c6">return</span> <span style="color:#bd93f9">0</span>;
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">#endif
+</span></span></span><span style="display:flex;"><span><span style="color:#ff79c6"></span>}
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4">// Handler for lost events.
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span><span style="color:#8be9fd">void</span> <span style="color:#50fa7b">handle_lost_events</span>(<span style="color:#8be9fd">void</span> <span style="color:#ff79c6">*</span>ctx, <span style="color:#8be9fd">int</span> cpu, __u64 lost_cnt)
+</span></span><span style="display:flex;"><span>{
+</span></span><span style="display:flex;"><span>        fprintf(stderr, <span style="color:#f1fa8c">&#34;Lost %llu events on CPU #%d!</span><span style="color:#f1fa8c">\n</span><span style="color:#f1fa8c">&#34;</span>, lost_cnt, cpu);
+</span></span><span style="display:flex;"><span>}
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4">// Heandler for print arguments (args are separated by &#39;\0&#39;).
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span><span style="color:#ff79c6">static</span> <span style="color:#8be9fd">void</span> <span style="color:#50fa7b">print_args</span>(<span style="color:#ff79c6">const</span> <span style="color:#ff79c6">struct</span> <span style="color:#50fa7b">event</span> <span style="color:#ff79c6">*</span>e)
+</span></span><span style="display:flex;"><span>{
+</span></span><span style="display:flex;"><span>        <span style="color:#8be9fd">int</span> args_counter <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">0</span>;
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">for</span> (<span style="color:#8be9fd">int</span> i <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">0</span>; i <span style="color:#ff79c6">&lt;</span> e<span style="color:#ff79c6">-&gt;</span>args_size <span style="color:#ff79c6">&amp;&amp;</span> args_counter <span style="color:#ff79c6">&lt;</span> e<span style="color:#ff79c6">-&gt;</span>args_count; i<span style="color:#ff79c6">++</span>) {
+</span></span><span style="display:flex;"><span>                <span style="color:#8be9fd">char</span> c <span style="color:#ff79c6">=</span> e<span style="color:#ff79c6">-&gt;</span>args[i];
+</span></span><span style="display:flex;"><span>                <span style="color:#ff79c6">if</span> (c <span style="color:#ff79c6">==</span> <span style="color:#f1fa8c">&#39;\0&#39;</span>) {
+</span></span><span style="display:flex;"><span>                        args_counter<span style="color:#ff79c6">++</span>;
+</span></span><span style="display:flex;"><span>                        putchar(<span style="color:#f1fa8c">&#39; &#39;</span>);
+</span></span><span style="display:flex;"><span>                } <span style="color:#ff79c6">else</span> {
+</span></span><span style="display:flex;"><span>                        putchar(c);
+</span></span><span style="display:flex;"><span>                }
+</span></span><span style="display:flex;"><span>        }
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">if</span> (e<span style="color:#ff79c6">-&gt;</span>args_count <span style="color:#ff79c6">&gt;</span> TOTAL_MAX_ARGS) {
+</span></span><span style="display:flex;"><span>                fputs(<span style="color:#f1fa8c">&#34; ...&#34;</span>, stdout);
+</span></span><span style="display:flex;"><span>        }
+</span></span><span style="display:flex;"><span>}
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4">// Handler for each perf event.
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span><span style="color:#8be9fd">void</span> <span style="color:#50fa7b">handle_event</span>(<span style="color:#8be9fd">void</span> <span style="color:#ff79c6">*</span>ctx, <span style="color:#8be9fd">int</span> cpu, <span style="color:#8be9fd">void</span> <span style="color:#ff79c6">*</span>data, __u32 data_sz)
+</span></span><span style="display:flex;"><span>{
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">const</span> <span style="color:#ff79c6">struct</span> <span style="color:#50fa7b">event</span> <span style="color:#ff79c6">*</span>e <span style="color:#ff79c6">=</span> data;
+</span></span><span style="display:flex;"><span>        printf(<span style="color:#f1fa8c">&#34;%-16s %-6d %3d &#34;</span>, e<span style="color:#ff79c6">-&gt;</span>comm, e<span style="color:#ff79c6">-&gt;</span>pid, e<span style="color:#ff79c6">-&gt;</span>retval);
+</span></span><span style="display:flex;"><span>        print_args(e);
+</span></span><span style="display:flex;"><span>        putchar(<span style="color:#f1fa8c">&#39;\n&#39;</span>);
+</span></span><span style="display:flex;"><span>}
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4">// Bump RLIMIT_MEMLOCK to allow BPF sub-system to do anything it needs.
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span><span style="color:#ff79c6">static</span> <span style="color:#8be9fd">void</span> <span style="color:#50fa7b">bump_memlock_rlimit</span>(<span style="color:#8be9fd">void</span>)
+</span></span><span style="display:flex;"><span>{
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">struct</span> <span style="color:#50fa7b">rlimit</span> rlim_new <span style="color:#ff79c6">=</span> {
+</span></span><span style="display:flex;"><span>                .rlim_cur <span style="color:#ff79c6">=</span> RLIM_INFINITY,
+</span></span><span style="display:flex;"><span>                .rlim_max <span style="color:#ff79c6">=</span> RLIM_INFINITY,
+</span></span><span style="display:flex;"><span>        };
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">if</span> (setrlimit(RLIMIT_MEMLOCK, <span style="color:#ff79c6">&amp;</span>rlim_new)) {
+</span></span><span style="display:flex;"><span>                fprintf(stderr, <span style="color:#f1fa8c">&#34;Failed to increase RLIMIT_MEMLOCK limit!</span><span style="color:#f1fa8c">\n</span><span style="color:#f1fa8c">&#34;</span>);
+</span></span><span style="display:flex;"><span>                exit(<span style="color:#bd93f9">1</span>);
+</span></span><span style="display:flex;"><span>        }
+</span></span><span style="display:flex;"><span>}
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#8be9fd">int</span> <span style="color:#50fa7b">main</span>(<span style="color:#8be9fd">int</span> argc, <span style="color:#8be9fd">char</span> <span style="color:#ff79c6">**</span>argv)
+</span></span><span style="display:flex;"><span>{
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">struct</span> <span style="color:#50fa7b">execsnoop_bpf</span> <span style="color:#ff79c6">*</span>skel;
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">struct</span> <span style="color:#50fa7b">perf_buffer</span> <span style="color:#ff79c6">*</span>pb <span style="color:#ff79c6">=</span> <span style="color:#8be9fd;font-style:italic">NULL</span>;
+</span></span><span style="display:flex;"><span>        <span style="color:#8be9fd">int</span> err;
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>        <span style="color:#6272a4">/* Set up libbpf errors and debug info callback */</span>
+</span></span><span style="display:flex;"><span>        libbpf_set_print(libbpf_print_fn);
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>        <span style="color:#6272a4">/* Bump RLIMIT_MEMLOCK to allow BPF sub-system to do anything */</span>
+</span></span><span style="display:flex;"><span>        bump_memlock_rlimit();
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>        <span style="color:#6272a4">/* Open BPF application (generated by bpftool gen skeleton) */</span>
+</span></span><span style="display:flex;"><span>        skel <span style="color:#ff79c6">=</span> execsnoop_bpf__open();
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">if</span> (<span style="color:#ff79c6">!</span>skel) {
+</span></span><span style="display:flex;"><span>                fprintf(stderr, <span style="color:#f1fa8c">&#34;Failed to open BPF skeleton</span><span style="color:#f1fa8c">\n</span><span style="color:#f1fa8c">&#34;</span>);
+</span></span><span style="display:flex;"><span>                <span style="color:#ff79c6">return</span> <span style="color:#bd93f9">1</span>;
+</span></span><span style="display:flex;"><span>        }
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>        <span style="color:#6272a4">/* Load &amp; verify BPF programs (generated by bpftool gen skeleton) */</span>
+</span></span><span style="display:flex;"><span>        err <span style="color:#ff79c6">=</span> execsnoop_bpf__load(skel);
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">if</span> (err) {
+</span></span><span style="display:flex;"><span>                fprintf(stderr, <span style="color:#f1fa8c">&#34;Failed to load and verify BPF skeleton</span><span style="color:#f1fa8c">\n</span><span style="color:#f1fa8c">&#34;</span>);
+</span></span><span style="display:flex;"><span>                <span style="color:#ff79c6">goto</span> cleanup;
+</span></span><span style="display:flex;"><span>        }
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>        <span style="color:#6272a4">/* Attach tracepoint handler (generated by bpftool gen skeleton) */</span>
+</span></span><span style="display:flex;"><span>        err <span style="color:#ff79c6">=</span> execsnoop_bpf__attach(skel);
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">if</span> (err) {
+</span></span><span style="display:flex;"><span>                fprintf(stderr, <span style="color:#f1fa8c">&#34;Failed to attach BPF skeleton</span><span style="color:#f1fa8c">\n</span><span style="color:#f1fa8c">&#34;</span>);
+</span></span><span style="display:flex;"><span>                <span style="color:#ff79c6">goto</span> cleanup;
+</span></span><span style="display:flex;"><span>        }
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>        pb <span style="color:#ff79c6">=</span> perf_buffer__new(bpf_map__fd(skel<span style="color:#ff79c6">-&gt;</span>maps.events), <span style="color:#bd93f9">64</span>, handle_event,
+</span></span><span style="display:flex;"><span>                              handle_lost_events, <span style="color:#8be9fd;font-style:italic">NULL</span>, <span style="color:#8be9fd;font-style:italic">NULL</span>);
+</span></span><span style="display:flex;"><span>        err <span style="color:#ff79c6">=</span> libbpf_get_error(pb);
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">if</span> (err) {
+</span></span><span style="display:flex;"><span>                pb <span style="color:#ff79c6">=</span> <span style="color:#8be9fd;font-style:italic">NULL</span>;
+</span></span><span style="display:flex;"><span>                fprintf(stderr, <span style="color:#f1fa8c">&#34;failed to open perf buffer: %d</span><span style="color:#f1fa8c">\n</span><span style="color:#f1fa8c">&#34;</span>, err);
+</span></span><span style="display:flex;"><span>                <span style="color:#ff79c6">goto</span> cleanup;
+</span></span><span style="display:flex;"><span>        }
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>        printf(<span style="color:#f1fa8c">&#34;%-16s %-6s %3s %s</span><span style="color:#f1fa8c">\n</span><span style="color:#f1fa8c">&#34;</span>, <span style="color:#f1fa8c">&#34;COMM&#34;</span>, <span style="color:#f1fa8c">&#34;PID&#34;</span>, <span style="color:#f1fa8c">&#34;RET&#34;</span>, <span style="color:#f1fa8c">&#34;ARGS&#34;</span>);
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>        <span style="color:#6272a4">/* Main polling loop */</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">while</span> ((err <span style="color:#ff79c6">=</span> perf_buffer__poll(pb, <span style="color:#bd93f9">100</span>)) <span style="color:#ff79c6">&gt;=</span> <span style="color:#bd93f9">0</span>) ;
+</span></span><span style="display:flex;"><span>        printf(<span style="color:#f1fa8c">&#34;Error polling perf buffer: %d</span><span style="color:#f1fa8c">\n</span><span style="color:#f1fa8c">&#34;</span>, err);
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span> <span style="color:#8be9fd;font-style:italic">cleanup</span>:
+</span></span><span style="display:flex;"><span>        perf_buffer__free(pb);
+</span></span><span style="display:flex;"><span>        execsnoop_bpf__destroy(skel);
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">return</span> err <span style="color:#ff79c6">!=</span> <span style="color:#bd93f9">0</span>;
+</span></span><span style="display:flex;"><span>}
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>用户态、内核态的交互过程<br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/06/29/7o6TUf.png">
+            <img class="mx-auto" alt="2025\06\bpf\12.jpg" src="https://v1.ax1x.com/2025/06/29/7o6TUf.png" />
+        </a>
+    </p>
+<p>程序释放的过程<br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/06/29/7o6m2c.png">
+            <img class="mx-auto" alt="2025\06\bpf\13.jpg" src="https://v1.ax1x.com/2025/06/29/7o6m2c.png" />
+        </a>
+    </p>
+<p>编译用户态代码</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-shell" data-lang="shell"><span style="display:flex;"><span>clang -g -O2 -Wall -I . -c execsnoop.c -o execsnoop.o
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>生成最终可执行文件</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-shell" data-lang="shell"><span style="display:flex;"><span>sudo apt install libzstd-dev
+</span></span><span style="display:flex;"><span>clang -Wall -O2 -g execsnoop.o -static -lbpf -lelf -lz -o execsnoop
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>执行这个二进制程序</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">6
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-shell" data-lang="shell"><span style="display:flex;"><span>./execsnoop
+</span></span><span style="display:flex;"><span>COMM             PID    RET ARGS
+</span></span><span style="display:flex;"><span>ls               <span style="color:#bd93f9">3292</span>     <span style="color:#bd93f9">0</span> /usr/bin/ls --color<span style="color:#ff79c6">=</span>auto
+</span></span><span style="display:flex;"><span>ls               <span style="color:#bd93f9">3293</span>     <span style="color:#bd93f9">0</span> /usr/bin/ls --color<span style="color:#ff79c6">=</span>auto
+</span></span><span style="display:flex;"><span>sleep            <span style="color:#bd93f9">3295</span>     <span style="color:#bd93f9">0</span> /usr/bin/sleep <span style="color:#bd93f9">1</span>
+</span></span><span style="display:flex;"><span>gcc              <span style="color:#bd93f9">3296</span>     <span style="color:#bd93f9">0</span> /usr/bin/gcc --version
+</span></span></code></pre></td></tr></table>
+</div>
+</div><h2 id="参考">参考</h2>
+<ul>
+<li><a href="https://ebpf.io/what-is-ebpf/">bpf 官方文档</a></li>
+<li><a href="https://www.kernel.org/doc/html/latest/bpf/index.html/">BPF 内核文档</a></li>
+<li><a href="https://ebpf.io/">ebpf</a></li>
+<li><a href="https://github.com/iovisor/bcc">bcc tools</a></li>
+<li><a href="https://github.com/bpftrace/bpftrace/blob/master/man/adoc/bpftrace.adoc">bpftrace文档</a></li>
+<li><a href="https://www.bluepuni.com/archives/ebpf-internals/">[翻译] eBPF 的工作原理</a></li>
+<li><a href="https://netflixtechblog.com/how-netflix-uses-ebpf-flow-logs-at-scale-for-network-insight-e3ea997dca96">How Netflix uses eBPF flow logs at scale for network insight</a></li>
+<li><a href="https://engineering.fb.com/2018/05/22/open-source/open-sourcing-katran-a-scalable-network-load-balancer/">Open-sourcing Katran, a scalable network load balancer</a></li>
+<li><a href="https://greenhathg.github.io/2022/05/18/CMU213-CSAPP-Virtual-Memory-Systems/">CMU213-CSAPP-Virtual-Memory-Systems</a></li>
+<li><a href="https://sysdig.com/blog/the-art-of-writing-ebpf-programs-a-primer/">The art of writing eBPF programs: a primer.</a></li>
+</ul>
+
+			<script type="text/javascript"
+        async
+        src="https://cdn.bootcss.com/mathjax/2.7.3/MathJax.js?config=TeX-AMS-MML_HTMLorMML">
+MathJax.Hub.Config({
+  tex2jax: {
+    inlineMath: [['$','$'], ['\\(','\\)']],
+    displayMath: [['$$','$$'], ['\[\[','\]\]']],
+    processEscapes: true,
+    processEnvironments: true,
+    skipTags: ['script', 'noscript', 'style', 'textarea', 'pre'],
+    TeX: { equationNumbers: { autoNumber: "AMS" },
+         extensions: ["AMSmath.js", "AMSsymbols.js"] }
+  }
+});
+
+MathJax.Hub.Queue(function() {
+    
+    
+    
+    var all = MathJax.Hub.getAllJax(), i;
+    for(i = 0; i < all.length; i += 1) {
+        all[i].SourceElement().parentNode.className += ' has-jax';
+    }
+});
+</script>
+
+<style>
+code.has-jax {
+    font: inherit;
+    font-size: 100%;
+    background: inherit;
+    border: inherit;
+    color: #515151;
+}
+</style>
+        </div>
+
+        
+
+
+        
+
+<div class="post-archive">
+    <h2>相关文章</h2>
+    <ul class="listing">
+        
+        <li><a href="/post/2025/05/ebpf_hello/">eBPF hello-world</a></li>
+        
+    </ul>
+</div>
+
+
+        <div class="post-meta meta-tags">
+            
+            <ul class="clearfix">
+                
+                <li><a href='/tags/ebpf'>eBPF</a></li>
+                
+            </ul>
+            
+        </div>
+    </article>
+    
+    
+
+    
+    
+    <div class="post bg-white">
+      <script src="https://utteranc.es/client.js"
+            repo= "himichael/hugoblogtalks"
+            issue-term="pathname"
+            theme="github-light"
+            crossorigin="anonymous"
+            async>
+      </script>
+    </div>
+    
+</div>
+
+
+                </div>
+
+                <div id="secondary">
+    <section class="widget">
+        <form id="search" action='https://code0xff.org/search/' method="get" accept-charset="utf-8" target="_blank" _lpchecked="1">
+      
+      <input type="text" name="q" maxlength="20" placeholder="Search">
+      <input type="hidden" name="sitesearch" value="https://code0xff.org/">
+      <button type="submit" class="submit icon-search"></button>
+</form>
+    </section>
+    
+    <section class="widget">
+        <h3 class="widget-title">最近文章</h3>
+<ul class="widget-list">
+    
+    <li>
+        <a href="https://code0xff.org/post/2026/02/yunnan_west/" title="云南滇西大环线">云南滇西大环线</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2026/01/2015_2025/" title="2015年 -- 2025年">2015年 -- 2025年</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2026/01/longhorn/" title="longhorn">longhorn</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2025/12/ai_infrastructure/" title="关于AI 的生态">关于AI 的生态</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2025/11/ai_bubble/" title="关于AI泡沫">关于AI泡沫</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2025/10/china_beihai/" title="南边的北海">南边的北海</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2025/09/bpf_http/" title="eBPF的 http跟踪">eBPF的 http跟踪</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2025/09/spark_flink/" title="Spark和Flink的对比总结（包含Operator）">Spark和Flink的对比总结（包含Operator）</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2025/08/juicefs/" title="JuiceFS">JuiceFS</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2025/08/bpftrace_12_lessons/" title="bpftrace 12个小命令">bpftrace 12个小命令</a>
+    </li>
+    
+</ul>
+    </section>
+
+    
+
+    <section class="widget">
+        <h3 class="widget-title"><a href='/categories/'>分类</a></h3>
+<ul class="widget-list">
+    
+    <li><a href="https://code0xff.org/categories/%E5%88%86%E5%B8%83%E5%BC%8F/">分布式 (8)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E5%8E%9F%E7%90%86%E5%88%86%E6%9E%90/">原理分析 (33)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E5%95%86%E4%B8%9A/">商业 (6)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E5%A4%A7%E6%95%B0%E6%8D%AE/">大数据 (59)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%95%B0%E6%8D%AE%E5%BA%93/">数据库 (41)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%96%87%E5%AD%A6%E5%92%8C%E8%89%BA%E6%9C%AF/">文学和艺术 (3)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%97%85%E8%A1%8C/">旅行 (15)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%9E%B6%E6%9E%84/">架构 (13)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E7%AE%97%E6%B3%95%E5%92%8Cai/">算法和AI (11)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E7%B3%BB%E7%BB%9F/">系统 (16)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E7%BC%96%E7%A8%8B%E8%AF%AD%E8%A8%80/">编程语言 (8)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E8%A1%8C%E4%B8%9A%E8%A7%82%E5%AF%9F/">行业观察 (3)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E8%AF%BB%E4%B9%A6%E7%AC%94%E8%AE%B0/">读书笔记 (19)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E9%9A%8F%E4%BE%BF%E5%86%99%E5%86%99/">随便写写 (4)</a></li>
+    
+</ul>
+    </section>
+
+    <section class="widget">
+        <h3 class="widget-title">归档</a></h3>
+<ul class="widget-list">
+    
+    <li><a href="https://code0xff.org/years/2021%E5%B9%B4/">2021年 (41)</a></li>
+    
+    <li><a href="https://code0xff.org/years/2022%E5%B9%B4/">2022年 (55)</a></li>
+    
+    <li><a href="https://code0xff.org/years/2023%E5%B9%B4/">2023年 (54)</a></li>
+    
+    <li><a href="https://code0xff.org/years/2024%E5%B9%B4/">2024年 (48)</a></li>
+    
+    <li><a href="https://code0xff.org/years/2025%E5%B9%B4/">2025年 (38)</a></li>
+    
+    <li><a href="https://code0xff.org/years/2026%E5%B9%B4/">2026年 (3)</a></li>
+    
+</ul>
+    </section>
+
+    <section class="widget">
+        <h3 class="widget-title"><a href='/tags/'>标签</a></h3>
+<div class="tagcloud">
+    
+    <a href="https://code0xff.org/tags/ai/">AI </a>
+    
+    <a href="https://code0xff.org/tags/ambari/">Ambari </a>
+    
+    <a href="https://code0xff.org/tags/architecture/">architecture </a>
+    
+    <a href="https://code0xff.org/tags/bigdata/">bigdata </a>
+    
+    <a href="https://code0xff.org/tags/btrace/">BTrace </a>
+    
+    <a href="https://code0xff.org/tags/b%E6%A0%91/">B树 </a>
+    
+    <a href="https://code0xff.org/tags/c&#43;&#43;/">C&#43;&#43; </a>
+    
+    <a href="https://code0xff.org/tags/calcite/">calcite </a>
+    
+    <a href="https://code0xff.org/tags/cmu-database/">CMU-Database </a>
+    
+    <a href="https://code0xff.org/tags/data_ingestion/">Data_Ingestion </a>
+    
+    <a href="https://code0xff.org/tags/deltalake/">DeltaLake </a>
+    
+    <a href="https://code0xff.org/tags/doris/">Doris </a>
+    
+    <a href="https://code0xff.org/tags/ebpf/">eBPF </a>
+    
+    <a href="https://code0xff.org/tags/english/">English </a>
+    
+    <a href="https://code0xff.org/tags/es/">ES </a>
+    
+    <a href="https://code0xff.org/tags/facebook/">Facebook </a>
+    
+    <a href="https://code0xff.org/tags/flink/">flink </a>
+    
+    <a href="https://code0xff.org/tags/flume/">flume </a>
+    
+    <a href="https://code0xff.org/tags/gc/">GC </a>
+    
+    <a href="https://code0xff.org/tags/gluten/">Gluten </a>
+    
+    <a href="https://code0xff.org/tags/hana/">HANA </a>
+    
+    <a href="https://code0xff.org/tags/hive/">Hive </a>
+    
+    <a href="https://code0xff.org/tags/iceberg/">iceberg </a>
+    
+    <a href="https://code0xff.org/tags/impala/">Impala </a>
+    
+    <a href="https://code0xff.org/tags/janino/">janino </a>
+    
+    <a href="https://code0xff.org/tags/juicefs/">JuiceFS </a>
+    
+    <a href="https://code0xff.org/tags/k8s/">k8s </a>
+    
+    <a href="https://code0xff.org/tags/kafka/">Kafka </a>
+    
+    <a href="https://code0xff.org/tags/kudu/">kudu </a>
+    
+    <a href="https://code0xff.org/tags/kyuubi/">Kyuubi </a>
+    
+    <a href="https://code0xff.org/tags/lakehouse/">Lakehouse </a>
+    
+    <a href="https://code0xff.org/tags/leveldb/">LevelDB </a>
+    
+    <a href="https://code0xff.org/tags/llamafactory/">LlamaFactory </a>
+    
+    <a href="https://code0xff.org/tags/llvm/">LLVM </a>
+    
+    <a href="https://code0xff.org/tags/log4j/">log4j </a>
+    
+    <a href="https://code0xff.org/tags/longhorn/">longhorn </a>
+    
+    <a href="https://code0xff.org/tags/manacher/">Manacher </a>
+    
+    <a href="https://code0xff.org/tags/mapreduce/">MapReduce </a>
+    
+    <a href="https://code0xff.org/tags/micro-service/">micro-service </a>
+    
+    <a href="https://code0xff.org/tags/mysql/">MySQL </a>
+    
+    <a href="https://code0xff.org/tags/newsql/">NewSQL </a>
+    
+    <a href="https://code0xff.org/tags/oceanbase/">OceanBase </a>
+    
+    <a href="https://code0xff.org/tags/openldap/">OpenLDAP </a>
+    
+    <a href="https://code0xff.org/tags/openlogreplicator/">OpenLogReplicator </a>
+    
+    <a href="https://code0xff.org/tags/parquet/">parquet </a>
+    
+    <a href="https://code0xff.org/tags/paxos/">paxos </a>
+    
+    <a href="https://code0xff.org/tags/presto/">Presto </a>
+    
+    <a href="https://code0xff.org/tags/pytorch/">PyTorch </a>
+    
+    <a href="https://code0xff.org/tags/quick-sql/">quick-sql </a>
+    
+    <a href="https://code0xff.org/tags/raft/">raft </a>
+    
+    <a href="https://code0xff.org/tags/scala/">scala </a>
+    
+    <a href="https://code0xff.org/tags/simd/">SIMD </a>
+    
+    <a href="https://code0xff.org/tags/snowflake/">snowflake </a>
+    
+    <a href="https://code0xff.org/tags/spark/">spark </a>
+    
+    <a href="https://code0xff.org/tags/sre/">SRE </a>
+    
+    <a href="https://code0xff.org/tags/teradata/">TeraData </a>
+    
+    <a href="https://code0xff.org/tags/tpcx-hs/">TPCx-HS </a>
+    
+    <a href="https://code0xff.org/tags/trino/">Trino </a>
+    
+    <a href="https://code0xff.org/tags/tuning/">Tuning </a>
+    
+    <a href="https://code0xff.org/tags/unix/">unix </a>
+    
+    <a href="https://code0xff.org/tags/yarn/">YARN </a>
+    
+    <a href="https://code0xff.org/tags/%E4%BA%8C%E5%88%86%E6%9F%A5%E6%89%BE/">二分查找 </a>
+    
+    <a href="https://code0xff.org/tags/%E4%BA%8C%E5%8F%89%E6%A0%91%E9%81%8D%E5%8E%86/">二叉树遍历 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%88%86%E5%B8%83%E5%BC%8F/">分布式 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%88%97%E5%AD%98/">列存 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%8A%A8%E6%80%81%E6%B3%A8%E5%85%A5/">动态注入 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%8E%86%E5%8F%B2/">历史 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%90%91%E9%87%8F%E5%8C%96/">向量化 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%95%86%E4%B8%9A/">商业 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%9B%9E%E6%BA%AF/">回溯 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%9B%BD%E5%86%85%E6%97%85%E8%A1%8C/">国内旅行 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%9B%BD%E5%A4%96%E6%97%85%E8%A1%8C/">国外旅行 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%A4%9A%E7%A7%9F%E6%88%B7/">多租户 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%A4%A7%E6%95%B0%E6%8D%AE/">大数据 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%AD%98%E5%82%A8/">存储 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%B7%A5%E4%BD%9C%E8%AE%B0%E5%BD%95/">工作记录 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%BE%AE%E6%9C%8D%E5%8A%A1/">微服务 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%95%B0%E6%8D%AE%E4%B8%AD%E5%8F%B0/">数据中台 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%95%B0%E6%8D%AE%E5%BA%93/">数据库 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%95%B0%E6%8D%AE%E6%A8%A1%E5%9E%8B/">数据模型 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%95%B0%E6%8D%AE%E8%BF%81%E7%A7%BB/">数据迁移 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%9F%A5%E8%AF%A2%E4%BC%98%E5%8C%96/">查询优化 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%9F%A5%E8%AF%A2%E7%BC%96%E8%AF%91/">查询编译 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%A6%82%E7%8E%87/">概率 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%B1%87%E7%BC%96/">汇编 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%B5%8B%E8%AF%95/">测试 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%94%9F%E6%B4%BB/">生活 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%94%B5%E5%BD%B1/">电影 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%AE%97%E6%B3%95/">算法 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%B4%A2%E5%BC%95/">索引 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BB%8F%E6%B5%8E/">经济 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BB%8F%E6%B5%8E%E5%88%86%E6%9E%90/">经济分析 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BC%93%E5%AD%98/">缓存 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BC%96%E8%AF%91%E5%8E%9F%E7%90%86/">编译原理 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BD%91%E7%BB%9C/">网络 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AE%A1%E7%AE%97%E6%A1%86%E6%9E%B6/">计算框架 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AE%BA%E6%96%87/">论文 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AF%BB%E4%B9%A6/">读书 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AF%BB%E4%B9%A6%E7%AC%94%E8%AE%B0/">读书笔记 </a>
+    
+</div>
+    </section>
+
+    
+
+    <section class="widget">
+        <h3 class="widget-title">RSS</h3>
+        <ul class="widget-list">
+            <li><a href="https://code0xff.org/index.xml">文章 RSS</a></li>
+        </ul>
+    </section>
+</div>
+            </div>
+        </div>
+    </div>
+    <footer id="footer">
+    <div>
+        &copy; 2026 <a href="https://code0xff.org/">记录每个瞬间 By 老王</a>
+        
+    </div>
+    <br />
+    <div>
+        <div class="github-badge">
+            <a href="https://gohugo.io/" target="_black" rel="nofollow"><span class="badge-subject">Powered by</span><span class="badge-value bg-blue">Hugo</span></a>
+        </div>
+        <div class="github-badge">
+            <a href="https://github.com/flysnow-org/maupassant-hugo" target="_black"><span class="badge-subject">Theme</span><span class="badge-value bg-yellowgreen">Maupassant</span></a>
+        </div>
+    </div>
+</footer>
+
+
+    
+    <script type="text/javascript">
+        window.MathJax = {
+            tex2jax: {
+                inlineMath: [['$', '$']],
+                processEscapes: true
+                }
+            };
+    </script>
+    <script src='https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.5/MathJax.js?config=TeX-MML-AM_CHTML' async></script><script src="https://cdn.bootcdn.net/ajax/libs/fancybox/3.5.7/jquery.fancybox.min.js"></script>
+
+<a id="rocket" href="#top"></a>
+<script type="text/javascript" src='/js/totop.js?v=0.0.0' async=""></script>
+
+<script type="application/javascript">
+var doNotTrack = false;
+if (!doNotTrack) {
+	window.ga=window.ga||function(){(ga.q=ga.q||[]).push(arguments)};ga.l=+new Date;
+	ga('create', 'GA ID', 'auto');
+	
+	ga('send', 'pageview');
+}
+</script>
+<script async src='https://www.google-analytics.com/analytics.js'></script>
+
+
+
+    <script type="text/javascript" src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js" async></script>
+
+
+
+
+</body>
+
+</html>

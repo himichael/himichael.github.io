@@ -1,0 +1,1190 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    
+    <meta name="referrer" content="no-referrer-when-downgrade">
+    
+
+    <title>Flink 状态管理 | 记录每个瞬间</title>
+    <meta property="og:title" content="Flink 状态管理 - 记录每个瞬间">
+    <meta property="og:type" content="article">
+        
+    <meta property="article:published_time" content='2025-03-15T09:10:12&#43;08:00'>
+        
+        
+    <meta property="article:modified_time" content='2025-03-15T09:10:12&#43;08:00'>
+        
+    <meta name="Keywords" content="">
+    <meta name="description" content="Flink 状态管理">
+        <meta name="author" content="隔壁老王">
+        
+    <meta property="og:url" content="https://code0xff.org/post/2025/03/flink_state/">
+    <link rel="shortcut icon" href='/favicon.ico'  type="image/x-icon">
+
+    <link rel="stylesheet" href='/css/normalize.css'>
+    <link rel="stylesheet" href='/css/style.css'>
+    <script type="text/javascript" src="//cdn.bootcdn.net/ajax/libs/jquery/3.4.1/jquery.min.js"></script>
+
+    
+    
+    
+        <link href="https://cdn.bootcdn.net/ajax/libs/fancybox/3.5.7/jquery.fancybox.min.css" rel="stylesheet">
+    
+    
+    
+    
+</head>
+
+
+<body>
+    <header id="header" class="clearfix">
+    <div class="container">
+        <div class="col-group">
+            <div class="site-name ">
+                
+                    <a id="logo" href="https://code0xff.org/">
+                        记录每个瞬间
+                    </a>
+                
+                
+            </div>
+            <div>
+                <nav id="nav-menu" class="clearfix">
+                    <a class="current" href="https://code0xff.org/">首页</a>
+                    
+                    <a  href="https://code0xff.org/linked/" title="链接">链接</a>
+                    
+                    <a  href="https://code0xff.org/archives/" title="归档">归档</a>
+                    
+                    <a  href="https://code0xff.org/about/" title="关于">关于</a>
+                    
+                </nav>
+            </div>
+        </div>
+    </div>
+</header>
+
+    <div id="body">
+        <div class="container">
+            <div class="col-group">
+
+                <div class="col-8" id="main">
+                    <div class="res-cons">
+    
+    <article class="post">
+        <header>
+            <h1 class="post-title">Flink 状态管理</h1>
+        </header>
+        <date class="post-meta meta-date">
+            2025年3月15日
+        </date>
+<nav id="TableOfContents">
+  <ul>
+    <li>
+      <ul>
+        <li><a href="#状态数据管理">状态数据管理</a></li>
+        <li><a href="#keyedstate">keyedState</a></li>
+        <li><a href="#operatorstate">OperatorState</a></li>
+        <li><a href="#statebackend">StateBackend</a></li>
+        <li><a href="#checkpoint">Checkpoint</a></li>
+        <li><a href="#示例">示例</a></li>
+        <li><a href="#参考">参考</a></li>
+      </ul>
+    </li>
+  </ul>
+</nav>
+        
+        <div class="post-meta">
+            
+            <span class="post-meta meta-tags">
+                <ul class="clearfix">
+                    <a href='/categories/%E5%8E%9F%E7%90%86%E5%88%86%E6%9E%90'>原理分析</a>
+                </ul>
+            </span>
+            
+        </div>
+        
+        
+        <div class="post-meta">
+            <span id="busuanzi_container_page_pv">|<span id="busuanzi_value_page_pv"></span><span>
+                    阅读</span></span>
+        </div>
+        
+        
+        <div class="post-content">
+            <h2 id="状态数据管理">状态数据管理</h2>
+<p>状态类型 类图</p>
+<ul>
+<li>状态数据通过抽象出统一的状态接口来表示，并根据不同的状态数据类型和使用方式区分接口实现<br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/03/15/7cS8AO.png">
+            <img class="mx-auto" alt="flink_3/1.jpg" src="https://v1.ax1x.com/2025/03/15/7cS8AO.png" />
+        </a>
+    </li>
+</ul>
+<p>Flink中的状态类型都是通过接口实现的</p>
+<ul>
+<li>MapState：用于存储分区的Key-Value类型状态数据</li>
+<li>ValueState：用于单值类型的状态数据，并提供获取和更新状态的方法</li>
+<li>ReadOnlyBroadcastState：提供只读操作的BroadcastState</li>
+<li>BroadcastState：用于存储BroadcastStream中的状态数据，BroadcastState中的数据会被发送到指定算子的所有实例中</li>
+<li>AppendingState：支持累积操作的状态数据</li>
+<li>MergingState：在AppendingState的基础上增加了合并功能，即支持合并状态的操作</li>
+<li>FoldingState：用于支持FoldFunction转换的状态数据</li>
+<li>AggregatingState：用于支持基于AggregateFunction转换的状态数据</li>
+<li>ListState：以数组结构类型存储状态数据</li>
+<li>ReducingState：用于支持ReduceFunction操作状态</li>
+</ul>
+<p>InternalKvState接口 类图</p>
+<ul>
+<li>用于在运行时将获取内部的状态 
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/03/15/7cSGJQ.png">
+            <img class="mx-auto" alt="flink_3/2.jpg" src="https://v1.ax1x.com/2025/03/15/7cSGJQ.png" />
+        </a>
+    </li>
+</ul>
+<p>InternalKvState 相关类图</p>
+<ul>
+<li>有基于堆内存存储的状态类型</li>
+<li>基于RocksDB存储的状态类型
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/03/15/7cS5Bf.png">
+            <img class="mx-auto" alt="flink_3/3.jpg" src="https://v1.ax1x.com/2025/03/15/7cS5Bf.png" />
+        </a>
+    </li>
+</ul>
+<p>KeyedState和OperatorState</p>
+<ul>
+<li>根据DataStream数据集是否基于Key进行分组</li>
+<li>KeyedState 类型</li>
+<li>OperatorState 类型</li>
+</ul>
+<p>KeyedState与OperatorState的区别 如下：</p>
+<table>
+<thead>
+<tr>
+<th>​<strong>Feature</strong></th>
+<th>​<strong>KeyedState</strong></th>
+<th>​<strong>OperatorState</strong></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>​<strong>Scope</strong></td>
+<td>Scoped to a specific key in a <code>KeyedStream</code> (each key has its own state) <a href="@ref">1</a></td>
+<td>Scoped to an operator instance (all data in the operator shares the same state) <a href="@ref">3,5</a></td>
+</tr>
+<tr>
+<td>​<strong>Applicability</strong></td>
+<td>Only usable on <code>KeyedStream</code> operators (e.g., after <code>keyBy()</code>) <a href="@ref">1,3</a></td>
+<td>Can be used in any operator (e.g., sources, sinks, non-keyed transformations) <a href="@ref">3,7</a></td>
+</tr>
+<tr>
+<td>​<strong>State Structure</strong></td>
+<td>Built-in data structures: <code>ValueState</code>, <code>ListState</code>, <code>MapState</code>, etc. <a href="@ref">3,7</a></td>
+<td>Typically <code>ListState</code> or <code>UnionListState</code>; custom structures require raw bytes <a href="@ref">5,7</a></td>
+</tr>
+<tr>
+<td>​<strong>Access Pattern</strong></td>
+<td>Accessed via <code>RuntimeContext</code> in <code>RichFunction</code> (e.g., <code>processElement</code>) <a href="@ref">3</a></td>
+<td>Accessed via <code>CheckpointedFunction</code> interface (<code>snapshotState</code>, <code>initializeState</code>) <a href="@ref">5</a></td>
+</tr>
+<tr>
+<td>​<strong>Parallelism Handling</strong></td>
+<td>Automatically partitioned by key groups for scaling <a href="@ref">1,6</a></td>
+<td>Requires explicit redistribution (e.g., split or union lists) during scaling <a href="@ref">1,5</a></td>
+</tr>
+<tr>
+<td>​<strong>Typical Use Cases</strong></td>
+<td>Aggregations (sum, min), window operations, per-key counters <a href="@ref">1,4</a></td>
+<td>Source offsets (e.g., Kafka partitions), sink buffers, operator-wide metrics <a href="@ref">5,7</a></td>
+</tr>
+<tr>
+<td>​<strong>State Backend</strong></td>
+<td>Managed by Flink (RocksDB, heap/disk) with automatic serialization <a href="@ref">3,7</a></td>
+<td>Requires manual handling for raw state; managed state uses Flink’s backend <a href="@ref">3,5</a></td>
+</tr>
+<tr>
+<td>​<strong>Fault Tolerance</strong></td>
+<td>Part of Flink’s checkpointing mechanism (state snapshots per key group) <a href="@ref">6</a></td>
+<td>Checkpointed as operator-level snapshots (e.g., list redistribution) <a href="@ref">1,5</a></td>
+</tr>
+<tr>
+<td>​<strong>Example</strong></td>
+<td>Tracking user session data in a keyed stream (e.g., <code>keyBy(userId)</code>) <a href="@ref">4</a></td>
+<td>Storing Kafka partition offsets in a source operator <a href="@ref">5,7</a></td>
+</tr>
+</tbody>
+</table>
+<p>状态初始化</p>
+<ul>
+<li>TaskManager中启动Task线程后，会调用StreamTask.invoke()方法触发当前Task中算子的执行</li>
+<li>调用： StreamTask.initializeStateAndOpen()</li>
+<li>只有当所有Operator的状态数据初始化完毕，才会调用StreamOperator.open()方法开启算子，并接入数据进行处理</li>
+</ul>
+<p>StateInitializationContext 相关类图</p>
+<ul>
+<li>ManagedInitializationContext接口提供了托管状态使用的KeyedStateStore和OperatorStateStore获取方法</li>
+<li>FunctionInitializationContext提供了用户自定义函数状态数据初始化需要的方法</li>
+<li>StateInitializationContext 提供了对托管状态数据的获取和管理，并在内部继承和拓展了获取及管理原生状态数据的方法</li>
+<li>StateInitializationContextImpl 具备操作管理状态和原生状态的能力
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/03/16/7cSvu5.jpg">
+            <img class="mx-auto" alt="flink_3/4.jpg" src="https://v1.ax1x.com/2025/03/16/7cSvu5.jpg" />
+        </a>
+    </li>
+</ul>
+<p>初始化过程</p>
+<ul>
+<li>调用keyedStateBackend()方法创建 KeyedStateBackend，他是 KeyedState 的状态管理后端</li>
+<li>调用operatorStateBackend()方法创建 OperatorStateBackend，是 OperatorState 的状态管理后端</li>
+<li>将创建出的 keyedStatedBackend和operatorStateBackend、原生状态存储后端rawKeyedStateInputs和rawOperatorStateInputs及timeServiceManager实例</li>
+<li>全部封装在StreamOperatorStateContextImpl上下文对象中</li>
+<li>再返回给 AbstractStreamOperator 使用</li>
+<li>具体算子可以使用抽象类中的 后端实现</li>
+<li>最终状态数据会存储在状态管理后端指定的物理介质上，例如堆内存或RocksDB</li>
+</ul>
+<h2 id="keyedstate">keyedState</h2>
+<p>KeyedState</p>
+<blockquote>
+<p>in Apache Flink is a type of state that is ​scoped to a specific key within a KeyedStream. <br>
+It allows stateful operations (e.g., aggregations, counters) to maintain and update data per key, ensuring that computations are partitioned and isolated across keys.<br>
+This is essential for distributed processing, as it guarantees consistency and parallelism for keyed operations<br>
+​
+KeyedState type</p>
+</blockquote>
+<ul>
+<li><strong>ValueState<!-- raw HTML omitted --></strong>: Holds a single value per key (e.g., a user’s total purchases).</li>
+<li>​<strong>ListState<!-- raw HTML omitted --></strong>: Stores a list of values per key (e.g., a user’s click history).</li>
+<li>​<strong>MapState&lt;K, V&gt;</strong>: Manages a key-value map per key (e.g., a user’s real-time feature cache).</li>
+<li>​<strong>ReducingState<!-- raw HTML omitted --></strong> / ​<strong>AggregatingState<!-- raw HTML omitted --></strong>: Supports incremental aggregations (e.g., sum or average per key).</li>
+</ul>
+<p>KeyedStateBackend 相关类图</p>
+<ul>
+<li>Flink主要提供了基于JVM堆内存和RocksDB实现的KeyedStateBackend</li>
+<li>AbstractKeyedStateBackend 提供了 snapshot()，将状态数据写入外部系统</li>
+<li>HeapKeyedStateBackend 借助 JVM 堆内存存储 KeyedState 状态数据</li>
+<li>RocksDBKeyedStateBackend 借助 RocksDB 管理的堆外内存存储 KeyedState 状态数据
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/03/22/7cClUQ.png">
+            <img class="mx-auto" alt="flink_3/5.jpg" src="https://v1.ax1x.com/2025/03/22/7cClUQ.png" />
+        </a>
+    </li>
+</ul>
+<p>HeapKeyedStateBackend 相关类图</p>
+<ul>
+<li>这里还实现了 InternalKvState 和具体状态类型的接口</li>
+<li>基于HeapKeyedStateBackend就可以将全部Keyed State存储在堆内存中</li>
+<li>当用户实现RichFunction接口时，就可以通过RuntimeContext提供的方法创建指定类型的KeyedState
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/03/22/7cJ96Y.jpg">
+            <img class="mx-auto" alt="flink_3/6.jpg" src="https://v1.ax1x.com/2025/03/22/7cJ96Y.jpg" />
+        </a>
+    </li>
+</ul>
+<p>StateTable 相关类图</p>
+<ul>
+<li>在 HeapKeyedStateBackend 中持有 Map&lt;String, StateTable&lt;K, ?, ?&raquo;registeredKVStates 结构来存储 StateName 与 StateTable 之间的映射关系</li>
+<li>StateTable 的实现：CopyOnWriteStateTable，cow 线程实现，checkpoint 支持异步快照</li>
+<li>NestedMapsStateTable底层借助NestedStateMap数据结构存储数据元素
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/03/22/7cJBNH.png">
+            <img class="mx-auto" alt="flink_3/7.jpg" src="https://v1.ax1x.com/2025/03/22/7cJBNH.png" />
+        </a>
+    </li>
+</ul>
+<p>存储结构</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">5
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-java" data-lang="java"><span style="display:flex;"><span>CopyOnWriteStateTable  <span style="color:#ff79c6">--</span>关联多个<span style="color:#ff79c6">--&gt;</span> KeyGroup 的状态
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>每个 KeyGroup的状态 对应一个 CopyOnWriteStateMap
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>CopyOnWriteStateMap： 数组 <span style="color:#ff79c6">+</span> 链表构成的 hash table   
+</span></span></code></pre></td></tr></table>
+</div>
+</div><h2 id="operatorstate">OperatorState</h2>
+<p>OperatorState 通过以下两种状态管理后端创建</p>
+<ul>
+<li>OperatorStateBackend</li>
+<li>RawKeyedStateInputs</li>
+</ul>
+<p>OperatorStateBackend 相关类图</p>
+<ul>
+<li>OperatorStateStore接口提供了获取BroadcastState、ListState</li>
+<li>以及注册在OperatorStateStore中的StateNames的方法</li>
+<li>SnapshotStrategy接口提供了对状态数据进行快照操作的方法</li>
+<li>所有算子的状态数据都只能存储在JVM堆内存中<br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/03/22/7cJTvZ.png">
+            <img class="mx-auto" alt="flink_3/8.jpg" src="https://v1.ax1x.com/2025/03/22/7cJTvZ.png" />
+        </a>
+    </li>
+</ul>
+<p>DefaultOperatorStateBackend</p>
+<ul>
+<li>​OperatorState Management</li>
+<li>​Checkpointing Support</li>
+<li>​Memory-Based Storage</li>
+</ul>
+<table>
+<thead>
+<tr>
+<th>​<strong>Feature</strong></th>
+<th>​<strong>KeyedStateBackend</strong></th>
+<th>​<strong>OperatorStateBackend</strong></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>​<strong>Scope</strong></td>
+<td>Manages state partitioned by keys (e.g., after <code>keyBy()</code>). Each key group corresponds to a specific key.</td>
+<td>Manages state at the operator level, shared across all records processed by an operator instance.</td>
+</tr>
+<tr>
+<td>​<strong>State Association</strong></td>
+<td>Tied to a specific key in a <code>KeyedStream</code>. State is isolated per key and accessible via keyed operations.</td>
+<td>Not key-specific. State is shared across all data processed by an operator, even without key grouping.</td>
+</tr>
+<tr>
+<td>​<strong>Data Structures</strong></td>
+<td>Supports rich types: <code>ValueState</code>, <code>ListState</code>, <code>MapState</code>, <code>ReducingState</code>, <code>AggregatingState</code>.</td>
+<td>Primarily uses <code>ListState</code> or <code>UnionListState</code> (raw bytes for custom structures).</td>
+</tr>
+<tr>
+<td>​<strong>Parallelism Handling</strong></td>
+<td>Automatically partitions state by key groups during scaling. State redistribution is transparent.</td>
+<td>Requires manual redistribution logic (e.g., splitting/merging lists) when parallelism changes.</td>
+</tr>
+<tr>
+<td>​<strong>Access Interface</strong></td>
+<td>Accessed via <code>RuntimeContext</code> in <code>RichFunction</code> (e.g., <code>ValueState</code> updates in <code>processElement</code>).</td>
+<td>Managed through <code>CheckpointedFunction</code> (<code>snapshotState</code> and <code>initializeState</code> methods).</td>
+</tr>
+<tr>
+<td>​<strong>Typical Use Cases</strong></td>
+<td>Per-key aggregations (e.g., user session counters, windowed sums).</td>
+<td>Operator-wide metrics, source/sink offsets (e.g., Kafka partition tracking), broadcast state.</td>
+</tr>
+<tr>
+<td>​<strong>Fault Tolerance</strong></td>
+<td>Snapshots are key-group-aware, enabling efficient recovery during failures.</td>
+<td>Snapshots entire operator state, which may require merging/splitting during recovery.</td>
+</tr>
+</tbody>
+</table>
+<h2 id="statebackend">StateBackend</h2>
+<p>Flink支持</p>
+<ul>
+<li>MemoryStateBackend</li>
+<li>FsStateBackend</li>
+<li>RocksDBStateBackend</li>
+</ul>
+<p>StateBackend 相关类图</p>
+<ul>
+<li>包括了 文件存储后端、rocksdb 存储</li>
+<li>MemoryStateBackend主要通过JobManager堆内存存储Checkpoint数据</li>
+<li>FsStateBackend通过FsCheckpointStorage将Checkpoint数据存储在指定文件系统中
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/03/22/7cJmIU.png">
+            <img class="mx-auto" alt="flink_3/9.jpg" src="https://v1.ax1x.com/2025/03/22/7cJmIU.png" />
+        </a>
+    </li>
+</ul>
+<p>StateBackend 初始化和加载</p>
+<ul>
+<li>都是通过 StateBackendLoader 加载工厂类，然后通过工厂类创建对应的 后端存储实现</li>
+<li>并且都继承了 ConfigurableStateBackend 接口</li>
+<li>state.backend的名称使用Java SPI技术加载</li>
+</ul>
+<p>StateBackendFactory 相关类图</p>
+<ul>
+<li>JobGraph对象创建ExecutionGraph的过程中会创建StateBackend</li>
+<li>用于CheckpointCoordinator组件管理状态和Checkpoint操作</li>
+<li>每个Task实例初始化的过程中会创建StateBackend，用于管理当前Task中的状态和Checkpoint数据<br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/03/22/7cJL0q.png">
+            <img class="mx-auto" alt="flink_3/10.jpg" src="https://v1.ax1x.com/2025/03/22/7cJL0q.png" />
+        </a>
+    </li>
+</ul>
+<p>MemoryStateBackend</p>
+<ul>
+<li>基于MemoryStateBackend创建KeyedStateBackend</li>
+<li>基于MemoryStateBackend创建OperatorStateBackend</li>
+</ul>
+<h2 id="checkpoint">Checkpoint</h2>
+<p>Checkpoint的执行过程分为三个阶段</p>
+<ul>
+<li>启动</li>
+<li>执行</li>
+<li>确认完成</li>
+</ul>
+<p>执行过</p>
+<ul>
+<li>首先 job-manager通过 CheckpointCoordinator组件向每个数据源节点发送Checkpoint执行请求</li>
+<li>JobManager节点会存储Checkpoint元数据，用于记录每次执行Checkpoint操作过程中算子的元数据信息</li>
+<li>如 kafka 的偏移量</li>
+<li>下游算子通过对齐Barrier事件，触发该算子的Checkpoint操作</li>
+<li>当下游收到 checkpoint 事件后， block当前算子，等待上游节点其他的 barrier 事件，即 对齐</li>
+<li>一直持续到 sink，每次算子 checkpoint 也会向 job-manager 发送 ack 事件</li>
+<li>当所有 sink 发送 ack 后，job-manager 通知所有 task 
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/03/22/7cJJAq.png">
+            <img class="mx-auto" alt="flink_3/11.jpg" src="https://v1.ax1x.com/2025/03/22/7cJJAq.png" />
+        </a>
+    </li>
+</ul>
+<p>ExecutionGraph</p>
+<ul>
+<li>提交时 StreamGraph 会携带 checkpoint 信息</li>
+<li>JobManager 启动时会根据 checkpoint 相关配置创建 ExecutionGraph，然后在JobMaster服务内调度和执行Checkpoint操作</li>
+</ul>
+<p>CompletedCheckpointStore 实现</p>
+<ul>
+<li>StandaloneCompletedCheckpointStore</li>
+<li>ZooKeeperCompletedCheckpointStore</li>
+</ul>
+<p>Checkpoint的触发方式</p>
+<ul>
+<li>数据源节点中的Checkpoint操作触发，通过CheckpointCoordinator组件进行协调和控制</li>
+<li>下游算子节点根据上游发送的Checkpoint Barrier事件控制算子中Checkpoint操作的触发时机</li>
+</ul>
+<p>CheckpointCoordinator</p>
+<ul>
+<li>preCheckBeforeTriggeringCheckpoint()方法进行一些前置检查</li>
+<li>创建 PendingCheckpoint
+<ul>
+<li>从开始执行Checkpoint操作直到Task实例返回Ack确认成功消息</li>
+<li>Checkpoint会一直处于Pending状态，确保Checkpoint能被成功执行</li>
+<li>支持 高可用、非高可用</li>
+</ul>
+</li>
+<li>Checkpoint操作的触发与执行
+<ul>
+<li>获取coordinator对象锁</li>
+<li>将PendingCheckpoint存储在pendingCheckpoints键值对中</li>
+<li>遍历执行executions集合中的Execution节点，判断同步 or 异步执行</li>
+</ul>
+</li>
+<li>调用TaskExecutor执行Checkpoint操作</li>
+<li>在StreamTask中执行Checkpoint操作</li>
+</ul>
+<p>
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/03/22/7cJsuL.png">
+            <img class="mx-auto" alt="flink_3/17.jpg" src="https://v1.ax1x.com/2025/03/22/7cJsuL.png" />
+        </a>
+    </p>
+<p>CheckpointType 枚举类型</p>
+<ul>
+<li>CHECKPOINT</li>
+<li>SAVEPOINT</li>
+<li>SYNC_SAVEPOINT</li>
+</ul>
+<p>对齐 CheckpointBarrier 触发算子Checkpoint操作</p>
+<ul>
+<li>当下游Task实例接收到上游节点发送的CheckpointBarrier事件消息</li>
+<li>且接收到所有InputChannel中的CheckpointBarrier事件消息时</li>
+<li>当前Task实例才会触发本节点的Checkpoint操作</li>
+</ul>
+<p>Exactly_Once 和 At_Least_Once 区别</p>
+<ul>
+<li>Exactly_Once 模式，某个算子的 Task 有多个输入通道时，当其中一个输入通道收到 CheckpointBarrier 时，Flink Task 会阻塞该通道</li>
+<li>其不会处理该通道后续数据，但是会将这些数据缓存起来，一旦完成了所有输入通道的 CheckpointBarrier 对齐，才会继续对这些数据进行消费处理</li>
+<li>At_least_Once，同样针对某个算子的 Task 有多个输入通道的情况下，当某个输入通道接收到 CheckpointBarrier 时</li>
+<li>即使没有完成所有输入通道 CheckpointBarrier 对齐，At Least Once 也会继续处理后续接收到的数据</li>
+</ul>
+<p>CheckpointBarrierHandler  相关类图</p>
+<ul>
+<li>CheckpointBarrierAligner用于实现Exactly-Once数据的一致性保障</li>
+<li>CheckpointBarrierTracker则实现了At-Least-Once语义处理保障<br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/03/22/7cJzMZ.png">
+            <img class="mx-auto" alt="flink_3/12.jpg" src="https://v1.ax1x.com/2025/03/22/7cJzMZ.png" />
+        </a>
+    </li>
+</ul>
+<p>StreamTask中执行Checkpoint操作</p>
+<p>Checkpoint确认过程<br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/03/22/7cJC3U.png">
+            <img class="mx-auto" alt="flink_3/13.jpg" src="https://v1.ax1x.com/2025/03/22/7cJC3U.png" />
+        </a>
+    </p>
+<p>checkpoint 流程
+1、Checkpoint Initiation (JobManager)</p>
+<ul>
+<li>​Entry Point: CheckpointCoordinator (package: org.apache.flink.runtime.checkpoint)
+<ul>
+<li>The triggerCheckpoint() method initiates a new checkpoint.</li>
+<li>Sends TriggerCheckpoint RPC messages to all SourceTasks via Execution#triggerCheckpoint()</li>
+</ul>
+</li>
+<li>Checkpoint ID Generation:
+<ul>
+<li>Unique IDs are generated via CheckpointIDCounter (persisted in HA storage like Zookeeper).</li>
+</ul>
+</li>
+</ul>
+<p>2、Checkpoint Barrier Injection (Source Tasks)</p>
+<ul>
+<li>​Barrier Creation:
+<ul>
+<li>Source tasks (e.g., StreamSource) inject CheckpointBarrier into the data stream via the OperatorChain (class: OperatorChain#broadcastCheckpointBarrier).
+​- Alignment Logic:</li>
+<li>For multi-input operators (e.g., joins), CheckpointBarrierHandler (in StreamTaskNetworkInput) buffers records until all input channels receive the barrier.</li>
+</ul>
+</li>
+</ul>
+<p>3、Task-Level Checkpointing (TaskManager)</p>
+<ul>
+<li>​Task Execution: StreamTask#performCheckpoint()
+<ul>
+<li>Suspends processing during the synchronous phase.</li>
+<li>Delegates to StreamOperator#snapshotState() for each operator in the chain (e.g., WindowOperator, ProcessOperator).</li>
+</ul>
+</li>
+<li>​State Snapshot:
+<ul>
+<li>​Keyed State: AbstractKeyedStateBackend (e.g., RocksDBKeyedStateBackend) serializes state via SnapshotStrategy#syncPrepareSnapshot().</li>
+<li>​Operator State: OperatorStateBackend (e.g., DefaultOperatorStateBackend) writes to ListState or BroadcastState.</li>
+</ul>
+</li>
+</ul>
+<p>4、Asynchronous Persistence</p>
+<ul>
+<li>​Async Thread: AsyncCheckpointRunnable (invoked via StreamTask#asyncCheckpoint())
+<ul>
+<li>Uploads state snapshots to durable storage (e.g., HDFS) using CheckpointStorageWorkers.</li>
+<li>For RocksDB, incremental snapshots are created via RocksDBIncrementalCheckpointUtils</li>
+</ul>
+</li>
+</ul>
+<p>5、Checkpoint Completion &amp; Acknowledgment</p>
+<ul>
+<li>Finalization:
+<ul>
+<li>After all subtasks complete, CheckpointCoordinator finalizes the checkpoint via PendingCheckpoint#complete().</li>
+<li>Updates the CompletedCheckpointStore (persisted in HA storage).</li>
+</ul>
+</li>
+<li>​Acknowledgment:
+<ul>
+<li>TaskExecutor sends AcknowledgeCheckpoint RPC to JobManager, handled by CheckpointCoordinator#receiveAcknowledgeMessage().</li>
+</ul>
+</li>
+</ul>
+<p>6、Recovery &amp; Restore</p>
+<ul>
+<li>State Restoration: TaskStateManagerImpl#restoreLatestCheckpointState()
+<ul>
+<li>Loads state handles from CompletedCheckpointStore during task deployment.</li>
+<li>For keyed state, KeyedStateBackend rebuilds state from RocksDB SST files or heap snapshots.
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/03/22/7cJfZV.png">
+            <img class="mx-auto" alt="flink_3/15.jpg" src="https://v1.ax1x.com/2025/03/22/7cJfZV.png" />
+        </a>
+    </li>
+</ul>
+</li>
+</ul>
+<p>StateBackend vs OperatorStateBackend vs ​KeyedStateBackend</p>
+<ol>
+<li>StateBackend</li>
+</ol>
+<ul>
+<li>StateBackend is a ​configuration-level abstraction that determines how and where Flink stores state data (both keyed and operator state) during computation and checkpoints. It defines the storage mechanism (heap, disk, or hybrid) and checkpoint persistence (e.g., to HDFS, S3).</li>
+</ul>
+<ol start="2">
+<li>OperatorStateBackend</li>
+</ol>
+<ul>
+<li>OperatorStateBackend is a ​runtime component that manages ​non-keyed state (OperatorState) for a single operator instance. It handles state that is not partitioned by keys (e.g., Kafka offsets in a source operator).</li>
+</ul>
+<ol start="3">
+<li>KeyedStateBackend</li>
+</ol>
+<ul>
+<li>KeyedStateBackend is a ​runtime component that manages ​keyed state (KeyedState) for a KeyedStream. It stores state partitioned by keys (e.g., per-user counters) and is accessible only in keyed contexts (after keyBy()).</li>
+</ul>
+<p>
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/03/22/7cJMRI.png">
+            <img class="mx-auto" alt="flink_3/16.jpg" src="https://v1.ax1x.com/2025/03/22/7cJMRI.png" />
+        </a>
+    </p>
+<h2 id="示例">示例</h2>
+<p>多节点容错对齐
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/04/19/7Y1sYj.png">
+            <img class="mx-auto" alt="flink_4/3_多节点容错对齐.jpg" src="https://v1.ax1x.com/2025/04/19/7Y1sYj.png" />
+        </a>
+    </p>
+<p>状态存储流程
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/04/19/7Y1dih.png">
+            <img class="mx-auto" alt="flink_4/4_状态存储流程.jpg" src="https://v1.ax1x.com/2025/04/19/7Y1dih.png" />
+        </a>
+    </p>
+<p>状态恢复流程
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/04/19/7Y1ZO4.png">
+            <img class="mx-auto" alt="flink_4/5_状态恢复流程.jpg" src="https://v1.ax1x.com/2025/04/19/7Y1ZO4.png" />
+        </a>
+    </p>
+<hr>
+<p>无状态流框架
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/04/19/7Y12d5.png">
+            <img class="mx-auto" alt="flink_4/6_无状态流框架.jpg" src="https://v1.ax1x.com/2025/04/19/7Y12d5.png" />
+        </a>
+    </p>
+<p>有状态流框架
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/04/19/7Y1Fwm.png">
+            <img class="mx-auto" alt="flink_4/7_有状态流框架.jpg" src="https://v1.ax1x.com/2025/04/19/7Y1Fwm.png" />
+        </a>
+    </p>
+<hr>
+<p>操作符状态的重分配</p>
+<ul>
+<li>SPLIT_DISTRIBUTE</li>
+<li>UNION</li>
+<li>BROADCAST</li>
+</ul>
+<p>SPLIT_DISTRIBUTE模式
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/04/19/7YP9VY.png">
+            <img class="mx-auto" alt="flink_4/SPLIT_DISTRIBUTE模式.jpg" src="https://v1.ax1x.com/2025/04/19/7YP9VY.png" />
+        </a>
+    </p>
+<p>UNION模式
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/04/19/7YPkXH.png">
+            <img class="mx-auto" alt="flink_4/UNION模式.jpg" src="https://v1.ax1x.com/2025/04/19/7YPkXH.png" />
+        </a>
+    </p>
+<p>BROADCAST模式
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/04/19/7Y1o79.png">
+            <img class="mx-auto" alt="flink_4/BROADCAST模式.jpg" src="https://v1.ax1x.com/2025/04/19/7Y1o79.png" />
+        </a>
+    </p>
+<hr>
+<p>无键组</p>
+<ul>
+<li>并行度从3改成了4，Flink仍然对key取哈希值，再对并行度取余，</li>
+<li>以此确定状态数据被读取到了哪个并行实例。但是下图可见，状态数据在存储时是顺序写入</li>
+<li>但是在状态恢复时变成了随机读取
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/04/19/7YPWmf.png">
+            <img class="mx-auto" alt="flink_4/11_无键组.jpg" src="https://v1.ax1x.com/2025/04/19/7YPWmf.png" />
+        </a>
+    </li>
+</ul>
+<p>有键组</p>
+<ul>
+<li>每个key都会按照一定规则被分入某个键组</li>
+<li>在状态存储时，会以键组为单位进行存储</li>
+<li>在状态恢复时，会以键组为单位被整体读取到某个新的并行实例中
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/04/19/7YPAjQ.png">
+            <img class="mx-auto" alt="flink_4/12_有键组.jpg" src="https://v1.ax1x.com/2025/04/19/7YPAjQ.png" />
+        </a>
+    </li>
+</ul>
+<h2 id="参考">参考</h2>
+<ul>
+<li><a href="https://nightlies.apache.org/flink/flink-docs-release-1.20/">1.20 官方文档</a></li>
+<li><a href="https://cloud.tencent.com/developer/column/93187?tag=11033">Lansonli技术博客</a></li>
+<li><a href="https://juejin.cn/post/7111510381956169764">深入浅出理解Flink运行时架构</a></li>
+<li><a href="https://0x90e.github.io/flink-execution-graph/">Flink Execution Graph</a></li>
+<li><a href="https://zhuanlan.zhihu.com/p/668625467">Flink实战(11)-Exactly-Once语义之两阶段提交</a></li>
+<li><a href="https://juejin.cn/post/7150837768346681374">Flink on k8s 讲解与实战操作</a></li>
+<li><a href="https://tech.youzan.com/flink_checkpoint_mechanism/">Flink Checkpoint 原理流程以及常见失败原因分析</a></li>
+<li><a href="https://nightlies.apache.org/flink/flink-docs-master/docs/concepts/stateful-stream-processing/">Stateful Stream Processing</a></li>
+</ul>
+
+			<script type="text/javascript"
+        async
+        src="https://cdn.bootcss.com/mathjax/2.7.3/MathJax.js?config=TeX-AMS-MML_HTMLorMML">
+MathJax.Hub.Config({
+  tex2jax: {
+    inlineMath: [['$','$'], ['\\(','\\)']],
+    displayMath: [['$$','$$'], ['\[\[','\]\]']],
+    processEscapes: true,
+    processEnvironments: true,
+    skipTags: ['script', 'noscript', 'style', 'textarea', 'pre'],
+    TeX: { equationNumbers: { autoNumber: "AMS" },
+         extensions: ["AMSmath.js", "AMSsymbols.js"] }
+  }
+});
+
+MathJax.Hub.Queue(function() {
+    
+    
+    
+    var all = MathJax.Hub.getAllJax(), i;
+    for(i = 0; i < all.length; i += 1) {
+        all[i].SourceElement().parentNode.className += ' has-jax';
+    }
+});
+</script>
+
+<style>
+code.has-jax {
+    font: inherit;
+    font-size: 100%;
+    background: inherit;
+    border: inherit;
+    color: #515151;
+}
+</style>
+        </div>
+
+        
+
+
+        
+
+<div class="post-archive">
+    <h2>相关文章</h2>
+    <ul class="listing">
+        
+        <li><a href="/post/2025/03/flink_cluster/">Flink 集群管理</a></li>
+        
+        <li><a href="/post/2025/03/flink_submit/">Flink 任务提交</a></li>
+        
+        <li><a href="/post/2025/02/flink_datastream/">Flink-DataStraem</a></li>
+        
+        <li><a href="/post/2025/02/flink_arch/">Flink架构</a></li>
+        
+        <li><a href="/post/2025/02/flink_inner/">Flink执行图的生成</a></li>
+        
+    </ul>
+</div>
+
+
+        <div class="post-meta meta-tags">
+            
+            <ul class="clearfix">
+                
+                <li><a href='/tags/flink'>Flink</a></li>
+                
+            </ul>
+            
+        </div>
+    </article>
+    
+    
+
+    
+    
+    <div class="post bg-white">
+      <script src="https://utteranc.es/client.js"
+            repo= "himichael/hugoblogtalks"
+            issue-term="pathname"
+            theme="github-light"
+            crossorigin="anonymous"
+            async>
+      </script>
+    </div>
+    
+</div>
+
+
+                </div>
+
+                <div id="secondary">
+    <section class="widget">
+        <form id="search" action='https://code0xff.org/search/' method="get" accept-charset="utf-8" target="_blank" _lpchecked="1">
+      
+      <input type="text" name="q" maxlength="20" placeholder="Search">
+      <input type="hidden" name="sitesearch" value="https://code0xff.org/">
+      <button type="submit" class="submit icon-search"></button>
+</form>
+    </section>
+    
+    <section class="widget">
+        <h3 class="widget-title">最近文章</h3>
+<ul class="widget-list">
+    
+    <li>
+        <a href="https://code0xff.org/post/2026/02/yunnan_west/" title="云南滇西大环线">云南滇西大环线</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2026/01/2015_2025/" title="2015年 -- 2025年">2015年 -- 2025年</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2026/01/longhorn/" title="longhorn">longhorn</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2025/12/ai_infrastructure/" title="关于AI 的生态">关于AI 的生态</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2025/11/ai_bubble/" title="关于AI泡沫">关于AI泡沫</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2025/10/china_beihai/" title="南边的北海">南边的北海</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2025/09/bpf_http/" title="eBPF的 http跟踪">eBPF的 http跟踪</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2025/09/spark_flink/" title="Spark和Flink的对比总结（包含Operator）">Spark和Flink的对比总结（包含Operator）</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2025/08/juicefs/" title="JuiceFS">JuiceFS</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2025/08/bpftrace_12_lessons/" title="bpftrace 12个小命令">bpftrace 12个小命令</a>
+    </li>
+    
+</ul>
+    </section>
+
+    
+
+    <section class="widget">
+        <h3 class="widget-title"><a href='/categories/'>分类</a></h3>
+<ul class="widget-list">
+    
+    <li><a href="https://code0xff.org/categories/%E5%88%86%E5%B8%83%E5%BC%8F/">分布式 (8)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E5%8E%9F%E7%90%86%E5%88%86%E6%9E%90/">原理分析 (33)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E5%95%86%E4%B8%9A/">商业 (6)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E5%A4%A7%E6%95%B0%E6%8D%AE/">大数据 (59)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%95%B0%E6%8D%AE%E5%BA%93/">数据库 (41)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%96%87%E5%AD%A6%E5%92%8C%E8%89%BA%E6%9C%AF/">文学和艺术 (3)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%97%85%E8%A1%8C/">旅行 (15)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%9E%B6%E6%9E%84/">架构 (13)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E7%AE%97%E6%B3%95%E5%92%8Cai/">算法和AI (11)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E7%B3%BB%E7%BB%9F/">系统 (16)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E7%BC%96%E7%A8%8B%E8%AF%AD%E8%A8%80/">编程语言 (8)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E8%A1%8C%E4%B8%9A%E8%A7%82%E5%AF%9F/">行业观察 (3)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E8%AF%BB%E4%B9%A6%E7%AC%94%E8%AE%B0/">读书笔记 (19)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E9%9A%8F%E4%BE%BF%E5%86%99%E5%86%99/">随便写写 (4)</a></li>
+    
+</ul>
+    </section>
+
+    <section class="widget">
+        <h3 class="widget-title">归档</a></h3>
+<ul class="widget-list">
+    
+    <li><a href="https://code0xff.org/years/2021%E5%B9%B4/">2021年 (41)</a></li>
+    
+    <li><a href="https://code0xff.org/years/2022%E5%B9%B4/">2022年 (55)</a></li>
+    
+    <li><a href="https://code0xff.org/years/2023%E5%B9%B4/">2023年 (54)</a></li>
+    
+    <li><a href="https://code0xff.org/years/2024%E5%B9%B4/">2024年 (48)</a></li>
+    
+    <li><a href="https://code0xff.org/years/2025%E5%B9%B4/">2025年 (38)</a></li>
+    
+    <li><a href="https://code0xff.org/years/2026%E5%B9%B4/">2026年 (3)</a></li>
+    
+</ul>
+    </section>
+
+    <section class="widget">
+        <h3 class="widget-title"><a href='/tags/'>标签</a></h3>
+<div class="tagcloud">
+    
+    <a href="https://code0xff.org/tags/ai/">AI </a>
+    
+    <a href="https://code0xff.org/tags/ambari/">Ambari </a>
+    
+    <a href="https://code0xff.org/tags/architecture/">architecture </a>
+    
+    <a href="https://code0xff.org/tags/bigdata/">bigdata </a>
+    
+    <a href="https://code0xff.org/tags/btrace/">BTrace </a>
+    
+    <a href="https://code0xff.org/tags/b%E6%A0%91/">B树 </a>
+    
+    <a href="https://code0xff.org/tags/c&#43;&#43;/">C&#43;&#43; </a>
+    
+    <a href="https://code0xff.org/tags/calcite/">calcite </a>
+    
+    <a href="https://code0xff.org/tags/cmu-database/">CMU-Database </a>
+    
+    <a href="https://code0xff.org/tags/data_ingestion/">Data_Ingestion </a>
+    
+    <a href="https://code0xff.org/tags/deltalake/">DeltaLake </a>
+    
+    <a href="https://code0xff.org/tags/doris/">Doris </a>
+    
+    <a href="https://code0xff.org/tags/ebpf/">eBPF </a>
+    
+    <a href="https://code0xff.org/tags/english/">English </a>
+    
+    <a href="https://code0xff.org/tags/es/">ES </a>
+    
+    <a href="https://code0xff.org/tags/facebook/">Facebook </a>
+    
+    <a href="https://code0xff.org/tags/flink/">flink </a>
+    
+    <a href="https://code0xff.org/tags/flume/">flume </a>
+    
+    <a href="https://code0xff.org/tags/gc/">GC </a>
+    
+    <a href="https://code0xff.org/tags/gluten/">Gluten </a>
+    
+    <a href="https://code0xff.org/tags/hana/">HANA </a>
+    
+    <a href="https://code0xff.org/tags/hive/">Hive </a>
+    
+    <a href="https://code0xff.org/tags/iceberg/">iceberg </a>
+    
+    <a href="https://code0xff.org/tags/impala/">Impala </a>
+    
+    <a href="https://code0xff.org/tags/janino/">janino </a>
+    
+    <a href="https://code0xff.org/tags/juicefs/">JuiceFS </a>
+    
+    <a href="https://code0xff.org/tags/k8s/">k8s </a>
+    
+    <a href="https://code0xff.org/tags/kafka/">Kafka </a>
+    
+    <a href="https://code0xff.org/tags/kudu/">kudu </a>
+    
+    <a href="https://code0xff.org/tags/kyuubi/">Kyuubi </a>
+    
+    <a href="https://code0xff.org/tags/lakehouse/">Lakehouse </a>
+    
+    <a href="https://code0xff.org/tags/leveldb/">LevelDB </a>
+    
+    <a href="https://code0xff.org/tags/llamafactory/">LlamaFactory </a>
+    
+    <a href="https://code0xff.org/tags/llvm/">LLVM </a>
+    
+    <a href="https://code0xff.org/tags/log4j/">log4j </a>
+    
+    <a href="https://code0xff.org/tags/longhorn/">longhorn </a>
+    
+    <a href="https://code0xff.org/tags/manacher/">Manacher </a>
+    
+    <a href="https://code0xff.org/tags/mapreduce/">MapReduce </a>
+    
+    <a href="https://code0xff.org/tags/micro-service/">micro-service </a>
+    
+    <a href="https://code0xff.org/tags/mysql/">MySQL </a>
+    
+    <a href="https://code0xff.org/tags/newsql/">NewSQL </a>
+    
+    <a href="https://code0xff.org/tags/oceanbase/">OceanBase </a>
+    
+    <a href="https://code0xff.org/tags/openldap/">OpenLDAP </a>
+    
+    <a href="https://code0xff.org/tags/openlogreplicator/">OpenLogReplicator </a>
+    
+    <a href="https://code0xff.org/tags/parquet/">parquet </a>
+    
+    <a href="https://code0xff.org/tags/paxos/">paxos </a>
+    
+    <a href="https://code0xff.org/tags/presto/">Presto </a>
+    
+    <a href="https://code0xff.org/tags/pytorch/">PyTorch </a>
+    
+    <a href="https://code0xff.org/tags/quick-sql/">quick-sql </a>
+    
+    <a href="https://code0xff.org/tags/raft/">raft </a>
+    
+    <a href="https://code0xff.org/tags/scala/">scala </a>
+    
+    <a href="https://code0xff.org/tags/simd/">SIMD </a>
+    
+    <a href="https://code0xff.org/tags/snowflake/">snowflake </a>
+    
+    <a href="https://code0xff.org/tags/spark/">spark </a>
+    
+    <a href="https://code0xff.org/tags/sre/">SRE </a>
+    
+    <a href="https://code0xff.org/tags/teradata/">TeraData </a>
+    
+    <a href="https://code0xff.org/tags/tpcx-hs/">TPCx-HS </a>
+    
+    <a href="https://code0xff.org/tags/trino/">Trino </a>
+    
+    <a href="https://code0xff.org/tags/tuning/">Tuning </a>
+    
+    <a href="https://code0xff.org/tags/unix/">unix </a>
+    
+    <a href="https://code0xff.org/tags/yarn/">YARN </a>
+    
+    <a href="https://code0xff.org/tags/%E4%BA%8C%E5%88%86%E6%9F%A5%E6%89%BE/">二分查找 </a>
+    
+    <a href="https://code0xff.org/tags/%E4%BA%8C%E5%8F%89%E6%A0%91%E9%81%8D%E5%8E%86/">二叉树遍历 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%88%86%E5%B8%83%E5%BC%8F/">分布式 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%88%97%E5%AD%98/">列存 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%8A%A8%E6%80%81%E6%B3%A8%E5%85%A5/">动态注入 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%8E%86%E5%8F%B2/">历史 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%90%91%E9%87%8F%E5%8C%96/">向量化 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%95%86%E4%B8%9A/">商业 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%9B%9E%E6%BA%AF/">回溯 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%9B%BD%E5%86%85%E6%97%85%E8%A1%8C/">国内旅行 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%9B%BD%E5%A4%96%E6%97%85%E8%A1%8C/">国外旅行 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%A4%9A%E7%A7%9F%E6%88%B7/">多租户 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%A4%A7%E6%95%B0%E6%8D%AE/">大数据 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%AD%98%E5%82%A8/">存储 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%B7%A5%E4%BD%9C%E8%AE%B0%E5%BD%95/">工作记录 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%BE%AE%E6%9C%8D%E5%8A%A1/">微服务 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%95%B0%E6%8D%AE%E4%B8%AD%E5%8F%B0/">数据中台 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%95%B0%E6%8D%AE%E5%BA%93/">数据库 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%95%B0%E6%8D%AE%E6%A8%A1%E5%9E%8B/">数据模型 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%95%B0%E6%8D%AE%E8%BF%81%E7%A7%BB/">数据迁移 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%9F%A5%E8%AF%A2%E4%BC%98%E5%8C%96/">查询优化 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%9F%A5%E8%AF%A2%E7%BC%96%E8%AF%91/">查询编译 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%A6%82%E7%8E%87/">概率 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%B1%87%E7%BC%96/">汇编 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%B5%8B%E8%AF%95/">测试 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%94%9F%E6%B4%BB/">生活 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%94%B5%E5%BD%B1/">电影 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%AE%97%E6%B3%95/">算法 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%B4%A2%E5%BC%95/">索引 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BB%8F%E6%B5%8E/">经济 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BB%8F%E6%B5%8E%E5%88%86%E6%9E%90/">经济分析 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BC%93%E5%AD%98/">缓存 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BC%96%E8%AF%91%E5%8E%9F%E7%90%86/">编译原理 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BD%91%E7%BB%9C/">网络 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AE%A1%E7%AE%97%E6%A1%86%E6%9E%B6/">计算框架 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AE%BA%E6%96%87/">论文 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AF%BB%E4%B9%A6/">读书 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AF%BB%E4%B9%A6%E7%AC%94%E8%AE%B0/">读书笔记 </a>
+    
+</div>
+    </section>
+
+    
+
+    <section class="widget">
+        <h3 class="widget-title">RSS</h3>
+        <ul class="widget-list">
+            <li><a href="https://code0xff.org/index.xml">文章 RSS</a></li>
+        </ul>
+    </section>
+</div>
+            </div>
+        </div>
+    </div>
+    <footer id="footer">
+    <div>
+        &copy; 2026 <a href="https://code0xff.org/">记录每个瞬间 By 老王</a>
+        
+    </div>
+    <br />
+    <div>
+        <div class="github-badge">
+            <a href="https://gohugo.io/" target="_black" rel="nofollow"><span class="badge-subject">Powered by</span><span class="badge-value bg-blue">Hugo</span></a>
+        </div>
+        <div class="github-badge">
+            <a href="https://github.com/flysnow-org/maupassant-hugo" target="_black"><span class="badge-subject">Theme</span><span class="badge-value bg-yellowgreen">Maupassant</span></a>
+        </div>
+    </div>
+</footer>
+
+
+    
+    <script type="text/javascript">
+        window.MathJax = {
+            tex2jax: {
+                inlineMath: [['$', '$']],
+                processEscapes: true
+                }
+            };
+    </script>
+    <script src='https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.5/MathJax.js?config=TeX-MML-AM_CHTML' async></script><script src="https://cdn.bootcdn.net/ajax/libs/fancybox/3.5.7/jquery.fancybox.min.js"></script>
+
+<a id="rocket" href="#top"></a>
+<script type="text/javascript" src='/js/totop.js?v=0.0.0' async=""></script>
+
+<script type="application/javascript">
+var doNotTrack = false;
+if (!doNotTrack) {
+	window.ga=window.ga||function(){(ga.q=ga.q||[]).push(arguments)};ga.l=+new Date;
+	ga('create', 'GA ID', 'auto');
+	
+	ga('send', 'pageview');
+}
+</script>
+<script async src='https://www.google-analytics.com/analytics.js'></script>
+
+
+
+    <script type="text/javascript" src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js" async></script>
+
+
+
+
+</body>
+
+</html>

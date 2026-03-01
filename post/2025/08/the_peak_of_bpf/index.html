@@ -1,0 +1,2712 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    
+    <meta name="referrer" content="no-referrer-when-downgrade">
+    
+
+    <title>eBPF 总结 | 记录每个瞬间</title>
+    <meta property="og:title" content="eBPF 总结 - 记录每个瞬间">
+    <meta property="og:type" content="article">
+        
+    <meta property="article:published_time" content='2025-08-02T09:10:12&#43;08:00'>
+        
+        
+    <meta property="article:modified_time" content='2025-08-02T09:10:12&#43;08:00'>
+        
+    <meta name="Keywords" content="">
+    <meta name="description" content="eBPF 总结">
+        <meta name="author" content="隔壁老王">
+        
+    <meta property="og:url" content="https://code0xff.org/post/2025/08/the_peak_of_bpf/">
+    <link rel="shortcut icon" href='/favicon.ico'  type="image/x-icon">
+
+    <link rel="stylesheet" href='/css/normalize.css'>
+    <link rel="stylesheet" href='/css/style.css'>
+    <script type="text/javascript" src="//cdn.bootcdn.net/ajax/libs/jquery/3.4.1/jquery.min.js"></script>
+
+    
+    
+    
+        <link href="https://cdn.bootcdn.net/ajax/libs/fancybox/3.5.7/jquery.fancybox.min.css" rel="stylesheet">
+    
+    
+    
+    
+</head>
+
+
+<body>
+    <header id="header" class="clearfix">
+    <div class="container">
+        <div class="col-group">
+            <div class="site-name ">
+                
+                    <a id="logo" href="https://code0xff.org/">
+                        记录每个瞬间
+                    </a>
+                
+                
+            </div>
+            <div>
+                <nav id="nav-menu" class="clearfix">
+                    <a class="current" href="https://code0xff.org/">首页</a>
+                    
+                    <a  href="https://code0xff.org/linked/" title="链接">链接</a>
+                    
+                    <a  href="https://code0xff.org/archives/" title="归档">归档</a>
+                    
+                    <a  href="https://code0xff.org/about/" title="关于">关于</a>
+                    
+                </nav>
+            </div>
+        </div>
+    </div>
+</header>
+
+    <div id="body">
+        <div class="container">
+            <div class="col-group">
+
+                <div class="col-8" id="main">
+                    
+<script type="module">
+  import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs';
+  mermaid.initialize({ startOnLoad: true });
+</script>
+<script>
+  document.addEventListener('DOMContentLoaded', () => {
+    document.querySelectorAll('code.language-mermaid').forEach(el => {
+      const container = document.createElement('div');
+      container.className = 'mermaid';
+      container.innerHTML = el.innerHTML;
+      el.parentNode.replaceChild(container, el);
+    });
+  });
+</script>
+<div class="res-cons">
+    
+    <article class="post">
+        <header>
+            <h1 class="post-title">eBPF 总结</h1>
+        </header>
+        <date class="post-meta meta-date">
+            2025年8月2日
+        </date>
+<nav id="TableOfContents">
+  <ul>
+    <li><a href="#概述">概述</a>
+      <ul>
+        <li><a href="#bcc-工具">BCC 工具</a>
+          <ul>
+            <li><a href="#调试">调试</a></li>
+          </ul>
+        </li>
+        <li><a href="#bpftrace">bpftrace</a></li>
+        <li><a href="#编程语言">编程语言</a></li>
+        <li><a href="#应用程序">应用程序</a></li>
+        <li><a href="#内核">内核</a></li>
+        <li><a href="#容器">容器</a></li>
+        <li><a href="#虚拟机">虚拟机</a></li>
+        <li><a href="#监控">监控</a></li>
+        <li><a href="#参考">参考</a></li>
+      </ul>
+    </li>
+  </ul>
+</nav>
+        
+        <div class="post-meta">
+            
+            <span class="post-meta meta-tags">
+                <ul class="clearfix">
+                    <a href='/categories/%E7%B3%BB%E7%BB%9F'>系统</a>
+                </ul>
+            </span>
+            
+        </div>
+        
+        
+        <div class="post-meta">
+            <span id="busuanzi_container_page_pv">|<span id="busuanzi_value_page_pv"></span><span>
+                    阅读</span></span>
+        </div>
+        
+        
+        <div class="post-content">
+            <h1 id="概述">概述</h1>
+<p>业务负载画像</p>
+<ol>
+<li>负载是谁产生的（如：进程ID、用户ID、进程名、IP地址）？</li>
+<li>负载为什么会产生（代码路径、调用栈、火焰图）？</li>
+<li>负载的组成层是什么（IOPS、吞吐量、负载类型）？</li>
+<li>负载怎样随着时间发生变化（比较每个周期的摘要信息）？</li>
+</ol>
+<p>可以测量的指标：</p>
+<ul>
+<li>延迟：  多久可以完整一次请求或者操作，毫秒为单位</li>
+<li>速率：  每秒操作或请求的速率</li>
+<li>利用率：以百分比形式表示的某资源在一段时间内的繁忙程度</li>
+<li>成本：  开销/性能的 比例</li>
+</ul>
+<p>下钻分析</p>
+<ol>
+<li>从业务最高层就开始分析</li>
+<li>检查下一个层级的细节</li>
+<li>挑出最感兴趣的部分或者线索</li>
+<li>如果问题还没有解决，跳转至第（2）步</li>
+</ol>
+<p>USE 方法</p>
+<ul>
+<li>使用率</li>
+<li>饱和度</li>
+<li>错误</li>
+</ul>
+<p>60 秒系统检查清单</p>
+<ol>
+<li>uptime</li>
+<li>dmesg | tail</li>
+<li>vmstat 1</li>
+<li>mpstat -P ALL 1</li>
+<li>pidstat 1</li>
+<li>iostat -xz 1</li>
+<li>free -m</li>
+<li>sar -n DEV 1</li>
+<li>sar -n TCP, ETCP 1</li>
+<li>top</li>
+</ol>
+<p>BCC 工具检查清单</p>
+<ol>
+<li>execsnoop</li>
+<li>opensnoop</li>
+<li>ext4slower(或 brtfs*, xfs*, zfs*</li>
+<li>biolatency</li>
+<li>biosnoop</li>
+<li>cachestat</li>
+<li>tcpconnect</li>
+<li>tcpaccept</li>
+<li>tcpretrans</li>
+<li>runqlat</li>
+<li>profile</li>
+</ol>
+<h2 id="bcc-工具">BCC 工具</h2>
+<p>常用 BCC 工具在内核中的位置<br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/07/26/EGV8TB.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2025/07/26/EGV8TB.png" />
+        </a>
+    </p>
+<table>
+<thead>
+<tr>
+<th>工具</th>
+<th>来源</th>
+<th>目标</th>
+<th>描述</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>funccount</td>
+<td>BCC</td>
+<td>软件</td>
+<td>对事件进行计数，包括函数调用</td>
+</tr>
+<tr>
+<td>stackcount</td>
+<td>BCC</td>
+<td>软件</td>
+<td>对引发某事件的函数调用栈进行计数</td>
+</tr>
+<tr>
+<td>trace</td>
+<td>BCC</td>
+<td>软件</td>
+<td>定制化打印每个事件的细节信息</td>
+</tr>
+<tr>
+<td>argdist</td>
+<td>BCC</td>
+<td>软件</td>
+<td>对事件的参数分布进行统计</td>
+</tr>
+</tbody>
+</table>
+<p>funccount 的例子</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">15
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">16
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">17
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">18
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">19
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">20
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">21
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">22
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">23
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">24
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">25
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">26
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">27
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">28
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">29
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">30
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">31
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">32
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">33
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">34
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">35
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">36
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">37
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">38
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">39
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-shell" data-lang="shell"><span style="display:flex;"><span><span style="color:#6272a4"># 内核函数 tcp_drop() 是否被调用   </span>
+</span></span><span style="display:flex;"><span>funccount-bpfcc tcp_drop
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4"># 内核中最频繁的 VFS 是哪个</span>
+</span></span><span style="display:flex;"><span>funccount-bpfcc <span style="color:#f1fa8c">&#39;vfs*&#39;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4"># 用户态函数 pthread_mutext_lock 每秒被调用的次数</span>
+</span></span><span style="display:flex;"><span>funccount-bpfcc -i <span style="color:#bd93f9">1</span> <span style="color:#f1fa8c">&#39;c:pthread_mutex_lock&#39;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4"># 全系统内， libc ku 中调用最频繁的与字符串相关的函数是哪个</span>
+</span></span><span style="display:flex;"><span>funccount-bpfcc <span style="color:#f1fa8c">&#39;c:str*&#39;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4"># 执行最频繁的系统调用是哪个</span>
+</span></span><span style="display:flex;"><span>funccount-bpfcc <span style="color:#f1fa8c">&#39;t:syscalls:sys_enter_*&#39;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4"># 对某个进程 统计 VFS 执行次数</span>
+</span></span><span style="display:flex;"><span>funccount-bpfcc -p <span style="color:#bd93f9">46649</span> <span style="color:#f1fa8c">&#39;vfs_*&#39;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4"># 对全局统计 VFS内核进行计数</span>
+</span></span><span style="display:flex;"><span>funccount-bpfcc <span style="color:#f1fa8c">&#39;vfs_*&#39;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4"># 对 TCP 内核进行计数</span>
+</span></span><span style="display:flex;"><span>funccount-bpfcc <span style="color:#f1fa8c">&#39;tcp_*&#39;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4"># 统计每秒 TCP 发送函数的调用次数</span>
+</span></span><span style="display:flex;"><span>funccount-bpfcc -i <span style="color:#bd93f9">1</span> <span style="color:#f1fa8c">&#39;tcp_send*&#39;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4"># 每秒 I/O 事件的数量</span>
+</span></span><span style="display:flex;"><span>funccount-bpfcc -i <span style="color:#bd93f9">1</span> <span style="color:#f1fa8c">&#39;t:block:*&#39;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4"># 每秒新创建的进程数量</span>
+</span></span><span style="display:flex;"><span>funccount-bpfcc -i <span style="color:#bd93f9">1</span> <span style="color:#f1fa8c">&#39;t:sched:sched_process_fork&#39;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4"># 每秒 libc 中 getaddrinfo() 域名解析 函数的调用次数</span>
+</span></span><span style="display:flex;"><span>funccount-bpfcc -i <span style="color:#bd93f9">1</span> <span style="color:#f1fa8c">&#39;c:getaddrinfo&#39;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4"># 对 libgo 中全部的 os.* 调用进行计数   </span>
+</span></span><span style="display:flex;"><span>funccount-bpfcc -i <span style="color:#bd93f9">1</span> <span style="color:#f1fa8c">&#39;go:os.*&#39;</span>
+</span></span></code></pre></td></tr></table>
+</div>
+</div><hr>
+<hr>
+<p>stackcount 例子</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">15
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">16
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">17
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-shell" data-lang="shell"><span style="display:flex;"><span><span style="color:#6272a4"># 统计 ktime_get() 调用的代码路径</span>
+</span></span><span style="display:flex;"><span>stackcount-bpfcc ktime_get   
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4"># 对创建块 I/O 的函数调用栈进行计数：</span>
+</span></span><span style="display:flex;"><span>stackcount-bpfcc t:block:block_rq_insert
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4"># 对发送 IP 数据包的调用栈进行计数：</span>
+</span></span><span style="display:flex;"><span>stackcount-bpfcc ip_output
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4"># 对发送 IP 数据包的调用栈进行计数，同时显示对应的 PID：</span>
+</span></span><span style="display:flex;"><span>stackcount-bpfcc -P ip_output
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4"># 对导致线程阻塞并且导致脱离 CPU 的调用栈进行计数：</span>
+</span></span><span style="display:flex;"><span>stackcount-bpfcc t:sched:sched_switch
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4"># 对导致系统调用 read () 的调用栈进行计数：</span>
+</span></span><span style="display:flex;"><span>stackcount-bpfcc t:syscalls:sys_enter_read
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>stackcount 生成火焰图</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">6
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-shell" data-lang="shell"><span style="display:flex;"><span>stackcount-bpfcc -f -P -D <span style="color:#bd93f9">10</span> ktime_get &gt; out.stackcount01.txt
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>git clone https://github.com/brendangregg/FlameGraph.git
+</span></span><span style="display:flex;"><span><span style="color:#8be9fd;font-style:italic">cd</span> FlameGraph
+</span></span><span style="display:flex;"><span>./flamegraph.pl --hash --bgcolors<span style="color:#ff79c6">=</span>grey &lt; /data/out.stackcount01.txt &gt; <span style="color:#f1fa8c">\
+</span></span></span><span style="display:flex;"><span><span style="color:#f1fa8c"></span>out.stackcount01.svg
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/08/03/EcHba9.png">
+            <img class="mx-auto" alt="2025\06\bpf\20.jpg" src="https://v1.ax1x.com/2025/08/03/EcHba9.png" />
+        </a>
+    </p>
+<hr>
+<hr>
+<p>trace 例子</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">15
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">16
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">17
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">18
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">19
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">20
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">21
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">22
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">23
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">24
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">25
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">26
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">27
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">28
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">29
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-shell" data-lang="shell"><span style="display:flex;"><span><span style="color:#6272a4"># 跟踪 open 系统调用，并打印 打开的 filename</span>
+</span></span><span style="display:flex;"><span>trace-bpfcc <span style="color:#f1fa8c">&#39;do_sys_open &#34;%s&#34;, arg2&#39;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4"># 跟踪内核函数 do_sys_open ()，并打印文件名：</span>
+</span></span><span style="display:flex;"><span>trace-bpfcc <span style="color:#f1fa8c">&#39;do_sys_open &#34;% s&#34;, arg2&#39;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4"># 跟踪内核函数 do_sys_open ()，并打印返回值：</span>
+</span></span><span style="display:flex;"><span>trace-bpfcc <span style="color:#f1fa8c">&#39;r::do_sys_open &#34;ret: % d&#34;, retval&#39;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4"># 跟踪 do_nanosleep ()，并且打印用户态的调用栈：</span>
+</span></span><span style="display:flex;"><span>trace-bpfcc -U <span style="color:#f1fa8c">&#39;do_nanosleep &#34;mode: % d&#34;, arg2&#39;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4"># 跟踪通过 pam 库进行身份鉴别的请求：</span>
+</span></span><span style="display:flex;"><span>trace-bpfcc <span style="color:#f1fa8c">&#39;pam:pam_start &#34;% s: % s&#34;, arg1, arg2&#39;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4"># 跟踪 udpv6 系统调用，这里需要结构体，所以有一个 -I &#39;net/sock.h&#39; </span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4"># 需要系统有完整的内核源码才能工作，未来会通过 BPF类型格式解决此问题</span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4"># 即将结构体信息嵌入到 二进制文件中，这样就不需要结构体的头文件了		</span>
+</span></span><span style="display:flex;"><span>trace -I <span style="color:#f1fa8c">&#39;net/sock.h&#39;</span> <span style="color:#f1fa8c">\
+</span></span></span><span style="display:flex;"><span><span style="color:#f1fa8c"></span>      <span style="color:#f1fa8c">&#39;udpv6_sendmsg(struct sock *sk) (sk-&gt;sk_dport == 13568)&#39;</span>
+</span></span><span style="display:flex;"><span>	  
+</span></span><span style="display:flex;"><span>	  
+</span></span><span style="display:flex;"><span>	  
+</span></span><span style="display:flex;"><span><span style="color:#6272a4"># 打印时间戳，并打印内核堆栈、用户态堆栈，跟踪 tcp_send_fin 函数</span>
+</span></span><span style="display:flex;"><span>trace-bpfcc -tKU <span style="color:#f1fa8c">&#39;tcp_send_fin&#39;</span>
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>argdist</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">15
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">16
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">17
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">18
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">19
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">20
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">21
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">22
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">23
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">24
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">25
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">26
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">27
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">28
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">29
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">30
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">31
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">32
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">33
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">34
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">35
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">36
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">37
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">38
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">39
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">40
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">41
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">42
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">43
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">44
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">45
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">46
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">47
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">48
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">49
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">50
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">51
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">52
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">53
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">54
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">55
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-shell" data-lang="shell"><span style="display:flex;"><span><span style="color:#6272a4"># 打印 kmalloc 分配的柱状图size</span>
+</span></span><span style="display:flex;"><span>argdist-bpfcc  -H <span style="color:#f1fa8c">&#39;p::__kmalloc(u64 size):u64:size&#39;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4"># 从 kmalloc 分配中打印每字节纳秒的直方图</span>
+</span></span><span style="display:flex;"><span>argdist-bpfcc  -H <span style="color:#f1fa8c">&#39;r::__kmalloc(size_t size):u64:$latency/$entry(size)#ns per byte&#39;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4"># 打印读取 size 满足条件，延迟 &gt; 1秒的</span>
+</span></span><span style="display:flex;"><span>argdist-bpfcc  -H <span style="color:#f1fa8c">&#39;r::__vfs_read(void *file, void *buf, size_t count):size_t:
+</span></span></span><span style="display:flex;"><span><span style="color:#f1fa8c">            $entry(count):$latency &gt; 1000000&#39;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4"># 打印完整的 block I/O 请求的 sector 数量柱状图</span>
+</span></span><span style="display:flex;"><span>argdist-bpfcc -H <span style="color:#f1fa8c">&#39;t:block:block_rq_complete():u32:args-&gt;nr_sector&#39;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4"># IRQ 中断请求的统计聚合</span>
+</span></span><span style="display:flex;"><span>argdist-bpfcc -C <span style="color:#f1fa8c">&#39;t:irq:irq_handler_entry():int:args-&gt;irq&#39;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4"># usdt 用户态静态跟踪，1337 进程 的 pthread_start 频率</span>
+</span></span><span style="display:flex;"><span>argdist-bpfcc -C <span style="color:#f1fa8c">&#39;u:pthread:pthread_start():u64:arg2&#39;</span> -p <span style="color:#bd93f9">1337</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4"># 跟踪 1234 进程，打印 libc 的 malloc 调用的频繁（分配的内存 &gt;1024字节) </span>
+</span></span><span style="display:flex;"><span>argdist-bpfcc -p <span style="color:#bd93f9">1234</span> -C <span style="color:#f1fa8c">&#39;p:c:malloc(size_t size):size_t:size:size&gt;1024&#39;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4"># 这里需要一个结构体，统计 cfs scheduling 队列剩余的运行时间</span>
+</span></span><span style="display:flex;"><span>argdist-bpfcc -I <span style="color:#f1fa8c">&#39;kernel/sched/sched.h&#39;</span> <span style="color:#f1fa8c">\
+</span></span></span><span style="display:flex;"><span><span style="color:#f1fa8c"></span>  -C <span style="color:#f1fa8c">&#39;p::__account_cfs_rq_runtime(struct cfs_rq *cfs_rq):s64:cfs_rq-&gt;runtime_remaining&#39;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4"># 统计 tcp 零窗口问题，看其返回的窗口大小</span>
+</span></span><span style="display:flex;"><span>argdist-bpfcc -H <span style="color:#f1fa8c">&#39;r::__tcp_select_window():int:$retval&#39;</span>		
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4"># 对 vfs_read() 返回值统计，用直方图打印   </span>
+</span></span><span style="display:flex;"><span>argdist-bpfcc -H <span style="color:#f1fa8c">&#39;r::vfs_read()&#39;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>根据调用号（syscall ID）对系统调用进行计数，这里使用了 raw_syscalls:sysenter 这个跟踪点：
+</span></span><span style="display:flex;"><span>argdist-bpfcc -C <span style="color:#f1fa8c">&#39;t:raw_syscalls:sys_enter():int:args-&gt;id&#39;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4"># 对 tcp_sendmsg () 的参数 size 进行统计：</span>
+</span></span><span style="display:flex;"><span>argdist-bpfcc -C <span style="color:#f1fa8c">&#39;p::tcp_sendmsg(struct sock *sk, struct msghdr *msg, size_t size):u32:size&#39;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4">#将 tcp_sendmsg () 的 size 作为以 2 的幂为区间的直方图打印出来：</span>
+</span></span><span style="display:flex;"><span>argdist-bpfcc -H <span style="color:#f1fa8c">&#39;p::tcp_sendmsg(struct sock *sk, struct msghdr *msg, size_t size):u32:size&#39;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4">#将 PID 为 181 的进程按照文件描述符对 write () 调用进行计数：</span>
+</span></span><span style="display:flex;"><span>argdist-bpfcc -p <span style="color:#bd93f9">181</span> -C <span style="color:#f1fa8c">&#39;p:c:write(int fd):int:fd&#39;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4"># 打印出延迟大于 0.1 毫秒的进程读操</span>
+</span></span><span style="display:flex;"><span>argdist-bpfcc -C <span style="color:#f1fa8c">&#39;r::vfs_read():u32:$PID:$latency &gt; 100000&#39;</span>
+</span></span></code></pre></td></tr></table>
+</div>
+</div><h3 id="调试">调试</h3>
+<p>BCC 装载一个 BPF 程序并开始对某个事件进行插桩的步骤如下：</p>
+<ol>
+<li>创建 Python BPF 对象，将 BPF C 程序传递给该 BPF 对象。</li>
+<li>使用 BCC 改写器对 BPF C 程序进行预处理，将内存访问替换为 bpf_probe_read () 调用。</li>
+<li>使用 Clang 将 BPF C 程序编译为 LLVM IR。</li>
+<li>使用 BCC codegen 根据需要增加额外的 LLVM IR。</li>
+<li>LLVM 将 IR 编译为 BPF 字节码。</li>
+<li>如果用到了映射表，就创建这些映射表。</li>
+<li>字节码被传送到内核，并经过 BPF 验证器的检查。</li>
+<li>事件被启用，BPF 程序被挂载到事件上。</li>
+<li>BCC 程序通过映射表或者 perf_event 缓冲区读取数据。</li>
+</ol>
+<p>
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/08/03/EcH80H.png">
+            <img class="mx-auto" alt="21.jpg" src="https://v1.ax1x.com/2025/08/03/EcH80H.png" />
+        </a>
+    </p>
+<p>用<code>bpf_trace_printfk</code>做调试<br>
+之后对</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">6
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-shell" data-lang="shell"><span style="display:flex;"><span><span style="color:#6272a4"># 读取调试信息</span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4"># 会阻塞更多的消息，当读取后消息会被清除</span>
+</span></span><span style="display:flex;"><span>cat /sys/kernel/debug/tracing/trace_pipe
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4"># 打印头文件，不会阻塞</span>
+</span></span><span style="display:flex;"><span>cat /sys/kernel/debug/tracing/trace
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>ebpf 参数，可以把这个程序的源码打印出来</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-shell" data-lang="shell"><span style="display:flex;"><span>execsnoop-bpfcc --ebpf
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>调试标志位</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-python" data-lang="python"><span style="display:flex;"><span>b <span style="color:#ff79c6">=</span> BPF(tex <span style="color:#ff79c6">=</span> bpf_text, debug <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">0x2</span>)   
+</span></span></code></pre></td></tr></table>
+</div>
+</div><table>
+<thead>
+<tr>
+<th>标志位</th>
+<th>名称</th>
+<th>调试</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>0x1</td>
+<td>DEBUG_LLVM_IR</td>
+<td>打印编译好的 LLVM 中间表示形式</td>
+</tr>
+<tr>
+<td>0x2</td>
+<td>DEBUG_BPF</td>
+<td>在分支处打印 BPF 字节码和寄存器状态</td>
+</tr>
+<tr>
+<td>0x4</td>
+<td>DEBUG_PREPROCESSOR</td>
+<td>打印预处理结果（与 &ndash;ebpf 类似）</td>
+</tr>
+<tr>
+<td>0x8</td>
+<td>DEBUG_SOURCE</td>
+<td>打印出源代码中内嵌的汇编指令</td>
+</tr>
+<tr>
+<td>0x10</td>
+<td>DEBUG_BPF_REGISTER_STATE</td>
+<td>打印所有指令中的寄存器状态</td>
+</tr>
+<tr>
+<td>0x20</td>
+<td>DEBUG_BTF</td>
+<td>打印出 BTF 调试信息（否则 BTF 错误会被忽略）</td>
+</tr>
+</tbody>
+</table>
+<p>其他</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-shell" data-lang="shell"><span style="display:flex;"><span>bpflist-bpfcc
+</span></span><span style="display:flex;"><span>bpflist-bpfcc -vv
+</span></span></code></pre></td></tr></table>
+</div>
+</div><h2 id="bpftrace">bpftrace</h2>
+<p>bpftrace 程序结构</p>
+<ul>
+<li>前端使用了 lex、yacc 做词法、语法分析</li>
+<li>clang 解析 结构体</li>
+<li>后端将 bpftrace 程序编译成 LLVM 中间表示形式</li>
+<li>再通过 LLVM 库将其编译为 BPF 代码
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/08/03/EcKqAJ.png">
+            <img class="mx-auto" alt="22.jpg" src="https://v1.ax1x.com/2025/08/03/EcKqAJ.png" />
+        </a>
+    </li>
+</ul>
+<p>bpftrace 内置的工具<br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/07/26/EGVgJG.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2025/07/26/EGVgJG.png" />
+        </a>
+    </p>
+<blockquote>
+<p><a href="https://github.com/bpftrace/bpftrace/blob/master/man/adoc/bpftrace.adoc">bpf官方手册</a></p>
+</blockquote>
+<table>
+<thead>
+<tr>
+<th>主题</th>
+<th>特色工具</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>CPU 相关</td>
+<td>execsnoop.bt、runqlat.bt、runqlen.bt、cpuwalk.bt、offcputime.bt</td>
+</tr>
+<tr>
+<td>内存相关</td>
+<td>oomkill.bt、faults.bt、vmscan.bt、swapin.bt</td>
+</tr>
+<tr>
+<td>文件系统相关</td>
+<td>vfsstat.bt、filelife.bt、xfsdist.bt</td>
+</tr>
+<tr>
+<td>存储 I/O 相关</td>
+<td>biosnoop.bt、biolatency.bt、bitesize.bt、biostacks.bt、scsilatency.bt、nvmelatency.bt</td>
+</tr>
+<tr>
+<td>网络相关</td>
+<td>tcpaccept.bt、tcpconnect.bt、tcpdrop.bt、tcpretrans.bt、gethostlatency.bt</td>
+</tr>
+<tr>
+<td>安全相关</td>
+<td>ttysnoop.bt、elfsnoop.bt、setuids.bt</td>
+</tr>
+<tr>
+<td>编程语言相关</td>
+<td>jnistacks.bt、javacalls.bt</td>
+</tr>
+<tr>
+<td>应用程序相关</td>
+<td>threadsnoop.bt、pmheld.bt、naptime.bt、mysqld_qslower.bt</td>
+</tr>
+<tr>
+<td>内核相关</td>
+<td>mlock.bt、mheld.bt、kmem.bt、kpages.bt、workq.bt</td>
+</tr>
+<tr>
+<td>容器相关</td>
+<td>pidnss.bt、blkthrot.bt</td>
+</tr>
+<tr>
+<td>虚拟机管理器相关</td>
+<td>xenhyper.bt、cpustolen.bt、kvmexits.bt</td>
+</tr>
+<tr>
+<td>调试器/多用途工具相关</td>
+<td>execsnoop.bt、threadsnoop.bt、opensnoop.bt、killsnoop.bt、signals.bt</td>
+</tr>
+</tbody>
+</table>
+<p>以直方图行驶统计 vfs_read() 返回值</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-shell" data-lang="shell"><span style="display:flex;"><span>bpftrace -e <span style="color:#f1fa8c">&#39;kretprobe:vfs_read { @bytes = hist(retval); } &#39;</span>
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>bpftrace 的单行程序</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">15
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">16
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">17
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">18
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">19
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">20
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">21
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">22
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">23
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">24
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">25
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">26
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">27
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">28
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">29
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">30
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">31
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">32
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">33
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">34
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">35
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">36
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">37
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">38
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">39
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">40
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">41
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">42
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">43
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">44
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">45
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">46
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">47
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">48
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-shell" data-lang="shell"><span style="display:flex;"><span><span style="color:#6272a4"># 展示系统中谁在执行什么命令：</span>
+</span></span><span style="display:flex;"><span>bpftrace -e <span style="color:#f1fa8c">&#39;tracepoint:syscalls:sys_enter_execve { printf(&#34;%s -&gt; %s\n&#34;, comm, str(args-&gt;filename)); }&#39;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4"># 展示新进程的创建，以及参数信息</span>
+</span></span><span style="display:flex;"><span>bpftrace -e <span style="color:#f1fa8c">&#39;tracepoint:syscalls:sys_enter_execve { join(args-&gt;argv); }&#39;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4"># 通过 openat () 查看打开文件动作，按进程统计</span>
+</span></span><span style="display:flex;"><span>bpftrace -e <span style="color:#f1fa8c">&#39;tracepoint:syscalls:sys_enter_openat { printf(&#34;%s %s\n&#34;, comm, str(args-&gt;filename)); }&#39;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4"># 按照不同程序统计系统调用</span>
+</span></span><span style="display:flex;"><span>bpftrace -e <span style="color:#f1fa8c">&#39;tracepoint:raw_syscalls:sys_enter { @[comm] = count(); }&#39;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4"># 按系统调用探针的名字对系统调用进行计数</span>
+</span></span><span style="display:flex;"><span>bpftrace -e <span style="color:#f1fa8c">&#39;tracepoint:syscalls:sys_enter_* { @[probe] = count(); }&#39;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4"># 按进程统计系统调用数量</span>
+</span></span><span style="display:flex;"><span>bpftrace -e <span style="color:#f1fa8c">&#39;tracepoint:raw_syscalls:sys_enter { @[pid, comm] = count(); }&#39;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4"># 按进程展示总的读取字节数</span>
+</span></span><span style="display:flex;"><span>bpftrace -e <span style="color:#f1fa8c">&#39;tracepoint:syscalls:sys_exit_read /args-&gt;ret/ { @[comm] = sum(args-&gt;ret); }&#39;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4"># 按进程展示 read 返回结果大小的分布</span>
+</span></span><span style="display:flex;"><span>bpftrace -e <span style="color:#f1fa8c">&#39;tracepoint:syscalls:sys_exit_read { @[comm] = hist(args-&gt;ret); }&#39;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4"># 展示进程的磁盘 I/O 尺寸</span>
+</span></span><span style="display:flex;"><span>bpftrace -e <span style="color:#f1fa8c">&#39;tracepoint:block:block_rq_issue { printf(&#34;%d %s %d\n&#34;, pid, comm, args-&gt;bytes); }&#39;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4"># 按进程展示页换入的数量</span>
+</span></span><span style="display:flex;"><span>bpftrace -e <span style="color:#f1fa8c">&#39;software:major-faults:1 { @[comm] = count(); }&#39;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4"># 按进程展示缺页中断的数量</span>
+</span></span><span style="display:flex;"><span>bpftrace -e <span style="color:#f1fa8c">&#39;software:faults:1 { @[comm] = count(); }&#39;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4"># 对 PID 为 189 的进程，以 49Hz 的频率抓取其用户态的调用栈信息：</span>
+</span></span><span style="display:flex;"><span>bpftrace -e <span style="color:#f1fa8c">&#39;profile:hz:49 /pid == 189/ {@[ustack] = count (); }&#39;</span>
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>bpftrace 的探针格式</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">6
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-shell" data-lang="shell"><span style="display:flex;"><span><span style="color:#6272a4"># 内核需要一个参数</span>
+</span></span><span style="display:flex;"><span>kprobe:vfs_read
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4"># 用户态需要路径和函数名</span>
+</span></span><span style="display:flex;"><span>uprobe:/bin/bash:readline
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>查询可用的探针</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-shell" data-lang="shell"><span style="display:flex;"><span>bpftrace -l <span style="color:#f1fa8c">&#39;kprobe:vfs_*&#39;</span>
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>查看内核函数参数</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">8
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-shell" data-lang="shell"><span style="display:flex;"><span>bpftrace -lv <span style="color:#f1fa8c">&#39;tracepoint:syscalls:sys_enter_clone&#39;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    int __syscall_nr
+</span></span><span style="display:flex;"><span>    unsigned long clone_flags
+</span></span><span style="display:flex;"><span>    unsigned long newsp
+</span></span><span style="display:flex;"><span>    int * parent_tidptr
+</span></span><span style="display:flex;"><span>    int * child_tidptr
+</span></span><span style="display:flex;"><span>    unsigned long tls
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>其他语法</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">5
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-shell" data-lang="shell"><span style="display:flex;"><span><span style="color:#6272a4"># 条件判断</span>
+</span></span><span style="display:flex;"><span>/pid &gt; <span style="color:#bd93f9">100</span> &amp; pid &lt; 1000/
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4"># 执行</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">{</span> action one; action two; action three <span style="color:#ff79c6">}</span>
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>变量</p>
+<ul>
+<li>内置变量</li>
+<li>临时变量： $x = 1; $y = &ldquo;hello&rdquo;; $z = (struct task_struct *)curtask;</li>
+<li>映射哈希表，可以在不同 action 之间传递（全局变量） @a = 1;</li>
+</ul>
+<p>对内核函数 vfs_read() 进行计时，并用直方图打印</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">15
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">16
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-shell" data-lang="shell"><span style="display:flex;"><span><span style="color:#ff79c6">#!/usr/bin/bpftrace
+</span></span></span><span style="display:flex;"><span><span style="color:#ff79c6"></span>
+</span></span><span style="display:flex;"><span>// this program <span style="color:#8be9fd;font-style:italic">times</span> vfs_read<span style="color:#ff79c6">()</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>kprobe:vfs_read
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>        @start<span style="color:#ff79c6">[</span>tid<span style="color:#ff79c6">]</span> <span style="color:#ff79c6">=</span> nsecs;
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">}</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>kretprobe:vfs_read
+</span></span><span style="display:flex;"><span>/@start<span style="color:#ff79c6">[</span>tid<span style="color:#ff79c6">]</span>/
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#8be9fd;font-style:italic">$duration_us</span> <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">(</span>nsecs - @start<span style="color:#ff79c6">[</span>tid<span style="color:#ff79c6">])</span> / 1000;
+</span></span><span style="display:flex;"><span>        @us <span style="color:#ff79c6">=</span> hist<span style="color:#ff79c6">(</span><span style="color:#8be9fd;font-style:italic">$duration_us</span><span style="color:#ff79c6">)</span>;
+</span></span><span style="display:flex;"><span>        delete<span style="color:#ff79c6">(</span>@start<span style="color:#ff79c6">[</span>tid<span style="color:#ff79c6">])</span>;
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">}</span>
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>一个例子</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-shell" data-lang="shell"><span style="display:flex;"><span><span style="color:#6272a4"># bpftrace -e &#39;tracepoint:syscalls:sys_enter_clone {</span>
+</span></span><span style="display:flex;"><span>    printf<span style="color:#ff79c6">(</span><span style="color:#f1fa8c">&#34;-&gt; clone() by %s PID %d\n&#34;</span>, comm, pid<span style="color:#ff79c6">)</span>; <span style="color:#ff79c6">}</span>
+</span></span><span style="display:flex;"><span>  tracepoint:syscalls:sys_exit_clone <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>    printf<span style="color:#ff79c6">(</span><span style="color:#f1fa8c">&#34;&lt;- clone() return %d, %s PID %d\n&#34;</span>, args-&gt;ret, comm, pid<span style="color:#ff79c6">)</span>; <span style="color:#ff79c6">}</span>&#39;
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>bpftrace 探针类型</p>
+<table>
+<thead>
+<tr>
+<th>类型</th>
+<th>缩写</th>
+<th>描述</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>tracepoint</td>
+<td>t</td>
+<td>内核静态插桩点</td>
+</tr>
+<tr>
+<td>usdt</td>
+<td>U</td>
+<td>用户态静态定义插桩点</td>
+</tr>
+<tr>
+<td>kprobe</td>
+<td>k</td>
+<td>内核动态函数插桩</td>
+</tr>
+<tr>
+<td>kretprobe</td>
+<td>kr</td>
+<td>内核动态函数返回值插桩</td>
+</tr>
+<tr>
+<td>uprobe</td>
+<td>u</td>
+<td>用户态动态函数插桩</td>
+</tr>
+<tr>
+<td>uretprobe</td>
+<td>ur</td>
+<td>用户态动态函数返回值插桩</td>
+</tr>
+<tr>
+<td>software</td>
+<td>s</td>
+<td>内核软件事件</td>
+</tr>
+<tr>
+<td>hardware</td>
+<td>h</td>
+<td>硬件基于计数器的插桩</td>
+</tr>
+<tr>
+<td>profile</td>
+<td>p</td>
+<td>对全部 CPU 进行时间采样</td>
+</tr>
+<tr>
+<td>interval</td>
+<td>i</td>
+<td>周期性报告（从一个 CPU 上）</td>
+</tr>
+<tr>
+<td>BEGIN</td>
+<td></td>
+<td>bpftrace 启动</td>
+</tr>
+<tr>
+<td>END</td>
+<td></td>
+<td>bpftrace 退出</td>
+</tr>
+</tbody>
+</table>
+<p>硬件探针，预先定义好的硬件事件</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-shell" data-lang="shell"><span style="display:flex;"><span>bpftrace -l <span style="color:#f1fa8c">&#39;hardware:*:*&#39;</span>
+</span></span><span style="display:flex;"><span>hardware:backend-stalls:
+</span></span><span style="display:flex;"><span>hardware:branch-instructions:
+</span></span><span style="display:flex;"><span>hardware:branch-misses:
+</span></span><span style="display:flex;"><span>hardware:bus-cycles:
+</span></span><span style="display:flex;"><span>hardware:cache-misses:
+</span></span><span style="display:flex;"><span>hardware:cache-references:
+</span></span><span style="display:flex;"><span>hardware:cpu-cycles:
+</span></span><span style="display:flex;"><span>hardware:frontend-stalls:
+</span></span><span style="display:flex;"><span>hardware:instructions:
+</span></span><span style="display:flex;"><span>hardware:ref-cycles:
+</span></span></code></pre></td></tr></table>
+</div>
+</div><table>
+<thead>
+<tr>
+<th>硬件事件名称</th>
+<th>缩写</th>
+<th>默认采样间隔</th>
+<th>描述</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>cpu-cycles</td>
+<td>cycles</td>
+<td>1000000</td>
+<td>CPU 运行时钟周期</td>
+</tr>
+<tr>
+<td>instructions</td>
+<td></td>
+<td>1000000</td>
+<td>CPU 运行指令数</td>
+</tr>
+<tr>
+<td>cache-references</td>
+<td></td>
+<td>1000000</td>
+<td>CPU 末级缓存引用</td>
+</tr>
+<tr>
+<td>cache-misses</td>
+<td></td>
+<td>1000000</td>
+<td>CPU 末级缓存未命中</td>
+</tr>
+<tr>
+<td>branch-instructions</td>
+<td>branches</td>
+<td>100000</td>
+<td>跳转指令</td>
+</tr>
+<tr>
+<td>bus-cycles</td>
+<td></td>
+<td>100000</td>
+<td>总线周期</td>
+</tr>
+<tr>
+<td>frontend-stalls</td>
+<td></td>
+<td>1000000</td>
+<td>处理器前端阻塞（例如，取指令）</td>
+</tr>
+<tr>
+<td>backend-stalls</td>
+<td></td>
+<td>1000000</td>
+<td>处理器后端阻塞（例如，数据加载/存储）</td>
+</tr>
+<tr>
+<td>ref-cycles</td>
+<td></td>
+<td>1000000</td>
+<td>CPU 参考时钟周期（未使用 turbo）</td>
+</tr>
+</tbody>
+</table>
+<hr>
+<hr>
+<p>软件探针，预先定义好的软件事件</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-shell" data-lang="shell"><span style="display:flex;"><span>bpftrace -l <span style="color:#f1fa8c">&#39;software:*:*&#39;</span>
+</span></span><span style="display:flex;"><span>software:alignment-faults:
+</span></span><span style="display:flex;"><span>software:bpf-output:
+</span></span><span style="display:flex;"><span>software:context-switches:
+</span></span><span style="display:flex;"><span>software:cpu-clock:
+</span></span><span style="display:flex;"><span>software:cpu-migrations:
+</span></span><span style="display:flex;"><span>software:dummy:
+</span></span><span style="display:flex;"><span>software:emulation-faults:
+</span></span><span style="display:flex;"><span>software:major-faults:
+</span></span><span style="display:flex;"><span>software:minor-faults:
+</span></span><span style="display:flex;"><span>software:page-faults:
+</span></span><span style="display:flex;"><span>software:task-clock:
+</span></span></code></pre></td></tr></table>
+</div>
+</div><table>
+<thead>
+<tr>
+<th>软件事件名称</th>
+<th>缩写</th>
+<th>默认采样间隔</th>
+<th>描述</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>cpu-clock</td>
+<td>cpu</td>
+<td>1000000</td>
+<td>CPU 真实时间</td>
+</tr>
+<tr>
+<td>task-clock</td>
+<td></td>
+<td>1000000</td>
+<td>CPU 任务时间（只在任务运行在 CPU 上时增长）</td>
+</tr>
+<tr>
+<td>page-faults</td>
+<td>faults</td>
+<td>100</td>
+<td>缺页中断</td>
+</tr>
+<tr>
+<td>context-switches</td>
+<td>cs</td>
+<td>1000</td>
+<td>上下文切换</td>
+</tr>
+<tr>
+<td>cpu-migrations</td>
+<td></td>
+<td>1</td>
+<td>CPU 线程迁移</td>
+</tr>
+<tr>
+<td>minor-faults</td>
+<td></td>
+<td>100</td>
+<td>次要缺页中断：由内存满足</td>
+</tr>
+<tr>
+<td>major-faults</td>
+<td></td>
+<td>1</td>
+<td>主要缺页中断：由存储 I/O 满足</td>
+</tr>
+<tr>
+<td>alignment-faults</td>
+<td></td>
+<td>1</td>
+<td>对齐中断</td>
+</tr>
+<tr>
+<td>emulation-faults</td>
+<td></td>
+<td>1</td>
+<td>当指令模拟执行时触发中断</td>
+</tr>
+<tr>
+<td>dummy</td>
+<td></td>
+<td>1</td>
+<td>用于测试的假事件</td>
+</tr>
+<tr>
+<td>bpf-output</td>
+<td></td>
+<td>1</td>
+<td>BPF 输出通道</td>
+</tr>
+</tbody>
+</table>
+<p>其他探针</p>
+<ul>
+<li>profile，会在全部 cpu 上激活</li>
+<li>interval，会在单个 cpu 上激活</li>
+</ul>
+<p><a href="https://www.brendangregg.com/BPF/bpftrace-cheat-sheet.html">bpftrace 内置的变量</a></p>
+<blockquote>
+<p>官方文档<br>
+<a href="https://bpftrace.org/docs/release_023/stdlib#builtins">内置变量</a><br>
+<a href="https://bpftrace.org/docs/release_023/stdlib#functions">内置函数</a><br>
+<a href="https://bpftrace.org/docs/release_023/stdlib#map-functions">内置的map 函数</a></p>
+</blockquote>
+<p>更多的例子</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">8
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-shell" data-lang="shell"><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>bpftrace -e <span style="color:#f1fa8c">&#39;t:syscalls:sys_enter_setuid { printf(&#34;setuid by PID %d (%s), UID %d\n&#34;, pid, comm, uid); }&#39;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>bpftrace -e <span style="color:#f1fa8c">&#39;tracepoint:syscalls:sys_exit_setuid { printf(&#34;setuid by %s returned %d\n&#34;, comm, args-&gt;ret); }&#39;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>bpftrace -e <span style="color:#f1fa8c">&#39;t:block:block_rq_insert { printf(&#34;Block I/O by %s\n&#34;, kstack); }&#39;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>bpftrace -e <span style="color:#f1fa8c">&#39;t:block:block_rq_insert { @[kstack] = count(); }&#39;</span>
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>映射表变量</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">7
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-shell" data-lang="shell"><span style="display:flex;"><span>@start <span style="color:#ff79c6">=</span> nsecs;  // 整数类型
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>@last<span style="color:#ff79c6">[</span>tid<span style="color:#ff79c6">]</span> <span style="color:#ff79c6">=</span> nsecs;
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>@bytes <span style="color:#ff79c6">=</span> hist<span style="color:#ff79c6">(</span>retval<span style="color:#ff79c6">)</span>;
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>@who<span style="color:#ff79c6">[</span>pid, comm<span style="color:#ff79c6">]</span> <span style="color:#ff79c6">=</span> count<span style="color:#ff79c6">()</span>;  // 包含两个键
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>函数</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-shell" data-lang="shell"><span style="display:flex;"><span>bpftrace -e <span style="color:#f1fa8c">&#39;tracepoint:syscalls:sys_enter_execve {join(args-&gt;argv); }&#39;</span>   
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>bpftrace -e <span style="color:#f1fa8c">&#39;ur:/bin/bash:readline {printf(&#34;%s\n&#34;, str(retval)); }&#39;</span>
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>打印 堆栈信息</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">15
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">16
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">17
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">18
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">19
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">20
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">21
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">22
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">23
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">24
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">25
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">26
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">27
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-shell" data-lang="shell"><span style="display:flex;"><span>bpftrace -e <span style="color:#f1fa8c">&#39;t:block:block_rq_insert {@[kstack(3), comm] = count(); }&#39;</span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4"># 结果</span>
+</span></span><span style="display:flex;"><span>@<span style="color:#ff79c6">[</span>
+</span></span><span style="display:flex;"><span>    blk_mq_insert_requests+115
+</span></span><span style="display:flex;"><span>    blk_mq_insert_requests+115
+</span></span><span style="display:flex;"><span>    blk_mq_sched_insert_requests+187
+</span></span><span style="display:flex;"><span>, kworker/u64:5<span style="color:#ff79c6">]</span>: <span style="color:#bd93f9">20</span>
+</span></span><span style="display:flex;"><span>@<span style="color:#ff79c6">[</span>
+</span></span><span style="display:flex;"><span>    blk_mq_insert_requests+115
+</span></span><span style="display:flex;"><span>    blk_mq_insert_requests+115
+</span></span><span style="display:flex;"><span>    blk_mq_sched_insert_requests+187
+</span></span><span style="display:flex;"><span>, kworker/u64:1<span style="color:#ff79c6">]</span>: <span style="color:#bd93f9">84</span>
+</span></span><span style="display:flex;"><span>@<span style="color:#ff79c6">[</span>
+</span></span><span style="display:flex;"><span>    blk_mq_insert_requests+115
+</span></span><span style="display:flex;"><span>    blk_mq_insert_requests+115
+</span></span><span style="display:flex;"><span>    blk_mq_sched_insert_requests+187
+</span></span><span style="display:flex;"><span>, kworker/u64:4<span style="color:#ff79c6">]</span>: <span style="color:#bd93f9">144</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>bpftrace -e <span style="color:#f1fa8c">&#39;k:do_nanosleep {printf(&#34;%s&#34;, ustack(perf)); }&#39;</span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4"># 结果</span>
+</span></span><span style="display:flex;"><span>        503f4bd runtime.usleep.abi0+61 <span style="color:#ff79c6">(</span>/usr/share/grafana/bin/grafana<span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>        50145c5 runtime.sysmon+165 <span style="color:#ff79c6">(</span>/usr/share/grafana/bin/grafana<span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>        500bd33 runtime.mstart1+147 <span style="color:#ff79c6">(</span>/usr/share/grafana/bin/grafana<span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>        500bc7a runtime.mstart0+122 <span style="color:#ff79c6">(</span>/usr/share/grafana/bin/grafana<span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>        503b8e5 runtime.mstart.abi0+5 <span style="color:#ff79c6">(</span>/usr/share/grafana/bin/grafana<span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>        990ac68 start+114 <span style="color:#ff79c6">(</span>/usr/share/grafana/bin/grafana<span style="color:#ff79c6">)</span>
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>将地址解析为对应的函数名</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">8
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-shell" data-lang="shell"><span style="display:flex;"><span>bpftrace -e <span style="color:#f1fa8c">&#39;tracepoint:timer:hrtimer_start {@[ksym(args-&gt;function)] = count();}&#39;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>@<span style="color:#ff79c6">[</span>it_real_fn<span style="color:#ff79c6">]</span>: <span style="color:#bd93f9">2</span>
+</span></span><span style="display:flex;"><span>@<span style="color:#ff79c6">[</span>sched_rt_period_timer<span style="color:#ff79c6">]</span>: <span style="color:#bd93f9">5</span>
+</span></span><span style="display:flex;"><span>@<span style="color:#ff79c6">[</span>timerfd_tmrproc<span style="color:#ff79c6">]</span>: <span style="color:#bd93f9">5</span>
+</span></span><span style="display:flex;"><span>@<span style="color:#ff79c6">[</span>watchdog_timer_fn<span style="color:#ff79c6">]</span>: <span style="color:#bd93f9">96</span>
+</span></span><span style="display:flex;"><span>@<span style="color:#ff79c6">[</span>hrtimer_wakeup<span style="color:#ff79c6">]</span>: <span style="color:#bd93f9">4524</span>
+</span></span><span style="display:flex;"><span>@<span style="color:#ff79c6">[</span>tick_sched_timer<span style="color:#ff79c6">]</span>: <span style="color:#bd93f9">10603</span>
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>映射表函数</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">15
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">16
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">17
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">18
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">19
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">20
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">21
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">22
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">23
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">24
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">25
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">26
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">27
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">28
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-shell" data-lang="shell"><span style="display:flex;"><span><span style="color:#6272a4"># 对出现次数计数</span>
+</span></span><span style="display:flex;"><span>bpftrace -e <span style="color:#f1fa8c">&#39;tracepoint:block:* { @[probe] = count(); }&#39;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>@<span style="color:#ff79c6">[</span>tracepoint:block:block_bio_frontmerge<span style="color:#ff79c6">]</span>: <span style="color:#bd93f9">2</span>
+</span></span><span style="display:flex;"><span>@<span style="color:#ff79c6">[</span>tracepoint:block:block_rq_insert<span style="color:#ff79c6">]</span>: <span style="color:#bd93f9">15</span>
+</span></span><span style="display:flex;"><span>@<span style="color:#ff79c6">[</span>tracepoint:block:block_plug<span style="color:#ff79c6">]</span>: <span style="color:#bd93f9">30</span>
+</span></span><span style="display:flex;"><span>@<span style="color:#ff79c6">[</span>tracepoint:block:block_unplug<span style="color:#ff79c6">]</span>: <span style="color:#bd93f9">34</span>
+</span></span><span style="display:flex;"><span>@<span style="color:#ff79c6">[</span>tracepoint:block:block_getrq<span style="color:#ff79c6">]</span>: <span style="color:#bd93f9">148</span>
+</span></span><span style="display:flex;"><span>@<span style="color:#ff79c6">[</span>tracepoint:block:block_rq_issue<span style="color:#ff79c6">]</span>: <span style="color:#bd93f9">163</span>
+</span></span><span style="display:flex;"><span>@<span style="color:#ff79c6">[</span>tracepoint:block:block_bio_backmerge<span style="color:#ff79c6">]</span>: <span style="color:#bd93f9">169</span>
+</span></span><span style="display:flex;"><span>@<span style="color:#ff79c6">[</span>tracepoint:block:block_rq_complete<span style="color:#ff79c6">]</span>: <span style="color:#bd93f9">185</span>
+</span></span><span style="display:flex;"><span>@<span style="color:#ff79c6">[</span>tracepoint:block:block_dirty_buffer<span style="color:#ff79c6">]</span>: <span style="color:#bd93f9">249</span>
+</span></span><span style="display:flex;"><span>@<span style="color:#ff79c6">[</span>tracepoint:block:block_bio_complete<span style="color:#ff79c6">]</span>: <span style="color:#bd93f9">309</span>
+</span></span><span style="display:flex;"><span>@<span style="color:#ff79c6">[</span>tracepoint:block:block_touch_buffer<span style="color:#ff79c6">]</span>: <span style="color:#bd93f9">463</span>
+</span></span><span style="display:flex;"><span>@<span style="color:#ff79c6">[</span>tracepoint:block:block_bio_remap<span style="color:#ff79c6">]</span>: <span style="color:#bd93f9">624</span>
+</span></span><span style="display:flex;"><span>@<span style="color:#ff79c6">[</span>tracepoint:block:block_bio_queue<span style="color:#ff79c6">]</span>: <span style="color:#bd93f9">628</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4"># 聚合函数</span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4"># sum()、avg()、min()、max()</span>
+</span></span><span style="display:flex;"><span>bpftrace -e <span style="color:#f1fa8c">&#39;tracepoint:syscalls:sys_exit_read /args-&gt;ret &gt; 0/ { @bytes = sum(args-&gt;ret); }&#39;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4"># 打印柱状图（二次幂为区间）</span>
+</span></span><span style="display:flex;"><span>bpftrace -e <span style="color:#f1fa8c">&#39;tracepoint:syscalls:sys_exit_read  { @ret = hist(args-&gt;ret); }&#39;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4"># 打印线性直方图</span>
+</span></span><span style="display:flex;"><span>bpftrace -e <span style="color:#f1fa8c">&#39;tracepoint:syscalls:sys_exit_read  { @ret = lhist(args-&gt;ret, 0, 1000, 100); }&#39;</span>
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>一个综合性的例子</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-shell" data-lang="shell"><span style="display:flex;"><span>bpftrace -e <span style="color:#f1fa8c">&#39;kprobe:vfs_read { @start[tid] = nsecs; }
+</span></span></span><span style="display:flex;"><span><span style="color:#f1fa8c">  kretprobe:vfs_read /@start[tid]/ {
+</span></span></span><span style="display:flex;"><span><span style="color:#f1fa8c">    @ms[comm] = sum(nsecs - @start[tid]); delete(@start[tid]); }
+</span></span></span><span style="display:flex;"><span><span style="color:#f1fa8c">  END { print(@ms, 0, 1000000); clear(@ms); clear(@start); }&#39;</span>
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>执行原理</p>
+<ul>
+<li>bpftrace 使用 libbcc 和 libbpf 完成对探针的插桩、程序的加载，以及使用 USDT。它也使用 LLVM 将程序编译为 BPF 字节码。</li>
+<li>bpftrace 语言是使用 lex 和 yacc 文件定义的，会分别经过 flex 和 bison 程序处理</li>
+<li>输出是一个作为抽象语法树存在的程序。跟踪点解析器和 Clang 解析器会对这个结构进行语法分析</li>
+<li>一个语法分析器会检查语言元素的使用，在出错时会抛出错误</li>
+<li>下一步是代码生成 —— 将 AST 节点转为 LLVM IR，最后再由 LLVM 编译为 BPF 字节码。
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/08/07/EctXiP.png">
+            <img class="mx-auto" alt="23.jpg" src="https://v1.ax1x.com/2025/08/07/EctXiP.png" />
+        </a>
+    </li>
+</ul>
+<h2 id="编程语言">编程语言</h2>
+<p>使用 BPF 对一种语言进行跟踪所需要的能力，包括可回答以下问题：</p>
+<ul>
+<li>什么函数被调用？</li>
+<li>函数的参数是什么？</li>
+<li>函数的返回值是什么？有错误吗？</li>
+<li>引发了某个事件的什么代码路径（调用栈）？</li>
+<li>函数运行的时长是多久？可以用直方图表示吗？</li>
+</ul>
+<p>C相关工具</p>
+<table>
+<thead>
+<tr>
+<th>工具</th>
+<th>来源</th>
+<th>目标</th>
+<th>描述</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>funccount</td>
+<td>BCC</td>
+<td>函数</td>
+<td>对函数调用计数</td>
+</tr>
+<tr>
+<td>stackcount</td>
+<td>BCC</td>
+<td>调用栈</td>
+<td>对导致某个事件发生的本地调用栈进行计数</td>
+</tr>
+<tr>
+<td>trace</td>
+<td>BCC</td>
+<td>函数</td>
+<td>打印详细的函数调用和返回值</td>
+</tr>
+<tr>
+<td>argdist</td>
+<td>BCC</td>
+<td>函数</td>
+<td>摘要统计函数参数和返回值</td>
+</tr>
+<tr>
+<td>bpftrace</td>
+<td>BT</td>
+<td>All</td>
+<td>自定义函数和调用栈插桩</td>
+</tr>
+</tbody>
+</table>
+<p>bpftrace</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">15
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">16
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">17
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">18
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">19
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">20
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">21
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">22
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">23
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">24
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">25
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">26
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-shell" data-lang="shell"><span style="display:flex;"><span><span style="color:#6272a4"># 对以 “attach” 开头的内核函数调用进行计数：</span>
+</span></span><span style="display:flex;"><span>bpftrace -e <span style="color:#f1fa8c">&#39;kprobe:attach* { @[probe] = count(); }&#39;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4"># 对某个二进制（如 /bin/bash）文件中以 a 开头的函数调用计数：</span>
+</span></span><span style="display:flex;"><span>bpftrace -e <span style="color:#f1fa8c">&#39;uprobe:/bin/bash:a* { @[probe] = count(); }&#39;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4"># 对某个库（如 libc.6.so）文件中以 a 开头的函数调用计数：</span>
+</span></span><span style="display:flex;"><span>bpftrace -e <span style="color:#f1fa8c">&#39;u:/lib/x86_64-linux-gnu/libc.so.6:a* { @[probe] = count(); }&#39;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4"># 跟踪某个函数和它的参数（比如，bash 的 readline ()）：</span>
+</span></span><span style="display:flex;"><span>bpftrace -e <span style="color:#f1fa8c">&#39;u:/bin/bash:readline { printf(&#34;prompt: %s\n&#34;, str(arg0)); }&#39;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4"># 跟踪某个函数和它的返回值（比如，bash 的 readline ()）：</span>
+</span></span><span style="display:flex;"><span>bpftrace -e <span style="color:#f1fa8c">&#39;ur:/bin/bash:readline { printf(&#34;read: %s\n&#34;, str(retval)); }&#39;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4"># 跟踪某个库函数和它的参数（比如，libc 的 fopen ()）：</span>
+</span></span><span style="display:flex;"><span>bpftrace -e <span style="color:#f1fa8c">&#39;u:/lib/x86_64-linux-gnu/libc.so.6:fopen { printf(&#34;opening: %s\n&#34;,str(arg0)); }&#39;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4"># 对某个库函数的返回值进行统计（比如，libc 的 fopen ()）：</span>
+</span></span><span style="display:flex;"><span>bpftrace -e <span style="color:#f1fa8c">&#39;ur:/lib/x86_64-linux-gnu/libc.so.6:fopen { @[retval] = count(); }&#39;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4"># 对某个用户态函数调用栈进行计数（比如，bash 的 readline ()）：</span>
+</span></span><span style="display:flex;"><span>bpftrace -e <span style="color:#f1fa8c">&#39;u:/bin/bash:readline { @[ustack] = count(); }&#39;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4"># 以 49Hz 的频率对用户态调用栈进行采样：</span>
+</span></span><span style="display:flex;"><span>bpftrace -e <span style="color:#f1fa8c">&#39;profile:hz:49 { @[ustack] = count(); }&#39;</span>
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>Java相关工具</p>
+<table>
+<thead>
+<tr>
+<th>工具</th>
+<th>来源</th>
+<th>跟踪目标</th>
+<th>描述</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>jnistacks</td>
+<td>本书</td>
+<td>libjvm</td>
+<td>使用对象调用栈来展示JNI消费者</td>
+</tr>
+<tr>
+<td>profile</td>
+<td>BCC</td>
+<td>CPU</td>
+<td>基于时间的调用栈采样，包括Java方法</td>
+</tr>
+<tr>
+<td>offcputime</td>
+<td>BCC</td>
+<td>Sched</td>
+<td>未在CPU上运行的栈采样，包括Java方法</td>
+</tr>
+<tr>
+<td>stackcount</td>
+<td>BCC</td>
+<td>Event</td>
+<td>对任何事件获取其调用栈</td>
+</tr>
+<tr>
+<td>javastat</td>
+<td>BCC</td>
+<td>USDT</td>
+<td>高级语言操作统计</td>
+</tr>
+<tr>
+<td>javathreads</td>
+<td>本书</td>
+<td>USDT</td>
+<td>跟踪线程的开始和结束事件</td>
+</tr>
+<tr>
+<td>javacalls</td>
+<td>BCC/本书</td>
+<td>USDT</td>
+<td>对Java方法调用进行计数</td>
+</tr>
+<tr>
+<td>javaflow</td>
+<td>BCC</td>
+<td>USDT</td>
+<td>展示Java方法的代码流</td>
+</tr>
+<tr>
+<td>javagc</td>
+<td>BCC</td>
+<td>USDT</td>
+<td>跟踪Java的垃圾回收</td>
+</tr>
+<tr>
+<td>javaobjnew</td>
+<td>BCC</td>
+<td>USDT</td>
+<td>对Java新对象的分配进行计数</td>
+</tr>
+</tbody>
+</table>
+<p>Java 的 USDT 探针</p>
+<ul>
+<li>虚拟机生命周期</li>
+<li>线程生命周期</li>
+<li>类加载</li>
+<li>垃圾回收</li>
+<li>方法编译</li>
+<li>监控器</li>
+<li>应用跟踪</li>
+<li>方法调用</li>
+<li>对象分配</li>
+<li>监控器事件</li>
+</ul>
+<p>上述探针只在 JDK 使用了 &ndash;enable-dtrace 编译选项后才能使用</p>
+<h2 id="应用程序">应用程序</h2>
+<p>应用程序相关的工具</p>
+<table>
+<thead>
+<tr>
+<th>工具</th>
+<th>来源</th>
+<th>目标</th>
+<th>工具介绍</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>execsnoop</td>
+<td>BCC/BT</td>
+<td>调度器</td>
+<td>列出新创建的进程</td>
+</tr>
+<tr>
+<td>threadsnoop</td>
+<td>本书</td>
+<td>pthread</td>
+<td>列出新创建的线程</td>
+</tr>
+<tr>
+<td>profile</td>
+<td>BCC</td>
+<td>CPU</td>
+<td>on-CPU 调用栈采样</td>
+</tr>
+<tr>
+<td>threaded</td>
+<td>本书</td>
+<td>CPU</td>
+<td>on-CPU 线程采样</td>
+</tr>
+<tr>
+<td>offcputime</td>
+<td>BCC</td>
+<td>Sched</td>
+<td>展示带调用栈的 off-CPU 执行时间</td>
+</tr>
+<tr>
+<td>offcpuist</td>
+<td>本书</td>
+<td>Sched</td>
+<td>展示带时间直方图的 off-CPU 调用栈</td>
+</tr>
+<tr>
+<td>syscount</td>
+<td>BCC</td>
+<td>系统调用</td>
+<td>按类型计数的系统调用</td>
+</tr>
+<tr>
+<td>ioprofile</td>
+<td>本书</td>
+<td>I/O</td>
+<td>I/O 调用栈计数</td>
+</tr>
+<tr>
+<td>mysqld_qslower</td>
+<td>BCC/本书</td>
+<td>MySQL服务器</td>
+<td>展示慢于阈值的 MySQL 查询</td>
+</tr>
+<tr>
+<td>mysqld_clat</td>
+<td>本书</td>
+<td>MySQL服务器</td>
+<td>以直方图的形式展示 MySQL 命令延迟</td>
+</tr>
+<tr>
+<td>signals</td>
+<td>本书</td>
+<td>信号</td>
+<td>汇总目标进程发出的信号</td>
+</tr>
+<tr>
+<td>killsnoop</td>
+<td>BCC/BT</td>
+<td>系统调用</td>
+<td>展示带发送进程信息的 kill(2) 系统调用</td>
+</tr>
+<tr>
+<td>pmlock</td>
+<td>本书</td>
+<td>锁</td>
+<td>展示 pthread 互斥锁次数和用户调用栈</td>
+</tr>
+<tr>
+<td>pmheld</td>
+<td>本书</td>
+<td>锁</td>
+<td>展示 pthread 互斥锁被持有次数和用户调用栈</td>
+</tr>
+<tr>
+<td>naptime</td>
+<td>本书</td>
+<td>系统调用</td>
+<td>展示被动睡眠调用</td>
+</tr>
+</tbody>
+</table>
+<p>bpftrace</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">15
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">16
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">17
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">18
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">19
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">20
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">21
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">22
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">23
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">24
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">25
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">26
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">27
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">28
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">29
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">30
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">31
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">32
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">33
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">34
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-shell" data-lang="shell"><span style="display:flex;"><span><span style="color:#6272a4"># 带参数的新创建进程：</span>
+</span></span><span style="display:flex;"><span>bpftrace -e <span style="color:#f1fa8c">&#39;tracepoint:syscalls:sys_enter_execve { join(args-&gt;argv); }&#39;</span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4"># 按进程对系统调用计数：</span>
+</span></span><span style="display:flex;"><span>bpftrace -e <span style="color:#f1fa8c">&#39;tracepoint:raw_syscalls:sys_enter { @[pid, comm] = count(); }&#39;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4"># 按系统调用名称对系统调用计数：</span>
+</span></span><span style="display:flex;"><span>bpftrace -e <span style="color:#f1fa8c">&#39;tracepoint:syscalls:sys_enter_* { @[probe] = count(); }&#39;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4"># 对 PID 为 189 的进程，以 49Hz 进行用户态调用栈采样：</span>
+</span></span><span style="display:flex;"><span>bpftrace -e <span style="color:#f1fa8c">&#39;profile:hz:49 /pid == 189/ { @[ustack] = count(); }&#39;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4"># 对 mysqld 进程，以 49Hz 进行用户态调用栈采样：</span>
+</span></span><span style="display:flex;"><span>bpftrace -e <span style="color:#f1fa8c">&#39;profile:hz:49 /comm == &#34;mysqld&#34;/ { @[ustack] = count(); }&#39;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4"># 对 off-CPU 用户态调用栈计数：</span>
+</span></span><span style="display:flex;"><span>bpftrace -e <span style="color:#f1fa8c">&#39;tracepoint:sched:sched_switch { @[ustack] = count(); }&#39;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4"># 对所有调用栈和进程名采样：</span>
+</span></span><span style="display:flex;"><span>bpftrace -e <span style="color:#f1fa8c">&#39;profile:hz:49 { @[ustack, stack, comm] = count(); }&#39;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4"># 按用户态调用栈计算 malloc () 请求的字节总数（高开销）：</span>
+</span></span><span style="display:flex;"><span>bpftrace -e <span style="color:#f1fa8c">&#39;u:/lib/x86_64-linux-gnu/libc-2.27.so:malloc { @[ustack(5)] = sum(arg0); }&#39;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4"># 跟踪 kill () 信号，显示发送进程名称、目标 PID 和信号号码：</span>
+</span></span><span style="display:flex;"><span>bpftrace -e <span style="color:#f1fa8c">&#39;t:syscalls:sys_enter_kill { printf(&#34;%s -&gt; PID %d SIG %d\n&#34;, comm, args-&gt;pid, args-&gt;sig); }&#39;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4"># 对 libpthread 互斥锁方法计数 1 秒：</span>
+</span></span><span style="display:flex;"><span>bpftrace -e <span style="color:#f1fa8c">&#39;u:/lib/x86_64-linux-gnu/libpthread.so.0:pthread_mutex_*lock { @[probe] = count(); } interval:s:1 { exit(); }&#39;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4"># 对 libpthread 条件变量相关函数计数 1 秒：</span>
+</span></span><span style="display:flex;"><span>bpftrace -e <span style="color:#f1fa8c">&#39;u:/lib/x86_64-linux-gnu/libpthread.so.0:pthread_cond_* { @[probe] = count(); } interval:s:1 { exit(); }&#39;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4"># 按进程对 LLC 缓存未命中计数：</span>
+</span></span><span style="display:flex;"><span>bpftrace -e <span style="color:#f1fa8c">&#39;hardware:cache-misses: { @[comm] = count(); }&#39;</span>
+</span></span></code></pre></td></tr></table>
+</div>
+</div><h2 id="内核">内核</h2>
+<p>BPF 跟踪工具可以提供内核指标外的其他信息，包括回答以下问题：</p>
+<ul>
+<li>线程为什么离开 CPU，以及它们离开 CPU 多久了？</li>
+<li>off-CPU 的线程在等待什么事件？</li>
+<li>谁正在使用内核的 slab 分配器？</li>
+<li>内核是否正在移动页面来平衡 NUMA？</li>
+<li>正在发生什么工作队列事件？延迟是多少？</li>
+<li>对于内核开发者：哪些函数被调用了？传入和返回的参数是什么？延迟是多少？</li>
+</ul>
+<p>内核事件类型和插桩源</p>
+<table>
+<thead>
+<tr>
+<th>事件类型</th>
+<th>事件源</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>内核函数执行</td>
+<td>kprobes</td>
+</tr>
+<tr>
+<td>调度器事件</td>
+<td>sched 跟踪点</td>
+</tr>
+<tr>
+<td>系统调用</td>
+<td>syscalls 跟踪点和 raw_syscalls 跟踪点</td>
+</tr>
+<tr>
+<td>内核内存分配</td>
+<td>kmem 跟踪点</td>
+</tr>
+<tr>
+<td>页面换出守护进程扫描</td>
+<td>vmscan 跟踪点</td>
+</tr>
+<tr>
+<td>中断</td>
+<td>irq 跟踪点和 irq_vectors 跟踪点</td>
+</tr>
+<tr>
+<td>工作队列执行</td>
+<td>workqueue 跟踪点</td>
+</tr>
+<tr>
+<td>计时器</td>
+<td>timer 跟踪点</td>
+</tr>
+<tr>
+<td>IRQ 和抢占禁用</td>
+<td>preemptirq 跟踪点<!-- raw HTML omitted -->1<!-- raw HTML omitted --></td>
+</tr>
+</tbody>
+</table>
+<p>内核相关工具</p>
+<table>
+<thead>
+<tr>
+<th>工具</th>
+<th>来源</th>
+<th>目标</th>
+<th>描述</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>loads</td>
+<td>BT</td>
+<td>CPU</td>
+<td>显示平均负载</td>
+</tr>
+<tr>
+<td>offcputime</td>
+<td>BCC/本书</td>
+<td>调度器</td>
+<td>总结off-CPU调用栈和时间</td>
+</tr>
+<tr>
+<td>wakeuptime</td>
+<td>BCC</td>
+<td>调度器</td>
+<td>总结唤醒调用栈和阻塞时间</td>
+</tr>
+<tr>
+<td>offwaketime</td>
+<td>BCC</td>
+<td>调度器</td>
+<td>总结带off-CPU调用栈的唤醒</td>
+</tr>
+<tr>
+<td>mlock</td>
+<td>本书</td>
+<td>互斥锁</td>
+<td>显示互斥锁时间和内核堆栈</td>
+</tr>
+<tr>
+<td>mheld</td>
+<td>本书</td>
+<td>互斥锁</td>
+<td>显示互斥保持时间和内核堆栈</td>
+</tr>
+<tr>
+<td>kmem</td>
+<td>本书</td>
+<td>内存</td>
+<td>总结内核内存分配</td>
+</tr>
+<tr>
+<td>kpages</td>
+<td>本书</td>
+<td>内存页面</td>
+<td>总结内核内存页面分配</td>
+</tr>
+<tr>
+<td>memleak</td>
+<td>本书</td>
+<td>内存</td>
+<td>显示可能的内存泄漏代码路径</td>
+</tr>
+<tr>
+<td>slabratetop</td>
+<td>BCC/本书</td>
+<td>slab</td>
+<td>按缓存显示内核slab分配率</td>
+</tr>
+<tr>
+<td>numamove</td>
+<td>本书</td>
+<td>NUMA</td>
+<td>显示NUMA页面迁移统计信息</td>
+</tr>
+<tr>
+<td>workq</td>
+<td>本书</td>
+<td>工作队列</td>
+<td>显示工作队列函数的执行时间</td>
+</tr>
+</tbody>
+</table>
+<p>bpftrace</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">15
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">16
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">17
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">18
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">19
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">20
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">21
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">22
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">23
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">24
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">25
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">26
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">27
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">28
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">29
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">30
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">31
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">32
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">33
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">34
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">35
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">36
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">37
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-shell" data-lang="shell"><span style="display:flex;"><span><span style="color:#6272a4"># 按进程对系统调用进行计数：</span>
+</span></span><span style="display:flex;"><span>bpftrace -e <span style="color:#f1fa8c">&#39;tracepoint:raw_syscalls:sys_enter { @[pid, comm] = count(); }&#39;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4"># 按系统调用探针名称对系统调用进行计数：</span>
+</span></span><span style="display:flex;"><span>bpftrace -e <span style="color:#f1fa8c">&#39;tracepoint:syscalls:sys_enter_* { @[probe] = count(); }&#39;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4">#按系统调用函数对系统调用进行计数：</span>
+</span></span><span style="display:flex;"><span>bpftrace -e <span style="color:#f1fa8c">&#39;tracepoint:raw_syscalls:sys_enter {
+</span></span></span><span style="display:flex;"><span><span style="color:#f1fa8c">    @[ksym(*(kaddr(&#34;sys_call_table&#34;) + args-&gt;id * 8))] = count(); }&#39;</span>
+</span></span><span style="display:flex;"><span>	
+</span></span><span style="display:flex;"><span><span style="color:#6272a4"># 对以 “attach” 开始的内核函数调用进行计数：</span>
+</span></span><span style="display:flex;"><span>bpftrace -e <span style="color:#f1fa8c">&#39;kprobe:attach* { @[probe] = count(); }&#39;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4"># 为内核函数 vfs_read () 计时并将其总结为直方图：</span>
+</span></span><span style="display:flex;"><span>bpftrace -e <span style="color:#f1fa8c">&#39;k:vfs_read { @ts[tid] = nsecs; } kr:vfs_read /@ts[tid]/ {
+</span></span></span><span style="display:flex;"><span><span style="color:#f1fa8c">    @ = hist(nsecs - @ts[tid]); delete(@ts[tid]); }&#39;</span>	
+</span></span><span style="display:flex;"><span>	
+</span></span><span style="display:flex;"><span><span style="color:#6272a4"># 对内核函数 “func1” 的第一个整数参数出现的频率进行计数：</span>
+</span></span><span style="display:flex;"><span>bpftrace -e <span style="color:#f1fa8c">&#39;kprobe:func1 { @[arg0] = count(); }&#39;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4"># 对内核函数 “func1” 的返回值出现的频率进行计数：</span>
+</span></span><span style="display:flex;"><span>bpftrace -e <span style="color:#f1fa8c">&#39;kretprobe:func1 { @[retval] = count(); }&#39;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4"># 以 99Hz 对内核态调用栈采样，不包含 idle：</span>
+</span></span><span style="display:flex;"><span>bpftrace -e <span style="color:#f1fa8c">&#39;profile:hz:99 /pid/ { @[kstack] = count(); }&#39;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4"># 以 99Hz 对 on-CPU 内核函数采样：</span>
+</span></span><span style="display:flex;"><span>bpftrace -e <span style="color:#f1fa8c">&#39;profile:hz:99 { @[kstack(1)] = count(); }&#39;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4"># 对上下文切换调用栈计数：</span>
+</span></span><span style="display:flex;"><span>bpftrace -e <span style="color:#f1fa8c">&#39;t:sched:sched_switch { @[kstack, ustack, comm] = count(); }&#39;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4"># 按内核函数对工作队列请求进行计数：</span>
+</span></span><span style="display:flex;"><span>bpftrace -e <span style="color:#f1fa8c">&#39;t:workqueue:workqueue_execute_start { @[ksym(args-&gt;function)] = count() }&#39;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4"># 对内核函数开始的 hrtimer 进行计数：</span>
+</span></span><span style="display:flex;"><span>bpftrace -e <span style="color:#f1fa8c">&#39;t:timer:hrtimer_start { @[ksym(args-&gt;function)] = count(); }&#39;</span>	
+</span></span></code></pre></td></tr></table>
+</div>
+</div><h2 id="容器">容器</h2>
+<p>主要有两种实现容器的方法。</p>
+<ul>
+<li>操作系统级别的虚拟化：在 Linux 中这涉及使用命名空间（namespace）对系统进行分区，通常与 cgroup 结合使用进行资源控制。所有容器共享同一个运行着的内核。这是 Docker、Kubernetes 以及其他容器环境所使用的方法。</li>
+<li>硬件级别的虚拟化：这涉及运行轻量级虚拟机，每个虚拟机都有自己的内核。Intel 的 Clear Containers（即现在的 Kata Containers<!-- raw HTML omitted -->[165]<!-- raw HTML omitted -->）和 AWS 的 Firecracker<!-- raw HTML omitted -->[166]<!-- raw HTML omitted -->使用这种方式。</li>
+</ul>
+<p>容器专用工具</p>
+<table>
+<thead>
+<tr>
+<th>工具</th>
+<th>来源</th>
+<th>目标</th>
+<th>工具描述</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>runqlat</td>
+<td>BCC</td>
+<td>Sched</td>
+<td>按 PID 命名空间总结 CPU 运行队列延迟</td>
+</tr>
+<tr>
+<td>pidnss</td>
+<td>本书</td>
+<td>Sched</td>
+<td>对 PID 命名空间切换进行计数：容器共享一个 CPU</td>
+</tr>
+<tr>
+<td>blkthrot</td>
+<td>本书</td>
+<td>块I/O</td>
+<td>对被 blk cgroup 限制的块I/O进行计数</td>
+</tr>
+<tr>
+<td>overlayfs</td>
+<td>本书</td>
+<td>Overlay文件系统</td>
+<td>显示Overlay文件系统的读写延迟</td>
+</tr>
+</tbody>
+</table>
+<p>bpftrace</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">7
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-shell" data-lang="shell"><span style="display:flex;"><span><span style="color:#6272a4"># 以 99Hz 的频率对 cgroup ID 进行计数：</span>
+</span></span><span style="display:flex;"><span>bpftrace -e <span style="color:#f1fa8c">&#39;profile:hz:99 { @[cgroup] = count(); }&#39;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4"># 跟踪名为 “container1” 的容器（cgroup v2）中打开的文件名：</span>
+</span></span><span style="display:flex;"><span>bpftrace -e <span style="color:#f1fa8c">&#39;t:syscalls:sys_enter_openat
+</span></span></span><span style="display:flex;"><span><span style="color:#f1fa8c">/cgroup == cgroupid(&#34;/sys/fs/cgroup/unified/container1&#34;)/ {
+</span></span></span><span style="display:flex;"><span><span style="color:#f1fa8c">printf(&#34;%s\n&#34;, str(args-&gt;filename)); }&#39;</span>
+</span></span></code></pre></td></tr></table>
+</div>
+</div><h2 id="虚拟机">虚拟机</h2>
+<p>类型</p>
+<ul>
+<li>配置 A：此配置被称为本机管理器或裸机管理器。虚拟机管理器直接运行在处理器上，它负责创建为运行访客虚拟机的域并将虚拟的访客系统 CPU 调度到真实 CPU 上，这种配置的一个流行的例子是 Xen 虚拟机管理器。</li>
+<li>配置 B: 虚拟机管理器由宿主机内核运行，可能由内核态模块和用户态进程组成。宿主机操作系统有管理虚拟机管理器的特权，其内核负责将虚拟机 CPU 以及宿主机上的其他进程一同调度。这种配置的一个流行的例子是 KVM 虚拟机管理器。</li>
+</ul>
+<p>改进</p>
+<ul>
+<li>处理器虚拟化支持：在2005—2006年引入的AMD-V和Intel VT-x处理器扩展为虚拟机操作提供了更快的硬件支持。</li>
+<li>半虚拟化（paravirt或PV）：通过半虚拟化运行一个修改过的操作系统，可以使操作系统知道它正在硬件虚拟机上运行，并对虚拟机管理器发起超级调用，以更高效地处理某些操作。为了提高效率，Xen将这些超级调用批处理为一个多重调用。</li>
+<li>硬件设备支持：为了进一步优化虚拟机性能，处理器之外的硬件设备已经添加了虚拟机支持。这包括用于网络和存储设备的SR-IOV，以及使用它们的特殊驱动程序：ixgbe、ena和nvme。</li>
+</ul>
+<h2 id="监控">监控</h2>
+<p>GUI 和工具包括如下一些。</p>
+<ul>
+<li>Vector 和 Performance Co-Pilot（PCP）：用于远程 BPF 监控</li>
+<li>Grafana 配合 PCP：用于远程 BPF 监控</li>
+<li>eBPF Exporter：用于 BPF 同 Prometheus 和 Grafana 的集成</li>
+<li>kubectl-trace：用于跟踪 Kubernetes 的 pods 和 nodes</li>
+</ul>
+<h2 id="参考">参考</h2>
+<ul>
+<li><a href="https://ebpf.io/what-is-ebpf/">bpf 官方文档</a></li>
+<li><a href="https://www.kernel.org/doc/html/latest/bpf/index.html/">BPF 内核文档</a></li>
+<li><a href="https://github.com/iovisor/bcc/blob/master/docs/reference_guide.md">bcc Reference Guide</a></li>
+<li><a href="https://ebpf.io/">ebpf</a></li>
+<li><a href="https://github.com/iovisor/bcc">bcc tools</a></li>
+<li><a href="https://github.com/bpftrace/bpftrace/blob/master/man/adoc/bpftrace.adoc">bpftrace文档</a></li>
+<li><a href="https://en.wikipedia.org/wiki/Application_binary_interface">Application binary interface</a></li>
+<li><a href="https://9p.io/sys/doc/asm.html">A Manual for the Plan 9 assembler</a></li>
+<li><a href="https://mermaid.js.org/intro/">About Mermaid</a></li>
+<li><a href="https://www.cnblogs.com/ywsun/p/14271547.html">整理Markdown 公式编辑常用数学符号</a></li>
+<li><a href="https://www.thebyte.com.cn/">《深入高可用系统原理与设计》</a></li>
+<li><a href="https://github.com/feiskyer/ebpf-apps/tree/main/loadbalancer/sockops">github sockops</a></li>
+<li><a href="https://github.com/libbpf/libbpf-bootstrap">libbpf-bootstrap</a></li>
+<li><a href="https://docs.alpinelinux.org/user-handbook/0.1a/index.html">alpine linux</a></li>
+<li><a href="https://archive.kernel.org/oldlinux/htmldocs/networking/">Linux Networking and Network Devices APIs</a></li>
+<li><a href="https://archive.kernel.org/oldlinux/htmldocs/">Linux Kernel HTML Documentation</a></li>
+<li><a href="https://linux-kernel-labs.github.io/refs/heads/master/so2/index.html">Operating Systems 2</a></li>
+<li><a href="https://elixir.bootlin.com/linux/v6.15.6/source">linux内核源码</a></li>
+<li><a href="https://lpc.events/event/11/contributions/939/attachments/771/1551/xdp-multi-buff.pdf">Bringing TSO/GRO and Jumbo
+frames to XDP</a></li>
+<li><a href="https://lpc.events/event/7/contributions/671/attachments/561/992/xdp-multiprog.pdf">Multiple XDP programs per
+interface: Status and
+outstanding issues</a></li>
+<li><a href="https://blog.csdn.net/jjj_web/article/details/147994999">在Ubuntu 24.04上搭建eBPF/XDP开发环境</a></li>
+<li><a href="https://www.ebpf.top/post/linux_process_mgr/">Linux 进程管理</a></li>
+<li><a href="https://www.ebpf.top/">Head First eBPF</a></li>
+<li><a href="https://developer.aliyun.com/article/899162">深入浅出 eBPF 安全项目 Tracee</a></li>
+<li><a href="https://developer.aliyun.com/article/1542402">深入探索Linux的lsns命令</a></li>
+<li><a href="https://www.ruilog.com/notebook/view/52c36fee92e8.htmls">动态追踪技术漫谈(全) [章亦春]</a></li>
+</ul>
+
+			<script type="text/javascript"
+        async
+        src="https://cdn.bootcss.com/mathjax/2.7.3/MathJax.js?config=TeX-AMS-MML_HTMLorMML">
+MathJax.Hub.Config({
+  tex2jax: {
+    inlineMath: [['$','$'], ['\\(','\\)']],
+    displayMath: [['$$','$$'], ['\[\[','\]\]']],
+    processEscapes: true,
+    processEnvironments: true,
+    skipTags: ['script', 'noscript', 'style', 'textarea', 'pre'],
+    TeX: { equationNumbers: { autoNumber: "AMS" },
+         extensions: ["AMSmath.js", "AMSsymbols.js"] }
+  }
+});
+
+MathJax.Hub.Queue(function() {
+    
+    
+    
+    var all = MathJax.Hub.getAllJax(), i;
+    for(i = 0; i < all.length; i += 1) {
+        all[i].SourceElement().parentNode.className += ' has-jax';
+    }
+});
+</script>
+
+<style>
+code.has-jax {
+    font: inherit;
+    font-size: 100%;
+    background: inherit;
+    border: inherit;
+    color: #515151;
+}
+</style>
+        </div>
+
+        
+
+
+        
+
+<div class="post-archive">
+    <h2>相关文章</h2>
+    <ul class="listing">
+        
+        <li><a href="/post/2025/08/ebpf_resource/">eBPF 资源</a></li>
+        
+        <li><a href="/post/2025/07/ebpf_container/">eBPF 容器</a></li>
+        
+        <li><a href="/post/2025/07/ebpf_networks/">eBPF 网络</a></li>
+        
+        <li><a href="/post/2025/07/ebpf_user/">eBPF 用户态跟踪</a></li>
+        
+        <li><a href="/post/2025/06/ebpf_kernal/">eBPF 内核跟踪</a></li>
+        
+    </ul>
+</div>
+
+
+        <div class="post-meta meta-tags">
+            
+            <ul class="clearfix">
+                
+                <li><a href='/tags/ebpf'>eBPF</a></li>
+                
+            </ul>
+            
+        </div>
+    </article>
+    
+    
+
+    
+    
+    <div class="post bg-white">
+      <script src="https://utteranc.es/client.js"
+            repo= "himichael/hugoblogtalks"
+            issue-term="pathname"
+            theme="github-light"
+            crossorigin="anonymous"
+            async>
+      </script>
+    </div>
+    
+</div>
+
+
+                </div>
+
+                <div id="secondary">
+    <section class="widget">
+        <form id="search" action='https://code0xff.org/search/' method="get" accept-charset="utf-8" target="_blank" _lpchecked="1">
+      
+      <input type="text" name="q" maxlength="20" placeholder="Search">
+      <input type="hidden" name="sitesearch" value="https://code0xff.org/">
+      <button type="submit" class="submit icon-search"></button>
+</form>
+    </section>
+    
+    <section class="widget">
+        <h3 class="widget-title">最近文章</h3>
+<ul class="widget-list">
+    
+    <li>
+        <a href="https://code0xff.org/post/2026/02/yunnan_west/" title="云南滇西大环线">云南滇西大环线</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2026/01/2015_2025/" title="2015年 -- 2025年">2015年 -- 2025年</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2026/01/longhorn/" title="longhorn">longhorn</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2025/12/ai_infrastructure/" title="关于AI 的生态">关于AI 的生态</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2025/11/ai_bubble/" title="关于AI泡沫">关于AI泡沫</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2025/10/china_beihai/" title="南边的北海">南边的北海</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2025/09/bpf_http/" title="eBPF的 http跟踪">eBPF的 http跟踪</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2025/09/spark_flink/" title="Spark和Flink的对比总结（包含Operator）">Spark和Flink的对比总结（包含Operator）</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2025/08/juicefs/" title="JuiceFS">JuiceFS</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2025/08/bpftrace_12_lessons/" title="bpftrace 12个小命令">bpftrace 12个小命令</a>
+    </li>
+    
+</ul>
+    </section>
+
+    
+
+    <section class="widget">
+        <h3 class="widget-title"><a href='/categories/'>分类</a></h3>
+<ul class="widget-list">
+    
+    <li><a href="https://code0xff.org/categories/%E5%88%86%E5%B8%83%E5%BC%8F/">分布式 (8)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E5%8E%9F%E7%90%86%E5%88%86%E6%9E%90/">原理分析 (33)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E5%95%86%E4%B8%9A/">商业 (6)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E5%A4%A7%E6%95%B0%E6%8D%AE/">大数据 (59)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%95%B0%E6%8D%AE%E5%BA%93/">数据库 (41)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%96%87%E5%AD%A6%E5%92%8C%E8%89%BA%E6%9C%AF/">文学和艺术 (3)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%97%85%E8%A1%8C/">旅行 (15)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%9E%B6%E6%9E%84/">架构 (13)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E7%AE%97%E6%B3%95%E5%92%8Cai/">算法和AI (11)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E7%B3%BB%E7%BB%9F/">系统 (16)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E7%BC%96%E7%A8%8B%E8%AF%AD%E8%A8%80/">编程语言 (8)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E8%A1%8C%E4%B8%9A%E8%A7%82%E5%AF%9F/">行业观察 (3)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E8%AF%BB%E4%B9%A6%E7%AC%94%E8%AE%B0/">读书笔记 (19)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E9%9A%8F%E4%BE%BF%E5%86%99%E5%86%99/">随便写写 (4)</a></li>
+    
+</ul>
+    </section>
+
+    <section class="widget">
+        <h3 class="widget-title">归档</a></h3>
+<ul class="widget-list">
+    
+    <li><a href="https://code0xff.org/years/2021%E5%B9%B4/">2021年 (41)</a></li>
+    
+    <li><a href="https://code0xff.org/years/2022%E5%B9%B4/">2022年 (55)</a></li>
+    
+    <li><a href="https://code0xff.org/years/2023%E5%B9%B4/">2023年 (54)</a></li>
+    
+    <li><a href="https://code0xff.org/years/2024%E5%B9%B4/">2024年 (48)</a></li>
+    
+    <li><a href="https://code0xff.org/years/2025%E5%B9%B4/">2025年 (38)</a></li>
+    
+    <li><a href="https://code0xff.org/years/2026%E5%B9%B4/">2026年 (3)</a></li>
+    
+</ul>
+    </section>
+
+    <section class="widget">
+        <h3 class="widget-title"><a href='/tags/'>标签</a></h3>
+<div class="tagcloud">
+    
+    <a href="https://code0xff.org/tags/ai/">AI </a>
+    
+    <a href="https://code0xff.org/tags/ambari/">Ambari </a>
+    
+    <a href="https://code0xff.org/tags/architecture/">architecture </a>
+    
+    <a href="https://code0xff.org/tags/bigdata/">bigdata </a>
+    
+    <a href="https://code0xff.org/tags/btrace/">BTrace </a>
+    
+    <a href="https://code0xff.org/tags/b%E6%A0%91/">B树 </a>
+    
+    <a href="https://code0xff.org/tags/c&#43;&#43;/">C&#43;&#43; </a>
+    
+    <a href="https://code0xff.org/tags/calcite/">calcite </a>
+    
+    <a href="https://code0xff.org/tags/cmu-database/">CMU-Database </a>
+    
+    <a href="https://code0xff.org/tags/data_ingestion/">Data_Ingestion </a>
+    
+    <a href="https://code0xff.org/tags/deltalake/">DeltaLake </a>
+    
+    <a href="https://code0xff.org/tags/doris/">Doris </a>
+    
+    <a href="https://code0xff.org/tags/ebpf/">eBPF </a>
+    
+    <a href="https://code0xff.org/tags/english/">English </a>
+    
+    <a href="https://code0xff.org/tags/es/">ES </a>
+    
+    <a href="https://code0xff.org/tags/facebook/">Facebook </a>
+    
+    <a href="https://code0xff.org/tags/flink/">flink </a>
+    
+    <a href="https://code0xff.org/tags/flume/">flume </a>
+    
+    <a href="https://code0xff.org/tags/gc/">GC </a>
+    
+    <a href="https://code0xff.org/tags/gluten/">Gluten </a>
+    
+    <a href="https://code0xff.org/tags/hana/">HANA </a>
+    
+    <a href="https://code0xff.org/tags/hive/">Hive </a>
+    
+    <a href="https://code0xff.org/tags/iceberg/">iceberg </a>
+    
+    <a href="https://code0xff.org/tags/impala/">Impala </a>
+    
+    <a href="https://code0xff.org/tags/janino/">janino </a>
+    
+    <a href="https://code0xff.org/tags/juicefs/">JuiceFS </a>
+    
+    <a href="https://code0xff.org/tags/k8s/">k8s </a>
+    
+    <a href="https://code0xff.org/tags/kafka/">Kafka </a>
+    
+    <a href="https://code0xff.org/tags/kudu/">kudu </a>
+    
+    <a href="https://code0xff.org/tags/kyuubi/">Kyuubi </a>
+    
+    <a href="https://code0xff.org/tags/lakehouse/">Lakehouse </a>
+    
+    <a href="https://code0xff.org/tags/leveldb/">LevelDB </a>
+    
+    <a href="https://code0xff.org/tags/llamafactory/">LlamaFactory </a>
+    
+    <a href="https://code0xff.org/tags/llvm/">LLVM </a>
+    
+    <a href="https://code0xff.org/tags/log4j/">log4j </a>
+    
+    <a href="https://code0xff.org/tags/longhorn/">longhorn </a>
+    
+    <a href="https://code0xff.org/tags/manacher/">Manacher </a>
+    
+    <a href="https://code0xff.org/tags/mapreduce/">MapReduce </a>
+    
+    <a href="https://code0xff.org/tags/micro-service/">micro-service </a>
+    
+    <a href="https://code0xff.org/tags/mysql/">MySQL </a>
+    
+    <a href="https://code0xff.org/tags/newsql/">NewSQL </a>
+    
+    <a href="https://code0xff.org/tags/oceanbase/">OceanBase </a>
+    
+    <a href="https://code0xff.org/tags/openldap/">OpenLDAP </a>
+    
+    <a href="https://code0xff.org/tags/openlogreplicator/">OpenLogReplicator </a>
+    
+    <a href="https://code0xff.org/tags/parquet/">parquet </a>
+    
+    <a href="https://code0xff.org/tags/paxos/">paxos </a>
+    
+    <a href="https://code0xff.org/tags/presto/">Presto </a>
+    
+    <a href="https://code0xff.org/tags/pytorch/">PyTorch </a>
+    
+    <a href="https://code0xff.org/tags/quick-sql/">quick-sql </a>
+    
+    <a href="https://code0xff.org/tags/raft/">raft </a>
+    
+    <a href="https://code0xff.org/tags/scala/">scala </a>
+    
+    <a href="https://code0xff.org/tags/simd/">SIMD </a>
+    
+    <a href="https://code0xff.org/tags/snowflake/">snowflake </a>
+    
+    <a href="https://code0xff.org/tags/spark/">spark </a>
+    
+    <a href="https://code0xff.org/tags/sre/">SRE </a>
+    
+    <a href="https://code0xff.org/tags/teradata/">TeraData </a>
+    
+    <a href="https://code0xff.org/tags/tpcx-hs/">TPCx-HS </a>
+    
+    <a href="https://code0xff.org/tags/trino/">Trino </a>
+    
+    <a href="https://code0xff.org/tags/tuning/">Tuning </a>
+    
+    <a href="https://code0xff.org/tags/unix/">unix </a>
+    
+    <a href="https://code0xff.org/tags/yarn/">YARN </a>
+    
+    <a href="https://code0xff.org/tags/%E4%BA%8C%E5%88%86%E6%9F%A5%E6%89%BE/">二分查找 </a>
+    
+    <a href="https://code0xff.org/tags/%E4%BA%8C%E5%8F%89%E6%A0%91%E9%81%8D%E5%8E%86/">二叉树遍历 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%88%86%E5%B8%83%E5%BC%8F/">分布式 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%88%97%E5%AD%98/">列存 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%8A%A8%E6%80%81%E6%B3%A8%E5%85%A5/">动态注入 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%8E%86%E5%8F%B2/">历史 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%90%91%E9%87%8F%E5%8C%96/">向量化 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%95%86%E4%B8%9A/">商业 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%9B%9E%E6%BA%AF/">回溯 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%9B%BD%E5%86%85%E6%97%85%E8%A1%8C/">国内旅行 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%9B%BD%E5%A4%96%E6%97%85%E8%A1%8C/">国外旅行 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%A4%9A%E7%A7%9F%E6%88%B7/">多租户 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%A4%A7%E6%95%B0%E6%8D%AE/">大数据 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%AD%98%E5%82%A8/">存储 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%B7%A5%E4%BD%9C%E8%AE%B0%E5%BD%95/">工作记录 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%BE%AE%E6%9C%8D%E5%8A%A1/">微服务 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%95%B0%E6%8D%AE%E4%B8%AD%E5%8F%B0/">数据中台 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%95%B0%E6%8D%AE%E5%BA%93/">数据库 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%95%B0%E6%8D%AE%E6%A8%A1%E5%9E%8B/">数据模型 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%95%B0%E6%8D%AE%E8%BF%81%E7%A7%BB/">数据迁移 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%9F%A5%E8%AF%A2%E4%BC%98%E5%8C%96/">查询优化 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%9F%A5%E8%AF%A2%E7%BC%96%E8%AF%91/">查询编译 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%A6%82%E7%8E%87/">概率 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%B1%87%E7%BC%96/">汇编 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%B5%8B%E8%AF%95/">测试 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%94%9F%E6%B4%BB/">生活 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%94%B5%E5%BD%B1/">电影 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%AE%97%E6%B3%95/">算法 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%B4%A2%E5%BC%95/">索引 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BB%8F%E6%B5%8E/">经济 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BB%8F%E6%B5%8E%E5%88%86%E6%9E%90/">经济分析 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BC%93%E5%AD%98/">缓存 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BC%96%E8%AF%91%E5%8E%9F%E7%90%86/">编译原理 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BD%91%E7%BB%9C/">网络 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AE%A1%E7%AE%97%E6%A1%86%E6%9E%B6/">计算框架 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AE%BA%E6%96%87/">论文 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AF%BB%E4%B9%A6/">读书 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AF%BB%E4%B9%A6%E7%AC%94%E8%AE%B0/">读书笔记 </a>
+    
+</div>
+    </section>
+
+    
+
+    <section class="widget">
+        <h3 class="widget-title">RSS</h3>
+        <ul class="widget-list">
+            <li><a href="https://code0xff.org/index.xml">文章 RSS</a></li>
+        </ul>
+    </section>
+</div>
+            </div>
+        </div>
+    </div>
+    <footer id="footer">
+    <div>
+        &copy; 2026 <a href="https://code0xff.org/">记录每个瞬间 By 老王</a>
+        
+    </div>
+    <br />
+    <div>
+        <div class="github-badge">
+            <a href="https://gohugo.io/" target="_black" rel="nofollow"><span class="badge-subject">Powered by</span><span class="badge-value bg-blue">Hugo</span></a>
+        </div>
+        <div class="github-badge">
+            <a href="https://github.com/flysnow-org/maupassant-hugo" target="_black"><span class="badge-subject">Theme</span><span class="badge-value bg-yellowgreen">Maupassant</span></a>
+        </div>
+    </div>
+</footer>
+
+
+    
+    <script type="text/javascript">
+        window.MathJax = {
+            tex2jax: {
+                inlineMath: [['$', '$']],
+                processEscapes: true
+                }
+            };
+    </script>
+    <script src='https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.5/MathJax.js?config=TeX-MML-AM_CHTML' async></script><script src="https://cdn.bootcdn.net/ajax/libs/fancybox/3.5.7/jquery.fancybox.min.js"></script>
+
+<a id="rocket" href="#top"></a>
+<script type="text/javascript" src='/js/totop.js?v=0.0.0' async=""></script>
+
+<script type="application/javascript">
+var doNotTrack = false;
+if (!doNotTrack) {
+	window.ga=window.ga||function(){(ga.q=ga.q||[]).push(arguments)};ga.l=+new Date;
+	ga('create', 'GA ID', 'auto');
+	
+	ga('send', 'pageview');
+}
+</script>
+<script async src='https://www.google-analytics.com/analytics.js'></script>
+
+
+
+    <script type="text/javascript" src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js" async></script>
+
+
+
+
+</body>
+
+</html>

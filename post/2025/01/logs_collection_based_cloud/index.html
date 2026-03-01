@@ -9,8 +9,8 @@
     <meta name="referrer" content="no-referrer-when-downgrade">
     
 
-    <title>云环境中的日志收集和处理方案 | 记录每个瞬间</title>
-    <meta property="og:title" content="云环境中的日志收集和处理方案 - 记录每个瞬间">
+    <title>公有云中日志收集 | 记录每个瞬间</title>
+    <meta property="og:title" content="公有云中日志收集 - 记录每个瞬间">
     <meta property="og:type" content="article">
         
     <meta property="article:published_time" content='2025-01-27T01:08:07&#43;08:00'>
@@ -19,7 +19,7 @@
     <meta property="article:modified_time" content='2025-01-27T01:08:07&#43;08:00'>
         
     <meta name="Keywords" content="">
-    <meta name="description" content="云环境中的日志收集和处理方案">
+    <meta name="description" content="公有云中日志收集">
         <meta name="author" content="隔壁老王">
         
     <meta property="og:url" content="https://code0xff.org/post/2025/01/logs_collection_based_cloud/">
@@ -73,12 +73,11 @@
             <div class="col-group">
 
                 <div class="col-8" id="main">
-                    
-<div class="res-cons">
+                    <div class="res-cons">
     
     <article class="post">
         <header>
-            <h1 class="post-title">云环境中的日志收集和处理方案</h1>
+            <h1 class="post-title">公有云中日志收集</h1>
         </header>
         <date class="post-meta meta-date">
             2025年1月27日
@@ -98,6 +97,13 @@
         <li><a href="#使用raft-组日志集群">使用raft 组日志集群</a></li>
         <li><a href="#使用-newsql">使用 NewSQL</a></li>
         <li><a href="#总结">总结</a></li>
+      </ul>
+    </li>
+    <li><a href="#调度">调度</a>
+      <ul>
+        <li><a href="#spark端">Spark端</a></li>
+        <li><a href="#接口">接口</a></li>
+        <li><a href="#对offset字段的解释">对offset字段的解释</a></li>
       </ul>
     </li>
   </ul>
@@ -305,6 +311,241 @@ log-service</p>
 <li>方案1、方案2实际都是写入了共享存储，所以后面都是类似的</li>
 <li>方案1 先写 kafka，而其他程序如分析类的，可以读kafka 做更多事情，所以方案-1的扩展性可能更强</li>
 </ul>
+<h1 id="调度">调度</h1>
+<h2 id="spark端">Spark端</h2>
+<p>一个完整的 spark-submit 参数：</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">15
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">16
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">17
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">18
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">19
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">20
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">21
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">22
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">23
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">24
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">25
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">26
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">27
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">28
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-shell" data-lang="shell"><span style="display:flex;"><span> ./spark-submit                                                                                                    <span style="color:#f1fa8c">\
+</span></span></span><span style="display:flex;"><span><span style="color:#f1fa8c"></span> --master k8s://https://&lt;k8s-address&gt;:&lt;k8s-port&gt;                                                                          <span style="color:#f1fa8c">\
+</span></span></span><span style="display:flex;"><span><span style="color:#f1fa8c"></span> --deploy-mode cluster                                                                                             <span style="color:#f1fa8c">\
+</span></span></span><span style="display:flex;"><span><span style="color:#f1fa8c"></span> --name spark-pi                                                                                                   <span style="color:#f1fa8c">\
+</span></span></span><span style="display:flex;"><span><span style="color:#f1fa8c"></span> --class org.apache.spark.examples.SparkPi                                                                         <span style="color:#f1fa8c">\
+</span></span></span><span style="display:flex;"><span><span style="color:#f1fa8c"></span> --conf spark.executor.instances<span style="color:#ff79c6">=</span><span style="color:#bd93f9">5</span>                                                                                 <span style="color:#f1fa8c">\
+</span></span></span><span style="display:flex;"><span><span style="color:#f1fa8c"></span> --conf spark.kubernetes.container.image<span style="color:#ff79c6">=</span>spark-image:3.5.0-log4jext                                                <span style="color:#f1fa8c">\
+</span></span></span><span style="display:flex;"><span><span style="color:#f1fa8c"></span> --conf spark.kubernetes.authenticate.submission.caCertFile<span style="color:#ff79c6">=</span>/etc/kubernetes/pki/ca.crt                             <span style="color:#f1fa8c">\
+</span></span></span><span style="display:flex;"><span><span style="color:#f1fa8c"></span> --conf spark.kubernetes.authenticate.submission.clientKeyFile<span style="color:#ff79c6">=</span>/etc/kubernetes/pki/apiserver-kubelet-client.key    <span style="color:#f1fa8c">\
+</span></span></span><span style="display:flex;"><span><span style="color:#f1fa8c"></span> --conf spark.kubernetes.authenticate.submission.clientCertFile<span style="color:#ff79c6">=</span>/etc/kubernetes/pki/apiserver-kubelet-client.crt   <span style="color:#f1fa8c">\
+</span></span></span><span style="display:flex;"><span><span style="color:#f1fa8c"></span> --conf spark.kubernetes.authenticate.driver.caCertFile<span style="color:#ff79c6">=</span>/etc/kubernetes/pki/ca.crt                                 <span style="color:#f1fa8c">\
+</span></span></span><span style="display:flex;"><span><span style="color:#f1fa8c"></span> --conf spark.kubernetes.authenticate.driver.clientKeyFile<span style="color:#ff79c6">=</span>/etc/kubernetes/pki/apiserver-kubelet-client.key        <span style="color:#f1fa8c">\
+</span></span></span><span style="display:flex;"><span><span style="color:#f1fa8c"></span> --conf spark.kubernetes.authenticate.driver.clientCertFile<span style="color:#ff79c6">=</span>/etc/kubernetes/pki/apiserver-kubelet-client.crt       <span style="color:#f1fa8c">\
+</span></span></span><span style="display:flex;"><span><span style="color:#f1fa8c"></span> --conf spark.kubernetes.namespace<span style="color:#ff79c6">=</span><span style="color:#8be9fd;font-style:italic">test</span>                                                                            <span style="color:#f1fa8c">\
+</span></span></span><span style="display:flex;"><span><span style="color:#f1fa8c"></span> --conf spark.kubernetes.driverEnv.SPARK_PREFIX_DIR<span style="color:#ff79c6">=</span>/custom/path                                                   <span style="color:#f1fa8c">\
+</span></span></span><span style="display:flex;"><span><span style="color:#f1fa8c"></span> --conf spark.executorEnv.SPARK_PREFIX_DIR<span style="color:#ff79c6">=</span>/custom/path                                                            <span style="color:#f1fa8c">\
+</span></span></span><span style="display:flex;"><span><span style="color:#f1fa8c"></span> --conf spark.kubernetes.driverEnv.SPARK_EXECUTOR_ID<span style="color:#ff79c6">=</span>driver                                                        <span style="color:#f1fa8c">\
+</span></span></span><span style="display:flex;"><span><span style="color:#f1fa8c"></span> --conf spark.kubernetes.driver.volumes.persistentVolumeClaim.data.options.claimName<span style="color:#ff79c6">=</span>my-pvc                        <span style="color:#f1fa8c">\
+</span></span></span><span style="display:flex;"><span><span style="color:#f1fa8c"></span> --conf spark.kubernetes.driver.volumes.persistentVolumeClaim.data.mount.path<span style="color:#ff79c6">=</span>/custom/path                         <span style="color:#f1fa8c">\
+</span></span></span><span style="display:flex;"><span><span style="color:#f1fa8c"></span> --conf spark.kubernetes.driver.volumes.persistentVolumeClaim.data.mount.readOnly<span style="color:#ff79c6">=</span><span style="color:#8be9fd;font-style:italic">false</span>                            <span style="color:#f1fa8c">\
+</span></span></span><span style="display:flex;"><span><span style="color:#f1fa8c"></span> --conf spark.kubernetes.executor.volumes.persistentVolumeClaim.data.options.claimName<span style="color:#ff79c6">=</span>my-pvc                      <span style="color:#f1fa8c">\
+</span></span></span><span style="display:flex;"><span><span style="color:#f1fa8c"></span> --conf spark.kubernetes.executor.volumes.persistentVolumeClaim.data.mount.path<span style="color:#ff79c6">=</span>/custom/path                       <span style="color:#f1fa8c">\
+</span></span></span><span style="display:flex;"><span><span style="color:#f1fa8c"></span> --conf spark.kubernetes.executor.volumes.persistentVolumeClaim.data.mount.readOnly<span style="color:#ff79c6">=</span><span style="color:#8be9fd;font-style:italic">false</span>                          <span style="color:#f1fa8c">\
+</span></span></span><span style="display:flex;"><span><span style="color:#f1fa8c"></span> --conf spark.driver.extraJavaOptions<span style="color:#ff79c6">=</span><span style="color:#f1fa8c">&#39;-agentlib:jdwp=transport=dt_socket,server=y,suspend=y,address=5005
+</span></span></span><span style="display:flex;"><span><span style="color:#f1fa8c"> -Dlog4j.configurationFile=/opt/spark/work-dir/log4j2.properties&#39;</span>        <span style="color:#f1fa8c">\
+</span></span></span><span style="display:flex;"><span><span style="color:#f1fa8c"></span> --conf spark.executor.extraJavaOptions<span style="color:#ff79c6">=</span><span style="color:#f1fa8c">&#39;-Dlog4j.configurationFile=/opt/spark/work-dir/log4j2.properties&#39;</span>              <span style="color:#f1fa8c">\
+</span></span></span><span style="display:flex;"><span><span style="color:#f1fa8c"></span> --conf spark.kubernetes.container.image.pullPolicy<span style="color:#ff79c6">=</span>Always                                                         <span style="color:#f1fa8c">\
+</span></span></span><span style="display:flex;"><span><span style="color:#f1fa8c"></span> local:///opt/spark/examples/jars/spark-examples_2.12-3.5.2.jar
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>Spark 的 driver 和 executor 都需要设置一些 ENV 参数：</p>
+<ul>
+<li>SPARK_EXECUTOR_ID       ，driver端需要手动设置，executor 是自动设置上的</li>
+<li>SPARK_APPLICATION_ID    ，driver 和 executor 都是自动设置上的</li>
+<li>SPARK_PREFIX_DIR        ，driver 和 executor 都需要手动设置上</li>
+</ul>
+<h2 id="接口">接口</h2>
+<p><strong>读取日志，POST</strong></p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-shell" data-lang="shell"><span style="display:flex;"><span>http://ip-address:8080/logs/query/read
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>请求参数：</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">8
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-json" data-lang="json"><span style="display:flex;"><span>{
+</span></span><span style="display:flex;"><span>            <span style="color:#ff79c6">&#34;applicationId&#34;</span>: <span style="color:#f1fa8c">&#34;spark-168f61c9c0c247d0948d30e037db20e4&#34;</span>,
+</span></span><span style="display:flex;"><span>            <span style="color:#ff79c6">&#34;executorId&#34;</span>: <span style="color:#f1fa8c">&#34;2&#34;</span>,
+</span></span><span style="display:flex;"><span>            <span style="color:#ff79c6">&#34;offset&#34;</span>: <span style="color:#bd93f9">4745</span>,
+</span></span><span style="display:flex;"><span>            <span style="color:#ff79c6">&#34;line&#34;</span>: <span style="color:#bd93f9">20</span>,
+</span></span><span style="display:flex;"><span>            <span style="color:#ff79c6">&#34;isS3&#34;</span>: <span style="color:#f1fa8c">&#34;true&#34;</span>,
+</span></span><span style="display:flex;"><span>            <span style="color:#ff79c6">&#34;isS3Url&#34;</span>: <span style="color:#f1fa8c">&#34;true&#34;</span>
+</span></span><span style="display:flex;"><span>}
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>参数解释</p>
+<ul>
+<li>applicationId，spark的应用id</li>
+<li>executorId，executor id（数字表示），如果是 driver则传入“driver&quot;</li>
+<li>offset，这个是表示文件的偏移量，下面会单独介绍一下为什么要有这个参数</li>
+<li>line，一次读取多少行</li>
+<li>isS3，如果共享存储读取不到，则从 S3读取</li>
+<li>isS3Url，如果共享存储读取不到，返回这个对象的URL
+返回</li>
+</ul>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">15
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">16
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">17
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">18
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">19
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">20
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">21
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">22
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-json" data-lang="json"><span style="display:flex;"><span>{
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">&#34;fileName&#34;</span>: <span style="color:#f1fa8c">&#34;test.log&#34;</span>,
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">&#34;offset&#34;</span>: <span style="color:#bd93f9">6331</span>,
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">&#34;msg&#34;</span>: [
+</span></span><span style="display:flex;"><span>        <span style="color:#f1fa8c">&#34;2:28:04 INFO  Executor:60 - Adding file:/opt/spark/work-dir/./spark-examples_2.12-3.5.2.jar to class loader default&#34;</span>,
+</span></span><span style="display:flex;"><span>        <span style="color:#f1fa8c">&#34;2099-02-11 02:28:05 INFO  CoarseGrainedExecutorBackend:60 - Got assigned task 1&#34;</span>,
+</span></span><span style="display:flex;"><span>        <span style="color:#f1fa8c">&#34;2099-02-11 02:28:05 INFO  Executor:60 - Running task 1.0 in stage 0.0 (TID 1)&#34;</span>,
+</span></span><span style="display:flex;"><span>        <span style="color:#f1fa8c">&#34;2099-02-11 02:28:05 INFO  TorrentBroadcast:60 - Started reading broadcast variable 0 with 1 pieces (estimated total size 4.0 MiB)&#34;</span>,
+</span></span><span style="display:flex;"><span>        <span style="color:#f1fa8c">&#34;2099-02-11 02:28:05 INFO  TransportClientFactory:316 - Successfully created connection to spark-pi-860f5a94f2d5891a-driver-svc.datacyber.svc/10.233.107.146:7079 after 2 ms (0 ms spent in bootstraps)&#34;</span>,
+</span></span><span style="display:flex;"><span>        <span style="color:#f1fa8c">&#34;2099-02-11 02:28:05 INFO  MemoryStore:60 - Block broadcast_0_piece0 stored as bytes in memory (estimated size 2.3 KiB, free 413.9 MiB)&#34;</span>,
+</span></span><span style="display:flex;"><span>        <span style="color:#f1fa8c">&#34;2099-02-11 02:28:05 INFO  TorrentBroadcast:60 - Reading broadcast variable 0 took 148 ms&#34;</span>,
+</span></span><span style="display:flex;"><span>        <span style="color:#f1fa8c">&#34;2099-02-11 02:28:05 INFO  MemoryStore:60 - Block broadcast_0 stored as values in memory (estimated size 4.0 KiB, free 413.9 MiB)&#34;</span>,
+</span></span><span style="display:flex;"><span>        <span style="color:#f1fa8c">&#34;2099-02-11 02:28:06 INFO  Executor:60 - Finished task 1.0 in stage 0.0 (TID 1). 1012 bytes result sent to driver&#34;</span>,
+</span></span><span style="display:flex;"><span>        <span style="color:#f1fa8c">&#34;2099-02-11 02:28:06 INFO  CoarseGrainedExecutorBackend:60 - Driver commanded a shutdown&#34;</span>,
+</span></span><span style="display:flex;"><span>        <span style="color:#f1fa8c">&#34;2099-02-11 02:28:06 INFO  MemoryStore:60 - MemoryStore cleared&#34;</span>,
+</span></span><span style="display:flex;"><span>        <span style="color:#f1fa8c">&#34;2099-02-11 02:28:06 INFO  BlockManager:60 - BlockManager stopped&#34;</span>,
+</span></span><span style="display:flex;"><span>        <span style="color:#f1fa8c">&#34;2099-02-11 02:28:06 INFO  ShutdownHookManager:60 - Shutdown hook called&#34;</span>,
+</span></span><span style="display:flex;"><span>        <span style="color:#f1fa8c">&#34;2099-02-11 02:28:06 INFO  ShutdownHookManager:60 - Deleting directory /var/data/spark-d9a9cce4-0755-477c-a826-1049b0cbf3ff/spark-ab79cbba-97a6-401b-9925-90042f227208&#34;</span>,
+</span></span><span style="display:flex;"><span>        <span style="color:#f1fa8c">&#34;2099-02-11 02:28:06 INFO  Log4jOutPrintStream: - shutdown hook&#34;</span>
+</span></span><span style="display:flex;"><span>    ],
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">&#34;finished&#34;</span>: <span style="color:#ff79c6">true</span>
+</span></span><span style="display:flex;"><span>}
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>解释：</p>
+<ul>
+<li>fileName，文件名</li>
+<li>offset，已经读取到的偏移量，下次继续用这个值请求即可</li>
+<li>msg，完整的日志内容，List<!-- raw HTML omitted -->格式</li>
+<li>finished，是否读取结束，true为读完了，false表示没有读取完</li>
+</ul>
+<p><strong>查询 executor 列表，GET</strong></p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-shell" data-lang="shell"><span style="display:flex;"><span>http://ip-address:8080/logs/query/list?applicationId<span style="color:#ff79c6">=</span>spark-168f61c9c0c247d0948d30e037db20e4
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>返回</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">7
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-json" data-lang="json"><span style="display:flex;"><span>[
+</span></span><span style="display:flex;"><span>    <span style="color:#f1fa8c">&#34;3&#34;</span>,
+</span></span><span style="display:flex;"><span>    <span style="color:#f1fa8c">&#34;1&#34;</span>,
+</span></span><span style="display:flex;"><span>    <span style="color:#f1fa8c">&#34;5&#34;</span>,
+</span></span><span style="display:flex;"><span>    <span style="color:#f1fa8c">&#34;4&#34;</span>,
+</span></span><span style="display:flex;"><span>    <span style="color:#f1fa8c">&#34;2&#34;</span>
+</span></span><span style="display:flex;"><span>]
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>解释
+‒ 从指定的目录下读取 executor 列表，过滤调了 driver</p>
+<p><strong>手动执行 clean，DELETE</strong></p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-shell" data-lang="shell"><span style="display:flex;"><span>http://ip-address:8080/logs/query/clean
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>解释</p>
+<ul>
+<li>从指定的共享存储位置中处理文件，将日志copy到 s3/minio，然后删除此文件</li>
+<li>判断文件是否能被清理的条件是：等待扫描的目录下包含 &ldquo;ok.complete&quot;文件，表示这个进程执行完了</li>
+</ul>
+<h2 id="对offset字段的解释">对offset字段的解释</h2>
+<p>查询日志内容的时候，需要传入 offset这个字段<br>
+正常情况下，应该传入 startLine，endLine，也就是从哪一行开始读取，读到某一行结束<br>
+但是在分布式场景下会有问题：</p>
+<ul>
+<li>如果有对个log-service 服务，如何确定是哪个服务正在读取？</li>
+<li>如果从log-service A 路由到了 B，那么B 同样需要记录一个表示，即当前读取到了哪一行了</li>
+<li>A和B 需要缓存住这个读取文件的 fd，同时还需提供一个超时时间，如1小时后自动关闭这个fd</li>
+<li>当然也可以用 分布式session去记录这个表示，但是也很复杂</li>
+</ul>
+<p>如果不记录标识</p>
+<ul>
+<li>那么每次都需要从头读取，假设读取1万零1行，只读取这一行，但需要额外过滤前面一万行</li>
+<li>linux 操作系统的函数中是没有skip 行这个操作的，同样java也没有这种 api</li>
+<li>如果硬要支持 start，end，那可能需要一个辅助的类似 B树的结构，记录索引位置，这又会增加复杂度</li>
+<li>那么最简单的方式，每次传入offset，让linux系统调用自动跳过一段内容（按字节）</li>
+<li>这样效率很高，同时也保证了 log-service是无状态的</li>
+</ul>
 
 			<script type="text/javascript"
         async
@@ -394,43 +635,43 @@ code.has-jax {
 <ul class="widget-list">
     
     <li>
-        <a href="https://code0xff.org/post/2025/01/logs_collection_based_cloud/" title="云环境中的日志收集和处理方案">云环境中的日志收集和处理方案</a>
+        <a href="https://code0xff.org/post/2026/02/yunnan_west/" title="云南滇西大环线">云南滇西大环线</a>
     </li>
     
     <li>
-        <a href="https://code0xff.org/post/2025/01/btrace/" title="BTrace">BTrace</a>
+        <a href="https://code0xff.org/post/2026/01/2015_2025/" title="2015年 -- 2025年">2015年 -- 2025年</a>
     </li>
     
     <li>
-        <a href="https://code0xff.org/post/2025/01/yarn/" title="YARN原理分析">YARN原理分析</a>
+        <a href="https://code0xff.org/post/2026/01/longhorn/" title="longhorn">longhorn</a>
     </li>
     
     <li>
-        <a href="https://code0xff.org/post/2025/01/spark_register_source/" title="Spark 注册数据源">Spark 注册数据源</a>
+        <a href="https://code0xff.org/post/2025/12/ai_infrastructure/" title="关于AI 的生态">关于AI 的生态</a>
     </li>
     
     <li>
-        <a href="https://code0xff.org/post/2025/01/spark_core_2/" title="Spark Core相关-2">Spark Core相关-2</a>
+        <a href="https://code0xff.org/post/2025/11/ai_bubble/" title="关于AI泡沫">关于AI泡沫</a>
     </li>
     
     <li>
-        <a href="https://code0xff.org/post/2024/12/llamafactory/" title="Llama Factory">Llama Factory</a>
+        <a href="https://code0xff.org/post/2025/10/china_beihai/" title="南边的北海">南边的北海</a>
     </li>
     
     <li>
-        <a href="https://code0xff.org/post/2024/11/spark_core/" title="Spark Core相关-1">Spark Core相关-1</a>
+        <a href="https://code0xff.org/post/2025/09/bpf_http/" title="eBPF的 http跟踪">eBPF的 http跟踪</a>
     </li>
     
     <li>
-        <a href="https://code0xff.org/post/2024/11/sae_tunnel/" title="sea tunnel">sea tunnel</a>
+        <a href="https://code0xff.org/post/2025/09/spark_flink/" title="Spark和Flink的对比总结（包含Operator）">Spark和Flink的对比总结（包含Operator）</a>
     </li>
     
     <li>
-        <a href="https://code0xff.org/post/2024/11/k8s_networks/" title="k8s 网络">k8s 网络</a>
+        <a href="https://code0xff.org/post/2025/08/juicefs/" title="JuiceFS">JuiceFS</a>
     </li>
     
     <li>
-        <a href="https://code0xff.org/post/2024/11/ozone/" title="ozone">ozone</a>
+        <a href="https://code0xff.org/post/2025/08/bpftrace_12_lessons/" title="bpftrace 12个小命令">bpftrace 12个小命令</a>
     </li>
     
 </ul>
@@ -442,33 +683,33 @@ code.has-jax {
         <h3 class="widget-title"><a href='/categories/'>分类</a></h3>
 <ul class="widget-list">
     
-    <li><a href="https://code0xff.org/categories/%E5%88%86%E5%B8%83%E5%BC%8F/">分布式 (6)</a></li>
+    <li><a href="https://code0xff.org/categories/%E5%88%86%E5%B8%83%E5%BC%8F/">分布式 (8)</a></li>
     
-    <li><a href="https://code0xff.org/categories/%E5%8E%9F%E7%90%86%E5%88%86%E6%9E%90/">原理分析 (26)</a></li>
+    <li><a href="https://code0xff.org/categories/%E5%8E%9F%E7%90%86%E5%88%86%E6%9E%90/">原理分析 (33)</a></li>
     
-    <li><a href="https://code0xff.org/categories/%E5%95%86%E4%B8%9A/">商业 (3)</a></li>
+    <li><a href="https://code0xff.org/categories/%E5%95%86%E4%B8%9A/">商业 (6)</a></li>
     
-    <li><a href="https://code0xff.org/categories/%E5%A4%A7%E6%95%B0%E6%8D%AE/">大数据 (56)</a></li>
+    <li><a href="https://code0xff.org/categories/%E5%A4%A7%E6%95%B0%E6%8D%AE/">大数据 (59)</a></li>
     
     <li><a href="https://code0xff.org/categories/%E6%95%B0%E6%8D%AE%E5%BA%93/">数据库 (41)</a></li>
     
     <li><a href="https://code0xff.org/categories/%E6%96%87%E5%AD%A6%E5%92%8C%E8%89%BA%E6%9C%AF/">文学和艺术 (3)</a></li>
     
-    <li><a href="https://code0xff.org/categories/%E6%97%85%E8%A1%8C/">旅行 (12)</a></li>
+    <li><a href="https://code0xff.org/categories/%E6%97%85%E8%A1%8C/">旅行 (15)</a></li>
     
-    <li><a href="https://code0xff.org/categories/%E6%9E%B6%E6%9E%84/">架构 (14)</a></li>
+    <li><a href="https://code0xff.org/categories/%E6%9E%B6%E6%9E%84/">架构 (13)</a></li>
     
-    <li><a href="https://code0xff.org/categories/%E7%AE%97%E6%B3%95/">算法 (8)</a></li>
+    <li><a href="https://code0xff.org/categories/%E7%AE%97%E6%B3%95%E5%92%8Cai/">算法和AI (11)</a></li>
     
-    <li><a href="https://code0xff.org/categories/%E7%B3%BB%E7%BB%9F/">系统 (7)</a></li>
+    <li><a href="https://code0xff.org/categories/%E7%B3%BB%E7%BB%9F/">系统 (16)</a></li>
     
-    <li><a href="https://code0xff.org/categories/%E7%BC%96%E7%A8%8B%E8%AF%AD%E8%A8%80/">编程语言 (7)</a></li>
+    <li><a href="https://code0xff.org/categories/%E7%BC%96%E7%A8%8B%E8%AF%AD%E8%A8%80/">编程语言 (8)</a></li>
     
     <li><a href="https://code0xff.org/categories/%E8%A1%8C%E4%B8%9A%E8%A7%82%E5%AF%9F/">行业观察 (3)</a></li>
     
-    <li><a href="https://code0xff.org/categories/%E8%AF%BB%E4%B9%A6%E7%AC%94%E8%AE%B0/">读书笔记 (14)</a></li>
+    <li><a href="https://code0xff.org/categories/%E8%AF%BB%E4%B9%A6%E7%AC%94%E8%AE%B0/">读书笔记 (19)</a></li>
     
-    <li><a href="https://code0xff.org/categories/%E9%9A%8F%E4%BE%BF%E5%86%99%E5%86%99/">随便写写 (3)</a></li>
+    <li><a href="https://code0xff.org/categories/%E9%9A%8F%E4%BE%BF%E5%86%99%E5%86%99/">随便写写 (4)</a></li>
     
 </ul>
     </section>
@@ -485,7 +726,9 @@ code.has-jax {
     
     <li><a href="https://code0xff.org/years/2024%E5%B9%B4/">2024年 (48)</a></li>
     
-    <li><a href="https://code0xff.org/years/2025%E5%B9%B4/">2025年 (5)</a></li>
+    <li><a href="https://code0xff.org/years/2025%E5%B9%B4/">2025年 (38)</a></li>
+    
+    <li><a href="https://code0xff.org/years/2026%E5%B9%B4/">2026年 (3)</a></li>
     
 </ul>
     </section>
@@ -518,6 +761,8 @@ code.has-jax {
     
     <a href="https://code0xff.org/tags/doris/">Doris </a>
     
+    <a href="https://code0xff.org/tags/ebpf/">eBPF </a>
+    
     <a href="https://code0xff.org/tags/english/">English </a>
     
     <a href="https://code0xff.org/tags/es/">ES </a>
@@ -542,6 +787,8 @@ code.has-jax {
     
     <a href="https://code0xff.org/tags/janino/">janino </a>
     
+    <a href="https://code0xff.org/tags/juicefs/">JuiceFS </a>
+    
     <a href="https://code0xff.org/tags/k8s/">k8s </a>
     
     <a href="https://code0xff.org/tags/kafka/">Kafka </a>
@@ -560,6 +807,8 @@ code.has-jax {
     
     <a href="https://code0xff.org/tags/log4j/">log4j </a>
     
+    <a href="https://code0xff.org/tags/longhorn/">longhorn </a>
+    
     <a href="https://code0xff.org/tags/manacher/">Manacher </a>
     
     <a href="https://code0xff.org/tags/mapreduce/">MapReduce </a>
@@ -572,6 +821,8 @@ code.has-jax {
     
     <a href="https://code0xff.org/tags/oceanbase/">OceanBase </a>
     
+    <a href="https://code0xff.org/tags/openldap/">OpenLDAP </a>
+    
     <a href="https://code0xff.org/tags/openlogreplicator/">OpenLogReplicator </a>
     
     <a href="https://code0xff.org/tags/parquet/">parquet </a>
@@ -579,6 +830,8 @@ code.has-jax {
     <a href="https://code0xff.org/tags/paxos/">paxos </a>
     
     <a href="https://code0xff.org/tags/presto/">Presto </a>
+    
+    <a href="https://code0xff.org/tags/pytorch/">PyTorch </a>
     
     <a href="https://code0xff.org/tags/quick-sql/">quick-sql </a>
     
@@ -619,6 +872,8 @@ code.has-jax {
     <a href="https://code0xff.org/tags/%E5%8E%86%E5%8F%B2/">历史 </a>
     
     <a href="https://code0xff.org/tags/%E5%90%91%E9%87%8F%E5%8C%96/">向量化 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%95%86%E4%B8%9A/">商业 </a>
     
     <a href="https://code0xff.org/tags/%E5%9B%9E%E6%BA%AF/">回溯 </a>
     
@@ -664,6 +919,8 @@ code.has-jax {
     
     <a href="https://code0xff.org/tags/%E7%BB%8F%E6%B5%8E/">经济 </a>
     
+    <a href="https://code0xff.org/tags/%E7%BB%8F%E6%B5%8E%E5%88%86%E6%9E%90/">经济分析 </a>
+    
     <a href="https://code0xff.org/tags/%E7%BC%93%E5%AD%98/">缓存 </a>
     
     <a href="https://code0xff.org/tags/%E7%BC%96%E8%AF%91%E5%8E%9F%E7%90%86/">编译原理 </a>
@@ -695,7 +952,7 @@ code.has-jax {
     </div>
     <footer id="footer">
     <div>
-        &copy; 2025 <a href="https://code0xff.org/">记录每个瞬间 By 老王</a>
+        &copy; 2026 <a href="https://code0xff.org/">记录每个瞬间 By 老王</a>
         
     </div>
     <br />

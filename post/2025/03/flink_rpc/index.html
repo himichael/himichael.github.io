@@ -1,0 +1,1658 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    
+    <meta name="referrer" content="no-referrer-when-downgrade">
+    
+
+    <title>Flink RPC | 记录每个瞬间</title>
+    <meta property="og:title" content="Flink RPC - 记录每个瞬间">
+    <meta property="og:type" content="article">
+        
+    <meta property="article:published_time" content='2025-03-23T10:10:12&#43;08:00'>
+        
+        
+    <meta property="article:modified_time" content='2025-03-23T10:10:12&#43;08:00'>
+        
+    <meta name="Keywords" content="">
+    <meta name="description" content="Flink RPC">
+        <meta name="author" content="隔壁老王">
+        
+    <meta property="og:url" content="https://code0xff.org/post/2025/03/flink_rpc/">
+    <link rel="shortcut icon" href='/favicon.ico'  type="image/x-icon">
+
+    <link rel="stylesheet" href='/css/normalize.css'>
+    <link rel="stylesheet" href='/css/style.css'>
+    <script type="text/javascript" src="//cdn.bootcdn.net/ajax/libs/jquery/3.4.1/jquery.min.js"></script>
+
+    
+    
+    
+        <link href="https://cdn.bootcdn.net/ajax/libs/fancybox/3.5.7/jquery.fancybox.min.css" rel="stylesheet">
+    
+    
+    
+    
+</head>
+
+
+<body>
+    <header id="header" class="clearfix">
+    <div class="container">
+        <div class="col-group">
+            <div class="site-name ">
+                
+                    <a id="logo" href="https://code0xff.org/">
+                        记录每个瞬间
+                    </a>
+                
+                
+            </div>
+            <div>
+                <nav id="nav-menu" class="clearfix">
+                    <a class="current" href="https://code0xff.org/">首页</a>
+                    
+                    <a  href="https://code0xff.org/linked/" title="链接">链接</a>
+                    
+                    <a  href="https://code0xff.org/archives/" title="归档">归档</a>
+                    
+                    <a  href="https://code0xff.org/about/" title="关于">关于</a>
+                    
+                </nav>
+            </div>
+        </div>
+    </div>
+</header>
+
+    <div id="body">
+        <div class="container">
+            <div class="col-group">
+
+                <div class="col-8" id="main">
+                    <div class="res-cons">
+    
+    <article class="post">
+        <header>
+            <h1 class="post-title">Flink RPC</h1>
+        </header>
+        <date class="post-meta meta-date">
+            2025年3月23日
+        </date>
+<nav id="TableOfContents">
+  <ul>
+    <li>
+      <ul>
+        <li><a href="#架构设计">架构设计</a></li>
+        <li><a href="#networkstack">NetworkStack</a>
+          <ul>
+            <li><a href="#streamtask-数据流">StreamTask 数据流</a></li>
+            <li><a href="#recordwriter">RecordWriter</a></li>
+            <li><a href="#shuffle-相关">Shuffle 相关</a></li>
+            <li><a href="#resultpartition">ResultPartition</a></li>
+            <li><a href="#connectmanager">ConnectManager</a></li>
+            <li><a href="#networkbuffer">NetWorkBuffer</a></li>
+          </ul>
+        </li>
+        <li><a href="#反压机制">反压机制</a></li>
+        <li><a href="#一些优化的案例">一些优化的案例</a></li>
+        <li><a href="#参考">参考</a></li>
+      </ul>
+    </li>
+  </ul>
+</nav>
+        
+        <div class="post-meta">
+            
+            <span class="post-meta meta-tags">
+                <ul class="clearfix">
+                    <a href='/categories/%E5%8E%9F%E7%90%86%E5%88%86%E6%9E%90'>原理分析</a>
+                </ul>
+            </span>
+            
+        </div>
+        
+        
+        <div class="post-meta">
+            <span id="busuanzi_container_page_pv">|<span id="busuanzi_value_page_pv"></span><span>
+                    阅读</span></span>
+        </div>
+        
+        
+        <div class="post-content">
+            <h2 id="架构设计">架构设计</h2>
+<p>Akka</p>
+<ul>
+<li>使用Scala语言编写的库，用于在JVM上简化编写具有可容错、高可伸缩性的Java或Scala的Actor模型</li>
+<li>状态：Actor对象的变量信息，由Actor自己管理，避免了并发环境下的锁和内存原子性等问题</li>
+<li>行为：指定Actor中的计算逻辑，通过接收到消息改变Actor的状态。</li>
+<li>邮箱：每个Actor都有自己的邮箱，通过邮箱能简化锁及线程管理。邮箱是Actor之间的通信桥梁，邮箱内部通过FIFO消息队列存储Actor发送方的消息，Actor接收方从邮箱队列中获取消息</li>
+</ul>
+<p>
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/03/23/7cX0ff.png">
+            <img class="mx-auto" alt="flink_3/18.jpg" src="https://v1.ax1x.com/2025/03/23/7cX0ff.png" />
+        </a>
+    </p>
+<p>构建 Akka 的例子</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-java" data-lang="java"><span style="display:flex;"><span><span style="color:#6272a4">// 构建ActorSystem
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>ActorSystem system <span style="color:#ff79c6">=</span> ActorSystem<span style="color:#ff79c6">.</span><span style="color:#50fa7b">create</span><span style="color:#ff79c6">(</span><span style="color:#f1fa8c">&#34;akka_system&#34;</span><span style="color:#ff79c6">);</span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4">// ActorSystem system = ActorSystem.create(&#34;akka_system&#34;, ConfigFactory.
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span><span style="color:#ff79c6">?</span>load<span style="color:#ff79c6">(</span><span style="color:#f1fa8c">&#34;appsys&#34;</span><span style="color:#ff79c6">));</span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4">// 构建Actor, 获取该Actor的引用，即ActorRef
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>ActorRef customActor <span style="color:#ff79c6">=</span> system<span style="color:#ff79c6">.</span><span style="color:#50fa7b">actorOf</span><span style="color:#ff79c6">(</span>Props<span style="color:#ff79c6">.</span><span style="color:#50fa7b">create</span><span style="color:#ff79c6">(</span>CustomActor<span style="color:#ff79c6">.</span><span style="color:#50fa7b">class</span><span style="color:#ff79c6">),</span> <span style="color:#f1fa8c">&#34;customActor&#34;</span><span style="color:#ff79c6">);</span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4">// 向helloActor发送消息
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>helloActor<span style="color:#ff79c6">.</span><span style="color:#50fa7b">tell</span><span style="color:#ff79c6">(</span><span style="color:#f1fa8c">&#34;hello customActor&#34;</span><span style="color:#ff79c6">,</span> ActorRef<span style="color:#ff79c6">.</span><span style="color:#50fa7b">noSender</span><span style="color:#ff79c6">());</span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4">// 关闭ActorSystem
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>system<span style="color:#ff79c6">.</span><span style="color:#50fa7b">terminate</span><span style="color:#ff79c6">();</span>
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>Flink RPC节点调用关系图</p>
+<ul>
+<li>集群的RPC服务组件是RpcEndpoint</li>
+<li>每个RpcEndpoint包含一个内置的RpcServer负责执行本地和远程的代码请求，RpcServer对应Akka中的Actor实例
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/03/23/7cX7V3.png">
+            <img class="mx-auto" alt="flink_3/19.jpg" src="https://v1.ax1x.com/2025/03/23/7cX7V3.png" />
+        </a>
+    </li>
+</ul>
+<p>Flink RPC 相关类图</p>
+<ul>
+<li>RpcEndpoint中提供了集群RPC组件的基本实现</li>
+<li>所有需要实现RPC服务的组件都会继承RpcEndpoint抽象类</li>
+<li>RpcEndpoint借助RpcService启动内部RpcServer，之后通过RpcServer完成本地和远程线程执行</li>
+<li>FencedRpcEndpoint 增加了 toke，只有访问的 token 一致才会调用</li>
+<li>实现类有Dispatcher、JobMaster以及ResourceManager等</li>
+<li>RpcService提供了创建和启动RpcServer的方法</li>
+<li>RpcServer接口通过AkkaInvocationHandler动态代理类实现<br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/03/23/7cXEJj.png">
+            <img class="mx-auto" alt="flink_3/20.jpg" src="https://v1.ax1x.com/2025/03/23/7cXEJj.png" />
+        </a>
+    </li>
+</ul>
+<p>RpcEndpoint 相关类图</p>
+<ul>
+<li>RpcEndpoint实现了RpcGateway和AutoCloseableAsync两个接口</li>
+<li>RpcGateway提供了动态获取RpcEndpoint中Akka地址和HostName的方法
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/03/23/7cXNT5.jpg">
+            <img class="mx-auto" alt="flink_3/21.jpg" src="https://v1.ax1x.com/2025/03/23/7cXNT5.jpg" />
+        </a>
+    </li>
+</ul>
+<p>AkkaRpcService 相关类图<br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/03/23/7cXqhm.png">
+            <img class="mx-auto" alt="flink_3/22.jpg" src="https://v1.ax1x.com/2025/03/23/7cXqhm.png" />
+        </a>
+    </p>
+<p>ClusterEntrypoint中创建AkkaRpcService过程<br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/03/23/7cXuY4.png">
+            <img class="mx-auto" alt="flink_3/23.jpg" src="https://v1.ax1x.com/2025/03/23/7cXuY4.png" />
+        </a>
+    </p>
+<p>Akka 的例子，服务端</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">15
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">16
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">17
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">18
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">19
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">20
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">21
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">22
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">23
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">24
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">25
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">26
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">27
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">28
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">29
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">30
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">31
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">32
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">33
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-java" data-lang="java"><span style="display:flex;"><span><span style="color:#6272a4">// Define the RPC interface
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span><span style="color:#8be9fd;font-style:italic">public</span> <span style="color:#8be9fd;font-style:italic">interface</span> <span style="color:#50fa7b">TaskGateway</span> <span style="color:#8be9fd;font-style:italic">extends</span> RpcGateway <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>    CompletableFuture<span style="color:#ff79c6">&lt;</span>String<span style="color:#ff79c6">&gt;</span> <span style="color:#50fa7b">sayHello</span><span style="color:#ff79c6">(</span>String message<span style="color:#ff79c6">);</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">}</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4">// Implement the RPC endpoint
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span><span style="color:#8be9fd;font-style:italic">public</span> <span style="color:#8be9fd;font-style:italic">class</span> <span style="color:#50fa7b">TaskEndpoint</span> <span style="color:#8be9fd;font-style:italic">extends</span> RpcEndpoint <span style="color:#8be9fd;font-style:italic">implements</span> TaskGateway <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#8be9fd;font-style:italic">public</span> <span style="color:#50fa7b">TaskEndpoint</span><span style="color:#ff79c6">(</span>RpcService rpcService<span style="color:#ff79c6">)</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#8be9fd;font-style:italic">super</span><span style="color:#ff79c6">(</span>rpcService<span style="color:#ff79c6">);</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">}</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    @Override
+</span></span><span style="display:flex;"><span>    <span style="color:#8be9fd;font-style:italic">public</span> CompletableFuture<span style="color:#ff79c6">&lt;</span>String<span style="color:#ff79c6">&gt;</span> <span style="color:#50fa7b">sayHello</span><span style="color:#ff79c6">(</span>String message<span style="color:#ff79c6">)</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">return</span> CompletableFuture<span style="color:#ff79c6">.</span><span style="color:#50fa7b">completedFuture</span><span style="color:#ff79c6">(</span><span style="color:#f1fa8c">&#34;Server response: Hello, &#34;</span> <span style="color:#ff79c6">+</span> message<span style="color:#ff79c6">);</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">}</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">}</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#8be9fd;font-style:italic">public</span> <span style="color:#8be9fd;font-style:italic">static</span> <span style="color:#8be9fd">void</span> <span style="color:#50fa7b">main</span><span style="color:#ff79c6">(</span>String<span style="color:#ff79c6">[]</span> args<span style="color:#ff79c6">)</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>	<span style="color:#6272a4">// 1. Create ActorSystem and RpcService
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>	ActorSystem actorSystem <span style="color:#ff79c6">=</span> AkkaUtils<span style="color:#ff79c6">.</span><span style="color:#50fa7b">createDefaultActorSystem</span><span style="color:#ff79c6">();</span>
+</span></span><span style="display:flex;"><span>	AkkaRpcService akkaRpcService <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">new</span> AkkaRpcService<span style="color:#ff79c6">(</span>
+</span></span><span style="display:flex;"><span>		actorSystem<span style="color:#ff79c6">,</span> 
+</span></span><span style="display:flex;"><span>		AkkaRpcServiceConfiguration<span style="color:#ff79c6">.</span><span style="color:#50fa7b">defaultConfiguration</span><span style="color:#ff79c6">()</span>
+</span></span><span style="display:flex;"><span>	<span style="color:#ff79c6">);</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>	<span style="color:#6272a4">// 2. Instantiate and start the endpoint
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>	TaskEndpoint endpoint <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">new</span> TaskEndpoint<span style="color:#ff79c6">(</span>akkaRpcService<span style="color:#ff79c6">);</span>
+</span></span><span style="display:flex;"><span>	endpoint<span style="color:#ff79c6">.</span><span style="color:#50fa7b">start</span><span style="color:#ff79c6">();</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>	<span style="color:#6272a4">// 3. Get the server&#39;s address (for clients to connect)
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>	String serverAddress <span style="color:#ff79c6">=</span> endpoint<span style="color:#ff79c6">.</span><span style="color:#50fa7b">getAddress</span><span style="color:#ff79c6">();</span>
+</span></span><span style="display:flex;"><span>	System<span style="color:#ff79c6">.</span><span style="color:#50fa7b">out</span><span style="color:#ff79c6">.</span><span style="color:#50fa7b">println</span><span style="color:#ff79c6">(</span><span style="color:#f1fa8c">&#34;Server address: &#34;</span> <span style="color:#ff79c6">+</span> serverAddress<span style="color:#ff79c6">);</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">}</span>
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>客户端的例子</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">15
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">16
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">17
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">18
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">19
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">20
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">21
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">22
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-java" data-lang="java"><span style="display:flex;"><span><span style="color:#6272a4">// 1. Create a client-side RpcService
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>ActorSystem clientActorSystem <span style="color:#ff79c6">=</span> AkkaUtils<span style="color:#ff79c6">.</span><span style="color:#50fa7b">createDefaultActorSystem</span><span style="color:#ff79c6">();</span>
+</span></span><span style="display:flex;"><span>AkkaRpcService clientRpcService <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">new</span> AkkaRpcService<span style="color:#ff79c6">(</span>
+</span></span><span style="display:flex;"><span>    clientActorSystem<span style="color:#ff79c6">,</span> 
+</span></span><span style="display:flex;"><span>    AkkaRpcServiceConfiguration<span style="color:#ff79c6">.</span><span style="color:#50fa7b">defaultConfiguration</span><span style="color:#ff79c6">()</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">);</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4">// 2. Connect to the server using its address
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>CompletableFuture<span style="color:#ff79c6">&lt;</span>TaskGateway<span style="color:#ff79c6">&gt;</span> gatewayFuture <span style="color:#ff79c6">=</span> clientRpcService<span style="color:#ff79c6">.</span><span style="color:#50fa7b">connect</span><span style="color:#ff79c6">(</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#f1fa8c">&#34;akka.tcp://flink@192.168.31.162:53465/user/rpc/c38b60e7-c87c-4b7f-b948-3099dfb12999&#34;</span><span style="color:#ff79c6">,</span> 
+</span></span><span style="display:flex;"><span>    TaskGateway<span style="color:#ff79c6">.</span><span style="color:#50fa7b">class</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">);</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4">// 3. Retrieve the proxy for remote invocation
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>TaskGateway gateway <span style="color:#ff79c6">=</span> gatewayFuture<span style="color:#ff79c6">.</span><span style="color:#50fa7b">get</span><span style="color:#ff79c6">();</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4">// Call the remote method asynchronously
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>CompletableFuture<span style="color:#ff79c6">&lt;</span>String<span style="color:#ff79c6">&gt;</span> responseFuture <span style="color:#ff79c6">=</span> gateway<span style="color:#ff79c6">.</span><span style="color:#50fa7b">sayHello</span><span style="color:#ff79c6">(</span><span style="color:#f1fa8c">&#34;Flink-Akka&#34;</span><span style="color:#ff79c6">);</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4">// Process the response
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4"></span>String response <span style="color:#ff79c6">=</span> responseFuture<span style="color:#ff79c6">.</span><span style="color:#50fa7b">get</span><span style="color:#ff79c6">();</span>
+</span></span><span style="display:flex;"><span>System<span style="color:#ff79c6">.</span><span style="color:#50fa7b">out</span><span style="color:#ff79c6">.</span><span style="color:#50fa7b">println</span><span style="color:#ff79c6">(</span>response<span style="color:#ff79c6">);</span> <span style="color:#6272a4">// Output: &#34;Server response: Hello, Flink-Akka&#34;
+</span></span></span></code></pre></td></tr></table>
+</div>
+</div><p>RpcServer启动流程图
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/03/23/7cXwdh.png">
+            <img class="mx-auto" alt="flink_3/24.jpg" src="https://v1.ax1x.com/2025/03/23/7cXwdh.png" />
+        </a>
+    </p>
+<p>RpcServer动态代理实现</p>
+<ul>
+<li>最终都会通过AkkaInvocationHandler.invoke()方法进行代理实现</li>
+<li>根据在本地执行还是远程执行将代理方法进行区分</li>
+</ul>
+<p>AkkaRpcActor</p>
+<ul>
+<li>RemoteRpcInvocation消息，最终会通过Akka系统传递到被调用方</li>
+<li>如TaskExecutor向ResourceManager发送SlotReport请求</li>
+<li>将 ResourceManagerGateway的方法名称和参数打包成RemoteRpcInvocation对象</li>
+<li>然后经过网络发送到ResourceManager中的AkkaRpcActor</li>
+</ul>
+<p>集群组件之间的RPC通信</p>
+<ul>
+<li>当TaskExecutor启动后，会立即向ResourceManager中注册当前TaskManager的信息</li>
+<li>JobMaster组件启动后也立即会向ResourceManager注册JobMaster的信息</li>
+<li>这些注册操作实际上就是在构建集群中各个组件之间的RPC连接</li>
+</ul>
+<p>RegisterdRpcConnection 相关类图<br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/03/23/7cXHw9.png">
+            <img class="mx-auto" alt="flink_3/25.jpg" src="https://v1.ax1x.com/2025/03/23/7cXHw9.png" />
+        </a>
+    </p>
+<p>TaskManager向ResourceManager注册RPC 服务的流程</p>
+<ul>
+<li>TaskExecutor调用startTaskExecutorServices()方法启动TaskExecutor的内部组件服务</li>
+<li>ResourceManagerLeaderListener接收到来自ResourceManager 信息后，通知TaskExecutor和新的ResourceManagerLeader建立RPC连接</li>
+<li>创建与ResourceManager组件之间的RPC网络连接</li>
+<li>在connectToResourceManager()方法中会创建TaskExecutorRegistration对象，用于存储TaskManager的注册信息</li>
+<li>建TaskExecutorToResourceManagerConnection实例，正式与ResourceManager建立RPC网络连接</li>
+<li>最终完成在ResourceManager中注册TaskManager的操作。创建的TaskExecutorRegistration同时会传递给ResourceManager 
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/03/23/7cXKOY.png">
+            <img class="mx-auto" alt="flink_3/26.jpg" src="https://v1.ax1x.com/2025/03/23/7cXKOY.png" />
+        </a>
+    </li>
+</ul>
+<h2 id="networkstack">NetworkStack</h2>
+<h3 id="streamtask-数据流">StreamTask 数据流</h3>
+<p>TaskManager和TaskManager节点之间 也有通讯</p>
+<ul>
+<li>Task之间的数据交换</li>
+</ul>
+<p>Flink NetworkStack整体架构</p>
+<ul>
+<li>整个数据传输过程主要基于Flink的NetworkStack框架进行</li>
+<li>经过Operator处理后的数据，最终会通过RecordWriter组件写入网络栈</li>
+<li>先将数据转为 二进制 buffer 数据，并缓存在 ResultSubPartition队列中</li>
+<li>上游的Task中会创建LocalBufferPool为数据元素申请对应Buffer的存储空间</li>
+<li>上游的Task会创建NettyServer作为网络连接服务端，并与下游Task内部的NettyClient之间建立网络连接</li>
+<li>下游的Task实例，会通过InputGate组件接收上游Task发送的数据</li>
+<li>上游Task的ResultPartition会根据ChannelSelector选择需要将数据下发到哪一个InputChannel中，类似娱 Shuffle 操作</li>
+<li>下游收到后会缓存到本地的 buffer 队列中</li>
+<li>之后被 StreamTaskInput 不断从队列中拉取出来并处理
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/03/23/7cXbiH.png">
+            <img class="mx-auto" alt="flink_3/27.jpg" src="https://v1.ax1x.com/2025/03/23/7cXbiH.png" />
+        </a>
+    </li>
+</ul>
+<p>OneInputStreamTask结构图</p>
+<ul>
+<li>根据数据源不同，StreamTask分为两种类型</li>
+<li>直接从外部源数据读取数据的SourceStreamTask和SourceReaderStreamTask</li>
+<li>支持从网络或本地获取数据的OneInputStreamTask和TwoInputStreamTask</li>
+<li>DataOutput：负责将StreamTaskInput接收的数据发送到当前Task实例的OperatorChain的HeadOperator中进行处理</li>
+<li>主要有StreamTaskNetworkOutput和StreamTaskSourceOutput两种实现</li>
+<li>在 OperatorChain中：上一个算子处理的 数据会通过Output组件发送到下一个算子中继续处理
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/03/24/7cjiIG.png">
+            <img class="mx-auto" alt="flink_3/28.jpg" src="https://v1.ax1x.com/2025/03/24/7cjiIG.png" />
+        </a>
+    </li>
+</ul>
+<p>Output 组件的实现主要有</p>
+<ul>
+<li>ChainingOutput</li>
+<li>BroadcastingOutputCollector</li>
+<li>DirectedOutput</li>
+<li>RecordWriterOutput 等</li>
+</ul>
+<p>StreamTaskNetworkInput.</p>
+<ul>
+<li>不断的从上游获取数据，写入 buffer</li>
+<li>判断 数据类型</li>
+<li>StreamRecord</li>
+<li>WaterMark 类型</li>
+<li>LatencyMarker 类型</li>
+</ul>
+<p>OperatorChain 相关类图<br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/03/24/7cj20B.png">
+            <img class="mx-auto" alt="flink_3/29.jpg" src="https://v1.ax1x.com/2025/03/24/7cj20B.png" />
+        </a>
+    </p>
+<h3 id="recordwriter">RecordWriter</h3>
+<p>RecordWriter</p>
+<ul>
+<li>StreamTask节点中的中间结果数据元素最终通过RecordWriterOutput实现了网络输出</li>
+<li>RecordWriterOutput底层依赖RecordWriter组件完成数据输出操作</li>
+</ul>
+<p>RecordWriter主要有两种实现类</p>
+<ul>
+<li>ChannelSelectorRecordWriter，内部基于StreamPartitoner获取不同的数据下发策略，实现数据重分区</li>
+<li>BroadcastRecordWriter，广播下发</li>
+</ul>
+<p>ChannelSelectorRecordWriter 相关类图<br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/03/25/7vvneb.jpg">
+            <img class="mx-auto" alt="flink_3/30.jpg" src="https://v1.ax1x.com/2025/03/25/7vvneb.jpg" />
+        </a>
+    </p>
+<p>RecordWriter 设计与实现</p>
+<ul>
+<li>BufferBuilder中会不断接入ByteBuffer数据，直到将BufferBuilder中的Buffer空间占满</li>
+<li>填满后，会向下游输出
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/03/25/7vvjrt.png">
+            <img class="mx-auto" alt="flink_3/31.jpg" src="https://v1.ax1x.com/2025/03/25/7vvjrt.png" />
+        </a>
+    </li>
+</ul>
+<p>ExecutionGraph与物理执行图<br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/03/28/7veiWs.jpg">
+            <img class="mx-auto" alt="flink_3/32.jpg" src="https://v1.ax1x.com/2025/03/28/7veiWs.jpg" />
+        </a>
+    </p>
+<h3 id="shuffle-相关">Shuffle 相关</h3>
+<p>ShuffleService 相关类图</p>
+<ul>
+<li>为支持可插播的 shuffle管理，通过 SPI方式加载到 classloader 中</li>
+<li>JobManagerRunner 实例的过程中会创建 ShuffeServiceLoader，TaskManager也是类似的</li>
+<li>ShuffleServiceFactory 创建 shuffle</li>
+<li>ShuffleEnvironment组件提供了创建Task实例中ResultPartition和InputGate组件的方法</li>
+<li>ShuffleMaster组件实现了对ResultPartition和InputGate的注册功能
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/03/28/7vesja.png">
+            <img class="mx-auto" alt="flink_3/33.jpg" src="https://v1.ax1x.com/2025/03/28/7vesja.png" />
+        </a>
+    </li>
+</ul>
+<p>shuffle 的创建</p>
+<ul>
+<li>JobMaster中创建 ShuffleMaster</li>
+<li>在TaskManager中创建 ShuffleEnvironment</li>
+</ul>
+<p>ShuffleMaster (JobManager-side):</p>
+<ul>
+<li>Responsible for ​global shuffle resource management, including requesting/releasing resources (e.g., network connections, storage allocations).</li>
+<li>Generates ​ShuffleDescriptor objects that encode metadata about data locations (e.g., remote worker addresses, file paths).</li>
+<li>Coordinates with the scheduler to ensure resource availability during task deployment</li>
+</ul>
+<p>​ShuffleEnvironment (TaskManager-side)</p>
+<ul>
+<li>Manages ​local shuffle resources such as network buffers, memory pools, and I/O handlers.</li>
+<li>Creates ​ResultPartitionWriter (producer) and ​InputGate (consumer) instances for data transmission.</li>
+<li>Handles buffer recycling and network connection lifecycle.</li>
+</ul>
+<p>上下游算子交互过程
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/03/28/7vo2Nc.png">
+            <img class="mx-auto" alt="flink_3/34.jpg" src="https://v1.ax1x.com/2025/03/28/7vo2Nc.png" />
+        </a>
+    </p>
+<p>TaskManager 中，createNettyShuffleEnvironment() 过程如下：</p>
+<ul>
+<li>获取相关配置，如：TransportType、InetAddress、serverPort以及numberOfSlots等信息</li>
+<li>创建ResultPartitionManager实例，专门用于消费ResultSubpartition中的Buffer数据</li>
+<li>创建FileChannelManager实例，会将数据写入文件系统，再对文件进行处理，这里的实现和MapReduce算法类似</li>
+<li>创建ConnectionManager实例，主要用于InputChannel组件</li>
+<li>创建NetworkBufferPool组件</li>
+<li>向系统中注册ShuffleMetrics</li>
+<li>创建ResultPartitionFactory工厂类，用于创建ResultPartition</li>
+<li>创建SingleInputGateFactory工厂类，用于创建SingleInputGate</li>
+</ul>
+<p>多个算子写入、读取的网络过程<br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/03/28/7vo6a3.png">
+            <img class="mx-auto" alt="flink_3/35.jpg" src="https://v1.ax1x.com/2025/03/28/7vo6a3.png" />
+        </a>
+    </p>
+<h3 id="resultpartition">ResultPartition</h3>
+<p>ResultPartition</p>
+<ul>
+<li>实际上是ExecutionGraph 中 IntermediateResultPartition 对应的底层物理实现</li>
+<li>通过 ResultPartition 实现管理和缓存Task产生的中间结果数据</li>
+<li>每个Task中都有一个 ResultPartition，会根据并行度创建多个 ResultSubPartition</li>
+</ul>
+<p>ResultPartition 相关类图</p>
+<ul>
+<li>单个 ResultPartition 会包含多个 ResultSubPartiton 实例</li>
+<li>ResultSubPartiton 的数量取决于 ExecutonGraph 中 IntermediateResult 的分区数</li>
+<li>ResultSubPartiton 的数量和下游 InputGate 中 InputChannel 的数量保持一致</li>
+<li>PipelinedSubParitition主要用于无界流式数据处理场景</li>
+<li>BoundedBlockingParitition主要用于有界离线数据处理场景
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/03/29/7a9ABw.png">
+            <img class="mx-auto" alt="flink_3/36.jpg" src="https://v1.ax1x.com/2025/03/29/7a9ABw.png" />
+        </a>
+    </li>
+</ul>
+<p>ResultPartition 的子类</p>
+<p>PipelinedResultPartition</p>
+<ul>
+<li>​Purpose: Designed for ​streaming/pipelined execution.</li>
+<li>Enables ​in-flight data transfer between producers and consumers.</li>
+<li>Supports ​low-latency processing by emitting data immediately.</li>
+<li>Uses ​network buffers for backpressure management.</li>
+</ul>
+<p>BoundedBlockingResultPartition</p>
+<ul>
+<li>​Purpose: Optimized for ​batch/blocking execution.</li>
+<li>Writes data to ​persistent storage (disk or remote storage) before consumers read.</li>
+<li>Supports ​blocking data exchanges (full materialization of results).</li>
+<li>Enables efficient ​bulk reads for downstream tasks.</li>
+</ul>
+<p>HsResultPartition (Hybrid Shuffle)</p>
+<ul>
+<li>​Purpose: Part of Flink’s ​Hybrid Shuffle mechanism (batch + streaming).</li>
+<li>Combines ​in-memory buffering and ​disk spillover for large datasets.</li>
+<li>Dynamically switches between pipelined and blocking modes.</li>
+<li>Optimized for ​elastic resource scaling (e.g., Kubernetes environments).</li>
+</ul>
+<p>SortMergeResultPartition</p>
+<ul>
+<li>​Purpose: Specialized for ​sorted data exchanges.</li>
+<li>Writes data in ​sorted runs (pre-sorted chunks).</li>
+<li>Merges sorted runs during consumption (via SortMergeInputGate).</li>
+<li>Minimizes memory usage for large-scale sorting.</li>
+</ul>
+<p>BufferWritingResultPartition</p>
+<ul>
+<li>​Purpose: Base class for ​direct buffer management.</li>
+<li>Handles ​low-level buffer allocation and recycling.</li>
+<li>Provides common logic for both pipelined and blocking writes.</li>
+<li>Extended by PipelinedResultPartition and BoundedBlockingResultPartition.</li>
+</ul>
+<p>Key Architectural Roles</p>
+<ul>
+<li>​Streaming vs. Batch
+<ul>
+<li>Pipelined* for streaming (low latency).</li>
+<li>BoundedBlocking*/SortMerge* for batch (high throughput).</li>
+</ul>
+</li>
+<li>​Hybrid Shuffle:
+<ul>
+<li>HsResultPartition bridges streaming and batch for adaptive execution.</li>
+</ul>
+</li>
+<li>​Performance Tradeoffs:
+<ul>
+<li>Pipelined: Lower latency but higher memory pressure.</li>
+<li>Blocking/SortMerge: Higher throughput but requires materialization.</li>
+</ul>
+</li>
+</ul>
+<p>InputGate的设计与实现</p>
+<ul>
+<li>下游 Task 节点中的 InputGate 和上游 ResultPartition 对应</li>
+<li>InputGate 同样包含了一个 LocalBufferPool 组件</li>
+<li>通过将 InputGate 封装成 CheckpointedInputGate，可以实现对 Checkpoint 数据的处理</li>
+<li>借助 StreamTaskNetworkInput 中的 DataOut 组件将数据推送到 OperatorChain 中进行处理
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/03/29/7a9Vb6.png">
+            <img class="mx-auto" alt="flink_3/37.jpg" src="https://v1.ax1x.com/2025/03/29/7a9Vb6.png" />
+        </a>
+    </li>
+</ul>
+<p>InputChannel向ResultPartition发送数据访问请求</p>
+<ul>
+<li>InputChannel 调用 ConnectionManager 创建用于访问上游 Task 实例中 ResultPartition 的 PartitionRequestClient 对象</li>
+<li>调用PartitionRequestClient向网络中发送PartitionRequest消息，包括：PartitionId、SubpartitionIndex、InputChannelId 和 InitialCredit 等信息</li>
+<li>创建 NetworkSequenceViewReader 组件，用于读取 ResultSubPartition 中的数据</li>
+<li>下游的 RemoteInputChannel 从 Channel 中获取 BufferOrEvent 数据</li>
+<li>Task 通过 InputGate 中的 InputChannel 组件获取上游发送的 Buffer 数据，然后经过 DataOut 组件将其发送到 OperatorChain 中进行处理
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/03/29/7a9WRO.png">
+            <img class="mx-auto" alt="flink_3/38.jpg" src="https://v1.ax1x.com/2025/03/29/7a9WRO.png" />
+        </a>
+    </li>
+</ul>
+<p>InputChannel 实现</p>
+<ul>
+<li>LocalInputChannel</li>
+<li>RemoteInputChannel</li>
+</ul>
+<p>​Core Reasons for Multiple RemoteInputChannels<br>
+​1. Parallel Data Consumption</p>
+<ul>
+<li>A single InputGate typically represents a ​logical input (e.g., one partition of data).</li>
+<li>However, data might come from ​multiple upstream ResultSubpartitions (e.g., from different TaskManagers or different subpartitions of the same ResultPartition).</li>
+<li>Each ​RemoteInputChannel corresponds to a connection to a ​specific ResultSubpartition (e.g., from TaskManager-1’s ResultSubPartition to TaskManager-2’s InputGate).</li>
+</ul>
+<p>​2. Shuffling or Partitioned Data
+-During operations like ​keyBy, ​shuffle, or ​rebalance, data is split into partitions sent to downstream tasks.</p>
+<ul>
+<li>Each RemoteInputChannel handles data from ​one upstream partition.</li>
+<li>Example: If TaskManager-1’s ResultPartition has 3 subpartitions, TaskManager-2’s InputGate will create 3 RemoteInputChannels to read them in parallel.</li>
+</ul>
+<p>​3. Pipelined vs. Blocking Exchanges</p>
+<ul>
+<li>For ​pipelined execution (streaming), data flows immediately through channels.</li>
+<li>For ​blocking exchanges (batch), channels are created once all upstream data is produced.</li>
+<li>Multiple channels allow ​overlapping consumption (fetching data while processing).</li>
+</ul>
+<p>InputChannel中Buffer数据接入的过程
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/03/29/7a9cZQ.png">
+            <img class="mx-auto" alt="flink_3/39.jpg" src="https://v1.ax1x.com/2025/03/29/7a9cZQ.png" />
+        </a>
+    </p>
+<h3 id="connectmanager">ConnectManager</h3>
+<p>Netty Reactor架构图</p>
+<ul>
+<li>Boss Group用于处理网络连接</li>
+<li>Worker Group用于处理实际的读写IO</li>
+<li>Worker Group和Boss Group都会执行一个runAllTasks()方法，用于处理任务队列中的任务。</li>
+<li>任务队列包括用户调用eventloop.execute()或schedule()方法执行的任务以及其他线程提交给该EventLoop的任务</li>
+<li>Channel代表一个实体（如硬件设备、文件、网络套接字、能够执行一个或者多个I/O操作的程序组件）的开放链接，如读操作和写操作</li>
+<li>ChannelHandler用于处理业务逻辑 
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/03/29/7aL3MJ.png">
+            <img class="mx-auto" alt="flink_3/40.jpg" src="https://v1.ax1x.com/2025/03/29/7aL3MJ.png" />
+        </a>
+    </li>
+</ul>
+<p>ConnectorManager 相关类图</p>
+<ul>
+<li>属于TaskManager中网络环境对象（ShuffleEnvironment）的核心部件</li>
+<li>默认实现是NettyConnectionManager，实际上就是基于Netty框架实现的网络连接管理器</li>
+<li>TaskManager中的NettyConnectionManager会同时管理一个Netty客户端（NettyClient）实例和一个Netty服务端（NettyServer）实例</li>
+<li>NettyConnectionManager中包含NettyServer、NettyClient、NettyProtocol、NettyBufferPool和PartitionRequestClient等成员变量
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/03/29/7aphzs.png">
+            <img class="mx-auto" alt="flink_3/41.jpg" src="https://v1.ax1x.com/2025/03/29/7aphzs.png" />
+        </a>
+    </li>
+</ul>
+<p>NettyConnectionManager 构造函数</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">15
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">16
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">17
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">18
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">19
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">20
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">21
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">22
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">23
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-java" data-lang="java"><span style="display:flex;"><span>    <span style="color:#8be9fd;font-style:italic">public</span> <span style="color:#50fa7b">NettyConnectionManager</span><span style="color:#ff79c6">(</span>
+</span></span><span style="display:flex;"><span>            NettyBufferPool bufferPool<span style="color:#ff79c6">,</span>
+</span></span><span style="display:flex;"><span>            ResultPartitionProvider partitionProvider<span style="color:#ff79c6">,</span>
+</span></span><span style="display:flex;"><span>            TaskEventPublisher taskEventPublisher<span style="color:#ff79c6">,</span>
+</span></span><span style="display:flex;"><span>            NettyConfig nettyConfig<span style="color:#ff79c6">,</span>
+</span></span><span style="display:flex;"><span>            <span style="color:#8be9fd">int</span> maxNumberOfConnections<span style="color:#ff79c6">,</span>
+</span></span><span style="display:flex;"><span>            <span style="color:#8be9fd">boolean</span> connectionReuseEnabled<span style="color:#ff79c6">)</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">this</span><span style="color:#ff79c6">.</span><span style="color:#50fa7b">server</span> <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">new</span> NettyServer<span style="color:#ff79c6">(</span>nettyConfig<span style="color:#ff79c6">);</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">this</span><span style="color:#ff79c6">.</span><span style="color:#50fa7b">client</span> <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">new</span> NettyClient<span style="color:#ff79c6">(</span>nettyConfig<span style="color:#ff79c6">);</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">this</span><span style="color:#ff79c6">.</span><span style="color:#50fa7b">bufferPool</span> <span style="color:#ff79c6">=</span> checkNotNull<span style="color:#ff79c6">(</span>bufferPool<span style="color:#ff79c6">);</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">this</span><span style="color:#ff79c6">.</span><span style="color:#50fa7b">partitionRequestClientFactory</span> <span style="color:#ff79c6">=</span>
+</span></span><span style="display:flex;"><span>                <span style="color:#ff79c6">new</span> PartitionRequestClientFactory<span style="color:#ff79c6">(</span>
+</span></span><span style="display:flex;"><span>                        client<span style="color:#ff79c6">,</span>
+</span></span><span style="display:flex;"><span>                        nettyConfig<span style="color:#ff79c6">.</span><span style="color:#50fa7b">getNetworkRetries</span><span style="color:#ff79c6">(),</span>
+</span></span><span style="display:flex;"><span>                        maxNumberOfConnections<span style="color:#ff79c6">,</span>
+</span></span><span style="display:flex;"><span>                        connectionReuseEnabled<span style="color:#ff79c6">);</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">this</span><span style="color:#ff79c6">.</span><span style="color:#50fa7b">nettyProtocol</span> <span style="color:#ff79c6">=</span>
+</span></span><span style="display:flex;"><span>                <span style="color:#ff79c6">new</span> NettyProtocol<span style="color:#ff79c6">(</span>
+</span></span><span style="display:flex;"><span>                        checkNotNull<span style="color:#ff79c6">(</span>partitionProvider<span style="color:#ff79c6">),</span> checkNotNull<span style="color:#ff79c6">(</span>taskEventPublisher<span style="color:#ff79c6">));</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">}</span>
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>ServerChannelHandler的创建和获取</p>
+<ul>
+<li>有NettyMessageEncoder、NettyMessageDecoder、PartitionRequestServerHandler和PartitionRequestQueue- 客户端的请求被 read 后，解码放入队列</li>
+<li>通过 MessageEncoder 对 Buffer 数据进行编码，执行 Socket#write()<br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/03/29/7apG9a.png">
+            <img class="mx-auto" alt="flink_3/42.jpg" src="https://v1.ax1x.com/2025/03/29/7apG9a.png" />
+        </a>
+    </li>
+</ul>
+<p>ClientChannelHandlers的创建和获取</p>
+<ul>
+<li>主要包括 NettyMessageEncoder、NettyMessageDecoder以及CreditBasedPartitionRequestClientHandler</li>
+<li>发送到 RemoteInputChannel 的 Buffer 队列中，供下游的算子消费 
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/03/29/7apOxt.png">
+            <img class="mx-auto" alt="flink_3/43.jpg" src="https://v1.ax1x.com/2025/03/29/7apOxt.png" />
+        </a>
+    </li>
+</ul>
+<p>流入 和 流出接口</p>
+<ul>
+<li>ChannelInboundHandler</li>
+<li>ChannelOutboundHandler</li>
+</ul>
+<p>NettyMessage 相关类图</p>
+<ul>
+<li>NettyClient-NettyServer方向（从RemoteInputChannel到ResultPartiton）</li>
+<li>PartitionRequest、CancelPartitionRequest、AddCredit、TaskEventRequest、CloseRequest</li>
+<li>NettyServer-NettyClient方向（从ResultSubPartiton到RemoteInputChannel）</li>
+<li>BufferResponse、ErrorResponse<br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/03/29/7apX53.png">
+            <img class="mx-auto" alt="flink_3/44.jpg" src="https://v1.ax1x.com/2025/03/29/7apX53.png" />
+        </a>
+    </li>
+</ul>
+<p>PartitionRequest内存空间申请</p>
+<ul>
+<li>PartitionRequest中的信息会按照顺序依次写入ByteBuf中，最后再将ByteBuf result通过Netty发送到TCP网络中
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/03/29/7apj4j.png">
+            <img class="mx-auto" alt="flink_3/45.jpg" src="https://v1.ax1x.com/2025/03/29/7apj4j.png" />
+        </a>
+    </li>
+</ul>
+<p>Buffer 中的数据类型，源码中用<code>DataType</code>表示</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">15
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">16
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">17
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">18
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">19
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">20
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">21
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">22
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">23
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">24
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">25
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">26
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">27
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">28
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">29
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">30
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">31
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">32
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">33
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">34
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">35
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">36
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-java" data-lang="java"><span style="display:flex;"><span><span style="color:#8be9fd;font-style:italic">enum</span> DataType <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>	<span style="color:#6272a4">/** {@link #NONE} indicates that there is no buffer. */</span>
+</span></span><span style="display:flex;"><span>	NONE<span style="color:#ff79c6">(</span><span style="color:#ff79c6">false</span><span style="color:#ff79c6">,</span> <span style="color:#ff79c6">false</span><span style="color:#ff79c6">,</span> <span style="color:#ff79c6">false</span><span style="color:#ff79c6">,</span> <span style="color:#ff79c6">false</span><span style="color:#ff79c6">,</span> <span style="color:#ff79c6">false</span><span style="color:#ff79c6">),</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>	<span style="color:#6272a4">/** {@link #DATA_BUFFER} indicates that this buffer represents a non-event data buffer. */</span>
+</span></span><span style="display:flex;"><span>	DATA_BUFFER<span style="color:#ff79c6">(</span><span style="color:#ff79c6">true</span><span style="color:#ff79c6">,</span> <span style="color:#ff79c6">false</span><span style="color:#ff79c6">,</span> <span style="color:#ff79c6">false</span><span style="color:#ff79c6">,</span> <span style="color:#ff79c6">false</span><span style="color:#ff79c6">,</span> <span style="color:#ff79c6">false</span><span style="color:#ff79c6">),</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>	<span style="color:#6272a4">/**
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">	 * {@link #EVENT_BUFFER} indicates that this buffer represents serialized data of an event.
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">	 * Note that this type can be further divided into more fine-grained event types like {@link
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">	 * #ALIGNED_CHECKPOINT_BARRIER} and etc.
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">	 */</span>
+</span></span><span style="display:flex;"><span>	EVENT_BUFFER<span style="color:#ff79c6">(</span><span style="color:#ff79c6">false</span><span style="color:#ff79c6">,</span> <span style="color:#ff79c6">true</span><span style="color:#ff79c6">,</span> <span style="color:#ff79c6">false</span><span style="color:#ff79c6">,</span> <span style="color:#ff79c6">false</span><span style="color:#ff79c6">,</span> <span style="color:#ff79c6">false</span><span style="color:#ff79c6">),</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>	<span style="color:#6272a4">/** Same as EVENT_BUFFER, but the event has been prioritized (e.g. it skipped buffers). */</span>
+</span></span><span style="display:flex;"><span>	PRIORITIZED_EVENT_BUFFER<span style="color:#ff79c6">(</span><span style="color:#ff79c6">false</span><span style="color:#ff79c6">,</span> <span style="color:#ff79c6">true</span><span style="color:#ff79c6">,</span> <span style="color:#ff79c6">false</span><span style="color:#ff79c6">,</span> <span style="color:#ff79c6">true</span><span style="color:#ff79c6">,</span> <span style="color:#ff79c6">false</span><span style="color:#ff79c6">),</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>	<span style="color:#6272a4">/**
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">	 * {@link #ALIGNED_CHECKPOINT_BARRIER} indicates that this buffer represents a serialized
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">	 * checkpoint barrier of aligned exactly-once checkpoint mode.
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">	 */</span>
+</span></span><span style="display:flex;"><span>	ALIGNED_CHECKPOINT_BARRIER<span style="color:#ff79c6">(</span><span style="color:#ff79c6">false</span><span style="color:#ff79c6">,</span> <span style="color:#ff79c6">true</span><span style="color:#ff79c6">,</span> <span style="color:#ff79c6">true</span><span style="color:#ff79c6">,</span> <span style="color:#ff79c6">false</span><span style="color:#ff79c6">,</span> <span style="color:#ff79c6">false</span><span style="color:#ff79c6">),</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>	<span style="color:#6272a4">/**
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">	 * {@link #TIMEOUTABLE_ALIGNED_CHECKPOINT_BARRIER} indicates that this buffer represents a
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">	 * serialized checkpoint barrier of aligned exactly-once checkpoint mode, that can be
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">	 * time-out&#39;ed to an unaligned checkpoint barrier.
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">	 */</span>
+</span></span><span style="display:flex;"><span>	TIMEOUTABLE_ALIGNED_CHECKPOINT_BARRIER<span style="color:#ff79c6">(</span><span style="color:#ff79c6">false</span><span style="color:#ff79c6">,</span> <span style="color:#ff79c6">true</span><span style="color:#ff79c6">,</span> <span style="color:#ff79c6">true</span><span style="color:#ff79c6">,</span> <span style="color:#ff79c6">false</span><span style="color:#ff79c6">,</span> <span style="color:#ff79c6">true</span><span style="color:#ff79c6">),</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>	<span style="color:#6272a4">/**
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">	 * Indicates that this subpartition state is fully recovered (emitted). Further data can be
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">	 * consumed after unblocking.
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">	 */</span>
+</span></span><span style="display:flex;"><span>	RECOVERY_COMPLETION<span style="color:#ff79c6">(</span><span style="color:#ff79c6">false</span><span style="color:#ff79c6">,</span> <span style="color:#ff79c6">true</span><span style="color:#ff79c6">,</span> <span style="color:#ff79c6">true</span><span style="color:#ff79c6">,</span> <span style="color:#ff79c6">false</span><span style="color:#ff79c6">,</span> <span style="color:#ff79c6">false</span><span style="color:#ff79c6">);</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">}</span>
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>RemoteInputChannel</p>
+<ul>
+<li>本地维系 expectedSequenceNumber，只有两边的序列号相同才能证明 Buffer 数据的顺序是正常的且可以进行处理</li>
+<li>判断Backlog是否大于0，如果是则说明上游ResultSubPartition还有更多Buffer数据需要消费，此时调用onSenderBacklog(backlog)方法处理Backlog信息</li>
+</ul>
+<p>InputGate 作用</p>
+<ol>
+<li>Aggregating Input Channels</li>
+</ol>
+<ul>
+<li>An InputGate acts as a ​logical gateway that aggregates multiple ​InputChannels (physical connections to upstream ResultSubpartitions).</li>
+<li>Each InputChannel corresponds to a specific upstream partition (e.g., a subpartition of a ResultPartition)</li>
+</ul>
+<ol start="2">
+<li>Coordinating Data Consumption</li>
+</ol>
+<ul>
+<li>The InputGate coordinates the ​data request and delivery process:</li>
+<li>Requesting partitions: It triggers requestPartitions() to initiate data consumption from upstream subpartitions via InputChannels (e.g., - LocalInputChannel or RemoteInputChannel).</li>
+<li>​Buffering and sequencing: It manages buffers (via BufferPool) to handle backpressure and ensures ordered data delivery to the task thread.
+​- Handling events: It processes metadata like EndOfPartitionEvent or CheckpointBarrier to track data completeness and align checkpoints</li>
+</ul>
+<ol start="3">
+<li>Resource Management
+​- Memory allocation: The InputGate manages buffer pools (bufferPool) to allocate memory segments for incoming data, balancing throughput and backpressure.</li>
+</ol>
+<ul>
+<li>​Slot sharing: In scenarios with slot sharing (e.g., tasks from different operators in the same slot), the InputGate ensures isolation of data streams while sharing resources</li>
+</ul>
+<p>​4. Fault Tolerance</p>
+<ul>
+<li>​Checkpoint alignment: By tracking CheckpointBarrier propagation across InputChannels, the InputGate ensures consistent state snapshots.</li>
+<li>​Error handling: If an InputChannel fails (e.g., network issues), the InputGate notifies the JobManager to trigger recovery (e.g., restarting affected tasks)</li>
+</ul>
+<h3 id="networkbuffer">NetWorkBuffer</h3>
+<p>NetworkBuffer内部分段</p>
+<ul>
+<li>Buffer接口分别被NetworkBuffer和ReadOnlySlicedNetworkBuffer类继承和实现 
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/03/29/7alJO4.png">
+            <img class="mx-auto" alt="flink_3/46.jpg" src="https://v1.ax1x.com/2025/03/29/7alJO4.png" />
+        </a>
+    </li>
+</ul>
+<p>NetworkBuffer 相关类图</p>
+<ul>
+<li>MemorySegment是NetworkBuffer底层使用的内存块</li>
+<li>BufferRecycler主要负责对当前Buffer进行内存空间的回收</li>
+<li>ByteBufAllocator是Netty中用于分配内存的组件
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/03/29/7alXih.png">
+            <img class="mx-auto" alt="flink_3/47.jpg" src="https://v1.ax1x.com/2025/03/29/7alXih.png" />
+        </a>
+    </li>
+</ul>
+<p>NetworkBufferPool与LocalBufferPool关系图</p>
+<ul>
+<li>当创建Task线程时，默认通过ShuffleEnvironment创建InputGate和ResultPartition</li>
+<li>分别为Task中的InputGate（IG）和ResultPartition（RP）组件创建一个LocalBufferPool（本地缓冲池）</li>
+<li>其中InputGate对应的缓冲池初始内存块数量与InputGate中的InputChannel数量一致</li>
+<li>ResultPartition对应的缓冲池初始内存块数量与ResultPartition中的ResultSubpartition数量一致
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/03/29/7aln79.png">
+            <img class="mx-auto" alt="flink_3/48.jpg" src="https://v1.ax1x.com/2025/03/29/7aln79.png" />
+        </a>
+    </li>
+</ul>
+<p>NetworkBufferPool与LocalBufferPool 关系<br>
+​1、Hierarchy and Ownership<br>
+​NetworkBufferPool:</p>
+<ul>
+<li>A ​global, TaskManager-level memory pool shared by all tasks running on the same TaskManager.</li>
+<li>Allocates fixed-size ​MemorySegments (default: 32 KB each) from off-heap or heap memory during TaskManager initialization.</li>
+<li>Manages a static number of buffers (default: 2048 segments, totaling 64 MB).</li>
+</ul>
+<p>LocalBufferPool:</p>
+<ul>
+<li>A ​task-specific buffer pool created for each InputGate (input) or ResultPartition (output) within a task.</li>
+<li>Acts as a logical subset of the NetworkBufferPool, dynamically borrowing buffers as needed</li>
+</ul>
+<p>2、Buffer Allocation Mechanism<br>
+Initialization:</p>
+<ul>
+<li>When a task starts, Flink creates LocalBufferPools for its inputs/outputs, setting initial buffer limits based on parallelism (e.g., one buffer per channel).</li>
+<li>LocalBufferPools initially hold no buffers; they request them from the NetworkBufferPool on demand.</li>
+</ul>
+<p>Dynamic Borrowing:</p>
+<ul>
+<li>If a LocalBufferPool exhausts its allocated buffers, it requests additional ones from the NetworkBufferPool.</li>
+<li>Example: During backpressure, a RemoteInputChannel may fetch extra buffers via its LocalBufferPool, which in turn borrows from the global pool.</li>
+</ul>
+<p>Buffer Redistribution:</p>
+<ul>
+<li>The NetworkBufferPool dynamically redistributes buffers among LocalBufferPools based on demand. For instance:</li>
+<li>When a new task registers, the global pool recalculates buffer quotas to balance resources.</li>
+<li>Excess buffers in a LocalBufferPool are returned to the NetworkBufferPool when no longer neede</li>
+</ul>
+<p>4、Resource Isolation and Sharing<br>
+Isolation:</p>
+<ul>
+<li>Each LocalBufferPool enforces task-level limits (e.g., maxBuffersPerChannel) to prevent a single task from monopolizing buffers.</li>
+<li>Example: A ResultPartition’s LocalBufferPool restricts buffers per subpartition to avoid skew.</li>
+</ul>
+<p>​Shared Backing Storage:</p>
+<ul>
+<li>Both pools use the same underlying MemorySegments from the NetworkBufferPool.</li>
+<li>Buffers recycled by a LocalBufferPool (e.g., after data processing) are either reused locally or returned to the global pool.</li>
+</ul>
+<p>5、Performance and Backpressure
+Backpressure Handling:</p>
+<ul>
+<li>If the NetworkBufferPool is exhausted, LocalBufferPools trigger backpressure by pausing data production/consumption.</li>
+<li>Example: A blocked ResultPartition stops emitting data until buffers are recycled.</li>
+</ul>
+<p>​Buffer Recycling Loop:</p>
+<ul>
+<li>After processing, buffers are returned to their LocalBufferPool. If the pool exceeds its quota, buffers flow back to the NetworkBufferPool.</li>
+<li>This minimizes memory allocation overhead and maintains stable throughput.</li>
+</ul>
+<p>LocalBufferPool 相关类图<br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/03/29/7alIVY.png">
+            <img class="mx-auto" alt="flink_3/49.jpg" src="https://v1.ax1x.com/2025/03/29/7alIVY.png" />
+        </a>
+    </p>
+<p>FloatingBuffer和ExclusiveBuffer<br>
+Exclusive Buffers</p>
+<ul>
+<li>​Purpose:
+<ul>
+<li>Pre-allocated buffers ​exclusively assigned to individual InputChannels (ICs).</li>
+<li>Ensure guaranteed buffer availability for each channel, preventing starvation.</li>
+</ul>
+</li>
+<li>​Key Features:
+<ul>
+<li>Fixed allocation (e.g., 2 buffers per channel).</li>
+<li>Marked in ​dark color in your image.</li>
+<li>Example: ICs in InputGate-1/InputGate-2 have dedicated buffers for steady data flow.</li>
+</ul>
+</li>
+</ul>
+<p>Floating Buffers
+​- Purpose:</p>
+<ul>
+<li>Dynamically shared buffers ​across all InputChannels within a LocalBufferPool.</li>
+<li>Handle temporary spikes in data volume or uneven workloads.</li>
+<li>​Key Features:
+<ul>
+<li>Flexible allocation (e.g., 8 floating buffers per InputGate).</li>
+<li>Marked in ​light color in your image.</li>
+<li>Example: Bursty data arriving at an IC can borrow floating buffers from the LocalBufferPool.<br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/03/29/7alMXH.png">
+            <img class="mx-auto" alt="flink_3/50.jpg" src="https://v1.ax1x.com/2025/03/29/7alMXH.png" />
+        </a>
+    </li>
+</ul>
+</li>
+</ul>
+<p>Transfer of a byte buffer between two tasks<br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/03/29/7a7hy5.png">
+            <img class="mx-auto" alt="flink_4/3.jpg" src="https://v1.ax1x.com/2025/03/29/7a7hy5.png" />
+        </a>
+    </p>
+<h2 id="反压机制">反压机制</h2>
+<p>TCP自带反压机制</p>
+<ul>
+<li>tcp连接被多个task复用，一个下游的 task 阻塞，会影响上游的 tcp 滑动窗口</li>
+<li>进而影响上游的 task-manager 中的所有 task</li>
+<li>上游 ResultPartition 只能根据 tcp来被动感知，不能提前调整发送频率</li>
+<li>也不能根据 ResultPartition 当前数据挤压情况及时调整下游节点的数据处理速度 
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/03/29/7a7Lrt.png">
+            <img class="mx-auto" alt="flink_4/1.jpg" src="https://v1.ax1x.com/2025/03/29/7a7Lrt.png" />
+        </a>
+    </li>
+</ul>
+<p>1、Core Principles</p>
+<ul>
+<li>Credit Allocation:
+<ul>
+<li>Downstream tasks allocate ​credits (numerical values) to upstream tasks, indicating the maximum amount of data (measured in buffers) they can currently process.</li>
+<li>Example: If a downstream task has 10 available buffers, it sends a credit of 10 to the upstream task.</li>
+</ul>
+</li>
+<li>​Data Transfer Regulation:
+<ul>
+<li>The upstream task sends data in chunks (buffers) and deducts credits accordingly. Once credits are exhausted, it pauses sending until new credits are received.</li>
+<li>This ensures the upstream never overwhelms the downstream with unprocessable data.</li>
+</ul>
+</li>
+<li>​Dynamic Feedback Loop:
+<ul>
+<li>As the downstream processes data and frees buffers, it periodically sends updated credit values to the upstream, enabling resumption of data flow</li>
+</ul>
+</li>
+</ul>
+<p>2、Key Components</p>
+<ul>
+<li>​Buffer Management:
+<ul>
+<li>Buffers (default size: 32 KB) are the units of data transmission. Each buffer corresponds to one credit.</li>
+<li>Downstream tasks manage a ​LocalBufferPool to track available buffers, which directly determines credit values.</li>
+</ul>
+</li>
+<li>​Credit Messaging:
+<ul>
+<li>Credits are communicated via ​control messages (e.g., AddCredit messages in Flink&rsquo;s Netty layer).</li>
+<li>This decouples flow control from the data plane, reducing latency.</li>
+</ul>
+</li>
+<li>​Backlog Awareness:
+<ul>
+<li>Upstream tasks include ​backlog size (queued but unsent buffers) in data transmissions, allowing downstream to prioritize resource allocation</li>
+</ul>
+</li>
+</ul>
+<p>Workflow Steps</p>
+<ul>
+<li>Initialization:
+<ul>
+<li>The downstream task allocates initial credits (e.g., 10) to the upstream task.</li>
+</ul>
+</li>
+<li>Data Transmission:
+<ul>
+<li>The upstream sends buffers, decrementing credits for each buffer sent.</li>
+<li>Example: Sending 5 buffers reduces credits from 10 to 5.</li>
+</ul>
+</li>
+<li>​Credit Depletion:
+<ul>
+<li>When credits reach zero, the upstream pauses transmission, preventing data buildup in the network layer.</li>
+</ul>
+</li>
+<li>​Feedback and Renewal:
+<ul>
+<li>After processing data, the downstream frees buffers and sends new credits (e.g., 8) to the upstream.</li>
+<li>The upstream resumes sending based on the updated credits.</li>
+</ul>
+</li>
+</ul>
+<p>基于信用值的反压机制设计<br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/03/29/7a70eb.png">
+            <img class="mx-auto" alt="flink_4/2.jpg" src="https://v1.ax1x.com/2025/03/29/7a70eb.png" />
+        </a>
+    </p>
+<p>Backlog和Credit的更新逻辑</p>
+<ul>
+<li>Backlog能够通过指标的变化影响下游RemoteInputChannel中浮动Buffer的数量，提升InputChannel的数据处理能力</li>
+<li>Backlog越大说明上游堆积的数据越多，需要更多的Buffer空间存储上游的数据</li>
+<li>将Credit理解为下游处理数据能力的体现</li>
+<li>RemoteInputChannel中AvailableBuffer的数量发生变化时，会将该信息转换为信用值发送给ResultPartition，表明下游具备数据处理能力，可以处理更多的Buffer数据，即通过信用值控制上游Task发送数据的频率</li>
+<li>ResultPartition通过Backlog控制下游处理数据的能力</li>
+<li>RemoteInputChannel通过信用值控制上游发送数据的频率</li>
+</ul>
+<p>每个 creadit 表示一个上游的 buffer（默认 32KB）</p>
+<h2 id="一些优化的案例">一些优化的案例</h2>
+<p>重优化过程</p>
+<ul>
+<li>类似于 spark 的 AQE，动态收集运行时信息</li>
+<li>然后运行时调整执行计划</li>
+<li>可以做分区拆分，分区合并
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/04/20/7Yzfm9.png">
+            <img class="mx-auto" alt="flink_4/13_重优化过程.jpg" src="https://v1.ax1x.com/2025/04/20/7Yzfm9.png" />
+        </a>
+    </li>
+</ul>
+<p>DS2模型架构</p>
+<ul>
+<li>也是动态收集信息</li>
+<li>然后动态调整并行度</li>
+<li>基于论文：Three steps is all you need: fast, accurate, automatic scaling decisions for distributed streaming dataflows
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/04/20/7YzIXh.png">
+            <img class="mx-auto" alt="flink_4/14_DS2模型架构.jpg" src="https://v1.ax1x.com/2025/04/20/7YzIXh.png" />
+        </a>
+    </li>
+</ul>
+<p>基于 sort 的 shuffle</p>
+<ul>
+<li>类似于 spark 的 sort-shuffle</li>
+<li>排序之后有一个索引文件，单个最终排序后的文件</li>
+<li>索引基于key 的 offset 指向排序的文件
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/04/20/7YzihY.jpg">
+            <img class="mx-auto" alt="flink_4/15_基于排序的shuffle.jpg" src="https://v1.ax1x.com/2025/04/20/7YzihY.jpg" />
+        </a>
+    </li>
+</ul>
+<p>将状态数据进行可视化和修改的架构</p>
+<ul>
+<li>根据状态信息设计表结构</li>
+<li>将状态信息写入到数据库，前端再异步处理展示
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/04/20/7YzsrH.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2025/04/20/7YzsrH.png" />
+        </a>
+    </li>
+</ul>
+<h2 id="参考">参考</h2>
+<ul>
+<li><a href="https://nightlies.apache.org/flink/flink-docs-release-1.20/">1.20 官方文档</a></li>
+<li><a href="https://cloud.tencent.com/developer/column/93187?tag=11033">Lansonli技术博客</a></li>
+<li><a href="https://juejin.cn/post/7111510381956169764">深入浅出理解Flink运行时架构</a></li>
+<li><a href="https://0x90e.github.io/flink-execution-graph/">Flink Execution Graph</a></li>
+<li><a href="https://zhuanlan.zhihu.com/p/668625467">Flink实战(11)-Exactly-Once语义之两阶段提交</a></li>
+<li><a href="https://juejin.cn/post/7150837768346681374">Flink on k8s 讲解与实战操作</a></li>
+<li><a href="https://tech.youzan.com/flink_checkpoint_mechanism/">Flink Checkpoint 原理流程以及常见失败原因分析</a></li>
+<li><a href="https://nightlies.apache.org/flink/flink-docs-master/docs/concepts/stateful-stream-processing/">Stateful Stream Processing</a></li>
+<li><a href="https://flink.apache.org/2019/06/05/a-deep-dive-into-flinks-network-stack/">A Deep-Dive into Flink&rsquo;s Network Stack</a></li>
+<li><a href="https://www.alibabacloud.com/blog/596632">Analysis of Network Flow Control and Back Pressure: Flink Advanced Tutorials</a></li>
+<li><a href="https://mp.weixin.qq.com/s?__biz=MzU3MzgwNTU2Mg==&amp;mid=2247484943&amp;idx=2&amp;sn=505faecd7c823e184c3ca5df0c2d95f3&amp;chksm=fca7a7026833d629d06485ffcd8ab3f625042c3dcb66004642fac2108b5a319b3486f515025c#rd">批流统一计算引擎的动力源泉—Flink Shuffle机制的重构与优化</a></li>
+<li><a href="https://zhuanlan.zhihu.com/p/462338206">业界RemoteShuffleService实现汇总</a></li>
+<li><a href="https://zhuanlan.zhihu.com/p/496894076">Flink Pluggable ShuffleService源码阅读</a></li>
+<li><a href="https://cloud.tencent.com/developer/article/2005235?from=15425">Flink Remote Shuffle 开源：面向流批一体与云原生的 Shuffle 服务</a></li>
+<li><a href="https://www.cnblogs.com/binlovetech/p/16442598.html">详细图解 Netty Reactor 启动全流程 | 万字长文 | 多图预警 </a></li>
+<li><a href="https://www.processon.com/view/607631346376891132cea911">Netty Reactor 工作架构图</a></li>
+<li><a href="https://www.cnblogs.com/nightbreeze/p/10942536.html">Flink架构，源码及debug </a></li>
+</ul>
+
+			<script type="text/javascript"
+        async
+        src="https://cdn.bootcss.com/mathjax/2.7.3/MathJax.js?config=TeX-AMS-MML_HTMLorMML">
+MathJax.Hub.Config({
+  tex2jax: {
+    inlineMath: [['$','$'], ['\\(','\\)']],
+    displayMath: [['$$','$$'], ['\[\[','\]\]']],
+    processEscapes: true,
+    processEnvironments: true,
+    skipTags: ['script', 'noscript', 'style', 'textarea', 'pre'],
+    TeX: { equationNumbers: { autoNumber: "AMS" },
+         extensions: ["AMSmath.js", "AMSsymbols.js"] }
+  }
+});
+
+MathJax.Hub.Queue(function() {
+    
+    
+    
+    var all = MathJax.Hub.getAllJax(), i;
+    for(i = 0; i < all.length; i += 1) {
+        all[i].SourceElement().parentNode.className += ' has-jax';
+    }
+});
+</script>
+
+<style>
+code.has-jax {
+    font: inherit;
+    font-size: 100%;
+    background: inherit;
+    border: inherit;
+    color: #515151;
+}
+</style>
+        </div>
+
+        
+
+
+        
+
+<div class="post-archive">
+    <h2>相关文章</h2>
+    <ul class="listing">
+        
+        <li><a href="/post/2025/03/flink_state/">Flink 状态管理</a></li>
+        
+        <li><a href="/post/2025/03/flink_cluster/">Flink 集群管理</a></li>
+        
+        <li><a href="/post/2025/03/flink_submit/">Flink 任务提交</a></li>
+        
+        <li><a href="/post/2025/02/flink_datastream/">Flink-DataStraem</a></li>
+        
+        <li><a href="/post/2025/02/flink_arch/">Flink架构</a></li>
+        
+    </ul>
+</div>
+
+
+        <div class="post-meta meta-tags">
+            
+            <ul class="clearfix">
+                
+                <li><a href='/tags/flink'>Flink</a></li>
+                
+            </ul>
+            
+        </div>
+    </article>
+    
+    
+
+    
+    
+    <div class="post bg-white">
+      <script src="https://utteranc.es/client.js"
+            repo= "himichael/hugoblogtalks"
+            issue-term="pathname"
+            theme="github-light"
+            crossorigin="anonymous"
+            async>
+      </script>
+    </div>
+    
+</div>
+
+
+                </div>
+
+                <div id="secondary">
+    <section class="widget">
+        <form id="search" action='https://code0xff.org/search/' method="get" accept-charset="utf-8" target="_blank" _lpchecked="1">
+      
+      <input type="text" name="q" maxlength="20" placeholder="Search">
+      <input type="hidden" name="sitesearch" value="https://code0xff.org/">
+      <button type="submit" class="submit icon-search"></button>
+</form>
+    </section>
+    
+    <section class="widget">
+        <h3 class="widget-title">最近文章</h3>
+<ul class="widget-list">
+    
+    <li>
+        <a href="https://code0xff.org/post/2026/02/yunnan_west/" title="云南滇西大环线">云南滇西大环线</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2026/01/2015_2025/" title="2015年 -- 2025年">2015年 -- 2025年</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2026/01/longhorn/" title="longhorn">longhorn</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2025/12/ai_infrastructure/" title="关于AI 的生态">关于AI 的生态</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2025/11/ai_bubble/" title="关于AI泡沫">关于AI泡沫</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2025/10/china_beihai/" title="南边的北海">南边的北海</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2025/09/bpf_http/" title="eBPF的 http跟踪">eBPF的 http跟踪</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2025/09/spark_flink/" title="Spark和Flink的对比总结（包含Operator）">Spark和Flink的对比总结（包含Operator）</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2025/08/juicefs/" title="JuiceFS">JuiceFS</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2025/08/bpftrace_12_lessons/" title="bpftrace 12个小命令">bpftrace 12个小命令</a>
+    </li>
+    
+</ul>
+    </section>
+
+    
+
+    <section class="widget">
+        <h3 class="widget-title"><a href='/categories/'>分类</a></h3>
+<ul class="widget-list">
+    
+    <li><a href="https://code0xff.org/categories/%E5%88%86%E5%B8%83%E5%BC%8F/">分布式 (8)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E5%8E%9F%E7%90%86%E5%88%86%E6%9E%90/">原理分析 (33)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E5%95%86%E4%B8%9A/">商业 (6)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E5%A4%A7%E6%95%B0%E6%8D%AE/">大数据 (59)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%95%B0%E6%8D%AE%E5%BA%93/">数据库 (41)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%96%87%E5%AD%A6%E5%92%8C%E8%89%BA%E6%9C%AF/">文学和艺术 (3)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%97%85%E8%A1%8C/">旅行 (15)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%9E%B6%E6%9E%84/">架构 (13)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E7%AE%97%E6%B3%95%E5%92%8Cai/">算法和AI (11)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E7%B3%BB%E7%BB%9F/">系统 (16)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E7%BC%96%E7%A8%8B%E8%AF%AD%E8%A8%80/">编程语言 (8)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E8%A1%8C%E4%B8%9A%E8%A7%82%E5%AF%9F/">行业观察 (3)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E8%AF%BB%E4%B9%A6%E7%AC%94%E8%AE%B0/">读书笔记 (19)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E9%9A%8F%E4%BE%BF%E5%86%99%E5%86%99/">随便写写 (4)</a></li>
+    
+</ul>
+    </section>
+
+    <section class="widget">
+        <h3 class="widget-title">归档</a></h3>
+<ul class="widget-list">
+    
+    <li><a href="https://code0xff.org/years/2021%E5%B9%B4/">2021年 (41)</a></li>
+    
+    <li><a href="https://code0xff.org/years/2022%E5%B9%B4/">2022年 (55)</a></li>
+    
+    <li><a href="https://code0xff.org/years/2023%E5%B9%B4/">2023年 (54)</a></li>
+    
+    <li><a href="https://code0xff.org/years/2024%E5%B9%B4/">2024年 (48)</a></li>
+    
+    <li><a href="https://code0xff.org/years/2025%E5%B9%B4/">2025年 (38)</a></li>
+    
+    <li><a href="https://code0xff.org/years/2026%E5%B9%B4/">2026年 (3)</a></li>
+    
+</ul>
+    </section>
+
+    <section class="widget">
+        <h3 class="widget-title"><a href='/tags/'>标签</a></h3>
+<div class="tagcloud">
+    
+    <a href="https://code0xff.org/tags/ai/">AI </a>
+    
+    <a href="https://code0xff.org/tags/ambari/">Ambari </a>
+    
+    <a href="https://code0xff.org/tags/architecture/">architecture </a>
+    
+    <a href="https://code0xff.org/tags/bigdata/">bigdata </a>
+    
+    <a href="https://code0xff.org/tags/btrace/">BTrace </a>
+    
+    <a href="https://code0xff.org/tags/b%E6%A0%91/">B树 </a>
+    
+    <a href="https://code0xff.org/tags/c&#43;&#43;/">C&#43;&#43; </a>
+    
+    <a href="https://code0xff.org/tags/calcite/">calcite </a>
+    
+    <a href="https://code0xff.org/tags/cmu-database/">CMU-Database </a>
+    
+    <a href="https://code0xff.org/tags/data_ingestion/">Data_Ingestion </a>
+    
+    <a href="https://code0xff.org/tags/deltalake/">DeltaLake </a>
+    
+    <a href="https://code0xff.org/tags/doris/">Doris </a>
+    
+    <a href="https://code0xff.org/tags/ebpf/">eBPF </a>
+    
+    <a href="https://code0xff.org/tags/english/">English </a>
+    
+    <a href="https://code0xff.org/tags/es/">ES </a>
+    
+    <a href="https://code0xff.org/tags/facebook/">Facebook </a>
+    
+    <a href="https://code0xff.org/tags/flink/">flink </a>
+    
+    <a href="https://code0xff.org/tags/flume/">flume </a>
+    
+    <a href="https://code0xff.org/tags/gc/">GC </a>
+    
+    <a href="https://code0xff.org/tags/gluten/">Gluten </a>
+    
+    <a href="https://code0xff.org/tags/hana/">HANA </a>
+    
+    <a href="https://code0xff.org/tags/hive/">Hive </a>
+    
+    <a href="https://code0xff.org/tags/iceberg/">iceberg </a>
+    
+    <a href="https://code0xff.org/tags/impala/">Impala </a>
+    
+    <a href="https://code0xff.org/tags/janino/">janino </a>
+    
+    <a href="https://code0xff.org/tags/juicefs/">JuiceFS </a>
+    
+    <a href="https://code0xff.org/tags/k8s/">k8s </a>
+    
+    <a href="https://code0xff.org/tags/kafka/">Kafka </a>
+    
+    <a href="https://code0xff.org/tags/kudu/">kudu </a>
+    
+    <a href="https://code0xff.org/tags/kyuubi/">Kyuubi </a>
+    
+    <a href="https://code0xff.org/tags/lakehouse/">Lakehouse </a>
+    
+    <a href="https://code0xff.org/tags/leveldb/">LevelDB </a>
+    
+    <a href="https://code0xff.org/tags/llamafactory/">LlamaFactory </a>
+    
+    <a href="https://code0xff.org/tags/llvm/">LLVM </a>
+    
+    <a href="https://code0xff.org/tags/log4j/">log4j </a>
+    
+    <a href="https://code0xff.org/tags/longhorn/">longhorn </a>
+    
+    <a href="https://code0xff.org/tags/manacher/">Manacher </a>
+    
+    <a href="https://code0xff.org/tags/mapreduce/">MapReduce </a>
+    
+    <a href="https://code0xff.org/tags/micro-service/">micro-service </a>
+    
+    <a href="https://code0xff.org/tags/mysql/">MySQL </a>
+    
+    <a href="https://code0xff.org/tags/newsql/">NewSQL </a>
+    
+    <a href="https://code0xff.org/tags/oceanbase/">OceanBase </a>
+    
+    <a href="https://code0xff.org/tags/openldap/">OpenLDAP </a>
+    
+    <a href="https://code0xff.org/tags/openlogreplicator/">OpenLogReplicator </a>
+    
+    <a href="https://code0xff.org/tags/parquet/">parquet </a>
+    
+    <a href="https://code0xff.org/tags/paxos/">paxos </a>
+    
+    <a href="https://code0xff.org/tags/presto/">Presto </a>
+    
+    <a href="https://code0xff.org/tags/pytorch/">PyTorch </a>
+    
+    <a href="https://code0xff.org/tags/quick-sql/">quick-sql </a>
+    
+    <a href="https://code0xff.org/tags/raft/">raft </a>
+    
+    <a href="https://code0xff.org/tags/scala/">scala </a>
+    
+    <a href="https://code0xff.org/tags/simd/">SIMD </a>
+    
+    <a href="https://code0xff.org/tags/snowflake/">snowflake </a>
+    
+    <a href="https://code0xff.org/tags/spark/">spark </a>
+    
+    <a href="https://code0xff.org/tags/sre/">SRE </a>
+    
+    <a href="https://code0xff.org/tags/teradata/">TeraData </a>
+    
+    <a href="https://code0xff.org/tags/tpcx-hs/">TPCx-HS </a>
+    
+    <a href="https://code0xff.org/tags/trino/">Trino </a>
+    
+    <a href="https://code0xff.org/tags/tuning/">Tuning </a>
+    
+    <a href="https://code0xff.org/tags/unix/">unix </a>
+    
+    <a href="https://code0xff.org/tags/yarn/">YARN </a>
+    
+    <a href="https://code0xff.org/tags/%E4%BA%8C%E5%88%86%E6%9F%A5%E6%89%BE/">二分查找 </a>
+    
+    <a href="https://code0xff.org/tags/%E4%BA%8C%E5%8F%89%E6%A0%91%E9%81%8D%E5%8E%86/">二叉树遍历 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%88%86%E5%B8%83%E5%BC%8F/">分布式 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%88%97%E5%AD%98/">列存 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%8A%A8%E6%80%81%E6%B3%A8%E5%85%A5/">动态注入 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%8E%86%E5%8F%B2/">历史 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%90%91%E9%87%8F%E5%8C%96/">向量化 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%95%86%E4%B8%9A/">商业 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%9B%9E%E6%BA%AF/">回溯 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%9B%BD%E5%86%85%E6%97%85%E8%A1%8C/">国内旅行 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%9B%BD%E5%A4%96%E6%97%85%E8%A1%8C/">国外旅行 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%A4%9A%E7%A7%9F%E6%88%B7/">多租户 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%A4%A7%E6%95%B0%E6%8D%AE/">大数据 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%AD%98%E5%82%A8/">存储 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%B7%A5%E4%BD%9C%E8%AE%B0%E5%BD%95/">工作记录 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%BE%AE%E6%9C%8D%E5%8A%A1/">微服务 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%95%B0%E6%8D%AE%E4%B8%AD%E5%8F%B0/">数据中台 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%95%B0%E6%8D%AE%E5%BA%93/">数据库 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%95%B0%E6%8D%AE%E6%A8%A1%E5%9E%8B/">数据模型 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%95%B0%E6%8D%AE%E8%BF%81%E7%A7%BB/">数据迁移 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%9F%A5%E8%AF%A2%E4%BC%98%E5%8C%96/">查询优化 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%9F%A5%E8%AF%A2%E7%BC%96%E8%AF%91/">查询编译 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%A6%82%E7%8E%87/">概率 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%B1%87%E7%BC%96/">汇编 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%B5%8B%E8%AF%95/">测试 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%94%9F%E6%B4%BB/">生活 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%94%B5%E5%BD%B1/">电影 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%AE%97%E6%B3%95/">算法 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%B4%A2%E5%BC%95/">索引 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BB%8F%E6%B5%8E/">经济 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BB%8F%E6%B5%8E%E5%88%86%E6%9E%90/">经济分析 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BC%93%E5%AD%98/">缓存 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BC%96%E8%AF%91%E5%8E%9F%E7%90%86/">编译原理 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BD%91%E7%BB%9C/">网络 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AE%A1%E7%AE%97%E6%A1%86%E6%9E%B6/">计算框架 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AE%BA%E6%96%87/">论文 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AF%BB%E4%B9%A6/">读书 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AF%BB%E4%B9%A6%E7%AC%94%E8%AE%B0/">读书笔记 </a>
+    
+</div>
+    </section>
+
+    
+
+    <section class="widget">
+        <h3 class="widget-title">RSS</h3>
+        <ul class="widget-list">
+            <li><a href="https://code0xff.org/index.xml">文章 RSS</a></li>
+        </ul>
+    </section>
+</div>
+            </div>
+        </div>
+    </div>
+    <footer id="footer">
+    <div>
+        &copy; 2026 <a href="https://code0xff.org/">记录每个瞬间 By 老王</a>
+        
+    </div>
+    <br />
+    <div>
+        <div class="github-badge">
+            <a href="https://gohugo.io/" target="_black" rel="nofollow"><span class="badge-subject">Powered by</span><span class="badge-value bg-blue">Hugo</span></a>
+        </div>
+        <div class="github-badge">
+            <a href="https://github.com/flysnow-org/maupassant-hugo" target="_black"><span class="badge-subject">Theme</span><span class="badge-value bg-yellowgreen">Maupassant</span></a>
+        </div>
+    </div>
+</footer>
+
+
+    
+    <script type="text/javascript">
+        window.MathJax = {
+            tex2jax: {
+                inlineMath: [['$', '$']],
+                processEscapes: true
+                }
+            };
+    </script>
+    <script src='https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.5/MathJax.js?config=TeX-MML-AM_CHTML' async></script><script src="https://cdn.bootcdn.net/ajax/libs/fancybox/3.5.7/jquery.fancybox.min.js"></script>
+
+<a id="rocket" href="#top"></a>
+<script type="text/javascript" src='/js/totop.js?v=0.0.0' async=""></script>
+
+<script type="application/javascript">
+var doNotTrack = false;
+if (!doNotTrack) {
+	window.ga=window.ga||function(){(ga.q=ga.q||[]).push(arguments)};ga.l=+new Date;
+	ga('create', 'GA ID', 'auto');
+	
+	ga('send', 'pageview');
+}
+</script>
+<script async src='https://www.google-analytics.com/analytics.js'></script>
+
+
+
+    <script type="text/javascript" src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js" async></script>
+
+
+
+
+</body>
+
+</html>

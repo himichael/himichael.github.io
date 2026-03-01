@@ -1,0 +1,1156 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    
+    <meta name="referrer" content="no-referrer-when-downgrade">
+    
+
+    <title>Flink架构 | 记录每个瞬间</title>
+    <meta property="og:title" content="Flink架构 - 记录每个瞬间">
+    <meta property="og:type" content="article">
+        
+    <meta property="article:published_time" content='2025-02-15T09:10:12&#43;08:00'>
+        
+        
+    <meta property="article:modified_time" content='2025-02-15T09:10:12&#43;08:00'>
+        
+    <meta name="Keywords" content="">
+    <meta name="description" content="Flink架构">
+        <meta name="author" content="隔壁老王">
+        
+    <meta property="og:url" content="https://code0xff.org/post/2025/02/flink_arch/">
+    <link rel="shortcut icon" href='/favicon.ico'  type="image/x-icon">
+
+    <link rel="stylesheet" href='/css/normalize.css'>
+    <link rel="stylesheet" href='/css/style.css'>
+    <script type="text/javascript" src="//cdn.bootcdn.net/ajax/libs/jquery/3.4.1/jquery.min.js"></script>
+
+    
+    
+    
+        <link href="https://cdn.bootcdn.net/ajax/libs/fancybox/3.5.7/jquery.fancybox.min.css" rel="stylesheet">
+    
+    
+    
+    
+</head>
+
+
+<body>
+    <header id="header" class="clearfix">
+    <div class="container">
+        <div class="col-group">
+            <div class="site-name ">
+                
+                    <a id="logo" href="https://code0xff.org/">
+                        记录每个瞬间
+                    </a>
+                
+                
+            </div>
+            <div>
+                <nav id="nav-menu" class="clearfix">
+                    <a class="current" href="https://code0xff.org/">首页</a>
+                    
+                    <a  href="https://code0xff.org/linked/" title="链接">链接</a>
+                    
+                    <a  href="https://code0xff.org/archives/" title="归档">归档</a>
+                    
+                    <a  href="https://code0xff.org/about/" title="关于">关于</a>
+                    
+                </nav>
+            </div>
+        </div>
+    </div>
+</header>
+
+    <div id="body">
+        <div class="container">
+            <div class="col-group">
+
+                <div class="col-8" id="main">
+                    <div class="res-cons">
+    
+    <article class="post">
+        <header>
+            <h1 class="post-title">Flink架构</h1>
+        </header>
+        <date class="post-meta meta-date">
+            2025年2月15日
+        </date>
+<nav id="TableOfContents">
+  <ul>
+    <li>
+      <ul>
+        <li><a href="#架构">架构</a></li>
+        <li><a href="#任务提交">任务提交</a></li>
+        <li><a href="#集群启动">集群启动</a></li>
+        <li><a href="#几个重要组件">几个重要组件</a>
+          <ul>
+            <li><a href="#webmonitorendpoint">WebMonitorEndpoint</a></li>
+            <li><a href="#dispatcher">Dispatcher</a></li>
+            <li><a href="#resourcemanager">ResourceManager</a></li>
+            <li><a href="#taskmanager">TaskManager</a></li>
+            <li><a href="#高可用">高可用</a></li>
+          </ul>
+        </li>
+        <li><a href="#整体架构">整体架构</a></li>
+        <li><a href="#参考">参考</a></li>
+      </ul>
+    </li>
+  </ul>
+</nav>
+        
+        <div class="post-meta">
+            
+            <span class="post-meta meta-tags">
+                <ul class="clearfix">
+                    <a href='/categories/%E5%8E%9F%E7%90%86%E5%88%86%E6%9E%90'>原理分析</a>
+                </ul>
+            </span>
+            
+        </div>
+        
+        
+        <div class="post-meta">
+            <span id="busuanzi_container_page_pv">|<span id="busuanzi_value_page_pv"></span><span>
+                    阅读</span></span>
+        </div>
+        
+        
+        <div class="post-content">
+            <h2 id="架构">架构</h2>
+<p>
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/03/22/7cJnBa.png">
+            <img class="mx-auto" alt="flink_3/15.jpg" src="https://v1.ax1x.com/2025/03/22/7cJnBa.png" />
+        </a>
+    </p>
+<h2 id="任务提交">任务提交</h2>
+<p>Flink Session集群的启动流程主要包含如下步骤</p>
+<ul>
+<li>用户通过客户端命令启动Session Cluster，此时会触发整个集群服务的启动过程，客户端会向集群资源管理器申请Container计算资源以启动运行时中的管理节点</li>
+<li>ClusterManagement会为运行时集群分配Application主节点需要的资源并启动主节点服务，例如在Hadoop Yarn资源管理器中会分配并启动Flink管理节点对应的Container</li>
+<li>客户端将用户提交的应用程序代码经过本地运行生成JobGraph结构，然后通过ClusterClient将JobGraph提交到集群运行时中运行</li>
+<li>此时集群运行时中的Dispatcher服务会接收到ClusterClient提交的JobGraph对象，然后根据JobGraph启动JobManager RPC服务。JobManager是每个提交的作业都会单独创建的作业管理服务，生命周期和整个作业的生命周期一致</li>
+<li>当JobManager RPC服务启动后，下一步就是根据JobGraph配置的计算资源向ResourceManager服务申请运行Task实例需要的Slot计算资源</li>
+<li>此时ResourceManager接收到JobManager提交的资源申请后，先判断集群中是否有足够的Slot资源满足作业的资源申请，如果有则直接向JobManager分配计算资源，如果没有则动态地向外部集群资源管理器申请启动额外的Container以提供Slot计算资源</li>
+<li>如果在集群资源管理器（例如Hadoop Yarn）中有足够的Container计算资源，就会根据ResourceManager的命令启动指定的TaskManager实例</li>
+<li>TaskManager启动后会主动向ResourceManager注册Slot信息，即其自身能提供的全部Slot资源。ReResourceManager接收到TaskManager中的Slot计算资源时，就会立即向该TaskManager发送Slot资源申请，为JobManager服务分配提交任务所需的Slot计算资源</li>
+<li>当TaskManager接收到ResourceManager的资源分配请求后，TaskManager会对符合申请条件的SlotRequest进行处理，然后立即向JobManager提供Slot资源</li>
+<li>此时JobManager会接收到来自TaskManager的offerslots消息，接下来会向Slot所在的TaskManager申请提交Task实例。TaskManager接收到来自JobManager的Task启动申请后，会在已经分配的Slot卡槽中启动Task线程</li>
+<li>TaskManager中启动的Task线程会周期性地向JobManager汇报任务运行状态，直到完成整个任务运行</li>
+</ul>
+<p>客户端提交</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">15
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">16
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">17
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">18
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">19
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">20
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">21
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">22
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">23
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">24
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">25
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">26
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">27
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">28
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">29
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">30
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-java" data-lang="java"><span style="display:flex;"><span>    <span style="color:#8be9fd;font-style:italic">public</span> JobExecutionResult <span style="color:#50fa7b">execute</span><span style="color:#ff79c6">(</span>StreamGraph streamGraph<span style="color:#ff79c6">)</span> <span style="color:#8be9fd;font-style:italic">throws</span> Exception <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>        JobClient jobClient <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">this</span><span style="color:#ff79c6">.</span><span style="color:#50fa7b">executeAsync</span><span style="color:#ff79c6">(</span>streamGraph<span style="color:#ff79c6">);</span>
+</span></span><span style="display:flex;"><span>		JobExecutionResult jobExecutionResult<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span>		jobExecutionResult <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">new</span> DetachedJobExecutionResult<span style="color:#ff79c6">(</span>jobClient<span style="color:#ff79c6">.</span><span style="color:#50fa7b">getJobID</span><span style="color:#ff79c6">());</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">this</span><span style="color:#ff79c6">.</span><span style="color:#50fa7b">jobListeners</span><span style="color:#ff79c6">.</span><span style="color:#50fa7b">forEach</span><span style="color:#ff79c6">((</span>jobListener<span style="color:#ff79c6">)</span> <span style="color:#ff79c6">-&gt;</span> jobListener<span style="color:#ff79c6">.</span><span style="color:#50fa7b">onJobExecuted</span><span style="color:#ff79c6">(</span>jobExecutionResult<span style="color:#ff79c6">,</span> <span style="color:#ff79c6">(</span>Throwable<span style="color:#ff79c6">)</span><span style="color:#ff79c6">null</span><span style="color:#ff79c6">));</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">return</span> jobExecutionResult<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">}</span>
+</span></span><span style="display:flex;"><span>	
+</span></span><span style="display:flex;"><span>	<span style="color:#8be9fd;font-style:italic">public</span> JobClient <span style="color:#50fa7b">executeAsync</span><span style="color:#ff79c6">(</span>StreamGraph streamGraph<span style="color:#ff79c6">)</span> <span style="color:#8be9fd;font-style:italic">throws</span> Exception <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>        PipelineExecutor executor <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">this</span><span style="color:#ff79c6">.</span><span style="color:#50fa7b">getPipelineExecutor</span><span style="color:#ff79c6">();</span>
+</span></span><span style="display:flex;"><span>        CompletableFuture<span style="color:#ff79c6">&lt;</span>JobClient<span style="color:#ff79c6">&gt;</span> jobClientFuture <span style="color:#ff79c6">=</span> executor<span style="color:#ff79c6">.</span><span style="color:#50fa7b">execute</span><span style="color:#ff79c6">(</span>streamGraph<span style="color:#ff79c6">,</span> <span style="color:#ff79c6">this</span><span style="color:#ff79c6">.</span><span style="color:#50fa7b">configuration</span><span style="color:#ff79c6">,</span> 
+</span></span><span style="display:flex;"><span>		<span style="color:#ff79c6">this</span><span style="color:#ff79c6">.</span><span style="color:#50fa7b">userClassloader</span><span style="color:#ff79c6">);</span>
+</span></span><span style="display:flex;"><span>		JobClient jobClient <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">(</span>JobClient<span style="color:#ff79c6">)</span>jobClientFuture<span style="color:#ff79c6">.</span><span style="color:#50fa7b">get</span><span style="color:#ff79c6">();</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">this</span><span style="color:#ff79c6">.</span><span style="color:#50fa7b">jobListeners</span><span style="color:#ff79c6">.</span><span style="color:#50fa7b">forEach</span><span style="color:#ff79c6">((</span>jobListener<span style="color:#ff79c6">)</span> <span style="color:#ff79c6">-&gt;</span> jobListener<span style="color:#ff79c6">.</span><span style="color:#50fa7b">onJobSubmitted</span><span style="color:#ff79c6">(</span>jobClient<span style="color:#ff79c6">,</span> <span style="color:#ff79c6">(</span>Throwable<span style="color:#ff79c6">)</span><span style="color:#ff79c6">null</span><span style="color:#ff79c6">));</span>
+</span></span><span style="display:flex;"><span>        collectIterators<span style="color:#ff79c6">.</span><span style="color:#50fa7b">forEach</span><span style="color:#ff79c6">((</span>iterator<span style="color:#ff79c6">)</span> <span style="color:#ff79c6">-&gt;</span> iterator<span style="color:#ff79c6">.</span><span style="color:#50fa7b">setJobClient</span><span style="color:#ff79c6">(</span>jobClient<span style="color:#ff79c6">));</span>
+</span></span><span style="display:flex;"><span>        collectIterators<span style="color:#ff79c6">.</span><span style="color:#50fa7b">clear</span><span style="color:#ff79c6">();</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">return</span> jobClient<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">}</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>	<span style="color:#8be9fd;font-style:italic">public</span> JobExecutionResult <span style="color:#50fa7b">execute</span><span style="color:#ff79c6">(</span>StreamGraph streamGraph<span style="color:#ff79c6">)</span> <span style="color:#8be9fd;font-style:italic">throws</span> Exception <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>        JobClient jobClient <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">this</span><span style="color:#ff79c6">.</span><span style="color:#50fa7b">executeAsync</span><span style="color:#ff79c6">(</span>streamGraph<span style="color:#ff79c6">);</span>
+</span></span><span style="display:flex;"><span>		JobExecutionResult jobExecutionResult<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span>		<span style="color:#ff79c6">if</span> <span style="color:#ff79c6">(</span><span style="color:#ff79c6">this</span><span style="color:#ff79c6">.</span><span style="color:#50fa7b">configuration</span><span style="color:#ff79c6">.</span><span style="color:#50fa7b">getBoolean</span><span style="color:#ff79c6">(</span>DeploymentOptions<span style="color:#ff79c6">.</span><span style="color:#50fa7b">ATTACHED</span><span style="color:#ff79c6">))</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>			jobExecutionResult <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">(</span>JobExecutionResult<span style="color:#ff79c6">)</span>jobClient<span style="color:#ff79c6">.</span><span style="color:#50fa7b">getJobExecutionResult</span><span style="color:#ff79c6">().</span><span style="color:#50fa7b">get</span><span style="color:#ff79c6">();</span>
+</span></span><span style="display:flex;"><span>		<span style="color:#ff79c6">}</span> <span style="color:#ff79c6">else</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>			jobExecutionResult <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">new</span> DetachedJobExecutionResult<span style="color:#ff79c6">(</span>jobClient<span style="color:#ff79c6">.</span><span style="color:#50fa7b">getJobID</span><span style="color:#ff79c6">());</span>
+</span></span><span style="display:flex;"><span>		<span style="color:#ff79c6">}</span>
+</span></span><span style="display:flex;"><span>		<span style="color:#ff79c6">this</span><span style="color:#ff79c6">.</span><span style="color:#50fa7b">jobListeners</span><span style="color:#ff79c6">.</span><span style="color:#50fa7b">forEach</span><span style="color:#ff79c6">((</span>jobListener<span style="color:#ff79c6">)</span> <span style="color:#ff79c6">-&gt;</span> jobListener<span style="color:#ff79c6">.</span><span style="color:#50fa7b">onJobExecuted</span><span style="color:#ff79c6">(</span>jobExecutionResult<span style="color:#ff79c6">,</span> <span style="color:#ff79c6">(</span>Throwable<span style="color:#ff79c6">)</span><span style="color:#ff79c6">null</span><span style="color:#ff79c6">));</span>
+</span></span><span style="display:flex;"><span>		<span style="color:#ff79c6">return</span> jobExecutionResult<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">}</span>	
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>Key Responsibilities of JobClient:</p>
+<ol>
+<li>Submitting Jobs: The JobClient allows users to submit jobs to a Flink cluster. It interacts with the Dispatcher to send a job request (along with job configurations) to the cluster. The Dispatcher then forwards the job to the JobMaster for execution.</li>
+<li>Monitoring Jobs: Once a job is submitted, the JobClient can be used to track the status and progress of the job. It can provide information such as:</li>
+</ol>
+<ul>
+<li>Job state (running, finished, failed, etc.)</li>
+<li>Progress of the tasks</li>
+<li>Job result, if applicable</li>
+</ul>
+<ol start="4">
+<li>Handling Job Completion: The JobClient can handle the completion of a job, whether the job has finished successfully, failed, or was canceled. It provides mechanisms to retrieve the final job result and perform any necessary cleanup.</li>
+<li>Job Cancellation: If required, the JobClient can also cancel a running job, which informs the JobMaster to stop the job and release resources.</li>
+<li>Accessing Job Results: After a job completes, the JobClient can be used to retrieve the results, especially when using operations like collect(), or to query metrics and diagnostics about the job.</li>
+</ol>
+<h2 id="集群启动">集群启动</h2>
+<p>ClusterEntrypoint  是入口点</p>
+<ul>
+<li>可以创建出 pre 集群，就是每个提交一个集群</li>
+<li>以及 session 集群</li>
+<li><strong>注意</strong>，新版本 pre 集群入口main 类是：ApplicationClusterEntryPoint</li>
+<li>session 集群入口 main 类是：StandaloneSessionClusterEntrypoint</li>
+<li>如果是单机版的入口是：MiniCluster
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/02/23/7W2iHj.png">
+            <img class="mx-auto" alt="34" src="https://v1.ax1x.com/2025/02/23/7W2iHj.png" />
+        </a>
+    </li>
+</ul>
+<p>StandaloneSession集群启动流程</p>
+<ul>
+<li>还会创建其他一些组件</li>
+<li>create RPC service</li>
+<li>JMX service</li>
+<li>blob server</li>
+<li>delegationTokenManager</li>
+<li>metricRegistry</li>
+<li>haServices</li>
+<li>heartbeatServices
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/02/23/7W2s15.png">
+            <img class="mx-auto" alt="35" src="https://v1.ax1x.com/2025/02/23/7W2s15.png" />
+        </a>
+    </li>
+</ul>
+<p>DispatcherResourceManagerComponent的 create函数包含了一堆必要组件</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-java" data-lang="java"><span style="display:flex;"><span>    <span style="color:#8be9fd;font-style:italic">public</span> DispatcherResourceManagerComponent <span style="color:#50fa7b">create</span><span style="color:#ff79c6">(</span>
+</span></span><span style="display:flex;"><span>            Configuration configuration<span style="color:#ff79c6">,</span>
+</span></span><span style="display:flex;"><span>            ResourceID resourceId<span style="color:#ff79c6">,</span>
+</span></span><span style="display:flex;"><span>            Executor ioExecutor<span style="color:#ff79c6">,</span>
+</span></span><span style="display:flex;"><span>            RpcService rpcService<span style="color:#ff79c6">,</span>
+</span></span><span style="display:flex;"><span>            HighAvailabilityServices highAvailabilityServices<span style="color:#ff79c6">,</span>
+</span></span><span style="display:flex;"><span>            BlobServer blobServer<span style="color:#ff79c6">,</span>
+</span></span><span style="display:flex;"><span>            HeartbeatServices heartbeatServices<span style="color:#ff79c6">,</span>
+</span></span><span style="display:flex;"><span>            DelegationTokenManager delegationTokenManager<span style="color:#ff79c6">,</span>
+</span></span><span style="display:flex;"><span>            MetricRegistry metricRegistry<span style="color:#ff79c6">,</span>
+</span></span><span style="display:flex;"><span>            ExecutionGraphInfoStore executionGraphInfoStore<span style="color:#ff79c6">,</span>
+</span></span><span style="display:flex;"><span>            MetricQueryServiceRetriever metricQueryServiceRetriever<span style="color:#ff79c6">,</span>
+</span></span><span style="display:flex;"><span>            FatalErrorHandler fatalErrorHandler<span style="color:#ff79c6">)</span>
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>DispatcherResourceManagerComponentFactory 类图<br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/02/23/7W226m.png">
+            <img class="mx-auto" alt="36" src="https://v1.ax1x.com/2025/02/23/7W226m.png" />
+        </a>
+    </p>
+<h2 id="几个重要组件">几个重要组件</h2>
+<h3 id="webmonitorendpoint">WebMonitorEndpoint</h3>
+<p>创建 DispatcherRunner</p>
+<ul>
+<li>创建HistoryServerArchivist，用于在HistoryServer上对指定的AccessExecutionGraph进行历史归档</li>
+<li>创建PartialDispatcherServices，用于提供Dispatcher组件使用的一部分服务，包括高可用、blobServer等</li>
+<li>调用dispatcherRunnerFactory.createDispatcherRunner()方法创建DispatcherRunner对象</li>
+<li>创建参数，包括前面创建的所有参数信息，而DispatcherRunner会在后面被leaderElectionService服务启动和执行</li>
+</ul>
+<p>WebMonitorEndpoint</p>
+<ul>
+<li>基于Netty通信框架实现了Restful的服务后端，提供Restful接口支持Flink Web页面在内的所有Rest请求</li>
+</ul>
+<p>
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/02/23/7W2FQ4.png">
+            <img class="mx-auto" alt="37" src="https://v1.ax1x.com/2025/02/23/7W2FQ4.png" />
+        </a>
+    </p>
+<p>DispatcherRestEndpoint</p>
+<ul>
+<li>dispatcherGatewayRetriever：DispatcherGateway服务地址获取器，用于获取当前活跃的dispatcherGateway地址。基于dispatcherGateway可以实现与Dispatcher的RPC通信，最终提交的JobGraph通过dispatcherGateway发送给Dispatcher组件</li>
+<li>resourceManagerGatewayRetriever：ResourceManagerGateway服务地址获取器，用于获取当前活跃的ResourceManagerGateway地址，通过Re</li>
+<li>ResourceManagerGateway实现ResourceManager组件之间的RPC通信，例如在TaskManagersHandler中通过调用ResourceManagerGateway获取集群中的TaskManagers监控信息</li>
+<li>transientBlobService：临时二进制对象数据存储服务，BlobServer接收数据后，会及时清理Cache中的对象数据</li>
+<li>executor：用于处理WebMonitorEndpoint请求的线程池服务</li>
+<li>metricFetcher：用于拉取JobManager和TaskManager上的Metric监控指标</li>
+<li>leaderElectionService：用于在高可用集群中启动和选择服务的Leader节点，如通过leaderElectionService启动WebMonitorEndpoint RPC服务，然后将Leader节点注册至ZooKeeper，以此实现WebMonitorEndpoint服务的高可用</li>
+<li>fatalErrorHandler：异常处理器，当WebMonitorEndpoint出现异常时调用fatalError-Handler的中处理接口</li>
+</ul>
+<h3 id="dispatcher">Dispatcher</h3>
+<p>Dispatcher主要涉及模块示意图</p>
+<ul>
+<li>Dispatcher：负责对集群中的作业进行接收和分发处理操作，客户端可以通过与Dispatcher建立RPC连接，将作业过ClusterClient提交到集群Dispatcher服务中。Dispatcher通过JobGraph对象启动JobManager服务</li>
+<li>DispatcherRunner：负责启动和管理Dispatcher组件，并支持对Dispatcher组件的Leader选举。当Dispatcher集群组件出现异常并停止时，会通过DispatcherRunner重新选择和启动新的Dispatcher服务，从而保证Dispatcher组件的高可用</li>
+<li>DispatcherLeaderProcess：负责管理Dispatcher生命周期，同时提供了对JobGraph的任务恢复管理功能。</li>
+<li>DispatcherGatewayService：主要基于Dispatcher实现的GatewayService，用于获取DispatcherGateway
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/02/23/7W2dI9.png">
+            <img class="mx-auto" alt="38" src="https://v1.ax1x.com/2025/02/23/7W2dI9.png" />
+        </a>
+    </li>
+</ul>
+<p>DispatcherRunner 类图
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/02/23/7W2oLY.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2025/02/23/7W2oLY.png" />
+        </a>
+    </p>
+<p>DispatcherLeaderProcess的创建关系</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">7
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-shell" data-lang="shell"><span style="display:flex;"><span>SessionDispatcherLeaderProcessFactoryFactory 
+</span></span><span style="display:flex;"><span>                                           -- create --&gt; SessionDispatcherLeaderProcessFactory
+</span></span><span style="display:flex;"><span>										   -- create --&gt; SessionDispatcherLeaderProcess
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>vobDispatcherLeaderProcessFactoryFactory
+</span></span><span style="display:flex;"><span>                                           -- create --&gt; JobDispatcherLeaderProcessFactony
+</span></span><span style="display:flex;"><span>										   -- create --&gt; JobDispatcherLeaderProcess
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>DispatcherLeaderProcess 类图</p>
+<ul>
+<li>SessionDispatcherLeaderProcess实现类中主要实现了与Session集群相关的Dispatcher处理逻辑，主要用于对JobGraphStore中存储的JobGraph进行恢复</li>
+<li>在非高可用集群下，JobGraphStore的实现类为StandaloneJobGraphStore，也就是不对JobGraph进行存储和管理</li>
+<li>在高可用集群中，JobGraphStore基于ZooKeeper存储集群中的JobGraph</li>
+<li>JobDispatcherLeaderProcess实现类中包含了对单个JobGraph进行创建和提交的方法
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/02/23/7W69xH.png">
+            <img class="mx-auto" alt="40" src="https://v1.ax1x.com/2025/02/23/7W69xH.png" />
+        </a>
+    </li>
+</ul>
+<h3 id="resourcemanager">ResourceManager</h3>
+<p>ResourceManager 实现类</p>
+<ul>
+<li>实现类：ActiveResourceManager</li>
+<li>实现类：StandaloneResourceManager</li>
+<li>继承自 RpcEndpoint</li>
+<li>本质上是一个 RPC 服务</li>
+</ul>
+<p>其他一些要创建的组件</p>
+<ul>
+<li>RpcService</li>
+<li>HeartbeatServices</li>
+<li>HighAvailabilityServices</li>
+<li>SlotManager</li>
+<li>JobLeaderIdService</li>
+</ul>
+<p>SlotMatchingStrategy</p>
+<ul>
+<li>LeastUtilizationSlotMatchingStrategy，即按照利用率最低原则匹配Slot资源</li>
+<li>AnyMatchingSlotMatchingStrategy，即直接返回第一个匹配的Slot资源策略</li>
+</ul>
+<p>ResourceManager 类图</p>
+<ul>
+<li>ActiveResourceManager 表示动态资源申请的</li>
+<li>StandaloneResourceManager 是standalone 模式的</li>
+<li>通过实现 RpcEndpoint 可以作为 RPC 对外提供服务</li>
+<li>也实现了 高可用
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/02/23/7W6p1s.png">
+            <img class="mx-auto" alt="43" src="https://v1.ax1x.com/2025/02/23/7W6p1s.png" />
+        </a>
+    </li>
+</ul>
+<p>ResourceManager 内部的其他一些信息</p>
+<ul>
+<li>jobManagerRegistrations：专门存储JobManager注册信息</li>
+<li>jobLeaderIdService</li>
+<li>taskExecutors：注册在ResourceManager的TaskExecutor列表中，其中Key为TaskExecutor对应的ResourceID，Value为WorkRegistration，即TaskExecutor向ResourceManager注册过程中所提供的信息</li>
+<li>highAvailabilityServices</li>
+<li>heartbeatServices</li>
+<li>fatalErrorHandler：系统异常错误处理</li>
+<li>slotManager：ResourceManager的内部组件，用于管理集群的可用Slot资源，同时接收并处理TaskExecutor的SlotReport</li>
+<li>taskManagerHeartbeatManager</li>
+<li>jobManagerHeartbeatManager</li>
+<li>clearStateFuture：用于停止ResourceManager后进行数据异步清理</li>
+</ul>
+<p>ResourceManager调用关系图
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/02/23/7W6L6a.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2025/02/23/7W6L6a.png" />
+        </a>
+    </p>
+<p>Slot计算资源管理</p>
+<ul>
+<li>包含了SlotID、ResourceProfile以及TaskExecutorConnection等信息</li>
+<li>如果Slot被分配使用，在TaskManagerSlot中还会存储AllocationID和JobID等分配信息</li>
+<li>SlotManager还包含了pendingSlotRequests和fulfilledSlotRequests两个键值对集合</li>
+<li>pendingSlotRequests存储了所有处于pending和unfulfilled状态的Slot请求</li>
+<li>fulfilledSlotRequests存储了所有已经分配完成的Slot请求
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/02/23/7W63N7.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2025/02/23/7W63N7.png" />
+        </a>
+    </li>
+</ul>
+<p>SlotManager接口的主要函数</p>
+<ul>
+<li>start</li>
+<li>processResourceRequirements</li>
+<li>registerTaskManager</li>
+<li>unregisterTaskManager</li>
+<li>reportSlotStatus</li>
+<li>freeSlot</li>
+<li>setFailUnfulfillableRequest</li>
+<li>triggerResourceRequirementsCheck</li>
+</ul>
+<h3 id="taskmanager">TaskManager</h3>
+<p>TaskManager 的启动过程
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/02/23/7W6mKq.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2025/02/23/7W6mKq.png" />
+        </a>
+    </p>
+<p>TaskExecutor</p>
+<ul>
+<li>调用resourceManagerLeaderRetriever.start()方法，用于创建ResourceManager之间的RPC连接，此时会将TaskManager的资源信息汇报给ResourceManager</li>
+<li>调用taskSlotTable.start()方法启动TaskSlotTable，用于管理当前TaskManager中的Slot计算资源</li>
+<li>启动JobLeaderService服务，用于和JobManager进行RPC通信，监听和获取JobManager当前活跃的Leader节点</li>
+<li>创建FileCache对象，用于存储Task在执行过程中从PermanentBlobService拉取的文件，并将文件展开在/tmp_/路径中，如果Task处于非注册状态超过5秒，将清理临时文件</li>
+</ul>
+<h3 id="高可用">高可用</h3>
+<p>HighAvailabilityServices 类图
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/02/23/7W6lvI.png">
+            <img class="mx-auto" alt="47" src="https://v1.ax1x.com/2025/02/23/7W6lvI.png" />
+        </a>
+    </p>
+<p>HighAvailabilityMode 主要有</p>
+<ul>
+<li>NONE，创建 EmbeddedHaServices</li>
+<li>ZOOKEEPER，创建 ZooKeeperMultipleComponentLeaderElectionHaServices 实例</li>
+<li>FACTORY_CLASS，自定义高可用服务</li>
+<li>KUBERNETES，作为自定义类型，创建：KubernetesHaServicesFactory</li>
+</ul>
+<p>HighAvailabilityServices 和客户端的关系
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/02/23/7W67IV.png">
+            <img class="mx-auto" alt="48" src="https://v1.ax1x.com/2025/02/23/7W67IV.png" />
+        </a>
+    </p>
+<p>相关组件需要使用的高可用</p>
+<ul>
+<li>ResourceManager</li>
+<li>Dispatcher</li>
+<li>JobManager</li>
+<li>WebMonitorEndpoint</li>
+<li>CheckpointRecoveryFactory</li>
+<li>JobGraphStore</li>
+<li>RunningJobsRegistry</li>
+<li>BlobStore</li>
+</ul>
+<p>ZooKeeperHaServices 类图
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/02/23/7W6Q0L.png">
+            <img class="mx-auto" alt="49" src="https://v1.ax1x.com/2025/02/23/7W6Q0L.png" />
+        </a>
+    </p>
+<p>高可用的 ZK 路径</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">15
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">16
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-shell" data-lang="shell"><span style="display:flex;"><span>/flink
+</span></span><span style="display:flex;"><span>*      +/cluster_id_1/resource_manager_lock
+</span></span><span style="display:flex;"><span>*      |            |
+</span></span><span style="display:flex;"><span>*      |            +/job-id-1/job_manager_lock
+</span></span><span style="display:flex;"><span>*      |            |         /checkpoints/latest
+</span></span><span style="display:flex;"><span>*      |            |                     /latest-1
+</span></span><span style="display:flex;"><span>*      |            |                     /latest-2
+</span></span><span style="display:flex;"><span>*      |            |
+</span></span><span style="display:flex;"><span>*      |            +/job-id-2/job_manager_lock
+</span></span><span style="display:flex;"><span>*      |
+</span></span><span style="display:flex;"><span>*      +/cluster_id_2/resource_manager_lock
+</span></span><span style="display:flex;"><span>*                   |
+</span></span><span style="display:flex;"><span>*                   +/job-id-1/job_manager_lock
+</span></span><span style="display:flex;"><span>*                            |/checkpoints/latest
+</span></span><span style="display:flex;"><span>*                            |            /latest-1
+</span></span><span style="display:flex;"><span>*                            |/persisted_job_graph
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>LeaderContender 类图
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/02/23/7W6NxJ.png">
+            <img class="mx-auto" alt="50" src="https://v1.ax1x.com/2025/02/23/7W6NxJ.png" />
+        </a>
+    </p>
+<p>ZooKeeperLeaderRetrievalService 和 ZooKeeperLeaderElectionService</p>
+<ul>
+<li>启动方式一致</li>
+<li>LeaderRetrievalService
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/02/23/7W6q4G.png">
+            <img class="mx-auto" alt="51" src="https://v1.ax1x.com/2025/02/23/7W6q4G.png" />
+        </a>
+    </li>
+</ul>
+<p>JobGraphStore</p>
+<ul>
+<li>session 模式下， 会通过 HighAvailabilityServices 创建 JobGraphStore</li>
+<li>可以从 JobGraphStore 中恢复之前提交的 JobGraph
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/02/23/7W6wkB.png">
+            <img class="mx-auto" alt="52" src="https://v1.ax1x.com/2025/02/23/7W6wkB.png" />
+        </a>
+    </li>
+</ul>
+<h2 id="整体架构">整体架构</h2>
+<p>其中高可用是依赖 Zookeeper 实现</p>
+<p>Dispatcher 是一个抽象类</p>
+<ul>
+<li>MiniDispatcher</li>
+<li>StandaloneDispatcher</li>
+</ul>
+<p>Dispatcher 的主要字段</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">15
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">16
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">17
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">18
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">19
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">20
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">21
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">22
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">23
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">24
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">25
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">26
+</span><span style="white-space:pre;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">27
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;"><code class="language-java" data-lang="java"><span style="display:flex;"><span>    <span style="color:#8be9fd;font-style:italic">private</span> <span style="color:#8be9fd;font-style:italic">final</span> Configuration configuration<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#8be9fd;font-style:italic">private</span> <span style="color:#8be9fd;font-style:italic">final</span> JobGraphWriter jobGraphWriter<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#8be9fd;font-style:italic">private</span> <span style="color:#8be9fd;font-style:italic">final</span> JobResultStore jobResultStore<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#8be9fd;font-style:italic">private</span> <span style="color:#8be9fd;font-style:italic">final</span> HighAvailabilityServices highAvailabilityServices<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#8be9fd;font-style:italic">private</span> <span style="color:#8be9fd;font-style:italic">final</span> GatewayRetriever<span style="color:#ff79c6">&lt;</span>ResourceManagerGateway<span style="color:#ff79c6">&gt;</span> resourceManagerGatewayRetriever<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#8be9fd;font-style:italic">private</span> <span style="color:#8be9fd;font-style:italic">final</span> JobManagerSharedServices jobManagerSharedServices<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#8be9fd;font-style:italic">private</span> <span style="color:#8be9fd;font-style:italic">final</span> HeartbeatServices heartbeatServices<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#8be9fd;font-style:italic">private</span> <span style="color:#8be9fd;font-style:italic">final</span> BlobServer blobServer<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#8be9fd;font-style:italic">private</span> <span style="color:#8be9fd;font-style:italic">final</span> FatalErrorHandler fatalErrorHandler<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#8be9fd;font-style:italic">private</span> <span style="color:#8be9fd;font-style:italic">final</span> OnMainThreadJobManagerRunnerRegistry jobManagerRunnerRegistry<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#8be9fd;font-style:italic">private</span> <span style="color:#8be9fd;font-style:italic">final</span> Collection<span style="color:#ff79c6">&lt;</span>JobGraph<span style="color:#ff79c6">&gt;</span> recoveredJobs<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#8be9fd;font-style:italic">private</span> <span style="color:#8be9fd;font-style:italic">final</span> Collection<span style="color:#ff79c6">&lt;</span>JobResult<span style="color:#ff79c6">&gt;</span> recoveredDirtyJobs<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#8be9fd;font-style:italic">private</span> <span style="color:#8be9fd;font-style:italic">final</span> DispatcherBootstrapFactory dispatcherBootstrapFactory<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#8be9fd;font-style:italic">private</span> <span style="color:#8be9fd;font-style:italic">final</span> ExecutionGraphInfoStore executionGraphInfoStore<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#8be9fd;font-style:italic">private</span> <span style="color:#8be9fd;font-style:italic">final</span> JobManagerRunnerFactory jobManagerRunnerFactory<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#8be9fd;font-style:italic">private</span> <span style="color:#8be9fd;font-style:italic">final</span> CleanupRunnerFactory cleanupRunnerFactory<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#8be9fd;font-style:italic">private</span> <span style="color:#8be9fd;font-style:italic">final</span> JobManagerMetricGroup jobManagerMetricGroup<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#8be9fd;font-style:italic">private</span> <span style="color:#8be9fd;font-style:italic">final</span> HistoryServerArchivist historyServerArchivist<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#8be9fd;font-style:italic">private</span> <span style="color:#8be9fd;font-style:italic">final</span> Executor ioExecutor<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span>    @Nullable
+</span></span><span style="display:flex;"><span>    <span style="color:#8be9fd;font-style:italic">private</span> <span style="color:#8be9fd;font-style:italic">final</span> String metricServiceQueryAddress<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#8be9fd;font-style:italic">private</span> <span style="color:#8be9fd;font-style:italic">final</span> Map<span style="color:#ff79c6">&lt;</span>JobID<span style="color:#ff79c6">,</span> CompletableFuture<span style="color:#ff79c6">&lt;</span>Void<span style="color:#ff79c6">&gt;&gt;</span> jobManagerRunnerTerminationFutures<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#8be9fd;font-style:italic">protected</span> <span style="color:#8be9fd;font-style:italic">final</span> CompletableFuture<span style="color:#ff79c6">&lt;</span>ApplicationStatus<span style="color:#ff79c6">&gt;</span> shutDownFuture<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#8be9fd;font-style:italic">private</span> DispatcherBootstrap dispatcherBootstrap<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#8be9fd;font-style:italic">private</span> <span style="color:#8be9fd;font-style:italic">final</span> DispatcherCachedOperationsHandler dispatcherCachedOperationsHandler<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#8be9fd;font-style:italic">private</span> <span style="color:#8be9fd;font-style:italic">final</span> ResourceCleaner localResourceCleaner<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#8be9fd;font-style:italic">private</span> <span style="color:#8be9fd;font-style:italic">final</span> ResourceCleaner globalResourceCleaner<span style="color:#ff79c6">;</span>
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>ResourceManager相关类图</p>
+<ul>
+<li>整个过程与 Dispatcher 构造、选举、启动的过程类似<br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/02/20/7WfdnJ.png">
+            <img class="mx-auto" alt="16" src="https://v1.ax1x.com/2025/02/20/7WfdnJ.png" />
+        </a>
+    </li>
+</ul>
+<p>几个角色的分工</p>
+<ul>
+<li>client 创建 JobGraph并提交给 Dispatcher</li>
+<li>Dispatcher 在获取 JobGraph 后创建 JobMaster</li>
+<li>ResourceManager 主要负责管理资源</li>
+<li>JobMaster 负责任务调度 和 checkpoint 等</li>
+<li>TaskExecutor 负责任务的执行、任务的数据传输</li>
+<li>BlobServer 负责处理 jar、等二进制文件分发</li>
+</ul>
+<p>JobManager</p>
+<ul>
+<li>主要用于协调分布式任务的执行，包括调度任务、协调容错机制等</li>
+<li>又包含了 JobMaster、Dispatcher、ResourceManager</li>
+<li>新版本的还有 BlobServer</li>
+</ul>
+<p>TaskManager</p>
+<ul>
+<li>主要用于负责任务的具体执行和任务间数据的传输
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/02/15/7WnAyh.png">
+            <img class="mx-auto" alt="12" src="https://v1.ax1x.com/2025/02/15/7WnAyh.png" />
+        </a>
+    </li>
+</ul>
+<p>任务提交过程<br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/02/15/7WnVU9.png">
+            <img class="mx-auto" alt="13" src="https://v1.ax1x.com/2025/02/15/7WnVU9.png" />
+        </a>
+    </p>
+<p>BolbServer<br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/02/15/7WnWsY.png">
+            <img class="mx-auto" alt="14" src="https://v1.ax1x.com/2025/02/15/7WnWsY.png" />
+        </a>
+    </p>
+<h2 id="参考">参考</h2>
+<ul>
+<li><a href="https://nightlies.apache.org/flink/flink-docs-release-1.20/">1.20 官方文档</a></li>
+<li><a href="https://cloud.tencent.com/developer/column/93187?tag=11033">Lansonli技术博客</a></li>
+<li><a href="https://juejin.cn/post/7111510381956169764">深入浅出理解Flink运行时架构</a></li>
+<li><a href="https://0x90e.github.io/flink-execution-graph/">Flink Execution Graph</a></li>
+<li><a href="https://blog.csdn.net/emttxdy/category_11787335.html">Flink源码系列</a></li>
+</ul>
+
+			<script type="text/javascript"
+        async
+        src="https://cdn.bootcss.com/mathjax/2.7.3/MathJax.js?config=TeX-AMS-MML_HTMLorMML">
+MathJax.Hub.Config({
+  tex2jax: {
+    inlineMath: [['$','$'], ['\\(','\\)']],
+    displayMath: [['$$','$$'], ['\[\[','\]\]']],
+    processEscapes: true,
+    processEnvironments: true,
+    skipTags: ['script', 'noscript', 'style', 'textarea', 'pre'],
+    TeX: { equationNumbers: { autoNumber: "AMS" },
+         extensions: ["AMSmath.js", "AMSsymbols.js"] }
+  }
+});
+
+MathJax.Hub.Queue(function() {
+    
+    
+    
+    var all = MathJax.Hub.getAllJax(), i;
+    for(i = 0; i < all.length; i += 1) {
+        all[i].SourceElement().parentNode.className += ' has-jax';
+    }
+});
+</script>
+
+<style>
+code.has-jax {
+    font: inherit;
+    font-size: 100%;
+    background: inherit;
+    border: inherit;
+    color: #515151;
+}
+</style>
+        </div>
+
+        
+
+
+        
+
+<div class="post-archive">
+    <h2>相关文章</h2>
+    <ul class="listing">
+        
+        <li><a href="/post/2025/02/flink_inner/">Flink执行图的生成</a></li>
+        
+    </ul>
+</div>
+
+
+        <div class="post-meta meta-tags">
+            
+            <ul class="clearfix">
+                
+                <li><a href='/tags/flink'>Flink</a></li>
+                
+            </ul>
+            
+        </div>
+    </article>
+    
+    
+
+    
+    
+    <div class="post bg-white">
+      <script src="https://utteranc.es/client.js"
+            repo= "himichael/hugoblogtalks"
+            issue-term="pathname"
+            theme="github-light"
+            crossorigin="anonymous"
+            async>
+      </script>
+    </div>
+    
+</div>
+
+
+                </div>
+
+                <div id="secondary">
+    <section class="widget">
+        <form id="search" action='https://code0xff.org/search/' method="get" accept-charset="utf-8" target="_blank" _lpchecked="1">
+      
+      <input type="text" name="q" maxlength="20" placeholder="Search">
+      <input type="hidden" name="sitesearch" value="https://code0xff.org/">
+      <button type="submit" class="submit icon-search"></button>
+</form>
+    </section>
+    
+    <section class="widget">
+        <h3 class="widget-title">最近文章</h3>
+<ul class="widget-list">
+    
+    <li>
+        <a href="https://code0xff.org/post/2026/02/yunnan_west/" title="云南滇西大环线">云南滇西大环线</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2026/01/2015_2025/" title="2015年 -- 2025年">2015年 -- 2025年</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2026/01/longhorn/" title="longhorn">longhorn</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2025/12/ai_infrastructure/" title="关于AI 的生态">关于AI 的生态</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2025/11/ai_bubble/" title="关于AI泡沫">关于AI泡沫</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2025/10/china_beihai/" title="南边的北海">南边的北海</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2025/09/bpf_http/" title="eBPF的 http跟踪">eBPF的 http跟踪</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2025/09/spark_flink/" title="Spark和Flink的对比总结（包含Operator）">Spark和Flink的对比总结（包含Operator）</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2025/08/juicefs/" title="JuiceFS">JuiceFS</a>
+    </li>
+    
+    <li>
+        <a href="https://code0xff.org/post/2025/08/bpftrace_12_lessons/" title="bpftrace 12个小命令">bpftrace 12个小命令</a>
+    </li>
+    
+</ul>
+    </section>
+
+    
+
+    <section class="widget">
+        <h3 class="widget-title"><a href='/categories/'>分类</a></h3>
+<ul class="widget-list">
+    
+    <li><a href="https://code0xff.org/categories/%E5%88%86%E5%B8%83%E5%BC%8F/">分布式 (8)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E5%8E%9F%E7%90%86%E5%88%86%E6%9E%90/">原理分析 (33)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E5%95%86%E4%B8%9A/">商业 (6)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E5%A4%A7%E6%95%B0%E6%8D%AE/">大数据 (59)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%95%B0%E6%8D%AE%E5%BA%93/">数据库 (41)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%96%87%E5%AD%A6%E5%92%8C%E8%89%BA%E6%9C%AF/">文学和艺术 (3)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%97%85%E8%A1%8C/">旅行 (15)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E6%9E%B6%E6%9E%84/">架构 (13)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E7%AE%97%E6%B3%95%E5%92%8Cai/">算法和AI (11)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E7%B3%BB%E7%BB%9F/">系统 (16)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E7%BC%96%E7%A8%8B%E8%AF%AD%E8%A8%80/">编程语言 (8)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E8%A1%8C%E4%B8%9A%E8%A7%82%E5%AF%9F/">行业观察 (3)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E8%AF%BB%E4%B9%A6%E7%AC%94%E8%AE%B0/">读书笔记 (19)</a></li>
+    
+    <li><a href="https://code0xff.org/categories/%E9%9A%8F%E4%BE%BF%E5%86%99%E5%86%99/">随便写写 (4)</a></li>
+    
+</ul>
+    </section>
+
+    <section class="widget">
+        <h3 class="widget-title">归档</a></h3>
+<ul class="widget-list">
+    
+    <li><a href="https://code0xff.org/years/2021%E5%B9%B4/">2021年 (41)</a></li>
+    
+    <li><a href="https://code0xff.org/years/2022%E5%B9%B4/">2022年 (55)</a></li>
+    
+    <li><a href="https://code0xff.org/years/2023%E5%B9%B4/">2023年 (54)</a></li>
+    
+    <li><a href="https://code0xff.org/years/2024%E5%B9%B4/">2024年 (48)</a></li>
+    
+    <li><a href="https://code0xff.org/years/2025%E5%B9%B4/">2025年 (38)</a></li>
+    
+    <li><a href="https://code0xff.org/years/2026%E5%B9%B4/">2026年 (3)</a></li>
+    
+</ul>
+    </section>
+
+    <section class="widget">
+        <h3 class="widget-title"><a href='/tags/'>标签</a></h3>
+<div class="tagcloud">
+    
+    <a href="https://code0xff.org/tags/ai/">AI </a>
+    
+    <a href="https://code0xff.org/tags/ambari/">Ambari </a>
+    
+    <a href="https://code0xff.org/tags/architecture/">architecture </a>
+    
+    <a href="https://code0xff.org/tags/bigdata/">bigdata </a>
+    
+    <a href="https://code0xff.org/tags/btrace/">BTrace </a>
+    
+    <a href="https://code0xff.org/tags/b%E6%A0%91/">B树 </a>
+    
+    <a href="https://code0xff.org/tags/c&#43;&#43;/">C&#43;&#43; </a>
+    
+    <a href="https://code0xff.org/tags/calcite/">calcite </a>
+    
+    <a href="https://code0xff.org/tags/cmu-database/">CMU-Database </a>
+    
+    <a href="https://code0xff.org/tags/data_ingestion/">Data_Ingestion </a>
+    
+    <a href="https://code0xff.org/tags/deltalake/">DeltaLake </a>
+    
+    <a href="https://code0xff.org/tags/doris/">Doris </a>
+    
+    <a href="https://code0xff.org/tags/ebpf/">eBPF </a>
+    
+    <a href="https://code0xff.org/tags/english/">English </a>
+    
+    <a href="https://code0xff.org/tags/es/">ES </a>
+    
+    <a href="https://code0xff.org/tags/facebook/">Facebook </a>
+    
+    <a href="https://code0xff.org/tags/flink/">flink </a>
+    
+    <a href="https://code0xff.org/tags/flume/">flume </a>
+    
+    <a href="https://code0xff.org/tags/gc/">GC </a>
+    
+    <a href="https://code0xff.org/tags/gluten/">Gluten </a>
+    
+    <a href="https://code0xff.org/tags/hana/">HANA </a>
+    
+    <a href="https://code0xff.org/tags/hive/">Hive </a>
+    
+    <a href="https://code0xff.org/tags/iceberg/">iceberg </a>
+    
+    <a href="https://code0xff.org/tags/impala/">Impala </a>
+    
+    <a href="https://code0xff.org/tags/janino/">janino </a>
+    
+    <a href="https://code0xff.org/tags/juicefs/">JuiceFS </a>
+    
+    <a href="https://code0xff.org/tags/k8s/">k8s </a>
+    
+    <a href="https://code0xff.org/tags/kafka/">Kafka </a>
+    
+    <a href="https://code0xff.org/tags/kudu/">kudu </a>
+    
+    <a href="https://code0xff.org/tags/kyuubi/">Kyuubi </a>
+    
+    <a href="https://code0xff.org/tags/lakehouse/">Lakehouse </a>
+    
+    <a href="https://code0xff.org/tags/leveldb/">LevelDB </a>
+    
+    <a href="https://code0xff.org/tags/llamafactory/">LlamaFactory </a>
+    
+    <a href="https://code0xff.org/tags/llvm/">LLVM </a>
+    
+    <a href="https://code0xff.org/tags/log4j/">log4j </a>
+    
+    <a href="https://code0xff.org/tags/longhorn/">longhorn </a>
+    
+    <a href="https://code0xff.org/tags/manacher/">Manacher </a>
+    
+    <a href="https://code0xff.org/tags/mapreduce/">MapReduce </a>
+    
+    <a href="https://code0xff.org/tags/micro-service/">micro-service </a>
+    
+    <a href="https://code0xff.org/tags/mysql/">MySQL </a>
+    
+    <a href="https://code0xff.org/tags/newsql/">NewSQL </a>
+    
+    <a href="https://code0xff.org/tags/oceanbase/">OceanBase </a>
+    
+    <a href="https://code0xff.org/tags/openldap/">OpenLDAP </a>
+    
+    <a href="https://code0xff.org/tags/openlogreplicator/">OpenLogReplicator </a>
+    
+    <a href="https://code0xff.org/tags/parquet/">parquet </a>
+    
+    <a href="https://code0xff.org/tags/paxos/">paxos </a>
+    
+    <a href="https://code0xff.org/tags/presto/">Presto </a>
+    
+    <a href="https://code0xff.org/tags/pytorch/">PyTorch </a>
+    
+    <a href="https://code0xff.org/tags/quick-sql/">quick-sql </a>
+    
+    <a href="https://code0xff.org/tags/raft/">raft </a>
+    
+    <a href="https://code0xff.org/tags/scala/">scala </a>
+    
+    <a href="https://code0xff.org/tags/simd/">SIMD </a>
+    
+    <a href="https://code0xff.org/tags/snowflake/">snowflake </a>
+    
+    <a href="https://code0xff.org/tags/spark/">spark </a>
+    
+    <a href="https://code0xff.org/tags/sre/">SRE </a>
+    
+    <a href="https://code0xff.org/tags/teradata/">TeraData </a>
+    
+    <a href="https://code0xff.org/tags/tpcx-hs/">TPCx-HS </a>
+    
+    <a href="https://code0xff.org/tags/trino/">Trino </a>
+    
+    <a href="https://code0xff.org/tags/tuning/">Tuning </a>
+    
+    <a href="https://code0xff.org/tags/unix/">unix </a>
+    
+    <a href="https://code0xff.org/tags/yarn/">YARN </a>
+    
+    <a href="https://code0xff.org/tags/%E4%BA%8C%E5%88%86%E6%9F%A5%E6%89%BE/">二分查找 </a>
+    
+    <a href="https://code0xff.org/tags/%E4%BA%8C%E5%8F%89%E6%A0%91%E9%81%8D%E5%8E%86/">二叉树遍历 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%88%86%E5%B8%83%E5%BC%8F/">分布式 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%88%97%E5%AD%98/">列存 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%8A%A8%E6%80%81%E6%B3%A8%E5%85%A5/">动态注入 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%8E%86%E5%8F%B2/">历史 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%90%91%E9%87%8F%E5%8C%96/">向量化 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%95%86%E4%B8%9A/">商业 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%9B%9E%E6%BA%AF/">回溯 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%9B%BD%E5%86%85%E6%97%85%E8%A1%8C/">国内旅行 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%9B%BD%E5%A4%96%E6%97%85%E8%A1%8C/">国外旅行 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%A4%9A%E7%A7%9F%E6%88%B7/">多租户 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%A4%A7%E6%95%B0%E6%8D%AE/">大数据 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%AD%98%E5%82%A8/">存储 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%B7%A5%E4%BD%9C%E8%AE%B0%E5%BD%95/">工作记录 </a>
+    
+    <a href="https://code0xff.org/tags/%E5%BE%AE%E6%9C%8D%E5%8A%A1/">微服务 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%95%B0%E6%8D%AE%E4%B8%AD%E5%8F%B0/">数据中台 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%95%B0%E6%8D%AE%E5%BA%93/">数据库 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%95%B0%E6%8D%AE%E6%A8%A1%E5%9E%8B/">数据模型 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%95%B0%E6%8D%AE%E8%BF%81%E7%A7%BB/">数据迁移 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%9F%A5%E8%AF%A2%E4%BC%98%E5%8C%96/">查询优化 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%9F%A5%E8%AF%A2%E7%BC%96%E8%AF%91/">查询编译 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%A6%82%E7%8E%87/">概率 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%B1%87%E7%BC%96/">汇编 </a>
+    
+    <a href="https://code0xff.org/tags/%E6%B5%8B%E8%AF%95/">测试 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%94%9F%E6%B4%BB/">生活 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%94%B5%E5%BD%B1/">电影 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%AE%97%E6%B3%95/">算法 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%B4%A2%E5%BC%95/">索引 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BB%8F%E6%B5%8E/">经济 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BB%8F%E6%B5%8E%E5%88%86%E6%9E%90/">经济分析 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BC%93%E5%AD%98/">缓存 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BC%96%E8%AF%91%E5%8E%9F%E7%90%86/">编译原理 </a>
+    
+    <a href="https://code0xff.org/tags/%E7%BD%91%E7%BB%9C/">网络 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AE%A1%E7%AE%97%E6%A1%86%E6%9E%B6/">计算框架 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AE%BA%E6%96%87/">论文 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AF%BB%E4%B9%A6/">读书 </a>
+    
+    <a href="https://code0xff.org/tags/%E8%AF%BB%E4%B9%A6%E7%AC%94%E8%AE%B0/">读书笔记 </a>
+    
+</div>
+    </section>
+
+    
+
+    <section class="widget">
+        <h3 class="widget-title">RSS</h3>
+        <ul class="widget-list">
+            <li><a href="https://code0xff.org/index.xml">文章 RSS</a></li>
+        </ul>
+    </section>
+</div>
+            </div>
+        </div>
+    </div>
+    <footer id="footer">
+    <div>
+        &copy; 2026 <a href="https://code0xff.org/">记录每个瞬间 By 老王</a>
+        
+    </div>
+    <br />
+    <div>
+        <div class="github-badge">
+            <a href="https://gohugo.io/" target="_black" rel="nofollow"><span class="badge-subject">Powered by</span><span class="badge-value bg-blue">Hugo</span></a>
+        </div>
+        <div class="github-badge">
+            <a href="https://github.com/flysnow-org/maupassant-hugo" target="_black"><span class="badge-subject">Theme</span><span class="badge-value bg-yellowgreen">Maupassant</span></a>
+        </div>
+    </div>
+</footer>
+
+
+    
+    <script type="text/javascript">
+        window.MathJax = {
+            tex2jax: {
+                inlineMath: [['$', '$']],
+                processEscapes: true
+                }
+            };
+    </script>
+    <script src='https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.5/MathJax.js?config=TeX-MML-AM_CHTML' async></script><script src="https://cdn.bootcdn.net/ajax/libs/fancybox/3.5.7/jquery.fancybox.min.js"></script>
+
+<a id="rocket" href="#top"></a>
+<script type="text/javascript" src='/js/totop.js?v=0.0.0' async=""></script>
+
+<script type="application/javascript">
+var doNotTrack = false;
+if (!doNotTrack) {
+	window.ga=window.ga||function(){(ga.q=ga.q||[]).push(arguments)};ga.l=+new Date;
+	ga('create', 'GA ID', 'auto');
+	
+	ga('send', 'pageview');
+}
+</script>
+<script async src='https://www.google-analytics.com/analytics.js'></script>
+
+
+
+    <script type="text/javascript" src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js" async></script>
+
+
+
+
+</body>
+
+</html>
