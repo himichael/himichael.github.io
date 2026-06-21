@@ -19,7 +19,7 @@
     <meta property="article:modified_time" content='2023-05-17T09:23:04&#43;08:00'>
         
     <meta name="Keywords" content="">
-    <meta name="description" content="Column Sketches: A Scan Accelerator for Rapid and Robust Predicate Evaluation">
+    <meta name="description" content="B数索引 对于选择率低时效果很好、但选择率一旦上升性能就不行了；轻量级索引 Zone Map、Column Imprints、Feature Based Data Skipping对数据聚集性有要求；早期裁剪 ByteSlicing、Bit-Slicing、Approximate and Refine 在数据倾斜情况下，高位可能都是重复的效果不好。Column Sketches使用直方图统计列数据分布，同时考虑了频繁值和普通值，之后建立映射函数，将频繁值映射成唯一code，非频繁值均匀分布，通过这种映射之后，数值类型的 原先 8bit 的值，映射完只需要 2bit 就可以表示了，对于频繁唯一值也不需要回表检查进一步加速；对于分类型也是类似方式，只是不需要排序，可以直接映射。对比其他方案，Column Sketches在选择率高/低，L1 miss，tuple处理速度，数据倾斜，鲁棒性，数据加载上都很不错；Column Sketches还可以利用 SIMD加速scan，可以跟现有技术做整合">
         <meta name="author" content="隔壁老王">
         
     <meta property="og:url" content="https://code0xff.org/post/2023/05/column_sketches/">
@@ -73,7 +73,8 @@
             <div class="col-group">
 
                 <div class="col-8" id="main">
-                    <div class="res-cons">
+                    
+<div class="res-cons">
     
     <article class="post">
         <header>
@@ -86,11 +87,11 @@
   <ul>
     <li>
       <ul>
-        <li><a href="#heading">背景</a></li>
-        <li><a href="#heading1">架构</a></li>
-        <li><a href="#heading2">压缩构建</a></li>
-        <li><a href="#heading3">性能分析</a></li>
-        <li><a href="#heading4">参考</a></li>
+        <li><a href="#背景">背景</a></li>
+        <li><a href="#架构">架构</a></li>
+        <li><a href="#压缩构建">压缩构建</a></li>
+        <li><a href="#性能分析">性能分析</a></li>
+        <li><a href="#参考">参考</a></li>
       </ul>
     </li>
   </ul>
@@ -118,7 +119,7 @@
 <p>原文
 <a href="https://15721.courses.cs.cmu.edu/spring2023/papers/04-olapindexes/hentschel-sigmod18.pdf">https://15721.courses.cs.cmu.edu/spring2023/papers/04-olapindexes/hentschel-sigmod18.pdf</a></p>
 </blockquote>
-<h2 id="heading">背景</h2>
+<h2 id="背景">背景</h2>
 <p>各种索引、存储模式 对于 谓词求值来说，只能用于特定的模式</p>
 <ul>
 <li>选择率</li>
@@ -135,7 +136,11 @@ Column Sketch<br>
 <li>早期裁剪，如ByteSlicing、Bit-Slicing、Approximate and Refine，比较每个bit 为，比如谓词100，同时比较高bit 0和低bit 100</li>
 <li>对于早期裁剪，如果大量的高bit 都是0，相当于都要比较第二个bit，则裁剪效果不好，跟 scan可能差不多</li>
 </ul>
-<p><img src="https://v1.ax1x.com/2024/05/01/7KJrlJ.jpg" alt="">
+<p>
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/05/01/7KJrlJ.jpg">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/05/01/7KJrlJ.jpg" />
+        </a>
+    
 Figure 1: For certain workloads, no state of the art methods provide any significant performance benefit over a scan.</p>
 <p>CS的好处</p>
 <ul>
@@ -143,7 +148,11 @@ Figure 1: For certain workloads, no state of the art methods provide any signifi
 <li>编码后的数据量更小</li>
 <li>相比于无损压缩，对于索引的摄取速度更快</li>
 </ul>
-<p><img src="https://v1.ax1x.com/2024/05/01/7KJXYe.jpg" alt="">
+<p>
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/05/01/7KJXYe.jpg">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/05/01/7KJXYe.jpg" />
+        </a>
+    
 Table 1: Each technique has scenarios where it is the best for select performance. However, Column Sketches are the only technique which improves performance in every scenario.</p>
 <p>论文的贡献</p>
 <ul>
@@ -151,7 +160,7 @@ Table 1: Each technique has scenarios where it is the best for select performanc
 <li>如何使用有损压缩来创建信息位表示，同时保持低内存开销</li>
 <li>给出了对列进行有效扫描的算法，以及如何将这种方式整合到现代系统架构中</li>
 </ul>
-<h2 id="heading1">架构</h2>
+<h2 id="架构">架构</h2>
 <p>Column Sketch 由两个部分组成</p>
 <ul>
 <li>一个是映射函数</li>
@@ -163,7 +172,11 @@ Table 1: Each technique has scenarios where it is the best for select performanc
 后面查找 x &lt; 90的时候，根据映射函数，可以得知，需要查找的范围是 00,01<br>
 然后找到对应的value，这里可能需要反复查询原始列，后面会讲进一步优化<br>
 可以看到 00 列的值肯定是小于的，不需要回原表检查，而 01 需要回原表检查   <br>
-<img src="https://v1.ax1x.com/2024/05/01/7KJtVG.jpg" alt=""><br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/05/01/7KJtVG.jpg">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/05/01/7KJtVG.jpg" />
+        </a>
+    <br>
 Figure 2: Column Sketches use their compression map to transform (possibly compressed) values in the base data to smaller code values in the sketched column. These codes are then used to filter most values in the base data during predicate evaluation.</p>
 <p>所以这里函数映射完后，是满足这两个条件的</p>
 <ul>
@@ -171,29 +184,29 @@ Figure 2: Column Sketches use their compression map to transform (possibly compr
 <li>for x,y ∈ I8, S (x) &lt; S (y) ⇒ x &lt; y</li>
 </ul>
 <p>Algorithm 1 Select where B &lt; x</p>
-<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4">
-<table style="border-spacing:0;padding:0;margin:0;border:0;width:auto;overflow:auto;display:block;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
-<pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">5
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">6
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">7
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"><code><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">5
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">6
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">7
 </span></code></pre></td>
 <td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
-<pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-cpp" data-lang="cpp"><span style="color:#8be9fd;font-style:italic">Require</span>: S is a function which is order preserving, B is the base attribute, Bs is the sketched column
-<span style="color:#ff79c6">for</span> i <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">0</span> to B.size <span style="color:#ff79c6">do</span>
-    <span style="color:#ff79c6">if</span> Bs [i] <span style="color:#ff79c6">&lt;</span> S (x) then
-        write position i to result output
-    <span style="color:#ff79c6">else</span> <span style="color:#ff79c6">if</span> Bs [i] <span style="color:#ff79c6">=</span><span style="color:#ff79c6">=</span> S (x) then
-        <span style="color:#ff79c6">if</span> B[i] <span style="color:#ff79c6">&lt;</span> x then
-            write position i to result output
-</code></pre></td></tr></table>
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"><code class="language-cpp" data-lang="cpp"><span style="display:flex;"><span><span style="color:#8be9fd;font-style:italic">Require</span>: S is a function which is order preserving, B is the base attribute, Bs is the sketched column
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">for</span> i <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">0</span> to B.size <span style="color:#ff79c6">do</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">if</span> Bs [i] <span style="color:#ff79c6">&lt;</span> S (x) then
+</span></span><span style="display:flex;"><span>        write position i to result output
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">else</span> <span style="color:#ff79c6">if</span> Bs [i] <span style="color:#ff79c6">==</span> S (x) then
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">if</span> B[i] <span style="color:#ff79c6">&lt;</span> x then
+</span></span><span style="display:flex;"><span>            write position i to result output
+</span></span></code></pre></td></tr></table>
 </div>
 </div><p>byte 需要对其，否则会有 30%的性能损失<br>
 源入股有序可以直接这么映射，无序的话需要做hash</p>
-<h2 id="heading2">压缩构建</h2>
+<h2 id="压缩构建">压缩构建</h2>
 <p>目标是，映射的函数，尽可能少的访问原表，有效的支持修改</p>
 <ul>
 <li>对于访问频繁的值，分配一个唯一code，比如表中有很多 90，如果是非唯一编码则要频繁回表，分配唯一code就可以解决此问题</li>
@@ -208,7 +221,11 @@ Figure 2: Column Sketches use their compression map to transform (possibly compr
 <li>然后根据样板的值(处理频繁值、非频繁值)生成对应的直方图</li>
 <li>确定直方图中每个柱(桶)的范围端点，然后根据每个柱(桶)的端点来分配对应的 code值</li>
 <li>此时 Compression map CM就建立好了，利用该 CM 对原数据列进行一一映射 ，形成 code值组成的 sketches column列 <br>
-<img src="https://v1.ax1x.com/2024/05/01/7KJ1uI.jpg" alt=""><br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/05/01/7KJ1uI.jpg">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/05/01/7KJ1uI.jpg" />
+        </a>
+    <br>
 Figure 3: Bucket sizes track the distribution of the data.</li>
 </ul>
 <p>数值类型map构建过程</p>
@@ -219,7 +236,11 @@ Figure 3: Bucket sizes track the distribution of the data.</li>
 <li>重复这个过程，直到处理完所有频繁值，再将非唯一值尽可能均匀的分不到每个柱子里</li>
 <li>利用构造好的compression map构造sketch column</li>
 <li>如下，2、40都是唯一值<br>
-<img src="https://v1.ax1x.com/2024/05/01/7KJjdP.jpg" alt=""></li>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/05/01/7KJjdP.jpg">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/05/01/7KJjdP.jpg" />
+        </a>
+    </li>
 </ul>
 <p>分类压缩类型map</p>
 <ul>
@@ -230,66 +251,70 @@ Figure 3: Bucket sizes track the distribution of the data.</li>
 <li>唯一值的选择类型 数值压缩，通过直方图找到频率高的，建立唯一值</li>
 <li>分配多少个 code作为唯一值，也是根据频率 z 的分布来的，或者设置一个常数</li>
 <li>通过 hash 函数，将value相对均匀的分散到 每个 非唯一code上
-<img src="https://v1.ax1x.com/2024/05/01/7KJPOV.jpg" alt=""><br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/05/01/7KJPOV.jpg">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/05/01/7KJPOV.jpg" />
+        </a>
+    <br>
 Figure 4: Lossy dictionaries trade uniqueness for better compression.<br>
 Figure 5: The number of unique codes should be neither too high nor too low.<br>
 Figure 6: Regardless of the level of skew, the number of values in non-unique codes is low.</li>
 </ul>
 <p>Algorithm 2 Column Sketches Scan<br>
 Select where B &lt; x, Column Sketch of one byte values</p>
-<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4">
-<table style="border-spacing:0;padding:0;margin:0;border:0;width:auto;overflow:auto;display:block;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
-<pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">15
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">16
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">17
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">18
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">19
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">20
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">21
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">22
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">23
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">24
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"><code><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">15
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">16
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">17
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">18
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">19
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">20
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">21
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">22
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">23
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">24
 </span></code></pre></td>
 <td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
-<pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-cpp" data-lang="cpp"><span style="color:#6272a4">// Require: S is a function which is order preserving
-</span><span style="color:#6272a4"></span><span style="color:#6272a4">// repeat_sx = _mm128_set1_epi8(S (x ))
-</span><span style="color:#6272a4"></span><span style="color:#ff79c6">for</span> each segment b in sketched column <span style="color:#ff79c6">do</span>
-    <span style="color:#6272a4">/* Work over the code one block of data at a time */</span>
-    position<span style="color:#ff79c6">=</span> b× segment size
-    <span style="color:#ff79c6">for</span> number of simd iterations in segment size <span style="color:#ff79c6">do</span>
-        <span style="color:#6272a4">/* Perform logical comparisons necessary for predicate evaluation
-</span><span style="color:#6272a4">        on each code. The 1,2 denote that this is done twice */</span>
-        codes1,<span style="color:#bd93f9">2</span> <span style="color:#ff79c6">=</span> _mm_load_si128(codes_address)
-        definite1,<span style="color:#bd93f9">2</span> <span style="color:#ff79c6">=</span> _mm_cmplt_epi8(codes,repeat_sx)
-        possible1,<span style="color:#bd93f9">2</span> <span style="color:#ff79c6">=</span> _mm_cmpeq_epi8(codes,repeat_sx)
-        bitvector_def1,<span style="color:#bd93f9">2</span> <span style="color:#ff79c6">=</span> _mm128_movemask_epi8(definite1)
-        bitvector_possible1,<span style="color:#bd93f9">2</span> <span style="color:#ff79c6">=</span> _mm128_movemask_epi8(possible1)
-        <span style="color:#6272a4">/* Store results we are certain of */</span>
-        bitvector_def <span style="color:#ff79c6">=</span> (bitvector_def1 « <span style="color:#bd93f9">16</span>) <span style="color:#ff79c6">|</span> bitvector_def2
-        store(bitvector_def) into result
-        <span style="color:#6272a4">/* Check if the boundary values have any matching tuples and
-</span><span style="color:#6272a4">        store qualifying positions. */</span>
-        conditional store bitvector_possible1,<span style="color:#bd93f9">2</span> into temp_result.
-        position <span style="color:#ff79c6">+</span> <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">32</span>
-        <span style="color:#6272a4">/* Check all tuples that we are uncertain about */</span>
-    <span style="color:#ff79c6">for</span> position in temp_result <span style="color:#ff79c6">do</span>
-        <span style="color:#ff79c6">if</span> B[position] <span style="color:#ff79c6">=</span><span style="color:#ff79c6">=</span> x then
-            set bit position <span style="color:#ff79c6">+</span> beginning position in result
-</code></pre></td></tr></table>
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"><code class="language-cpp" data-lang="cpp"><span style="display:flex;"><span><span style="color:#6272a4">// Require: S is a function which is order preserving
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">// repeat_sx = _mm128_set1_epi8(S (x ))
+</span></span></span><span style="display:flex;"><span><span style="color:#ff79c6">for</span> each segment b in sketched column <span style="color:#ff79c6">do</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#6272a4">/* Work over the code one block of data at a time */</span>
+</span></span><span style="display:flex;"><span>    position<span style="color:#ff79c6">=</span> b× segment size
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">for</span> number of simd iterations in segment size <span style="color:#ff79c6">do</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#6272a4">/* Perform logical comparisons necessary for predicate evaluation
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">        on each code. The 1,2 denote that this is done twice */</span>
+</span></span><span style="display:flex;"><span>        codes1,<span style="color:#bd93f9">2</span> <span style="color:#ff79c6">=</span> _mm_load_si128(codes_address)
+</span></span><span style="display:flex;"><span>        definite1,<span style="color:#bd93f9">2</span> <span style="color:#ff79c6">=</span> _mm_cmplt_epi8(codes,repeat_sx)
+</span></span><span style="display:flex;"><span>        possible1,<span style="color:#bd93f9">2</span> <span style="color:#ff79c6">=</span> _mm_cmpeq_epi8(codes,repeat_sx)
+</span></span><span style="display:flex;"><span>        bitvector_def1,<span style="color:#bd93f9">2</span> <span style="color:#ff79c6">=</span> _mm128_movemask_epi8(definite1)
+</span></span><span style="display:flex;"><span>        bitvector_possible1,<span style="color:#bd93f9">2</span> <span style="color:#ff79c6">=</span> _mm128_movemask_epi8(possible1)
+</span></span><span style="display:flex;"><span>        <span style="color:#6272a4">/* Store results we are certain of */</span>
+</span></span><span style="display:flex;"><span>        bitvector_def <span style="color:#ff79c6">=</span> (bitvector_def1 « <span style="color:#bd93f9">16</span>) <span style="color:#ff79c6">|</span> bitvector_def2
+</span></span><span style="display:flex;"><span>        store(bitvector_def) into result
+</span></span><span style="display:flex;"><span>        <span style="color:#6272a4">/* Check if the boundary values have any matching tuples and
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">        store qualifying positions. */</span>
+</span></span><span style="display:flex;"><span>        conditional store bitvector_possible1,<span style="color:#bd93f9">2</span> into temp_result.
+</span></span><span style="display:flex;"><span>        position <span style="color:#ff79c6">+</span> <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">32</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#6272a4">/* Check all tuples that we are uncertain about */</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">for</span> position in temp_result <span style="color:#ff79c6">do</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">if</span> B[position] <span style="color:#ff79c6">==</span> x then
+</span></span><span style="display:flex;"><span>            set bit position <span style="color:#ff79c6">+</span> beginning position in result
+</span></span></code></pre></td></tr></table>
 </div>
 </div><p>代码解释：</p>
 <ul>
@@ -304,7 +329,7 @@ Select where B &lt; x, Column Sketch of one byte values</p>
 <li>对于临时结果向量中的每个位置，如果满足条件，则在结果向量中设置相应的位。</li>
 <li>重复步骤2至步骤9，直到处理完所有段。</li>
 </ul>
-<h2 id="heading3">性能分析</h2>
+<h2 id="性能分析">性能分析</h2>
 <p>对比几种索引</p>
 <ul>
 <li>B 树</li>
@@ -321,7 +346,11 @@ Select where B &lt; x, Column Sketch of one byte values</p>
 Column Imprints、zone map对于聚集元素表现最好，非聚集就不行了<br>
 BitWeaving 是早期做裁剪，但可能要读很多bit，不如 CS<br>
 图10、对于谓词比较，执行一个tuple需要多少周期，scan是最多的，CS是最少<br>
-<img src="https://v1.ax1x.com/2024/05/01/7KJSd7.jpg" alt=""><br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/05/01/7KJSd7.jpg">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/05/01/7KJSd7.jpg" />
+        </a>
+    <br>
 Figure 7: Column Sketches outperform other access methods in all but the most selective queries.<br>
 Figure 8: Column Sketches incur fewer cache misses than competing techniques.<br>
 Figure 9: Column Sketches need to access the base data very infrequently.<br>
@@ -330,22 +359,38 @@ Figure 10: Column Sketches need fewer cycles to evaluate single and double sided
 <p><strong>倾斜分布的数值数据</strong><br>
 下面两个对比是当输入数据未编码的效果，测试鲁棒性，可以看到CS 的鲁棒性不错<br>
 对于数据size，从4字节增加到 16字节，scan的效率成比例下降，而SC 因为是缓存到cache中的，性能跟 4字节时差不多<br>
-<img src="https://v1.ax1x.com/2024/05/01/7KJRiL.jpg" alt=""><br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/05/01/7KJRiL.jpg">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/05/01/7KJRiL.jpg" />
+        </a>
+    <br>
 Figure 11: Column Sketches perform well even in the case of a bad compression map.<br>
 Figure 12: Column Sketches retain nearly identical performance with larger base data.</p>
-<p><img src="https://v1.ax1x.com/2024/05/01/7KJzXB.jpg" alt=""> <br>
+<p>
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/05/01/7KJzXB.jpg">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/05/01/7KJzXB.jpg" />
+        </a>
+     <br>
 Table 2: Scan Performance under Skewed Datasets</p>
 <p>&ndash;</p>
 <p><strong>分类数据</strong><br>
 这里做了三组对比，等值、唯一code，等值、非唯一code，小于、非唯一code<br>
 从三种情况看，CS 表现都是最好的<br>
-<img src="https://v1.ax1x.com/2024/05/01/7KJJhb.jpg" alt=""><br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/05/01/7KJJhb.jpg">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/05/01/7KJJhb.jpg" />
+        </a>
+    <br>
 Figure 13: Column Sketches is the fastest scan across unique and non-unique codes, and across equality and range comparisons</p>
 <p><strong>负载性能</strong><br>
 测试各种类型数据，摄入的情况<br>
 读取 1亿条数据，连续跑 5次<br>
 可以看到 CS 是 BitWeaving 的 5 - 16倍性能<br>
-<img src="https://v1.ax1x.com/2024/05/01/7KJCTt.jpg" alt=""><br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/05/01/7KJCTt.jpg">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/05/01/7KJCTt.jpg" />
+        </a>
+    <br>
 Table 3: Time to load all batches (sec.)</p>
 <p>进一步工作</p>
 <ul>
@@ -355,7 +400,7 @@ Table 3: Time to load all batches (sec.)</p>
 <li>Other Operators over Early Pruning Techniques</li>
 <li>SIMD Scan Optimizations</li>
 </ul>
-<h2 id="heading4">参考</h2>
+<h2 id="参考">参考</h2>
 <ul>
 <li><a href="https://zhuanlan.zhihu.com/p/457791379">2018 Sigmod : Column Sketches: A Scan Accelerator for Rapid and Robust Predicate Evaluation笔记</a></li>
 <li>A. Lamb, M. Fuller, and R. Varadarajan. The Vertica Analytic Database: C-Store 7 Years Later. Proceedings of the VLDB Endowment, 5(12):1790–1801, 2012.</li>
@@ -412,7 +457,8 @@ code.has-jax {
         
         <li><a href="/post/2023/05/column-stores_vs_row-stores_how_different_are_they_really/">列存 vs 行存，到底有什么不同？</a></li>
         
-        <li><a href="/post/2023/05/lakehouse-a-new-generation-of-open-platforms-that-unify/">Lakehouse A New Generation of Open Platforms that Unify Data Warehousing and Advanced Analytics</a></li>
+        <li><a href="/post/2023/05/lakehouse-a-new-generation-of-open-platforms-that-unify/">Lakehouse A New Generation of Open Platforms that Unify
+Data Warehousing and Advanced Analytics</a></li>
         
         <li><a href="/post/2023/05/building-an-elastic-query-engine-on-disaggregated-storage/">基于存算分离下的Elastic Query Engine</a></li>
         
@@ -449,6 +495,7 @@ code.has-jax {
       </script>
     </div>
     
+
 </div>
 
 
@@ -467,6 +514,10 @@ code.has-jax {
     <section class="widget">
         <h3 class="widget-title">最近文章</h3>
 <ul class="widget-list">
+    
+    <li>
+        <a href="/post/2026/06/da_lian/" title="大连，11年后的再相见">大连，11年后的再相见</a>
+    </li>
     
     <li>
         <a href="/post/2026/05/volcano-notes/" title="Volcano 笔记">Volcano 笔记</a>
@@ -504,10 +555,6 @@ code.has-jax {
         <a href="/post/2026/04/claude_code/" title="Claude code 源码分析">Claude code 源码分析</a>
     </li>
     
-    <li>
-        <a href="/post/2026/03/iran_war/" title="Iran War">Iran War</a>
-    </li>
-    
 </ul>
 
     </section>
@@ -534,7 +581,7 @@ code.has-jax {
     
     <li><a href="/categories/%E6%96%87%E5%AD%A6%E5%92%8C%E8%89%BA%E6%9C%AF/">文学和艺术 (3)</a></li>
     
-    <li><a href="/categories/%E6%97%85%E8%A1%8C/">旅行 (15)</a></li>
+    <li><a href="/categories/%E6%97%85%E8%A1%8C/">旅行 (16)</a></li>
     
     <li><a href="/categories/%E6%9E%B6%E6%9E%84/">架构 (15)</a></li>
     
@@ -568,7 +615,7 @@ code.has-jax {
     
     <li><a href="/years/2025%E5%B9%B4/">2025年 (38)</a></li>
     
-    <li><a href="/years/2026%E5%B9%B4/">2026年 (14)</a></li>
+    <li><a href="/years/2026%E5%B9%B4/">2026年 (15)</a></li>
     
 </ul>
 
@@ -582,9 +629,9 @@ code.has-jax {
     
     <a href="/tags/ambari/">Ambari </a>
     
-    <a href="/tags/architecture/">architecture </a>
+    <a href="/tags/architecture/">Architecture </a>
     
-    <a href="/tags/bigdata/">bigdata </a>
+    <a href="/tags/bigdata/">Bigdata </a>
     
     <a href="/tags/btrace/">BTrace </a>
     
@@ -592,11 +639,11 @@ code.has-jax {
     
     <a href="/tags/c&#43;&#43;/">C&#43;&#43; </a>
     
-    <a href="/tags/calcite/">calcite </a>
+    <a href="/tags/calcite/">Calcite </a>
     
     <a href="/tags/canal/">Canal </a>
     
-    <a href="/tags/claude/">claude </a>
+    <a href="/tags/claude/">Claude </a>
     
     <a href="/tags/cmu-database/">CMU-Database </a>
     
@@ -608,7 +655,7 @@ code.has-jax {
     
     <a href="/tags/doris/">Doris </a>
     
-    <a href="/tags/ebpf/">eBPF </a>
+    <a href="/tags/ebpf/">EBPF </a>
     
     <a href="/tags/english/">English </a>
     
@@ -618,7 +665,7 @@ code.has-jax {
     
     <a href="/tags/flink/">Flink </a>
     
-    <a href="/tags/flume/">flume </a>
+    <a href="/tags/flume/">Flume </a>
     
     <a href="/tags/gc/">GC </a>
     
@@ -628,15 +675,15 @@ code.has-jax {
     
     <a href="/tags/hive/">Hive </a>
     
-    <a href="/tags/iceberg/">iceberg </a>
+    <a href="/tags/iceberg/">Iceberg </a>
     
     <a href="/tags/impala/">Impala </a>
     
-    <a href="/tags/janino/">janino </a>
+    <a href="/tags/janino/">Janino </a>
     
     <a href="/tags/juicefs/">JuiceFS </a>
     
-    <a href="/tags/k8s/">k8s </a>
+    <a href="/tags/k8s/">K8s </a>
     
     <a href="/tags/kafka/">Kafka </a>
     
@@ -652,17 +699,17 @@ code.has-jax {
     
     <a href="/tags/llvm/">LLVM </a>
     
-    <a href="/tags/log4j/">log4j </a>
+    <a href="/tags/log4j/">Log4j </a>
     
-    <a href="/tags/longhorn/">longhorn </a>
+    <a href="/tags/longhorn/">Longhorn </a>
     
     <a href="/tags/manacher/">Manacher </a>
     
     <a href="/tags/mapreduce/">MapReduce </a>
     
-    <a href="/tags/micro-service/">micro-service </a>
+    <a href="/tags/micro-service/">Micro-Service </a>
     
-    <a href="/tags/mq/">mq </a>
+    <a href="/tags/mq/">Mq </a>
     
     <a href="/tags/mysql/">MySQL </a>
     
@@ -676,25 +723,25 @@ code.has-jax {
     
     <a href="/tags/ozone/">Ozone </a>
     
-    <a href="/tags/parquet/">parquet </a>
+    <a href="/tags/parquet/">Parquet </a>
     
-    <a href="/tags/paxos/">paxos </a>
+    <a href="/tags/paxos/">Paxos </a>
     
     <a href="/tags/presto/">Presto </a>
     
     <a href="/tags/pytorch/">PyTorch </a>
     
-    <a href="/tags/quick-sql/">quick-sql </a>
+    <a href="/tags/quick-sql/">Quick-Sql </a>
     
-    <a href="/tags/raft/">raft </a>
+    <a href="/tags/raft/">Raft </a>
     
-    <a href="/tags/scala/">scala </a>
+    <a href="/tags/scala/">Scala </a>
     
     <a href="/tags/seatunnel/">SeaTunnel </a>
     
     <a href="/tags/simd/">SIMD </a>
     
-    <a href="/tags/snowflake/">snowflake </a>
+    <a href="/tags/snowflake/">Snowflake </a>
     
     <a href="/tags/spark/">Spark </a>
     
@@ -708,7 +755,7 @@ code.has-jax {
     
     <a href="/tags/tuning/">Tuning </a>
     
-    <a href="/tags/unix/">unix </a>
+    <a href="/tags/unix/">Unix </a>
     
     <a href="/tags/volcano/">Volcano </a>
     

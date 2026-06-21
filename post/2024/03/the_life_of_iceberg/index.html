@@ -19,7 +19,7 @@
     <meta property="article:modified_time" content='2024-02-26T09:08:07&#43;08:00'>
         
     <meta name="Keywords" content="">
-    <meta name="description" content="Apache Iceberg Tables 的读写和查询管理">
+    <meta name="description" content="介绍了存储的结构，元数据层包括：manifest files、manifest list, metadata files，catalog指向最新的 metadata files；每一层都可以做裁减，包括数据层，介绍了读取、time travel过程，是自上往下的读取和裁减过程；写入过程：插入、删除、merge过程，写 过程是自下而上的，通过 切换catalog指向，利用OCC控制并发，实现ACID">
         <meta name="author" content="隔壁老王">
         
     <meta property="og:url" content="https://code0xff.org/post/2024/03/the_life_of_iceberg/">
@@ -73,7 +73,8 @@
             <div class="col-group">
 
                 <div class="col-8" id="main">
-                    <div class="res-cons">
+                    
+<div class="res-cons">
     
     <article class="post">
         <header>
@@ -131,7 +132,11 @@
 </blockquote>
 <h2 id="apache-iceberg-101">Apache Iceberg 101</h2>
 <p>存储层的结构如下：<br>
-<img src="https://v1.ax1x.com/2024/05/21/7gQ0V4.png" alt=""></p>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/05/21/7gQ0V4.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/05/21/7gQ0V4.png" />
+        </a>
+    </p>
 <p>Data Layer</p>
 <ul>
 <li><strong>Data files</strong> – Parquet or ORC 的存储格式，真实数据放这里</li>
@@ -156,42 +161,50 @@
 </ul>
 <h2 id="how-a-query-engine-processes-the-query">How a Query Engine Processes the Query</h2>
 <p>基于<code>order</code>表的查询，表结构</p>
-<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4">
-<table style="border-spacing:0;padding:0;margin:0;border:0;width:auto;overflow:auto;display:block;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
-<pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"><code><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
 </span></code></pre></td>
 <td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
-<pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-sql" data-lang="sql"><span style="color:#ff79c6">CREATE</span> <span style="color:#ff79c6">TABLE</span> orders (...)
-PARTITIONED <span style="color:#ff79c6">BY</span> (<span style="color:#ff79c6">year</span>(order_ts));
-</code></pre></td></tr></table>
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"><code class="language-sql" data-lang="sql"><span style="display:flex;"><span><span style="color:#ff79c6">CREATE</span> <span style="color:#ff79c6">TABLE</span> orders (...)
+</span></span><span style="display:flex;"><span>PARTITIONED <span style="color:#ff79c6">BY</span> (<span style="color:#ff79c6">year</span>(order_ts));
+</span></span></code></pre></td></tr></table>
 </div>
 </div><p>查询语句</p>
-<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4">
-<table style="border-spacing:0;padding:0;margin:0;border:0;width:auto;overflow:auto;display:block;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
-<pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"><code><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
 </span></code></pre></td>
 <td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
-<pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-sql" data-lang="sql"><span style="color:#ff79c6">SELECT</span> <span style="color:#ff79c6">*</span>
-<span style="color:#ff79c6">FROM</span> orders
-<span style="color:#ff79c6">WHERE</span> order_ts
-<span style="color:#ff79c6">BETWEEN</span> <span style="color:#f1fa8c">&#39;</span><span style="color:#f1fa8c">2021-06-01 10:00:00</span><span style="color:#f1fa8c">&#39;</span> <span style="color:#ff79c6">and</span> <span style="color:#f1fa8c">&#39;</span><span style="color:#f1fa8c">2021-06-30 10:00:00</span><span style="color:#f1fa8c">&#39;</span>;
-</code></pre></td></tr></table>
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"><code class="language-sql" data-lang="sql"><span style="display:flex;"><span><span style="color:#ff79c6">SELECT</span> <span style="color:#ff79c6">*</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">FROM</span> orders
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">WHERE</span> order_ts
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">BETWEEN</span> <span style="color:#f1fa8c">&#39;2021-06-01 10:00:00&#39;</span> <span style="color:#ff79c6">and</span> <span style="color:#f1fa8c">&#39;2021-06-30 10:00:00&#39;</span>;
+</span></span></code></pre></td></tr></table>
 </div>
 </div><h3 id="metadata-qeruy">Metadata Qeruy</h3>
 <p>查询首先被提交到 engine，然后被解析，engine 需要知道这个表的元数据，才能做plan<br>
 查询元数据，四个步骤执行过程如下：<br>
-<img src="https://v1.ax1x.com/2024/05/21/7gQEhY.png" alt=""></p>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/05/21/7gQEhY.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/05/21/7gQEhY.png" />
+        </a>
+    </p>
 <p><strong>第一步</strong>，获取 catalog，根据 catalog 获取 orders 表的当前元数据文件</p>
 <p><strong>第二步</strong>，通过 order 表的最新的元数据，可以</p>
 <ul>
 <li>拿到表的 schema</li>
 <li>表的分区信息，之后在 plan 中可以做裁剪</li>
 <li>当前快照的 &ldquo;manifest list&rdquo; 可以知道 需要再进一步扫描哪些文件
-<img src="hhttps://v1.ax1x.com/2024/05/21/7gQ7m9.png" alt=""></li>
+
+        <a data-fancybox="gallery" href="hhttps://v1.ax1x.com/2024/05/21/7gQ7m9.png">
+            <img class="mx-auto" alt="" src="hhttps://v1.ax1x.com/2024/05/21/7gQ7m9.png" />
+        </a>
+    </li>
 </ul>
 <p><strong>第三步</strong>，通过 manifest list 文件，我们可以再进一步</p>
 <ul>
@@ -199,55 +212,83 @@ PARTITIONED <span style="color:#ff79c6">BY</span> (<span style="color:#ff79c6">y
 <li>每个分区还包含了一些统计信息，通过 lower 和 upper 边界，可以可以确定 是否要跳过这个分区</li>
 <li>当后面拿到 manifest file 时候还可以再做进一步的 skip</li>
 </ul>
-<p><img src="https://v1.ax1x.com/2024/05/21/7gQ3Xh.png" alt=""></p>
+<p>
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/05/21/7gQ3Xh.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/05/21/7gQ3Xh.png" />
+        </a>
+    </p>
 <p><strong>第四步</strong>，根据每个 manifest file 文件，可以继续做裁剪，然后获取每个文件对应的 data</p>
 <ul>
 <li>schema-id， partition-id 包含的就是数据文件信息</li>
 <li>内容的类型，比如可以跳过 delete类型的数据</li>
 <li>列中包含了 value内容、唯一值、lower、upper信息，可以做裁剪</li>
 </ul>
-<p><img src="https://v1.ax1x.com/2024/05/21/7gQQrH.png" alt=""></p>
+<p>
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/05/21/7gQQrH.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/05/21/7gQQrH.png" />
+        </a>
+    </p>
 <h3 id="performing-the-scan-and-returning-the-results">Performing the Scan and Returning the Results</h3>
 <p>经过上面几次 裁剪后，真正要扫描的数据文件就很少了<br>
 parquet 文件本身也包含 min/max信息，还可以继续在文件级别继续 裁剪<br>
-<img src="https://v1.ax1x.com/2024/05/21/7gQNdZ.png" alt=""></p>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/05/21/7gQNdZ.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/05/21/7gQNdZ.png" />
+        </a>
+    </p>
 <h3 id="time-travel">Time Travel</h3>
 <p>查询前一个版本的信息</p>
-<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4">
-<table style="border-spacing:0;padding:0;margin:0;border:0;width:auto;overflow:auto;display:block;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
-<pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"><code><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
 </span></code></pre></td>
 <td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
-<pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-sql" data-lang="sql"><span style="color:#ff79c6">SELECT</span> <span style="color:#ff79c6">*</span>
-<span style="color:#ff79c6">FROM</span> orders <span style="color:#ff79c6">TIMESTAMP</span> <span style="color:#ff79c6">AS</span> <span style="color:#ff79c6">OF</span> <span style="color:#f1fa8c">&#39;</span><span style="color:#f1fa8c">2022-06-01 10:00:00</span><span style="color:#f1fa8c">&#39;</span>
-<span style="color:#ff79c6">WHERE</span> order_ts <span style="color:#ff79c6">BETWEEN</span> <span style="color:#f1fa8c">&#39;</span><span style="color:#f1fa8c">2021-06-01 10:00:00</span><span style="color:#f1fa8c">&#39;</span> <span style="color:#ff79c6">and</span> <span style="color:#f1fa8c">&#39;</span><span style="color:#f1fa8c">2022-05-31 10:00:00</span><span style="color:#f1fa8c">&#39;</span>;
-</code></pre></td></tr></table>
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"><code class="language-sql" data-lang="sql"><span style="display:flex;"><span><span style="color:#ff79c6">SELECT</span> <span style="color:#ff79c6">*</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">FROM</span> orders <span style="color:#ff79c6">TIMESTAMP</span> <span style="color:#ff79c6">AS</span> <span style="color:#ff79c6">OF</span> <span style="color:#f1fa8c">&#39;2022-06-01 10:00:00&#39;</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">WHERE</span> order_ts <span style="color:#ff79c6">BETWEEN</span> <span style="color:#f1fa8c">&#39;2021-06-01 10:00:00&#39;</span> <span style="color:#ff79c6">and</span> <span style="color:#f1fa8c">&#39;2022-05-31 10:00:00&#39;</span>;
+</span></span></code></pre></td></tr></table>
 </div>
 </div><p>这里使用了 TIMESTAMP AS OF ，用做 time travel 用的<br>
 完整的执行过程如下：<br>
-<img src="https://v1.ax1x.com/2024/05/21/7gQK7a.png" alt=""></p>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/05/21/7gQK7a.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/05/21/7gQK7a.png" />
+        </a>
+    </p>
 <p>通过最新的 快照，可以：</p>
 <ul>
 <li>通过比较快照 id，或者 快照的 timestamp，找到 AS OF 之前的快照</li>
 <li>获取这个表的 schema</li>
 <li>获取查询分区，用于裁剪，以及目标快照的 manifest list<br>
-<img src="https://v1.ax1x.com/2024/05/21/7gQuwU.png" alt=""></li>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/05/21/7gQuwU.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/05/21/7gQuwU.png" />
+        </a>
+    </li>
 </ul>
 <p>跟普查查询类似，找到 manifest list 文件</p>
 <ul>
 <li>通过 partition-spec-id，可以知道分区信息</li>
 <li>分解分区的统计信息，lower 和 upper做进一步裁剪</li>
-<li>在这里可以 skip 大量不需要的分区 
-<img src="https://v1.ax1x.com/2024/05/21/7gQyis.png" alt=""></li>
+<li>在这里可以 skip 大量不需要的分区
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/05/21/7gQyis.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/05/21/7gQyis.png" />
+        </a>
+    </li>
 </ul>
 <p>对于 manifest files</p>
 <ul>
 <li>schema-id、partition-id 对应于数据文件</li>
 <li>跳过 delete 类型的文件</li>
 <li>根据 统计信息，如 lower、upper，做裁剪<br>
-<img src="https://v1.ax1x.com/2024/05/21/7gQwSq.png" alt=""></li>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/05/21/7gQwSq.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/05/21/7gQwSq.png" />
+        </a>
+    </li>
 </ul>
 <p>接下来就是 scan 数据文件，因为前面已经 skip 了大量的文件，此时需要扫描的文件就少很多了<br>
 parquet文件本身也可以做谓词下推，进一步减少读取的数量<br>
@@ -255,13 +296,13 @@ parquet文件本身也可以做谓词下推，进一步减少读取的数量<br>
 <h2 id="how-a-query-engine-processes-the-write">How a Query Engine Processes the Write</h2>
 <h3 id="insert">Insert</h3>
 <p>查询语句</p>
-<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4">
-<table style="border-spacing:0;padding:0;margin:0;border:0;width:auto;overflow:auto;display:block;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
-<pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"><code><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
 </span></code></pre></td>
 <td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
-<pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-sql" data-lang="sql"><span style="color:#ff79c6">INSERT</span> <span style="color:#ff79c6">INTO</span> orders <span style="color:#ff79c6">VALUES</span> (...);
-</code></pre></td></tr></table>
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"><code class="language-sql" data-lang="sql"><span style="display:flex;"><span><span style="color:#ff79c6">INSERT</span> <span style="color:#ff79c6">INTO</span> orders <span style="color:#ff79c6">VALUES</span> (...);
+</span></span></code></pre></td></tr></table>
 </div>
 </div><p>执行过程</p>
 <ol>
@@ -300,15 +341,15 @@ parquet文件本身也可以做谓词下推，进一步减少读取的数量<br>
 </ul>
 <h3 id="delete">Delete</h3>
 <p>语句</p>
-<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4">
-<table style="border-spacing:0;padding:0;margin:0;border:0;width:auto;overflow:auto;display:block;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
-<pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"><code><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
 </span></code></pre></td>
 <td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
-<pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-sql" data-lang="sql"><span style="color:#ff79c6">DELETE</span> <span style="color:#ff79c6">FROM</span> orders 
-<span style="color:#ff79c6">WHERE</span> order_ts <span style="color:#ff79c6">BETWEEN</span> <span style="color:#f1fa8c">&#39;</span><span style="color:#f1fa8c">2022-05-01 10:00:00</span><span style="color:#f1fa8c">&#39;</span> <span style="color:#ff79c6">AND</span> <span style="color:#f1fa8c">&#39;</span><span style="color:#f1fa8c">2022-05-31 10:00:00</span><span style="color:#f1fa8c">&#39;</span>;
-</code></pre></td></tr></table>
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"><code class="language-sql" data-lang="sql"><span style="display:flex;"><span><span style="color:#ff79c6">DELETE</span> <span style="color:#ff79c6">FROM</span> orders 
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">WHERE</span> order_ts <span style="color:#ff79c6">BETWEEN</span> <span style="color:#f1fa8c">&#39;2022-05-01 10:00:00&#39;</span> <span style="color:#ff79c6">AND</span> <span style="color:#f1fa8c">&#39;2022-05-31 10:00:00&#39;</span>;
+</span></span></code></pre></td></tr></table>
 </div>
 </div><p>执行过程</p>
 <ol>
@@ -341,13 +382,21 @@ parquet文件本身也可以做谓词下推，进一步减少读取的数量<br>
 <li>通过扫描元数据，确定哪些文件被删除</li>
 <li>通过扫描数据文件，确定要删除的记录位置</li>
 <li>在分区中写一个删除类型的文件，记录了哪些记录是按位置从 哪些文件中删除的
-<img src="https://v1.ax1x.com/2024/05/21/7gQgXI.png" alt=""></li>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/05/21/7gQgXI.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/05/21/7gQgXI.png" />
+        </a>
+    </li>
 </ul>
 <p>Equality deletes</p>
 <ul>
 <li>不需要扫描任何文件，只需要写一个删除类型的文件，列出哪些行中的值要被删除</li>
 <li>在读取时，根据删除类型文件和分区中的数据记录做重建，这个操作代价很高
-<img src="https://v1.ax1x.com/2024/05/21/7gQbW7.png" alt=""><br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/05/21/7gQbW7.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/05/21/7gQbW7.png" />
+        </a>
+    <br>
 原始的文件仍然被保留，当后续读取时，会根据 删除类型文件，旧文件做合并处理</li>
 </ul>
 <ol start="4">
@@ -369,21 +418,21 @@ parquet文件本身也可以做谓词下推，进一步减少读取的数量<br>
 </ul>
 <h3 id="upsertmerge">Upsert/Merge</h3>
 <p>语句</p>
-<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4">
-<table style="border-spacing:0;padding:0;margin:0;border:0;width:auto;overflow:auto;display:block;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
-<pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">5
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"><code><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">5
 </span></code></pre></td>
 <td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
-<pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-sql" data-lang="sql">MERGE <span style="color:#ff79c6">INTO</span> orders o
-<span style="color:#ff79c6">USING</span> (<span style="color:#ff79c6">SELECT</span> <span style="color:#ff79c6">*</span> <span style="color:#ff79c6">FROM</span> orders_staging) s
-<span style="color:#ff79c6">ON</span> o.id <span style="color:#ff79c6">=</span> s.id
-<span style="color:#ff79c6">WHEN</span> MATCHED …
-<span style="color:#ff79c6">WHEN</span> <span style="color:#ff79c6">NOT</span> MATCHED
-</code></pre></td></tr></table>
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"><code class="language-sql" data-lang="sql"><span style="display:flex;"><span>MERGE <span style="color:#ff79c6">INTO</span> orders o
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">USING</span> (<span style="color:#ff79c6">SELECT</span> <span style="color:#ff79c6">*</span> <span style="color:#ff79c6">FROM</span> orders_staging) s
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">ON</span> o.id <span style="color:#ff79c6">=</span> s.id
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">WHEN</span> MATCHED …
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">WHEN</span> <span style="color:#ff79c6">NOT</span> MATCHED
+</span></span></code></pre></td></tr></table>
 </div>
 </div><p>执行过程</p>
 <ol>
@@ -509,6 +558,7 @@ code.has-jax {
       </script>
     </div>
     
+
 </div>
 
 
@@ -527,6 +577,10 @@ code.has-jax {
     <section class="widget">
         <h3 class="widget-title">最近文章</h3>
 <ul class="widget-list">
+    
+    <li>
+        <a href="/post/2026/06/da_lian/" title="大连，11年后的再相见">大连，11年后的再相见</a>
+    </li>
     
     <li>
         <a href="/post/2026/05/volcano-notes/" title="Volcano 笔记">Volcano 笔记</a>
@@ -564,10 +618,6 @@ code.has-jax {
         <a href="/post/2026/04/claude_code/" title="Claude code 源码分析">Claude code 源码分析</a>
     </li>
     
-    <li>
-        <a href="/post/2026/03/iran_war/" title="Iran War">Iran War</a>
-    </li>
-    
 </ul>
 
     </section>
@@ -594,7 +644,7 @@ code.has-jax {
     
     <li><a href="/categories/%E6%96%87%E5%AD%A6%E5%92%8C%E8%89%BA%E6%9C%AF/">文学和艺术 (3)</a></li>
     
-    <li><a href="/categories/%E6%97%85%E8%A1%8C/">旅行 (15)</a></li>
+    <li><a href="/categories/%E6%97%85%E8%A1%8C/">旅行 (16)</a></li>
     
     <li><a href="/categories/%E6%9E%B6%E6%9E%84/">架构 (15)</a></li>
     
@@ -628,7 +678,7 @@ code.has-jax {
     
     <li><a href="/years/2025%E5%B9%B4/">2025年 (38)</a></li>
     
-    <li><a href="/years/2026%E5%B9%B4/">2026年 (14)</a></li>
+    <li><a href="/years/2026%E5%B9%B4/">2026年 (15)</a></li>
     
 </ul>
 
@@ -642,9 +692,9 @@ code.has-jax {
     
     <a href="/tags/ambari/">Ambari </a>
     
-    <a href="/tags/architecture/">architecture </a>
+    <a href="/tags/architecture/">Architecture </a>
     
-    <a href="/tags/bigdata/">bigdata </a>
+    <a href="/tags/bigdata/">Bigdata </a>
     
     <a href="/tags/btrace/">BTrace </a>
     
@@ -652,11 +702,11 @@ code.has-jax {
     
     <a href="/tags/c&#43;&#43;/">C&#43;&#43; </a>
     
-    <a href="/tags/calcite/">calcite </a>
+    <a href="/tags/calcite/">Calcite </a>
     
     <a href="/tags/canal/">Canal </a>
     
-    <a href="/tags/claude/">claude </a>
+    <a href="/tags/claude/">Claude </a>
     
     <a href="/tags/cmu-database/">CMU-Database </a>
     
@@ -668,7 +718,7 @@ code.has-jax {
     
     <a href="/tags/doris/">Doris </a>
     
-    <a href="/tags/ebpf/">eBPF </a>
+    <a href="/tags/ebpf/">EBPF </a>
     
     <a href="/tags/english/">English </a>
     
@@ -678,7 +728,7 @@ code.has-jax {
     
     <a href="/tags/flink/">Flink </a>
     
-    <a href="/tags/flume/">flume </a>
+    <a href="/tags/flume/">Flume </a>
     
     <a href="/tags/gc/">GC </a>
     
@@ -688,15 +738,15 @@ code.has-jax {
     
     <a href="/tags/hive/">Hive </a>
     
-    <a href="/tags/iceberg/">iceberg </a>
+    <a href="/tags/iceberg/">Iceberg </a>
     
     <a href="/tags/impala/">Impala </a>
     
-    <a href="/tags/janino/">janino </a>
+    <a href="/tags/janino/">Janino </a>
     
     <a href="/tags/juicefs/">JuiceFS </a>
     
-    <a href="/tags/k8s/">k8s </a>
+    <a href="/tags/k8s/">K8s </a>
     
     <a href="/tags/kafka/">Kafka </a>
     
@@ -712,17 +762,17 @@ code.has-jax {
     
     <a href="/tags/llvm/">LLVM </a>
     
-    <a href="/tags/log4j/">log4j </a>
+    <a href="/tags/log4j/">Log4j </a>
     
-    <a href="/tags/longhorn/">longhorn </a>
+    <a href="/tags/longhorn/">Longhorn </a>
     
     <a href="/tags/manacher/">Manacher </a>
     
     <a href="/tags/mapreduce/">MapReduce </a>
     
-    <a href="/tags/micro-service/">micro-service </a>
+    <a href="/tags/micro-service/">Micro-Service </a>
     
-    <a href="/tags/mq/">mq </a>
+    <a href="/tags/mq/">Mq </a>
     
     <a href="/tags/mysql/">MySQL </a>
     
@@ -736,25 +786,25 @@ code.has-jax {
     
     <a href="/tags/ozone/">Ozone </a>
     
-    <a href="/tags/parquet/">parquet </a>
+    <a href="/tags/parquet/">Parquet </a>
     
-    <a href="/tags/paxos/">paxos </a>
+    <a href="/tags/paxos/">Paxos </a>
     
     <a href="/tags/presto/">Presto </a>
     
     <a href="/tags/pytorch/">PyTorch </a>
     
-    <a href="/tags/quick-sql/">quick-sql </a>
+    <a href="/tags/quick-sql/">Quick-Sql </a>
     
-    <a href="/tags/raft/">raft </a>
+    <a href="/tags/raft/">Raft </a>
     
-    <a href="/tags/scala/">scala </a>
+    <a href="/tags/scala/">Scala </a>
     
     <a href="/tags/seatunnel/">SeaTunnel </a>
     
     <a href="/tags/simd/">SIMD </a>
     
-    <a href="/tags/snowflake/">snowflake </a>
+    <a href="/tags/snowflake/">Snowflake </a>
     
     <a href="/tags/spark/">Spark </a>
     
@@ -768,7 +818,7 @@ code.has-jax {
     
     <a href="/tags/tuning/">Tuning </a>
     
-    <a href="/tags/unix/">unix </a>
+    <a href="/tags/unix/">Unix </a>
     
     <a href="/tags/volcano/">Volcano </a>
     

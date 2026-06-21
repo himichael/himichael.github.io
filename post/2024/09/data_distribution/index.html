@@ -19,7 +19,7 @@
     <meta property="article:modified_time" content='2024-09-01T09:08:07&#43;08:00'>
         
     <meta name="Keywords" content="">
-    <meta name="description" content="Spark的 数据分布">
+    <meta name="description" content="Distribution及相关类，Partitioning类，Partitioner类，排序的物理算子，UnsafeExternalSorter 和UnsafeInMemorySorter，spill和归并排序；shuffle操作，ShuffleDependency，ShuffleRowRDD，map端的ShuffleMapTasks，reduce端 ShuffleDependency 从shuffle manager 那里读取数据，拿到MapStauts 状态；ShuffleManager 包含了ShuffleWriter，ShuffleReader；BypassMergeSortShuffleWriter 、UnsafeShuffleWriter、SortShuffleWriter、、BlockStoreShuffleReader">
         <meta name="author" content="隔壁老王">
         
     <meta property="og:url" content="https://code0xff.org/post/2024/09/data_distribution/">
@@ -73,7 +73,8 @@
             <div class="col-group">
 
                 <div class="col-8" id="main">
-                    <div class="res-cons">
+                    
+<div class="res-cons">
     
     <article class="post">
         <header>
@@ -86,10 +87,10 @@
   <ul>
     <li>
       <ul>
-        <li><a href="#heading">分区相关的</a></li>
-        <li><a href="#heading1">排序物理算子</a></li>
-        <li><a href="#heading2">细说排序细节</a></li>
-        <li><a href="#shuffle">Shuffle操作</a></li>
+        <li><a href="#分区相关的">分区相关的</a></li>
+        <li><a href="#排序物理算子">排序物理算子</a></li>
+        <li><a href="#细说排序细节">细说排序细节</a></li>
+        <li><a href="#shuffle操作">Shuffle操作</a></li>
       </ul>
     </li>
   </ul>
@@ -113,9 +114,13 @@
         
         
         <div class="post-content">
-            <h2 id="heading">分区相关的</h2>
+            <h2 id="分区相关的">分区相关的</h2>
 <p>Distribution 类的继承关系<br>
-<img src="https://v1.ax1x.com/2024/09/01/7xyLZ4.png" alt=""><br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/09/01/7xyLZ4.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/09/01/7xyLZ4.png" />
+        </a>
+    <br>
 图片来源 -&gt; <a href="https://dataninjago.com/2022/01/20/spark-sql-query-engine-deep-dive-14-partitioning-ordering/">这里</a><br>
 主要的类</p>
 <ul>
@@ -127,7 +132,11 @@
 <li>OrderedDistribution – represents the distribution that the rows are ordered across partitions and not necessarily within a partition.</li>
 </ul>
 <p>Partitioning 类的继承关系<br>
-<img src="https://v1.ax1x.com/2024/09/01/7xy3uh.png" alt=""><br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/09/01/7xy3uh.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/09/01/7xy3uh.png" />
+        </a>
+    <br>
 主要的关系</p>
 <ul>
 <li>SinglePartition – represents a single partition (numPartitions == 1) which satisfies all the distributions apart from BroadcastDistribution as long as the condition for the requiredNumPartitions is met.</li>
@@ -137,120 +146,136 @@
 <li>BroadcastPartitioning – represents a partitioning where rows are collected from the nodes in the cluster and then all the collected rows are broadcasted to each node. BroadcastPartitioning can only satisfy the BroadcastDistribution.</li>
 </ul>
 <p>Partitioner 类表示用什么方式做数据分区<br>
-<img src="https://v1.ax1x.com/2024/09/01/7xylO9.png" alt=""></p>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/09/01/7xylO9.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/09/01/7xylO9.png" />
+        </a>
+    </p>
 <p>例子<br>
 按照 hash 做分区</p>
-<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4">
-<table style="border-spacing:0;padding:0;margin:0;border:0;width:auto;overflow:auto;display:block;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
-<pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"><code><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
 </span></code></pre></td>
 <td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
-<pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-scala" data-lang="scala"><span style="color:#ff79c6">val</span> rdd <span style="color:#ff79c6">=</span> sc<span style="color:#ff79c6">.</span>parallelize<span style="color:#ff79c6">(</span><span style="color:#50fa7b">Seq</span><span style="color:#ff79c6">(</span><span style="color:#ff79c6">(</span><span style="color:#f1fa8c">&#34;a&#34;</span><span style="color:#ff79c6">,</span> <span style="color:#bd93f9">1</span><span style="color:#ff79c6">)</span><span style="color:#ff79c6">,</span> <span style="color:#ff79c6">(</span><span style="color:#f1fa8c">&#34;b&#34;</span><span style="color:#ff79c6">,</span> <span style="color:#bd93f9">2</span><span style="color:#ff79c6">)</span><span style="color:#ff79c6">,</span> <span style="color:#ff79c6">(</span><span style="color:#f1fa8c">&#34;c&#34;</span><span style="color:#ff79c6">,</span> <span style="color:#bd93f9">3</span><span style="color:#ff79c6">)</span><span style="color:#ff79c6">,</span> <span style="color:#ff79c6">(</span><span style="color:#f1fa8c">&#34;a&#34;</span><span style="color:#ff79c6">,</span> <span style="color:#bd93f9">4</span><span style="color:#ff79c6">)</span><span style="color:#ff79c6">)</span><span style="color:#ff79c6">)</span>
-<span style="color:#ff79c6">val</span> partitionedRdd <span style="color:#ff79c6">=</span> rdd<span style="color:#ff79c6">.</span>partitionBy<span style="color:#ff79c6">(</span><span style="color:#ff79c6">new</span> <span style="color:#50fa7b">HashPartitioner</span><span style="color:#ff79c6">(</span><span style="color:#bd93f9">2</span><span style="color:#ff79c6">)</span><span style="color:#ff79c6">)</span>
-</code></pre></td></tr></table>
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"><code class="language-scala" data-lang="scala"><span style="display:flex;"><span><span style="color:#ff79c6">val</span> rdd <span style="color:#ff79c6">=</span> sc<span style="color:#ff79c6">.</span>parallelize<span style="color:#ff79c6">(</span><span style="color:#50fa7b">Seq</span><span style="color:#ff79c6">((</span><span style="color:#f1fa8c">&#34;a&#34;</span><span style="color:#ff79c6">,</span> <span style="color:#bd93f9">1</span><span style="color:#ff79c6">),</span> <span style="color:#ff79c6">(</span><span style="color:#f1fa8c">&#34;b&#34;</span><span style="color:#ff79c6">,</span> <span style="color:#bd93f9">2</span><span style="color:#ff79c6">),</span> <span style="color:#ff79c6">(</span><span style="color:#f1fa8c">&#34;c&#34;</span><span style="color:#ff79c6">,</span> <span style="color:#bd93f9">3</span><span style="color:#ff79c6">),</span> <span style="color:#ff79c6">(</span><span style="color:#f1fa8c">&#34;a&#34;</span><span style="color:#ff79c6">,</span> <span style="color:#bd93f9">4</span><span style="color:#ff79c6">)))</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">val</span> partitionedRdd <span style="color:#ff79c6">=</span> rdd<span style="color:#ff79c6">.</span>partitionBy<span style="color:#ff79c6">(</span><span style="color:#ff79c6">new</span> <span style="color:#50fa7b">HashPartitioner</span><span style="color:#ff79c6">(</span><span style="color:#bd93f9">2</span><span style="color:#ff79c6">))</span>
+</span></span></code></pre></td></tr></table>
 </div>
 </div><p>按照 range 做分区</p>
-<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4">
-<table style="border-spacing:0;padding:0;margin:0;border:0;width:auto;overflow:auto;display:block;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
-<pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"><code><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
 </span></code></pre></td>
 <td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
-<pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-scala" data-lang="scala"><span style="color:#ff79c6">import</span> org.apache.spark.RangePartitioner
-
-<span style="color:#ff79c6">val</span> rdd <span style="color:#ff79c6">=</span> sc<span style="color:#ff79c6">.</span>parallelize<span style="color:#ff79c6">(</span><span style="color:#50fa7b">Seq</span><span style="color:#ff79c6">(</span><span style="color:#ff79c6">(</span><span style="color:#bd93f9">1</span><span style="color:#ff79c6">,</span> <span style="color:#f1fa8c">&#34;a&#34;</span><span style="color:#ff79c6">)</span><span style="color:#ff79c6">,</span> <span style="color:#ff79c6">(</span><span style="color:#bd93f9">10</span><span style="color:#ff79c6">,</span> <span style="color:#f1fa8c">&#34;b&#34;</span><span style="color:#ff79c6">)</span><span style="color:#ff79c6">,</span> <span style="color:#ff79c6">(</span><span style="color:#bd93f9">100</span><span style="color:#ff79c6">,</span> <span style="color:#f1fa8c">&#34;c&#34;</span><span style="color:#ff79c6">)</span><span style="color:#ff79c6">,</span> <span style="color:#ff79c6">(</span><span style="color:#bd93f9">1000</span><span style="color:#ff79c6">,</span> <span style="color:#f1fa8c">&#34;d&#34;</span><span style="color:#ff79c6">)</span><span style="color:#ff79c6">)</span><span style="color:#ff79c6">)</span>
-<span style="color:#ff79c6">val</span> partitionedRdd <span style="color:#ff79c6">=</span> rdd<span style="color:#ff79c6">.</span>partitionBy<span style="color:#ff79c6">(</span><span style="color:#ff79c6">new</span> <span style="color:#50fa7b">RangePartitioner</span><span style="color:#ff79c6">(</span><span style="color:#bd93f9">3</span><span style="color:#ff79c6">,</span> rdd<span style="color:#ff79c6">)</span><span style="color:#ff79c6">)</span>
-</code></pre></td></tr></table>
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"><code class="language-scala" data-lang="scala"><span style="display:flex;"><span><span style="color:#ff79c6">import</span> org.apache.spark.RangePartitioner
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">val</span> rdd <span style="color:#ff79c6">=</span> sc<span style="color:#ff79c6">.</span>parallelize<span style="color:#ff79c6">(</span><span style="color:#50fa7b">Seq</span><span style="color:#ff79c6">((</span><span style="color:#bd93f9">1</span><span style="color:#ff79c6">,</span> <span style="color:#f1fa8c">&#34;a&#34;</span><span style="color:#ff79c6">),</span> <span style="color:#ff79c6">(</span><span style="color:#bd93f9">10</span><span style="color:#ff79c6">,</span> <span style="color:#f1fa8c">&#34;b&#34;</span><span style="color:#ff79c6">),</span> <span style="color:#ff79c6">(</span><span style="color:#bd93f9">100</span><span style="color:#ff79c6">,</span> <span style="color:#f1fa8c">&#34;c&#34;</span><span style="color:#ff79c6">),</span> <span style="color:#ff79c6">(</span><span style="color:#bd93f9">1000</span><span style="color:#ff79c6">,</span> <span style="color:#f1fa8c">&#34;d&#34;</span><span style="color:#ff79c6">)))</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">val</span> partitionedRdd <span style="color:#ff79c6">=</span> rdd<span style="color:#ff79c6">.</span>partitionBy<span style="color:#ff79c6">(</span><span style="color:#ff79c6">new</span> <span style="color:#50fa7b">RangePartitioner</span><span style="color:#ff79c6">(</span><span style="color:#bd93f9">3</span><span style="color:#ff79c6">,</span> rdd<span style="color:#ff79c6">))</span>
+</span></span></code></pre></td></tr></table>
 </div>
-</div><h2 id="heading1">排序物理算子</h2>
+</div><h2 id="排序物理算子">排序物理算子</h2>
 <p>SortExec#doExecute 代码：</p>
-<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4">
-<table style="border-spacing:0;padding:0;margin:0;border:0;width:auto;overflow:auto;display:block;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
-<pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">15
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">16
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">17
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">18
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">19
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">20
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">21
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">22
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">23
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">24
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">25
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">26
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">27
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">28
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">29
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">30
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">31
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">32
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">33
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"><code><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">15
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">16
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">17
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">18
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">19
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">20
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">21
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">22
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">23
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">24
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">25
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">26
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">27
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">28
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">29
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">30
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">31
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">32
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">33
 </span></code></pre></td>
 <td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
-<pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-scala" data-lang="scala">  <span style="color:#ff79c6">def</span> createSorter<span style="color:#ff79c6">(</span><span style="color:#ff79c6">)</span><span style="color:#ff79c6">:</span> <span style="color:#8be9fd">UnsafeExternalRowSorter</span> <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">{</span>
-    <span style="color:#ff79c6">val</span> ordering <span style="color:#ff79c6">=</span> <span style="color:#50fa7b">RowOrdering</span><span style="color:#ff79c6">.</span>create<span style="color:#ff79c6">(</span>sortOrder<span style="color:#ff79c6">,</span> output<span style="color:#ff79c6">)</span>
-
-    <span style="color:#6272a4">// The comparator for comparing prefix
-</span><span style="color:#6272a4"></span>    <span style="color:#ff79c6">val</span> boundSortExpression <span style="color:#ff79c6">=</span> <span style="color:#50fa7b">BindReferences</span><span style="color:#ff79c6">.</span>bindReference<span style="color:#ff79c6">(</span>sortOrder<span style="color:#ff79c6">.</span>head<span style="color:#ff79c6">,</span> output<span style="color:#ff79c6">)</span>
-    <span style="color:#ff79c6">val</span> prefixComparator <span style="color:#ff79c6">=</span> <span style="color:#50fa7b">SortPrefixUtils</span><span style="color:#ff79c6">.</span>getPrefixComparator<span style="color:#ff79c6">(</span>boundSortExpression<span style="color:#ff79c6">)</span>
-
-    <span style="color:#ff79c6">val</span> canUseRadixSort <span style="color:#ff79c6">=</span> enableRadixSort <span style="color:#ff79c6">&amp;&amp;</span> sortOrder<span style="color:#ff79c6">.</span>length <span style="color:#ff79c6">==</span> <span style="color:#bd93f9">1</span> <span style="color:#ff79c6">&amp;&amp;</span>
-      <span style="color:#50fa7b">SortPrefixUtils</span><span style="color:#ff79c6">.</span>canSortFullyWithPrefix<span style="color:#ff79c6">(</span>boundSortExpression<span style="color:#ff79c6">)</span>
-
-    <span style="color:#6272a4">// The generator for prefix
-</span><span style="color:#6272a4"></span>    <span style="color:#ff79c6">val</span> prefixExpr <span style="color:#ff79c6">=</span> <span style="color:#50fa7b">SortPrefix</span><span style="color:#ff79c6">(</span>boundSortExpression<span style="color:#ff79c6">)</span>
-    <span style="color:#ff79c6">val</span> prefixProjection <span style="color:#ff79c6">=</span> <span style="color:#50fa7b">UnsafeProjection</span><span style="color:#ff79c6">.</span>create<span style="color:#ff79c6">(</span><span style="color:#50fa7b">Seq</span><span style="color:#ff79c6">(</span>prefixExpr<span style="color:#ff79c6">)</span><span style="color:#ff79c6">)</span>
-    <span style="color:#ff79c6">val</span> prefixComputer <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">new</span> <span style="color:#50fa7b">UnsafeExternalRowSorter</span><span style="color:#ff79c6">.</span><span style="color:#50fa7b">PrefixComputer</span> <span style="color:#ff79c6">{</span>
-      <span style="color:#ff79c6">private</span> <span style="color:#ff79c6">val</span> result <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">new</span> <span style="color:#50fa7b">UnsafeExternalRowSorter</span><span style="color:#ff79c6">.</span><span style="color:#50fa7b">PrefixComputer</span><span style="color:#ff79c6">.</span><span style="color:#50fa7b">Prefix</span>
-      <span style="color:#ff79c6">override</span> <span style="color:#ff79c6">def</span> computePrefix<span style="color:#ff79c6">(</span>row<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">InternalRow</span><span style="color:#ff79c6">)</span><span style="color:#ff79c6">:</span>
-          <span style="color:#8be9fd">UnsafeExternalRowSorter</span><span style="color:#8be9fd">.</span><span style="color:#8be9fd">PrefixComputer</span><span style="color:#8be9fd">.</span><span style="color:#8be9fd">Prefix</span> <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">{</span>
-        <span style="color:#ff79c6">val</span> prefix <span style="color:#ff79c6">=</span> prefixProjection<span style="color:#ff79c6">.</span>apply<span style="color:#ff79c6">(</span>row<span style="color:#ff79c6">)</span>
-        result<span style="color:#ff79c6">.</span>isNull <span style="color:#ff79c6">=</span> prefix<span style="color:#ff79c6">.</span>isNullAt<span style="color:#ff79c6">(</span><span style="color:#bd93f9">0</span><span style="color:#ff79c6">)</span>
-        result<span style="color:#ff79c6">.</span>value <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">if</span> <span style="color:#ff79c6">(</span>result<span style="color:#ff79c6">.</span>isNull<span style="color:#ff79c6">)</span> prefixExpr<span style="color:#ff79c6">.</span>nullValue <span style="color:#ff79c6">else</span> prefix<span style="color:#ff79c6">.</span>getLong<span style="color:#ff79c6">(</span><span style="color:#bd93f9">0</span><span style="color:#ff79c6">)</span>
-        result
-      <span style="color:#ff79c6">}</span>
-    <span style="color:#ff79c6">}</span>
-
-    <span style="color:#ff79c6">val</span> pageSize <span style="color:#ff79c6">=</span> <span style="color:#50fa7b">SparkEnv</span><span style="color:#ff79c6">.</span>get<span style="color:#ff79c6">.</span>memoryManager<span style="color:#ff79c6">.</span>pageSizeBytes
-    rowSorter <span style="color:#ff79c6">=</span> <span style="color:#50fa7b">UnsafeExternalRowSorter</span><span style="color:#ff79c6">.</span>create<span style="color:#ff79c6">(</span>
-      schema<span style="color:#ff79c6">,</span> ordering<span style="color:#ff79c6">,</span> prefixComparator<span style="color:#ff79c6">,</span> prefixComputer<span style="color:#ff79c6">,</span> pageSize<span style="color:#ff79c6">,</span> canUseRadixSort<span style="color:#ff79c6">)</span>
-
-    <span style="color:#ff79c6">if</span> <span style="color:#ff79c6">(</span>testSpillFrequency <span style="color:#ff79c6">&gt;</span> <span style="color:#bd93f9">0</span><span style="color:#ff79c6">)</span> <span style="color:#ff79c6">{</span>
-      rowSorter<span style="color:#ff79c6">.</span>setTestSpillFrequency<span style="color:#ff79c6">(</span>testSpillFrequency<span style="color:#ff79c6">)</span>
-    <span style="color:#ff79c6">}</span>
-    rowSorter
-  <span style="color:#ff79c6">}</span>
-</code></pre></td></tr></table>
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"><code class="language-scala" data-lang="scala"><span style="display:flex;"><span>  <span style="color:#ff79c6">def</span> createSorter<span style="color:#ff79c6">()</span><span style="color:#ff79c6">:</span> <span style="color:#8be9fd">UnsafeExternalRowSorter</span> <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">val</span> ordering <span style="color:#ff79c6">=</span> <span style="color:#50fa7b">RowOrdering</span><span style="color:#ff79c6">.</span>create<span style="color:#ff79c6">(</span>sortOrder<span style="color:#ff79c6">,</span> output<span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#6272a4">// The comparator for comparing prefix
+</span></span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">val</span> boundSortExpression <span style="color:#ff79c6">=</span> <span style="color:#50fa7b">BindReferences</span><span style="color:#ff79c6">.</span>bindReference<span style="color:#ff79c6">(</span>sortOrder<span style="color:#ff79c6">.</span>head<span style="color:#ff79c6">,</span> output<span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">val</span> prefixComparator <span style="color:#ff79c6">=</span> <span style="color:#50fa7b">SortPrefixUtils</span><span style="color:#ff79c6">.</span>getPrefixComparator<span style="color:#ff79c6">(</span>boundSortExpression<span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">val</span> canUseRadixSort <span style="color:#ff79c6">=</span> enableRadixSort <span style="color:#ff79c6">&amp;&amp;</span> sortOrder<span style="color:#ff79c6">.</span>length <span style="color:#ff79c6">==</span> <span style="color:#bd93f9">1</span> <span style="color:#ff79c6">&amp;&amp;</span>
+</span></span><span style="display:flex;"><span>      <span style="color:#50fa7b">SortPrefixUtils</span><span style="color:#ff79c6">.</span>canSortFullyWithPrefix<span style="color:#ff79c6">(</span>boundSortExpression<span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#6272a4">// The generator for prefix
+</span></span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">val</span> prefixExpr <span style="color:#ff79c6">=</span> <span style="color:#50fa7b">SortPrefix</span><span style="color:#ff79c6">(</span>boundSortExpression<span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">val</span> prefixProjection <span style="color:#ff79c6">=</span> <span style="color:#50fa7b">UnsafeProjection</span><span style="color:#ff79c6">.</span>create<span style="color:#ff79c6">(</span><span style="color:#50fa7b">Seq</span><span style="color:#ff79c6">(</span>prefixExpr<span style="color:#ff79c6">))</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">val</span> prefixComputer <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">new</span> <span style="color:#50fa7b">UnsafeExternalRowSorter</span><span style="color:#ff79c6">.</span><span style="color:#50fa7b">PrefixComputer</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>      <span style="color:#ff79c6">private</span> <span style="color:#ff79c6">val</span> result <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">new</span> <span style="color:#50fa7b">UnsafeExternalRowSorter</span><span style="color:#ff79c6">.</span><span style="color:#50fa7b">PrefixComputer</span><span style="color:#ff79c6">.</span><span style="color:#50fa7b">Prefix</span>
+</span></span><span style="display:flex;"><span>      <span style="color:#ff79c6">override</span> <span style="color:#ff79c6">def</span> computePrefix<span style="color:#ff79c6">(</span>row<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">InternalRow</span><span style="color:#ff79c6">)</span><span style="color:#ff79c6">:</span>
+</span></span><span style="display:flex;"><span>          <span style="color:#8be9fd">UnsafeExternalRowSorter.PrefixComputer.Prefix</span> <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">val</span> prefix <span style="color:#ff79c6">=</span> prefixProjection<span style="color:#ff79c6">.</span>apply<span style="color:#ff79c6">(</span>row<span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>        result<span style="color:#ff79c6">.</span>isNull <span style="color:#ff79c6">=</span> prefix<span style="color:#ff79c6">.</span>isNullAt<span style="color:#ff79c6">(</span><span style="color:#bd93f9">0</span><span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>        result<span style="color:#ff79c6">.</span>value <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">if</span> <span style="color:#ff79c6">(</span>result<span style="color:#ff79c6">.</span>isNull<span style="color:#ff79c6">)</span> prefixExpr<span style="color:#ff79c6">.</span>nullValue <span style="color:#ff79c6">else</span> prefix<span style="color:#ff79c6">.</span>getLong<span style="color:#ff79c6">(</span><span style="color:#bd93f9">0</span><span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>        result
+</span></span><span style="display:flex;"><span>      <span style="color:#ff79c6">}</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">}</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">val</span> pageSize <span style="color:#ff79c6">=</span> <span style="color:#50fa7b">SparkEnv</span><span style="color:#ff79c6">.</span>get<span style="color:#ff79c6">.</span>memoryManager<span style="color:#ff79c6">.</span>pageSizeBytes
+</span></span><span style="display:flex;"><span>    rowSorter <span style="color:#ff79c6">=</span> <span style="color:#50fa7b">UnsafeExternalRowSorter</span><span style="color:#ff79c6">.</span>create<span style="color:#ff79c6">(</span>
+</span></span><span style="display:flex;"><span>      schema<span style="color:#ff79c6">,</span> ordering<span style="color:#ff79c6">,</span> prefixComparator<span style="color:#ff79c6">,</span> prefixComputer<span style="color:#ff79c6">,</span> pageSize<span style="color:#ff79c6">,</span> canUseRadixSort<span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">if</span> <span style="color:#ff79c6">(</span>testSpillFrequency <span style="color:#ff79c6">&gt;</span> <span style="color:#bd93f9">0</span><span style="color:#ff79c6">)</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>      rowSorter<span style="color:#ff79c6">.</span>setTestSpillFrequency<span style="color:#ff79c6">(</span>testSpillFrequency<span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">}</span>
+</span></span><span style="display:flex;"><span>    rowSorter
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">}</span>
+</span></span></code></pre></td></tr></table>
 </div>
 </div><p>内容比较简单，创建一个排序器，然后对子节点的数据做排序</p>
 <p>SortExec 依赖的其他类<br>
 排序时会有内存阈值判断，超过了会溢出到磁盘
-<img src="https://v1.ax1x.com/2024/05/07/7bxx7Y.png" alt=""><br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/05/07/7bxx7Y.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/05/07/7bxx7Y.png" />
+        </a>
+    <br>
 图片来源 -&gt; <a href="https://dataninjago.com/2022/01/23/spark-sql-query-engine-deep-dive-15-unsafeexternalsorter-sortexec/">这里</a></p>
-<h2 id="heading2">细说排序细节</h2>
+<h2 id="细说排序细节">细说排序细节</h2>
 <p>以 SortMergeJoin 来说，首先它需要数据分布，以及排序<br>
-<img src="https://v1.ax1x.com/2024/09/01/7xy7fY.png" alt=""></p>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/09/01/7xy7fY.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/09/01/7xy7fY.png" />
+        </a>
+    </p>
 <p>Sort 底层是借用下面两个操作实现</p>
 <ul>
 <li>UnsafeExternalSorter
-<img src="https://v1.ax1x.com/2024/09/01/7xyQlH.png" alt=""></li>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/09/01/7xyQlH.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/09/01/7xyQlH.png" />
+        </a>
+    </li>
 </ul>
 <p>UnsafeExternalSorter 的组成</p>
 <ul>
@@ -258,7 +283,11 @@
 <li>spill writer，会free 内存写到磁盘</li>
 <li>UnsafeInMemorySorter 会持有一个 LongArray数组</li>
 <li>UnsafeExternalSorter  提供了插入数据，返回迭代器的接口
-<img src="https://v1.ax1x.com/2024/09/01/7xyNAZ.png" alt=""></li>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/09/01/7xyNAZ.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/09/01/7xyNAZ.png" />
+        </a>
+    </li>
 </ul>
 <p>如下</p>
 <ul>
@@ -266,7 +295,11 @@
 <li>这又会插入到 UnsafeInMemorySorter</li>
 <li>插入到内存数组时，会检查页是否足够，是否有足够的内存，是否要spill 等</li>
 <li>这里使用了前缀比较，主要是避免 cache miss
-<img src="https://v1.ax1x.com/2024/09/01/7xyqJU.png" alt=""></li>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/09/01/7xyqJU.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/09/01/7xyqJU.png" />
+        </a>
+    </li>
 </ul>
 <p>当内存不足时，会 spill 到磁盘</p>
 <ul>
@@ -274,16 +307,20 @@
 <li>创建 UnsafeSorterSpillWriter  实例，也就是 spillWriter</li>
 <li>spillWriter 获取内存页中的指针，拿到数据，写入到磁盘</li>
 <li>之后清空内存中的page
-<img src="https://v1.ax1x.com/2024/09/01/7xywTq.png" alt=""></li>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/09/01/7xywTq.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/09/01/7xywTq.png" />
+        </a>
+    </li>
 </ul>
 <p>spill file按照下列格式存储</p>
-<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4">
-<table style="border-spacing:0;padding:0;margin:0;border:0;width:auto;overflow:auto;display:block;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
-<pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"><code><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
 </span></code></pre></td>
 <td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
-<pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell"><span style="color:#ff79c6">[</span><span style="color:#6272a4"># of records (int)] [[len (int)][prefix (long)][data (bytes)]...]</span>
-</code></pre></td></tr></table>
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"><code class="language-shell" data-lang="shell"><span style="display:flex;"><span><span style="color:#ff79c6">[</span><span style="color:#6272a4"># of records (int)] [[len (int)][prefix (long)][data (bytes)]...]</span>
+</span></span></code></pre></td></tr></table>
 </div>
 </div><p>getSortedIterator</p>
 <ul>
@@ -291,69 +328,73 @@
 <li>如果是数字，用的是 radix sort，一般情况就是 封装了 JDK 的 tim sort</li>
 <li>如果有spill 则，调用外排序，还会用归并的动作</li>
 </ul>
-<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4">
-<table style="border-spacing:0;padding:0;margin:0;border:0;width:auto;overflow:auto;display:block;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
-<pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">15
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">16
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">17
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">18
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">19
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">20
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">21
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">22
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">23
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">24
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">25
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"><code><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">15
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">16
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">17
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">18
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">19
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">20
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">21
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">22
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">23
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">24
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">25
 </span></code></pre></td>
 <td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
-<pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-scala" data-lang="scala">  public <span style="color:#50fa7b">UnsafeSorterIterator</span> getIterator<span style="color:#ff79c6">(</span>int startIndex<span style="color:#ff79c6">)</span> throws <span style="color:#50fa7b">IOException</span> <span style="color:#ff79c6">{</span>
-    <span style="color:#ff79c6">if</span> <span style="color:#ff79c6">(</span>spillWriters<span style="color:#ff79c6">.</span>isEmpty<span style="color:#ff79c6">(</span><span style="color:#ff79c6">)</span><span style="color:#ff79c6">)</span> <span style="color:#ff79c6">{</span>
-      assert<span style="color:#ff79c6">(</span>inMemSorter <span style="color:#ff79c6">!=</span> <span style="color:#ff79c6">null</span><span style="color:#ff79c6">)</span><span style="color:#ff79c6">;</span>
-      <span style="color:#50fa7b">UnsafeSorterIterator</span> iter <span style="color:#ff79c6">=</span> inMemSorter<span style="color:#ff79c6">.</span>getSortedIterator<span style="color:#ff79c6">(</span><span style="color:#ff79c6">)</span><span style="color:#ff79c6">;</span>
-      moveOver<span style="color:#ff79c6">(</span>iter<span style="color:#ff79c6">,</span> startIndex<span style="color:#ff79c6">)</span><span style="color:#ff79c6">;</span>
-      <span style="color:#ff79c6">return</span> iter<span style="color:#ff79c6">;</span>
-    <span style="color:#ff79c6">}</span> <span style="color:#ff79c6">else</span> <span style="color:#ff79c6">{</span>
-      <span style="color:#50fa7b">LinkedList</span><span style="color:#ff79c6">&lt;</span><span style="color:#50fa7b">UnsafeSorterIterator</span><span style="color:#ff79c6">&gt;</span> queue <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">new</span> <span style="color:#50fa7b">LinkedList</span><span style="color:#ff79c6">&lt;&gt;</span><span style="color:#ff79c6">(</span><span style="color:#ff79c6">)</span><span style="color:#ff79c6">;</span>
-      int i <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">0</span><span style="color:#ff79c6">;</span>
-      <span style="color:#ff79c6">for</span> <span style="color:#ff79c6">(</span><span style="color:#50fa7b">UnsafeSorterSpillWriter</span> spillWriter <span style="color:#ff79c6">:</span> <span style="color:#8be9fd">spillWriters</span><span style="color:#ff79c6">)</span> <span style="color:#ff79c6">{</span>
-        <span style="color:#ff79c6">if</span> <span style="color:#ff79c6">(</span>i <span style="color:#ff79c6">+</span> spillWriter<span style="color:#ff79c6">.</span>recordsSpilled<span style="color:#ff79c6">(</span><span style="color:#ff79c6">)</span> <span style="color:#ff79c6">&gt;</span> startIndex<span style="color:#ff79c6">)</span> <span style="color:#ff79c6">{</span>
-          <span style="color:#50fa7b">UnsafeSorterIterator</span> iter <span style="color:#ff79c6">=</span> spillWriter<span style="color:#ff79c6">.</span>getReader<span style="color:#ff79c6">(</span>serializerManager<span style="color:#ff79c6">)</span><span style="color:#ff79c6">;</span>
-          moveOver<span style="color:#ff79c6">(</span>iter<span style="color:#ff79c6">,</span> startIndex <span style="color:#ff79c6">-</span> i<span style="color:#ff79c6">)</span><span style="color:#ff79c6">;</span>
-          queue<span style="color:#ff79c6">.</span>add<span style="color:#ff79c6">(</span>iter<span style="color:#ff79c6">)</span><span style="color:#ff79c6">;</span>
-        <span style="color:#ff79c6">}</span>
-        i <span style="color:#ff79c6">+=</span> spillWriter<span style="color:#ff79c6">.</span>recordsSpilled<span style="color:#ff79c6">(</span><span style="color:#ff79c6">)</span><span style="color:#ff79c6">;</span>
-      <span style="color:#ff79c6">}</span>
-      <span style="color:#ff79c6">if</span> <span style="color:#ff79c6">(</span>inMemSorter <span style="color:#ff79c6">!=</span> <span style="color:#ff79c6">null</span> <span style="color:#ff79c6">&amp;&amp;</span> inMemSorter<span style="color:#ff79c6">.</span>numRecords<span style="color:#ff79c6">(</span><span style="color:#ff79c6">)</span> <span style="color:#ff79c6">&gt;</span> <span style="color:#bd93f9">0</span><span style="color:#ff79c6">)</span> <span style="color:#ff79c6">{</span>
-        <span style="color:#50fa7b">UnsafeSorterIterator</span> iter <span style="color:#ff79c6">=</span> inMemSorter<span style="color:#ff79c6">.</span>getSortedIterator<span style="color:#ff79c6">(</span><span style="color:#ff79c6">)</span><span style="color:#ff79c6">;</span>
-        moveOver<span style="color:#ff79c6">(</span>iter<span style="color:#ff79c6">,</span> startIndex <span style="color:#ff79c6">-</span> i<span style="color:#ff79c6">)</span><span style="color:#ff79c6">;</span>
-        queue<span style="color:#ff79c6">.</span>add<span style="color:#ff79c6">(</span>iter<span style="color:#ff79c6">)</span><span style="color:#ff79c6">;</span>
-      <span style="color:#ff79c6">}</span>
-      <span style="color:#ff79c6">return</span> <span style="color:#ff79c6">new</span> <span style="color:#50fa7b">ChainedIterator</span><span style="color:#ff79c6">(</span>queue<span style="color:#ff79c6">)</span><span style="color:#ff79c6">;</span>
-    <span style="color:#ff79c6">}</span>
-  <span style="color:#ff79c6">}</span>
-</code></pre></td></tr></table>
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"><code class="language-scala" data-lang="scala"><span style="display:flex;"><span>  public <span style="color:#50fa7b">UnsafeSorterIterator</span> getIterator<span style="color:#ff79c6">(</span>int startIndex<span style="color:#ff79c6">)</span> throws <span style="color:#50fa7b">IOException</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">if</span> <span style="color:#ff79c6">(</span>spillWriters<span style="color:#ff79c6">.</span>isEmpty<span style="color:#ff79c6">())</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>      assert<span style="color:#ff79c6">(</span>inMemSorter <span style="color:#ff79c6">!=</span> <span style="color:#ff79c6">null</span><span style="color:#ff79c6">);</span>
+</span></span><span style="display:flex;"><span>      <span style="color:#50fa7b">UnsafeSorterIterator</span> iter <span style="color:#ff79c6">=</span> inMemSorter<span style="color:#ff79c6">.</span>getSortedIterator<span style="color:#ff79c6">();</span>
+</span></span><span style="display:flex;"><span>      moveOver<span style="color:#ff79c6">(</span>iter<span style="color:#ff79c6">,</span> startIndex<span style="color:#ff79c6">);</span>
+</span></span><span style="display:flex;"><span>      <span style="color:#ff79c6">return</span> iter<span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">}</span> <span style="color:#ff79c6">else</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>      <span style="color:#50fa7b">LinkedList</span><span style="color:#ff79c6">&lt;</span><span style="color:#50fa7b">UnsafeSorterIterator</span><span style="color:#ff79c6">&gt;</span> queue <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">new</span> <span style="color:#50fa7b">LinkedList</span><span style="color:#ff79c6">&lt;&gt;();</span>
+</span></span><span style="display:flex;"><span>      int i <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">0</span><span style="color:#ff79c6">;</span>
+</span></span><span style="display:flex;"><span>      <span style="color:#ff79c6">for</span> <span style="color:#ff79c6">(</span><span style="color:#50fa7b">UnsafeSorterSpillWriter</span> spillWriter <span style="color:#ff79c6">:</span> <span style="color:#8be9fd">spillWriters</span><span style="color:#ff79c6">)</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">if</span> <span style="color:#ff79c6">(</span>i <span style="color:#ff79c6">+</span> spillWriter<span style="color:#ff79c6">.</span>recordsSpilled<span style="color:#ff79c6">()</span> <span style="color:#ff79c6">&gt;</span> startIndex<span style="color:#ff79c6">)</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>          <span style="color:#50fa7b">UnsafeSorterIterator</span> iter <span style="color:#ff79c6">=</span> spillWriter<span style="color:#ff79c6">.</span>getReader<span style="color:#ff79c6">(</span>serializerManager<span style="color:#ff79c6">);</span>
+</span></span><span style="display:flex;"><span>          moveOver<span style="color:#ff79c6">(</span>iter<span style="color:#ff79c6">,</span> startIndex <span style="color:#ff79c6">-</span> i<span style="color:#ff79c6">);</span>
+</span></span><span style="display:flex;"><span>          queue<span style="color:#ff79c6">.</span>add<span style="color:#ff79c6">(</span>iter<span style="color:#ff79c6">);</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">}</span>
+</span></span><span style="display:flex;"><span>        i <span style="color:#ff79c6">+=</span> spillWriter<span style="color:#ff79c6">.</span>recordsSpilled<span style="color:#ff79c6">();</span>
+</span></span><span style="display:flex;"><span>      <span style="color:#ff79c6">}</span>
+</span></span><span style="display:flex;"><span>      <span style="color:#ff79c6">if</span> <span style="color:#ff79c6">(</span>inMemSorter <span style="color:#ff79c6">!=</span> <span style="color:#ff79c6">null</span> <span style="color:#ff79c6">&amp;&amp;</span> inMemSorter<span style="color:#ff79c6">.</span>numRecords<span style="color:#ff79c6">()</span> <span style="color:#ff79c6">&gt;</span> <span style="color:#bd93f9">0</span><span style="color:#ff79c6">)</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#50fa7b">UnsafeSorterIterator</span> iter <span style="color:#ff79c6">=</span> inMemSorter<span style="color:#ff79c6">.</span>getSortedIterator<span style="color:#ff79c6">();</span>
+</span></span><span style="display:flex;"><span>        moveOver<span style="color:#ff79c6">(</span>iter<span style="color:#ff79c6">,</span> startIndex <span style="color:#ff79c6">-</span> i<span style="color:#ff79c6">);</span>
+</span></span><span style="display:flex;"><span>        queue<span style="color:#ff79c6">.</span>add<span style="color:#ff79c6">(</span>iter<span style="color:#ff79c6">);</span>
+</span></span><span style="display:flex;"><span>      <span style="color:#ff79c6">}</span>
+</span></span><span style="display:flex;"><span>      <span style="color:#ff79c6">return</span> <span style="color:#ff79c6">new</span> <span style="color:#50fa7b">ChainedIterator</span><span style="color:#ff79c6">(</span>queue<span style="color:#ff79c6">);</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">}</span>
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">}</span>
+</span></span></code></pre></td></tr></table>
 </div>
-</div><h2 id="shuffle">Shuffle操作</h2>
+</div><h2 id="shuffle操作">Shuffle操作</h2>
 <p>ShuffleExchangeExec 操作</p>
 <ul>
 <li>准备 ShuffleDependency，根据父节点所需要的分区schema，对子节点的输出做分区</li>
 <li>添加 ShuffleRowRDD，并将准备好的 ShuffleDependency指定为这个RDD 的依赖项</li>
 <li>DAGScheduler 发现了ShuffleRowRDD的依赖后，创建ShuffleMapStage，保证 row rdd，并为ShuffleDependency中定义的shuffle操作生成数据
-<img src="https://v1.ax1x.com/2024/09/01/7xyygs.png" alt=""></li>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/09/01/7xyygs.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/09/01/7xyygs.png" />
+        </a>
+    </li>
 </ul>
 <p>ShuffleExchangeExec</p>
 <ul>
@@ -364,7 +405,11 @@
 <li>ShuffleMapStage 由 每个 Executor 中的 ShuffleMapTasks执行</li>
 <li>每个ShuffleMapStage 调用写操作输出shuffle</li>
 <li>ShuffleDependency 从shuffle manager 那里读取数据，拿到MapStauts 状态
-<img src="https://v1.ax1x.com/2024/09/01/7xyHYa.png" alt=""></li>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/09/01/7xyHYa.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/09/01/7xyHYa.png" />
+        </a>
+    </li>
 </ul>
 <p>根据分区生成key 是根据不同的分区目标来做的</p>
 <ul>
@@ -382,7 +427,11 @@
 <li>BypassMergeSortShuffleWriter 不做排序，适合分区较少场景</li>
 <li>UnsafeShuffleWriter，使用Tungsten 做分区排序</li>
 <li>SortShuffleWriter，不满足一些阈值条件，则使用这个
-<img src="https://v1.ax1x.com/2024/09/01/7xyKd7.png" alt=""></li>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/09/01/7xyKd7.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/09/01/7xyKd7.png" />
+        </a>
+    </li>
 </ul>
 <p>UnsafeShuffleWriter</p>
 <ul>
@@ -392,7 +441,11 @@
 <li>如果内存不足则 spill 到磁盘，再做归并排序</li>
 <li>写入的信息也包含一些元信息，如分区长度，block id，等</li>
 <li>写入完后，为每个分区id，增加一个 index，方便 reader快速定位
-<img src="https://v1.ax1x.com/2024/09/01/7xyguI.png" alt=""></li>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/09/01/7xyguI.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/09/01/7xyguI.png" />
+        </a>
+    </li>
 </ul>
 <p>BlockStoreShuffleReader</p>
 <ul>
@@ -488,6 +541,7 @@ code.has-jax {
       </script>
     </div>
     
+
 </div>
 
 
@@ -506,6 +560,10 @@ code.has-jax {
     <section class="widget">
         <h3 class="widget-title">最近文章</h3>
 <ul class="widget-list">
+    
+    <li>
+        <a href="/post/2026/06/da_lian/" title="大连，11年后的再相见">大连，11年后的再相见</a>
+    </li>
     
     <li>
         <a href="/post/2026/05/volcano-notes/" title="Volcano 笔记">Volcano 笔记</a>
@@ -543,10 +601,6 @@ code.has-jax {
         <a href="/post/2026/04/claude_code/" title="Claude code 源码分析">Claude code 源码分析</a>
     </li>
     
-    <li>
-        <a href="/post/2026/03/iran_war/" title="Iran War">Iran War</a>
-    </li>
-    
 </ul>
 
     </section>
@@ -573,7 +627,7 @@ code.has-jax {
     
     <li><a href="/categories/%E6%96%87%E5%AD%A6%E5%92%8C%E8%89%BA%E6%9C%AF/">文学和艺术 (3)</a></li>
     
-    <li><a href="/categories/%E6%97%85%E8%A1%8C/">旅行 (15)</a></li>
+    <li><a href="/categories/%E6%97%85%E8%A1%8C/">旅行 (16)</a></li>
     
     <li><a href="/categories/%E6%9E%B6%E6%9E%84/">架构 (15)</a></li>
     
@@ -607,7 +661,7 @@ code.has-jax {
     
     <li><a href="/years/2025%E5%B9%B4/">2025年 (38)</a></li>
     
-    <li><a href="/years/2026%E5%B9%B4/">2026年 (14)</a></li>
+    <li><a href="/years/2026%E5%B9%B4/">2026年 (15)</a></li>
     
 </ul>
 
@@ -621,9 +675,9 @@ code.has-jax {
     
     <a href="/tags/ambari/">Ambari </a>
     
-    <a href="/tags/architecture/">architecture </a>
+    <a href="/tags/architecture/">Architecture </a>
     
-    <a href="/tags/bigdata/">bigdata </a>
+    <a href="/tags/bigdata/">Bigdata </a>
     
     <a href="/tags/btrace/">BTrace </a>
     
@@ -631,11 +685,11 @@ code.has-jax {
     
     <a href="/tags/c&#43;&#43;/">C&#43;&#43; </a>
     
-    <a href="/tags/calcite/">calcite </a>
+    <a href="/tags/calcite/">Calcite </a>
     
     <a href="/tags/canal/">Canal </a>
     
-    <a href="/tags/claude/">claude </a>
+    <a href="/tags/claude/">Claude </a>
     
     <a href="/tags/cmu-database/">CMU-Database </a>
     
@@ -647,7 +701,7 @@ code.has-jax {
     
     <a href="/tags/doris/">Doris </a>
     
-    <a href="/tags/ebpf/">eBPF </a>
+    <a href="/tags/ebpf/">EBPF </a>
     
     <a href="/tags/english/">English </a>
     
@@ -657,7 +711,7 @@ code.has-jax {
     
     <a href="/tags/flink/">Flink </a>
     
-    <a href="/tags/flume/">flume </a>
+    <a href="/tags/flume/">Flume </a>
     
     <a href="/tags/gc/">GC </a>
     
@@ -667,15 +721,15 @@ code.has-jax {
     
     <a href="/tags/hive/">Hive </a>
     
-    <a href="/tags/iceberg/">iceberg </a>
+    <a href="/tags/iceberg/">Iceberg </a>
     
     <a href="/tags/impala/">Impala </a>
     
-    <a href="/tags/janino/">janino </a>
+    <a href="/tags/janino/">Janino </a>
     
     <a href="/tags/juicefs/">JuiceFS </a>
     
-    <a href="/tags/k8s/">k8s </a>
+    <a href="/tags/k8s/">K8s </a>
     
     <a href="/tags/kafka/">Kafka </a>
     
@@ -691,17 +745,17 @@ code.has-jax {
     
     <a href="/tags/llvm/">LLVM </a>
     
-    <a href="/tags/log4j/">log4j </a>
+    <a href="/tags/log4j/">Log4j </a>
     
-    <a href="/tags/longhorn/">longhorn </a>
+    <a href="/tags/longhorn/">Longhorn </a>
     
     <a href="/tags/manacher/">Manacher </a>
     
     <a href="/tags/mapreduce/">MapReduce </a>
     
-    <a href="/tags/micro-service/">micro-service </a>
+    <a href="/tags/micro-service/">Micro-Service </a>
     
-    <a href="/tags/mq/">mq </a>
+    <a href="/tags/mq/">Mq </a>
     
     <a href="/tags/mysql/">MySQL </a>
     
@@ -715,25 +769,25 @@ code.has-jax {
     
     <a href="/tags/ozone/">Ozone </a>
     
-    <a href="/tags/parquet/">parquet </a>
+    <a href="/tags/parquet/">Parquet </a>
     
-    <a href="/tags/paxos/">paxos </a>
+    <a href="/tags/paxos/">Paxos </a>
     
     <a href="/tags/presto/">Presto </a>
     
     <a href="/tags/pytorch/">PyTorch </a>
     
-    <a href="/tags/quick-sql/">quick-sql </a>
+    <a href="/tags/quick-sql/">Quick-Sql </a>
     
-    <a href="/tags/raft/">raft </a>
+    <a href="/tags/raft/">Raft </a>
     
-    <a href="/tags/scala/">scala </a>
+    <a href="/tags/scala/">Scala </a>
     
     <a href="/tags/seatunnel/">SeaTunnel </a>
     
     <a href="/tags/simd/">SIMD </a>
     
-    <a href="/tags/snowflake/">snowflake </a>
+    <a href="/tags/snowflake/">Snowflake </a>
     
     <a href="/tags/spark/">Spark </a>
     
@@ -747,7 +801,7 @@ code.has-jax {
     
     <a href="/tags/tuning/">Tuning </a>
     
-    <a href="/tags/unix/">unix </a>
+    <a href="/tags/unix/">Unix </a>
     
     <a href="/tags/volcano/">Volcano </a>
     

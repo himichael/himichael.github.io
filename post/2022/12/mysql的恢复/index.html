@@ -19,7 +19,7 @@
     <meta property="article:modified_time" content='2022-12-22T08:15:19&#43;08:00'>
         
     <meta name="Keywords" content="">
-    <meta name="description" content="MySQL的恢复">
+    <meta name="description" content="redo log的格式(逻辑&#43;物理混合格式)、Mini-Transaction、redo log写入过程，写入page cache，log_sys结构、redo log的文件格式，如何刷新到磁盘上的，checkpoint过程，恢复过程；   undo log的格式(逻辑格式)、undo log的组织、回滚段、系统表空间的5号page，多个回滚段、rollback的过程；以及源码中的redo log定义、undo log定义">
         <meta name="author" content="隔壁老王">
         
     <meta property="og:url" content="https://code0xff.org/post/2022/12/mysql%E7%9A%84%E6%81%A2%E5%A4%8D/">
@@ -73,7 +73,8 @@
             <div class="col-group">
 
                 <div class="col-8" id="main">
-                    <div class="res-cons">
+                    
+<div class="res-cons">
     
     <article class="post">
         <header>
@@ -88,32 +89,32 @@
       <ul>
         <li><a href="#redo-log">redo log</a>
           <ul>
-            <li><a href="#redo-log1">redo log格式</a></li>
-            <li><a href="#minitransaction">Mini-Transaction</a></li>
-            <li><a href="#redo-log2">redo log写入过程</a></li>
-            <li><a href="#-page-cache">写入 page cache</a></li>
-            <li><a href="#redo-loglogsys">管理redo log的log_sys</a></li>
-            <li><a href="#redo-log3">redo log文件格式</a></li>
-            <li><a href="#heading">刷新到磁盘</a></li>
+            <li><a href="#redo-log格式">redo log格式</a></li>
+            <li><a href="#mini-transaction">Mini-Transaction</a></li>
+            <li><a href="#redo-log写入过程">redo log写入过程</a></li>
+            <li><a href="#写入-page-cache">写入 page cache</a></li>
+            <li><a href="#管理redo-log的log_sys">管理redo log的log_sys</a></li>
+            <li><a href="#redo-log文件格式">redo log文件格式</a></li>
+            <li><a href="#刷新到磁盘">刷新到磁盘</a></li>
             <li><a href="#checkpoint">checkpoint</a></li>
-            <li><a href="#heading1">恢复过程</a></li>
+            <li><a href="#恢复过程">恢复过程</a></li>
           </ul>
         </li>
         <li><a href="#undo-log">undo log</a>
           <ul>
-            <li><a href="#undo-log-">undo log 格式</a></li>
-            <li><a href="#undo-log1">undo log的组织</a></li>
-            <li><a href="#heading2">回滚段</a></li>
-            <li><a href="#rollback">rollback过程</a></li>
+            <li><a href="#undo-log-格式">undo log 格式</a></li>
+            <li><a href="#undo-log的组织">undo log的组织</a></li>
+            <li><a href="#回滚段">回滚段</a></li>
+            <li><a href="#rollback过程">rollback过程</a></li>
           </ul>
         </li>
-        <li><a href="#heading3">源码中的类型定义</a>
+        <li><a href="#源码中的类型定义">源码中的类型定义</a>
           <ul>
-            <li><a href="#redo-log4">redo log所有类型</a></li>
-            <li><a href="#undo-log2">undo log的所有类型</a></li>
+            <li><a href="#redo-log所有类型">redo log所有类型</a></li>
+            <li><a href="#undo-log的所有类型">undo log的所有类型</a></li>
           </ul>
         </li>
-        <li><a href="#heading4">参考</a></li>
+        <li><a href="#参考">参考</a></li>
       </ul>
     </li>
   </ul>
@@ -143,9 +144,13 @@
 <li>直接将数据刷磁盘是 随机I/O行为，redo log则是顺序I/O行为</li>
 <li>redo 本身比 纯数据要小很大，而数据page一写就是 16K为单位写入的</li>
 <li>基本是纯物理格式，也有物理+逻辑格式，比 binlog更底层<br>
-<img src="https://v1.ax1x.com/2024/05/10/7bAjlO.png" alt="0"></li>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/05/10/7bAjlO.png">
+            <img class="mx-auto" alt="0" src="https://v1.ax1x.com/2024/05/10/7bAjlO.png" />
+        </a>
+    </li>
 </ul>
-<h3 id="redo-log1">redo log格式</h3>
+<h3 id="redo-log格式">redo log格式</h3>
 <p>redo log大致可以分为三类</p>
 <ul>
 <li>作用于Page的REDO，这种占大多数，如：Index Page REDO，Undo Page REDO，Rtree PageREDO</li>
@@ -153,10 +158,18 @@
 <li>提供额外信息的Logic REDO，如MLOG_MULTI_REC_END</li>
 </ul>
 <p>通用的redo log格式如下：<br>
-<img src="https://v1.ax1x.com/2024/05/10/7bArYb.jpg" alt="1"></p>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/05/10/7bArYb.jpg">
+            <img class="mx-auto" alt="1" src="https://v1.ax1x.com/2024/05/10/7bArYb.jpg" />
+        </a>
+    </p>
 <p>如果没有主键，mysql会自动生成 row_id，而每当这个值是 256的倍数，就会刷到系统表空间<code>7</code>号page<br>
 这种操作只需要记录，哪个表空间、哪个page、offset是什么就可以了，属于简单格式<br>
-<img src="https://v1.ax1x.com/2024/05/10/7bAtZe.jpg" alt="2"><br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/05/10/7bAtZe.jpg">
+            <img class="mx-auto" alt="2" src="https://v1.ax1x.com/2024/05/10/7bAtZe.jpg" />
+        </a>
+    <br>
 简单格式的redo log如下：</p>
 <ul>
 <li>MLOG_1BYTE（type字段对应的2进制数字为1）：表示在⻚⾯的某个偏移量处写⼊1个字节的redo⽇志类型</li>
@@ -172,78 +185,114 @@
 <li>PAGE_HEAP_TOP，还未使用的最小空间地址</li>
 <li>PAGE_N_HEAP，page中的记录数量</li>
 <li>下一条记录的next_record指针
-<img src="https://v1.ax1x.com/2024/05/10/7bA4uP.jpg" alt="3"></li>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/05/10/7bA4uP.jpg">
+            <img class="mx-auto" alt="3" src="https://v1.ax1x.com/2024/05/10/7bA4uP.jpg" />
+        </a>
+    </li>
 </ul>
 <p>一些复杂的 redo log格式：</p>
 <table>
-<thead>
-<tr>
-<th>type</th>
-<th>description</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td>MLOG_REC_INSERT</td>
-<td>表示插以条使非紧凑格式的记录时的redo志类型</td>
-</tr>
-<tr>
-<td>MLOG_COMP_REC_INSERT</td>
-<td>插入紧凑格式的记录</td>
-</tr>
-<tr>
-<td>MLOG_COMP_PAGE_CREATE</td>
-<td>创建紧凑格式记录</td>
-</tr>
-<tr>
-<td>MLOG_COMP_REC_DELETE</td>
-<td>删除一条记录</td>
-</tr>
-<tr>
-<td>MLOG_COMP_LIST_START_DELETE</td>
-<td>从这里开始删除记录</td>
-</tr>
-<tr>
-<td>MLOG_COMP_LIST_END_DELETE</td>
-<td>跟上面配套使用，表示结束删除</td>
-</tr>
-<tr>
-<td>MLOG_ZIP_PAGE_COMPRESS</td>
-<td>一条压缩记录</td>
-</tr>
-</tbody>
+	<thead>
+			<tr>
+					<th>type</th>
+					<th>description</th>
+			</tr>
+	</thead>
+	<tbody>
+			<tr>
+					<td>MLOG_REC_INSERT</td>
+					<td>表示插以条使非紧凑格式的记录时的redo志类型</td>
+			</tr>
+			<tr>
+					<td>MLOG_COMP_REC_INSERT</td>
+					<td>插入紧凑格式的记录</td>
+			</tr>
+			<tr>
+					<td>MLOG_COMP_PAGE_CREATE</td>
+					<td>创建紧凑格式记录</td>
+			</tr>
+			<tr>
+					<td>MLOG_COMP_REC_DELETE</td>
+					<td>删除一条记录</td>
+			</tr>
+			<tr>
+					<td>MLOG_COMP_LIST_START_DELETE</td>
+					<td>从这里开始删除记录</td>
+			</tr>
+			<tr>
+					<td>MLOG_COMP_LIST_END_DELETE</td>
+					<td>跟上面配套使用，表示结束删除</td>
+			</tr>
+			<tr>
+					<td>MLOG_ZIP_PAGE_COMPRESS</td>
+					<td>一条压缩记录</td>
+			</tr>
+	</tbody>
 </table>
 <p>下面是 一条 MLOG_COMP_REC_INSERT 类型的redo log：<br>
-<img src="https://v1.ax1x.com/2024/05/10/7bACOw.jpg" alt="4">  
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/05/10/7bACOw.jpg">
+            <img class="mx-auto" alt="4" src="https://v1.ax1x.com/2024/05/10/7bACOw.jpg" />
+        </a>
+    <br>
 n_uniques，主键是一个字段，联合主键多个，二级索引是包含的列+主键</p>
 <p>从这里也可以看到，这种复杂性的redo log是物理+逻辑混合的<br>
 物理上，它标注了表空间iD，page号，这种是属于物理级别的<br>
 但它记录了并不纯粹是物理信息，相当于是用这些信息，组成了一个逻辑的插入语句<br>
 等恢复的时候，通过这些信息，调用对应的恢复函数，变成一次insert插入，就可以真正还原了</p>
 <p>MLOG_REC_UPDATE_IN_PLACE 内容格式<br>
-<img src="https://v1.ax1x.com/2024/05/10/7bVMEI.png" alt="x-1"></p>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/05/10/7bVMEI.png">
+            <img class="mx-auto" alt="x-1" src="https://v1.ax1x.com/2024/05/10/7bVMEI.png" />
+        </a>
+    </p>
 <p>MLOG_FILE_CREATE 内容格式
-<img src="https://v1.ax1x.com/2024/05/10/7bVn27.png" alt="x-2"></p>
-<h3 id="minitransaction">Mini-Transaction</h3>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/05/10/7bVn27.png">
+            <img class="mx-auto" alt="x-2" src="https://v1.ax1x.com/2024/05/10/7bVn27.png" />
+        </a>
+    </p>
+<h3 id="mini-transaction">Mini-Transaction</h3>
 <p>插入一条数据时，B+树可能会分裂，此时可能需要修改好几个page，也就会记录更多的redo log<br>
 这些redo log应该是以事务的方式出现，他们是不可分割的<br>
-<img src="https://v1.ax1x.com/2024/05/10/7bAJf6.jpg" alt="5">  
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/05/10/7bAJf6.jpg">
+            <img class="mx-auto" alt="5" src="https://v1.ax1x.com/2024/05/10/7bAJf6.jpg" />
+        </a>
+    <br>
 比如上面的分裂，会导致修改很多地方，比如该系一些系统的page，修改各种段、区的统计信息，各种FREE、FSP_FREE_FRAG链表的信息等等<br>
 以上这些操作都必须是原子的，组织成一个事务</p>
 <p>于是就有<code>MLOG_MULTI_REC_END</code>这种类型的 redo log<br>
 它的结构很简单，只有一个<code>typ</code>字段</p>
 <p>一组完整的redo log事务，只要后面以 MLOG_MULTI_REC_END结尾即可，当然一个普通的MLOG_8BYTE也可以用 MLOG_MULTI_REC_END结尾<br>
-<img src="https://v1.ax1x.com/2024/05/10/7bAnVQ.jpg" alt="6"></p>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/05/10/7bAnVQ.jpg">
+            <img class="mx-auto" alt="6" src="https://v1.ax1x.com/2024/05/10/7bAnVQ.jpg" />
+        </a>
+    </p>
 <p>每个redo log类型的第一个bit用来标识是否是原子性的<br>
-<img src="https://v1.ax1x.com/2024/05/10/7bAIJf.jpg" alt="7"></p>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/05/10/7bAIJf.jpg">
+            <img class="mx-auto" alt="7" src="https://v1.ax1x.com/2024/05/10/7bAIJf.jpg" />
+        </a>
+    </p>
 <p>Mini-Transaction，简称mtr<br>
 一个mtr可以包含一组redo log，他们表示不可分割<br>
 一个事务可以由多个语句组成，而一个语句又包含多个 mtr，一个mtr包含多个redo log<br>
 他们的关系如下：<br>
-<img src="https://v1.ax1x.com/2024/05/10/7bAfTc.jpg" alt="8"></p>
-<h3 id="redo-log2">redo log写入过程</h3>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/05/10/7bAfTc.jpg">
+            <img class="mx-auto" alt="8" src="https://v1.ax1x.com/2024/05/10/7bAfTc.jpg" />
+        </a>
+    </p>
+<h3 id="redo-log写入过程">redo log写入过程</h3>
 <p>mtr生成的log被放在一个 512字节的块中，格式如下：<br>
-<img src="https://v1.ax1x.com/2024/05/10/7bAih3.jpg" alt="9">  <br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/05/10/7bAih3.jpg">
+            <img class="mx-auto" alt="9" src="https://v1.ax1x.com/2024/05/10/7bAih3.jpg" />
+        </a>
+      <br>
 参数解释：</p>
 <ul>
 <li>LOG_BLOCK_HDR_NO，每个block都有一个大于0的唯一标识</li>
@@ -253,30 +302,58 @@ n_uniques，主键是一个字段，联合主键多个，二级索引是包含�
 <li>LOG_BLOCK_CHECKSUM，尾部的校验和</li>
 </ul>
 <p>redo log的缓冲区结构如下，就是把一堆 block连在一起而已<br>
-<img src="https://v1.ax1x.com/2024/05/10/7bAsYj.jpg" alt="10"></p>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/05/10/7bAsYj.jpg">
+            <img class="mx-auto" alt="10" src="https://v1.ax1x.com/2024/05/10/7bAsYj.jpg" />
+        </a>
+    </p>
 <p>查看redo log的缓冲区大小 命令，默认为 16M</p>
-<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4">
-<table style="border-spacing:0;padding:0;margin:0;border:0;width:auto;overflow:auto;display:block;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
-<pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"><code><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
 </span></code></pre></td>
 <td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
-<pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-sql" data-lang="sql"><span style="color:#ff79c6">SHOW</span> VARIABLES <span style="color:#ff79c6">LIKE</span> <span style="color:#f1fa8c">&#39;</span><span style="color:#f1fa8c">innodb_log_buffer_size</span><span style="color:#f1fa8c">&#39;</span>
-</code></pre></td></tr></table>
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"><code class="language-sql" data-lang="sql"><span style="display:flex;"><span><span style="color:#ff79c6">SHOW</span> VARIABLES <span style="color:#ff79c6">LIKE</span> <span style="color:#f1fa8c">&#39;innodb_log_buffer_size&#39;</span>
+</span></span></code></pre></td></tr></table>
 </div>
 </div><p>多个事务的写入，是混杂在一起的，交错的连续存放，其中全局变量 buf_free指向的位置，表示后面都是空闲的 <br>
-<img src="https://v1.ax1x.com/2024/05/10/7bA2d5.jpg" alt="11"></p>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/05/10/7bA2d5.jpg">
+            <img class="mx-auto" alt="11" src="https://v1.ax1x.com/2024/05/10/7bA2d5.jpg" />
+        </a>
+    </p>
 <p>从8.0 开始，设计了一套无锁的写log机制，最大限度的保证了并发性<br>
 首先会根据自身的 redo log长度，计算出对应在 log buffer中的占用空间，这部分空间就是独占的，不会有并发</p>
-<h3 id="-page-cache">写入 page cache</h3>
+<h3 id="写入-page-cache">写入 page cache</h3>
 <p>InnoDB中有单独的log_writer来做这件事情<br>
 InnoDB在这里引入一个叫做link_buf的数据结构<br>
 link_buf是一个循环使用的数组，对每个lsn取模可以得到其在link_buf上的一个槽位，在这个槽位中记录REDO长度。另外一个线程从开始遍历这个link_buf，通过槽位中的长度可以找到这条REDO的结尾位置，一直遍历到下一位置为0的位置，可以认为之后的REDO有空洞，而之前已经连续，这个位置叫做link_buf的tail<br>
-<img src="https://v1.ax1x.com/2024/05/10/7bVCoq.png" alt="x-4"></p>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/05/10/7bVCoq.png">
+            <img class="mx-auto" alt="x-4" src="https://v1.ax1x.com/2024/05/10/7bVCoq.png" />
+        </a>
+    </p>
 <p>log_writer 和众多mtr利用这个link_buf数据结构完成写入过程：<br>
-<img src="https://v1.ax1x.com/2024/05/10/7bVjUa.png" alt="x-5">  
-<img src="https://v1.ax1x.com/2024/05/10/7bVXys.png" alt="x-6">  
-<img src="https://v1.ax1x.com/2024/05/10/7bVinL.png" alt="x-7">  
-<img src="https://v1.ax1x.com/2024/05/10/7bVfcV.png" alt="x-8">  
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/05/10/7bVjUa.png">
+            <img class="mx-auto" alt="x-5" src="https://v1.ax1x.com/2024/05/10/7bVjUa.png" />
+        </a>
+    <br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/05/10/7bVXys.png">
+            <img class="mx-auto" alt="x-6" src="https://v1.ax1x.com/2024/05/10/7bVXys.png" />
+        </a>
+    <br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/05/10/7bVinL.png">
+            <img class="mx-auto" alt="x-7" src="https://v1.ax1x.com/2024/05/10/7bVinL.png" />
+        </a>
+    <br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/05/10/7bVfcV.png">
+            <img class="mx-auto" alt="x-8" src="https://v1.ax1x.com/2024/05/10/7bVfcV.png" />
+        </a>
+    <br>
 三个变量</p>
 <ul>
 <li>write_lsn是当前log_writer已经写入到Page Cache中日志末尾</li>
@@ -287,49 +364,53 @@ link_buf是一个循环使用的数组，对每个lsn取模可以得到其在lin
 从buf_ready_for_write_lsn到current_lsn是当前mtr正在并发写Log Buffer的范围</p>
 <p>一开始有空洞，就是不连续的红色部分，等写完之后红色部分连续了，将buf_ready_for_write_lsn向前滑动，红色部分清零，就可以重复使用了<br>
 紧接log_writer将连续的内容刷盘并提升write_lsn</p>
-<h3 id="redo-loglogsys">管理redo log的log_sys</h3>
+<h3 id="管理redo-log的log_sys">管理redo log的log_sys</h3>
 <p>InnoDB 使用 log_sys 这个对象来管理 Redo Log Buffer，其结构体为 log_t<br>
 <code>log_t</code>路径为：   /innobase/include/log0log.h<br>
 log_sys 主要包含的元数据：</p>
 <table>
-<thead>
-<tr>
-<th>参数</th>
-<th>描述</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td>lsn</td>
-<td>日志序列号</td>
-</tr>
-<tr>
-<td>buf_free</td>
-<td>当前log buffer空闲空间的起始位置</td>
-</tr>
-<tr>
-<td>buf</td>
-<td>log buffer的起始位置</td>
-</tr>
-<tr>
-<td>write_lsn</td>
-<td>最新写入的lsn</td>
-</tr>
-<tr>
-<td>flushed_to_disk_lsn</td>
-<td>已刷新到redo log文件中的lsn</td>
-</tr>
-<tr>
-<td>last_checkpoint_lsn</td>
-<td>最近执行检查点的lsn</td>
-</tr>
-</tbody>
+	<thead>
+			<tr>
+					<th>参数</th>
+					<th>描述</th>
+			</tr>
+	</thead>
+	<tbody>
+			<tr>
+					<td>lsn</td>
+					<td>日志序列号</td>
+			</tr>
+			<tr>
+					<td>buf_free</td>
+					<td>当前log buffer空闲空间的起始位置</td>
+			</tr>
+			<tr>
+					<td>buf</td>
+					<td>log buffer的起始位置</td>
+			</tr>
+			<tr>
+					<td>write_lsn</td>
+					<td>最新写入的lsn</td>
+			</tr>
+			<tr>
+					<td>flushed_to_disk_lsn</td>
+					<td>已刷新到redo log文件中的lsn</td>
+			</tr>
+			<tr>
+					<td>last_checkpoint_lsn</td>
+					<td>最近执行检查点的lsn</td>
+			</tr>
+	</tbody>
 </table>
 <p>log_sys的初始化由log_init()函数实现<br>
 位置：/innobase/log/log0log.cc</p>
 <p>log_sys 个 log_block的关系如下：<br>
-<img src="https://v1.ax1x.com/2024/05/10/7bAZO4.png" alt="12"></p>
-<h3 id="redo-log3">redo log文件格式</h3>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/05/10/7bAZO4.png">
+            <img class="mx-auto" alt="12" src="https://v1.ax1x.com/2024/05/10/7bAZO4.png" />
+        </a>
+    </p>
+<h3 id="redo-log文件格式">redo log文件格式</h3>
 <p>也就是存储在硬盘上的redo log格式<br>
 几个参数：</p>
 <ul>
@@ -340,11 +421,19 @@ log_sys 主要包含的元数据：</p>
 <p>默认的文件名为：<br>
 ib_logfile0、ib_logfile1<br>
 redo log总大小就是： innodb_log_file_size * innodb_log_files_in_group<br>
-<img src="https://v1.ax1x.com/2024/05/10/7bAFwm.jpg" alt="13"></p>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/05/10/7bAFwm.jpg">
+            <img class="mx-auto" alt="13" src="https://v1.ax1x.com/2024/05/10/7bAFwm.jpg" />
+        </a>
+    </p>
 <p>log buffer会将一片连续的内存刷新到磁盘，所以硬盘上的redo log格式跟log buffer的一样<br>
 也是按照 512一个block组织的<br>
 不过的是前面 4个block，2048字节有特殊用途，后面就跟正常的 block一样了 <br>
-<img src="https://v1.ax1x.com/2024/05/10/7bAo79.jpg" alt="14"></p>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/05/10/7bAo79.jpg">
+            <img class="mx-auto" alt="14" src="https://v1.ax1x.com/2024/05/10/7bAo79.jpg" />
+        </a>
+    </p>
 <p>redo log的前4个block</p>
 <ul>
 <li>log file header，512字节
@@ -352,7 +441,7 @@ redo log总大小就是： innodb_log_file_size * innodb_log_files_in_group<br>
 <li>LOG_HEADER_FORMAT(4B)，redo log的版本</li>
 <li>1LOG_HEADER_PAD1(4B)，无意义</li>
 <li>LOG_HEADER_START_LSN(8B)，LSN值</li>
-<li>LOG_HEADER_CREATOR(32B)，创建者，如&quot;MySQL5.7&rdquo;，“ibbackup”等</li>
+<li>LOG_HEADER_CREATOR(32B)，创建者，如&quot;MySQL5.7&quot;，“ibbackup”等</li>
 <li>后面460字节没用</li>
 <li>LOG_BLOCK_CHECKSUM(4B)</li>
 </ul>
@@ -371,22 +460,38 @@ redo log总大小就是： innodb_log_file_size * innodb_log_files_in_group<br>
 </ul>
 <p>redo log的三层结构<br>
 最上面的混合逻辑+物理结构，然后写入log buffer，再刷新到磁盘<br>
-<img src="https://v1.ax1x.com/2024/05/10/7bW92P.png" alt="x-3"></p>
-<h3 id="heading">刷新到磁盘</h3>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/05/10/7bW92P.png">
+            <img class="mx-auto" alt="x-3" src="https://v1.ax1x.com/2024/05/10/7bW92P.png" />
+        </a>
+    </p>
+<h3 id="刷新到磁盘">刷新到磁盘</h3>
 <p><code>Log Sequeue Number</code>是一个全局递增的值，在一条redo log都没写入时，LSN的值为<code>8704</code><br>
 实际统计LSN时，会把log block header、log block trialer也算上<br>
 第一次启动初始化log buffer后，buf_free指向了12字节偏移量，此时LSN = 8704 + 12 = 8716<br>
 对于跨多个block的，需要把对应的头和尾的字节都算上 <br>
-<img src="https://v1.ax1x.com/2024/05/10/7bAdih.jpg" alt="15"></p>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/05/10/7bAdih.jpg">
+            <img class="mx-auto" alt="15" src="https://v1.ax1x.com/2024/05/10/7bAdih.jpg" />
+        </a>
+    </p>
 <p><code>buf_next_to_write</code>这个变量，标记了已经刷新到磁盘上的位置<br>
 这里其实有两个值</p>
 <ul>
 <li>write_lsn，表示 log buffer 写入到操作系统缓冲区，但没有fsync()</li>
 <li>flushed_to_disk_lsn，表示写入到操作系统buffer，并且调用了fsync，所以这个值一般会比 write_lsn 要小一些</li>
 </ul>
-<p><img src="https://v1.ax1x.com/2024/05/10/7bV9VY.jpg" alt="16"></p>
+<p>
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/05/10/7bV9VY.jpg">
+            <img class="mx-auto" alt="16" src="https://v1.ax1x.com/2024/05/10/7bV9VY.jpg" />
+        </a>
+    </p>
 <p>lsn值和redo⽇志⽂件偏移量的对应关系，如下：<br>
-<img src="https://v1.ax1x.com/2024/05/10/7bVkXH.jpg" alt="17"> <br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/05/10/7bVkXH.jpg">
+            <img class="mx-auto" alt="17" src="https://v1.ax1x.com/2024/05/10/7bVkXH.jpg" />
+        </a>
+     <br>
 初始时的LSN值是8704，对应⽂件偏移量2048<br>
 之后每个mtr向磁盘中写⼊多少字节⽇志，lsn的值就增⻓多少</p>
 <p>flush链表中的脏⻚是按照⻚⾯的第⼀次修改时间从⼤到⼩进⾏排序的<br>
@@ -397,16 +502,28 @@ redo log总大小就是： innodb_log_file_size * innodb_log_files_in_group<br>
 </ul>
 <p>假设mtr1修改了页面 a，之后 mtr2 修改了页面b、c<br>
 之后 mtr3 修改了 页面b、页面d，最终效果如下：<br>
-<img src="https://v1.ax1x.com/2024/05/10/7bVTTZ.jpg" alt="18"></p>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/05/10/7bVTTZ.jpg">
+            <img class="mx-auto" alt="18" src="https://v1.ax1x.com/2024/05/10/7bVTTZ.jpg" />
+        </a>
+    </p>
 <p>flush链表中的脏⻚按照修改发⽣的时间顺序进行排序<br>
 也就是按照<code>oldest_modification</code>代表的LSN值进⾏排序<br>
 被多次更新的页面不会重复插入到flush链表中，但是会更新<code>newest_modification</code>属性的值</p>
 <p>为了避免大量的唤醒工作影响log_writer或log_flusher线程，InnoDB中引入了两个专门负责唤醒用户的线程：<br>
 log_wirte_notifier和log_flush_notifier<br>
 当超过一个条件变量需要被唤醒时，log_writer和log_flusher会通知这两个线程完成唤醒工作<br>
-<img src="https://v1.ax1x.com/2024/05/10/7bVFzB.png" alt="x-9"></p>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/05/10/7bVFzB.png">
+            <img class="mx-auto" alt="x-9" src="https://v1.ax1x.com/2024/05/10/7bVFzB.png" />
+        </a>
+    </p>
 <p>多个线程通过一些内部数据结构的辅助，完成了高效的从REDO产生，到REDO写盘，再到唤醒用户线程的流程，下面是整个这个过程的时序图<br>
-<img src="https://v1.ax1x.com/2024/05/10/7bV6GG.png" alt="x-10"> 
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/05/10/7bV6GG.png">
+            <img class="mx-auto" alt="x-10" src="https://v1.ax1x.com/2024/05/10/7bV6GG.png" />
+        </a>
+    
 这里的 log_writer完成主要写入工作，调用<code>pwrite</code>系统调用完成原子写入<br>
 后面再交给log_flusher完成真正的 fsync()系统调用<br>
 这里根据<code>innodb_flush_log_at_trx_commit</code>的取值不同，有不同的写入和通知方式</p>
@@ -414,52 +531,64 @@ log_wirte_notifier和log_flush_notifier<br>
 <p>为防止redo log文件追尾，需要定期做 checkpoint<br>
 对于已经刷新到磁盘上的数据，其 redo log就可以被覆盖了<br>
 比如下面的 mtr1 已经刷新到磁盘了，那么对应的 flushed_to_disk_lsn 就需要增加<br>
-<img src="https://v1.ax1x.com/2024/05/10/7bVTTZ.jpg" alt="18,两个18原始就是重复的"></p>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/05/10/7bVTTZ.jpg">
+            <img class="mx-auto" alt="18,两个18原始就是重复的" src="https://v1.ax1x.com/2024/05/10/7bVTTZ.jpg" />
+        </a>
+    </p>
 <p>这里需要一个全局变量<code>checkpoint_lsn</code>，表示可以被覆盖的 redo log是多少</p>
 <ul>
 <li>假设页面a被刷新到磁盘，那么页面c就是最老的，其<code>oldest_modification</code>是 8916</li>
 <li>那么就把 8916 赋给checkpoint-lsn，凡是小于这个的都可以被覆盖掉</li>
 <li>更新checkpoint_no，并将checkpoint_lsn 写入到redo log文件组管理信息中</li>
 <li>checkpoint_no是奇数就更新 redo log文件中的checkpoint1、否则更新checkpoint2<br>
-<img src="https://v1.ax1x.com/2024/05/10/7bVmhU.jpg" alt="19"></li>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/05/10/7bVmhU.jpg">
+            <img class="mx-auto" alt="19" src="https://v1.ax1x.com/2024/05/10/7bVmhU.jpg" />
+        </a>
+    </li>
 </ul>
 <p>记录完checkpoint后，redo log文件组中各个 LSN值关系如下：<br>
-<img src="https://v1.ax1x.com/2024/05/10/7bVprq.jpg" alt="20"></p>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/05/10/7bVprq.jpg">
+            <img class="mx-auto" alt="20" src="https://v1.ax1x.com/2024/05/10/7bVprq.jpg" />
+        </a>
+    </p>
 <p>刷新脏页、做checkpoint是两个不同的线程<br>
 如果系统LSN增长的太快，后面来不及做脏页刷新，最后不得已会同步的从flush链表中同步的刷新脏页到磁盘<br>
 当这些脏页刷新完后，系统就可以继续做checkpoint了</p>
-<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4">
-<table style="border-spacing:0;padding:0;margin:0;border:0;width:auto;overflow:auto;display:block;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
-<pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"><code><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
 </span></code></pre></td>
 <td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
-<pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-sql" data-lang="sql"><span style="color:#ff79c6">SHOW</span> ENGINE INNODB STATUS
-</code></pre></td></tr></table>
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"><code class="language-sql" data-lang="sql"><span style="display:flex;"><span><span style="color:#ff79c6">SHOW</span> ENGINE INNODB STATUS
+</span></span></code></pre></td></tr></table>
 </div>
 </div><p>显示结果：</p>
-<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4">
-<table style="border-spacing:0;padding:0;margin:0;border:0;width:auto;overflow:auto;display:block;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
-<pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">5
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">6
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">7
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">8
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">9
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"><code><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">5
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">6
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">7
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">8
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">9
 </span></code></pre></td>
 <td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
-<pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">---
-LOG
----
-Log sequence number 21897971
-Log flushed up to   21897971
-Pages flushed up to 21897971
-Last checkpoint at  21897962
-<span style="color:#bd93f9">0</span> pending log flushes, <span style="color:#bd93f9">0</span> pending chkp writes
-<span style="color:#bd93f9">26</span> log i/o<span style="color:#f1fa8c">&#39;s done, 0.00 LOG i/o&#39;</span>s/second
-</code></pre></td></tr></table>
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"><code class="language-shell" data-lang="shell"><span style="display:flex;"><span>---
+</span></span><span style="display:flex;"><span>LOG
+</span></span><span style="display:flex;"><span>---
+</span></span><span style="display:flex;"><span>Log sequence number <span style="color:#bd93f9">21897971</span>
+</span></span><span style="display:flex;"><span>Log flushed up to   <span style="color:#bd93f9">21897971</span>
+</span></span><span style="display:flex;"><span>Pages flushed up to <span style="color:#bd93f9">21897971</span>
+</span></span><span style="display:flex;"><span>Last checkpoint at  <span style="color:#bd93f9">21897962</span>
+</span></span><span style="display:flex;"><span><span style="color:#bd93f9">0</span> pending log flushes, <span style="color:#bd93f9">0</span> pending chkp writes
+</span></span><span style="display:flex;"><span><span style="color:#bd93f9">26</span> log i/o<span style="color:#f1fa8c">&#39;s done, 0.00 LOG i/o&#39;</span>s/second
+</span></span></code></pre></td></tr></table>
 </div>
 </div><p>解释一下</p>
 <ul>
@@ -468,7 +597,7 @@ Last checkpoint at  21897962
 <li>Pages flushed up to，flush链表中最早修改的页面对应的oldest_modification值</li>
 <li>Last checkpoint at，最新的checkpoint值</li>
 <li>pending log flushes,pending chkp writes，还未完成的日志操作及统计信息</li>
-<li>log i/o's done,log i/o's/second，已经发生的日志操作统计信息</li>
+<li>log i/o&rsquo;s done,log i/o&rsquo;s/second，已经发生的日志操作统计信息</li>
 </ul>
 <p><code>innodb_flush_log_at_trx_commit</code>取值</p>
 <ul>
@@ -476,8 +605,12 @@ Last checkpoint at  21897962
 <li>1，提交事务时也将redo log同步到磁盘，最安全但性能最差</li>
 <li>2，提交事务的redo log写入到操作系统缓存，如果OS没挂还是能保证持久性</li>
 </ul>
-<p><img src="https://v1.ax1x.com/2024/05/10/7bAvu7.png" alt="mysql缓存-7"></p>
-<h3 id="heading1">恢复过程</h3>
+<p>
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/05/10/7bAvu7.png">
+            <img class="mx-auto" alt="mysql缓存-7" src="https://v1.ax1x.com/2024/05/10/7bAvu7.png" />
+        </a>
+    </p>
+<h3 id="恢复过程">恢复过程</h3>
 <p>找到<code>checkpoint_lsn</code>，之前的那些 redo log已经刷脏页到磁盘上了，所以不用恢复<br>
 redo log文件组有两个checkpoint头，1 和 2，取最新的即可，这样就能拿到恢复的起点位置了</p>
 <p>如果一个block是满的，那么 LOG_BLOCK_HDR_DATA_LEN 就是 512字节<br>
@@ -488,69 +621,93 @@ redo log文件组有两个checkpoint头，1 和 2，取最新的即可，这样�
 <li>对于小于LSN的redo log就不用管了，而大于LSN的，可能也被后台线程刷新到磁盘了，需要判断一下是否需要跳过</li>
 <li>File Header头部的FIL_PAGE_LSN记录了最近一次修改的LSN，也就是页面控制块的newest_modification，如果大于LSN此页面可以跳过</li>
 <li>根据表空间 + 页号，组装成hash表，相同的按照链表先来后到排序，这样同一个页面就在一起了合并了，减少了很多随机I/O<br>
-<img src="https://v1.ax1x.com/2024/05/10/7bVLds.jpg" alt="21"></li>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/05/10/7bVLds.jpg">
+            <img class="mx-auto" alt="21" src="https://v1.ax1x.com/2024/05/10/7bVLds.jpg" />
+        </a>
+    </li>
 </ul>
 <p>LOG_BLOCK_HDR_NO 的计算过程</p>
-<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4">
-<table style="border-spacing:0;padding:0;margin:0;border:0;width:auto;overflow:auto;display:block;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
-<pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"><code><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
 </span></code></pre></td>
 <td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
-<pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-cpp" data-lang="cpp">((lsn <span style="color:#ff79c6">/</span> <span style="color:#bd93f9">512</span>) <span style="color:#ff79c6">&amp;</span> <span style="color:#bd93f9">0x3FFFFFFFUL</span>) <span style="color:#ff79c6">+</span> <span style="color:#bd93f9">1</span>
-</code></pre></td></tr></table>
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"><code class="language-cpp" data-lang="cpp"><span style="display:flex;"><span>((lsn <span style="color:#ff79c6">/</span> <span style="color:#bd93f9">512</span>) <span style="color:#ff79c6">&amp;</span> <span style="color:#bd93f9">0x3FFFFFFFUL</span>) <span style="color:#ff79c6">+</span> <span style="color:#bd93f9">1</span>
+</span></span></code></pre></td></tr></table>
 </div>
 </div><p>所以肯定是在 1~0x40000000之间，后者就等于 1G<br>
 所以能产生不重复的LOG_BLOCK_HDR_NO最多只有 1GB个，一个block是512字节，redo log组总文件最大就是 512G</p>
 <h2 id="undo-log">undo log</h2>
 <p>undo log本身也会被 redo log记录下来</p>
-<h3 id="undo-log-">undo log 格式</h3>
+<h3 id="undo-log-格式">undo log 格式</h3>
 <p>一般来说，每次对一条记录的改动都会对应一条 undo log，有时候会会对应两条<br>
 undo log专门存放在 <code>FIL_PAGE_UNDO_LOG</code>的页面中，可以放在系统表空间中，也可以放在独立表空间中</p>
 <p>假设表结构为：</p>
-<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4">
-<table style="border-spacing:0;padding:0;margin:0;border:0;width:auto;overflow:auto;display:block;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
-<pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">5
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">6
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">7
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"><code><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">5
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">6
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">7
 </span></code></pre></td>
 <td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
-<pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-sql" data-lang="sql"><span style="color:#ff79c6">CREATE</span> <span style="color:#ff79c6">TABLE</span> undo_demo (
-  id <span style="color:#8be9fd;font-style:italic">INT</span> <span style="color:#ff79c6">NOT</span> <span style="color:#ff79c6">NULL</span>,
-  key1 <span style="color:#8be9fd;font-style:italic">VARCHAR</span>(<span style="color:#bd93f9">100</span>),
-  col <span style="color:#8be9fd;font-style:italic">VARCHAR</span>(<span style="color:#bd93f9">100</span>),
-  <span style="color:#ff79c6">PRIMARY</span> <span style="color:#ff79c6">KEY</span>(id),
-  <span style="color:#ff79c6">KEY</span> idx_key1(key1)
-) Engine<span style="color:#ff79c6">=</span>InnoDB ;
-</code></pre></td></tr></table>
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"><code class="language-sql" data-lang="sql"><span style="display:flex;"><span><span style="color:#ff79c6">CREATE</span> <span style="color:#ff79c6">TABLE</span> undo_demo (
+</span></span><span style="display:flex;"><span>  id <span style="color:#8be9fd;font-style:italic">INT</span> <span style="color:#ff79c6">NOT</span> <span style="color:#ff79c6">NULL</span>,
+</span></span><span style="display:flex;"><span>  key1 <span style="color:#8be9fd;font-style:italic">VARCHAR</span>(<span style="color:#bd93f9">100</span>),
+</span></span><span style="display:flex;"><span>  col <span style="color:#8be9fd;font-style:italic">VARCHAR</span>(<span style="color:#bd93f9">100</span>),
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">PRIMARY</span> <span style="color:#ff79c6">KEY</span>(id),
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">KEY</span> idx_key1(key1)
+</span></span><span style="display:flex;"><span>) Engine<span style="color:#ff79c6">=</span>InnoDB ;
+</span></span></code></pre></td></tr></table>
 </div>
-</div><p><strong>INSERT的 undo log格式</strong>  
+</div><p><strong>INSERT的 undo log格式</strong><br>
 插入语句：</p>
-<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4">
-<table style="border-spacing:0;padding:0;margin:0;border:0;width:auto;overflow:auto;display:block;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
-<pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"><code><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
 </span></code></pre></td>
 <td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
-<pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-sql" data-lang="sql"><span style="color:#ff79c6">INSERT</span> <span style="color:#ff79c6">INTO</span> undo_demo(id, key1, col1)
-<span style="color:#ff79c6">VALUES</span>(<span style="color:#bd93f9">1</span>, <span style="color:#f1fa8c">&#39;</span><span style="color:#f1fa8c">AWM</span><span style="color:#f1fa8c">&#39;</span>, <span style="color:#f1fa8c">&#39;</span><span style="color:#f1fa8c">aaa</span><span style="color:#f1fa8c">&#39;</span>), (<span style="color:#bd93f9">2</span>, <span style="color:#f1fa8c">&#39;</span><span style="color:#f1fa8c">M416</span><span style="color:#f1fa8c">&#39;</span>, <span style="color:#f1fa8c">&#39;</span><span style="color:#f1fa8c">bbb</span><span style="color:#f1fa8c">&#39;</span>);
-</code></pre></td></tr></table>
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"><code class="language-sql" data-lang="sql"><span style="display:flex;"><span><span style="color:#ff79c6">INSERT</span> <span style="color:#ff79c6">INTO</span> undo_demo(id, key1, col1)
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">VALUES</span>(<span style="color:#bd93f9">1</span>, <span style="color:#f1fa8c">&#39;AWM&#39;</span>, <span style="color:#f1fa8c">&#39;aaa&#39;</span>), (<span style="color:#bd93f9">2</span>, <span style="color:#f1fa8c">&#39;M416&#39;</span>, <span style="color:#f1fa8c">&#39;bbb&#39;</span>);
+</span></span></code></pre></td></tr></table>
 </div>
 </div><p>insert的undo log格式：<br>
-<img src="https://v1.ax1x.com/2024/05/10/7bV3wa.jpg" alt="22"></p>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/05/10/7bV3wa.jpg">
+            <img class="mx-auto" alt="22" src="https://v1.ax1x.com/2024/05/10/7bV3wa.jpg" />
+        </a>
+    </p>
 <p>page的开头是 next record offset，结尾是 prev record offset
-<img src="https://v1.ax1x.com/2024/05/10/7bV2pJ.png" alt="x-11"></p>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/05/10/7bV2pJ.png">
+            <img class="mx-auto" alt="x-11" src="https://v1.ax1x.com/2024/05/10/7bV2pJ.png" />
+        </a>
+    </p>
 <p>插入2条记录后的 undo log格式如下：<br>
-<img src="https://v1.ax1x.com/2024/05/10/7bVlS7.jpg" alt="23"></p>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/05/10/7bVlS7.jpg">
+            <img class="mx-auto" alt="23" src="https://v1.ax1x.com/2024/05/10/7bVlS7.jpg" />
+        </a>
+    </p>
 <p><strong>DELETE的 undo log格式</strong><br>
 删除一条记录后，并不是立马从数据页中删除，而是有一个中间状态<br>
 这样做是为了实现<code>MVCC</code><br>
-<img src="https://v1.ax1x.com/2024/05/10/7bV7iI.jpg" alt="24"></p>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/05/10/7bV7iI.jpg">
+            <img class="mx-auto" alt="24" src="https://v1.ax1x.com/2024/05/10/7bV7iI.jpg" />
+        </a>
+    </p>
 <p>之后会有专门的 purge 线程来完成垃圾清理操作<br>
-<img src="https://v1.ax1x.com/2024/05/10/7bVQ7V.jpg" alt="25"></p>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/05/10/7bVQ7V.jpg">
+            <img class="mx-auto" alt="25" src="https://v1.ax1x.com/2024/05/10/7bVQ7V.jpg" />
+        </a>
+    </p>
 <p>所以删除一条记录分为两个阶段</p>
 <ul>
 <li>仅仅将这个记录的<code>deleted_flag</code>做一个标记，然后修改隐藏的 trx_id、roll_pointer值，其他列不改动</li>
@@ -563,10 +720,18 @@ undo log专门存放在 <code>FIL_PAGE_UNDO_LOG</code>的页面中，可以放�
 <li>如果删除空间中全有很多碎片，但是加起来空间却足够，会申请一个新page，然后全复制page这样就可以清除碎片了</li>
 </ul>
 <p>TRX_UNDO_DEL_MARK_REC 类型的undo log格式：<br>
-<img src="https://v1.ax1x.com/2024/05/10/7bVqXJ.jpg" alt="26"></p>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/05/10/7bVqXJ.jpg">
+            <img class="mx-auto" alt="26" src="https://v1.ax1x.com/2024/05/10/7bVqXJ.jpg" />
+        </a>
+    </p>
 <p>删除语句的delete mark操作对应的undo log结构<br>
 roll_pointer指向了 旧的记录<br>
-<img src="https://v1.ax1x.com/2024/05/10/7bVNWL.jpg" alt="27"></p>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/05/10/7bVNWL.jpg">
+            <img class="mx-auto" alt="27" src="https://v1.ax1x.com/2024/05/10/7bVNWL.jpg" />
+        </a>
+    </p>
 <p><strong>UPDATE的undo log格式</strong><br>
 更新要分为两种情况</p>
 <ul>
@@ -586,15 +751,31 @@ roll_pointer指向了 旧的记录<br>
 </ul>
 <p>不管是更新主键、还是不更新主键，都会 生成一个 TRX_UNDO_UPD_EXIST_REC 格式的undo log<br>
 TRX_UNDO_UPD_EXIST_REC 格式如下：<br>
-<img src="https://v1.ax1x.com/2024/05/10/7bVwmG.jpg" alt="28"></p>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/05/10/7bVwmG.jpg">
+            <img class="mx-auto" alt="28" src="https://v1.ax1x.com/2024/05/10/7bVwmG.jpg" />
+        </a>
+    </p>
 <p>先插入一条记录，再更新这个记录之后的 roll_pointer指向情况<br>
-<img src="https://v1.ax1x.com/2024/05/10/7bVHrt.jpg" alt="29"></p>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/05/10/7bVHrt.jpg">
+            <img class="mx-auto" alt="29" src="https://v1.ax1x.com/2024/05/10/7bVHrt.jpg" />
+        </a>
+    </p>
 <p>MVCC方式的数据组织，根据事务id，去undo page中对比，如果可见则返回，否则继续遍历链表   <br>
-<img src="https://v1.ax1x.com/2024/05/10/7bVZot.png" alt="x-12"></p>
-<h3 id="undo-log1">undo log的组织</h3>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/05/10/7bVZot.png">
+            <img class="mx-auto" alt="x-12" src="https://v1.ax1x.com/2024/05/10/7bVZot.png" />
+        </a>
+    </p>
+<h3 id="undo-log的组织">undo log的组织</h3>
 <p>undo log会按照 双链表的方式组织在一起，链表的第一个节点比较特殊，有有一些特殊的header，其他节点格式都一样<br>
 一下就是 FIL_PAGE_UNDO_LOG 页面的格式：<br>
-<img src="https://v1.ax1x.com/2024/05/10/7bVy8B.jpg" alt="30"></p>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/05/10/7bVy8B.jpg">
+            <img class="mx-auto" alt="30" src="https://v1.ax1x.com/2024/05/10/7bVy8B.jpg" />
+        </a>
+    </p>
 <p>解释一下这几个头</p>
 <ul>
 <li>Undo page Header
@@ -637,12 +818,24 @@ TRX_UNDO_UPD_EXIST_REC 格式如下：<br>
 </li>
 </ul>
 <p>undo log的双链表结构<br>
-<img src="https://v1.ax1x.com/2024/05/10/7bVKeb.jpg" alt="31"></p>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/05/10/7bVKeb.jpg">
+            <img class="mx-auto" alt="31" src="https://v1.ax1x.com/2024/05/10/7bVKeb.jpg" />
+        </a>
+    </p>
 <p>一个事务中最多有 4个链表<br>
-<img src="https://v1.ax1x.com/2024/05/10/7bVhSP.jpg" alt="32"></p>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/05/10/7bVhSP.jpg">
+            <img class="mx-auto" alt="32" src="https://v1.ax1x.com/2024/05/10/7bVhSP.jpg" />
+        </a>
+    </p>
 <p>undo page的内部组成<br>
-<img src="https://v1.ax1x.com/2024/05/10/7bVoUe.png" alt="x-13"></p>
-<h3 id="heading2">回滚段</h3>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/05/10/7bVoUe.png">
+            <img class="mx-auto" alt="x-13" src="https://v1.ax1x.com/2024/05/10/7bVoUe.png" />
+        </a>
+    </p>
+<h3 id="回滚段">回滚段</h3>
 <p>重用undo log</p>
 <ul>
 <li>该链表只有一个page</li>
@@ -653,7 +846,11 @@ TRX_UNDO_UPD_EXIST_REC 格式如下：<br>
 <p>回滚段中存放了各个事务中 undo log链表的first undo page<br>
 这些first undo page被放在一个个的 undo slot中</p>
 <p>每个Rollback Segment Header页面对应一个段，这个段就是回滚段<br>
-<img src="https://v1.ax1x.com/2024/05/10/7bVgwe.jpg" alt="33"> 
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/05/10/7bVgwe.jpg">
+            <img class="mx-auto" alt="33" src="https://v1.ax1x.com/2024/05/10/7bVgwe.jpg" />
+        </a>
+    
 主要字段</p>
 <ul>
 <li>TRX_RSEG_MAX_SIZE，所有undo log链表中undo log页面数量总和</li>
@@ -680,13 +877,25 @@ TRX_UNDO_UPD_EXIST_REC 格式如下：<br>
 <li>page Number</li>
 </ul>
 <p>系统的第<code>5</code>号页面，Rollback Segment Header，undo slot，undo log链表之间的关系<br>
-<img src="https://v1.ax1x.com/2024/05/10/7bVx76.jpg" alt="34"></p>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/05/10/7bVx76.jpg">
+            <img class="mx-auto" alt="34" src="https://v1.ax1x.com/2024/05/10/7bVx76.jpg" />
+        </a>
+    </p>
 <p>独立表空间下，默认第3个page 固定作为这128个Rollback Segment的目录，也就是Rollback Segment Arrary Header <br>
 其中最多会有128个指针指向各个Rollback Segment Header所在的Page<br>
 每个Rollback Segment Header又包含了 1024个 slot，指向了一个 Undo Segment 的first undo page<br>
-<img src="https://v1.ax1x.com/2024/05/10/7bVeHb.png" alt="x-14"></p>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/05/10/7bVeHb.png">
+            <img class="mx-auto" alt="x-14" src="https://v1.ax1x.com/2024/05/10/7bVeHb.png" />
+        </a>
+    </p>
 <p>一个事务引用内存中的数据结构，以及磁盘上的物理结构组织<br>
-<img src="https://v1.ax1x.com/2024/05/10/7bWTc6.png" alt="x-15"></p>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/05/10/7bWTc6.png">
+            <img class="mx-auto" alt="x-15" src="https://v1.ax1x.com/2024/05/10/7bWTc6.png" />
+        </a>
+    </p>
 <p>回滚段的分配</p>
 <ul>
 <li>0号必须在系统表空间，也就是0号对应的 Rollback Segment Header必须在系统表空间</li>
@@ -706,13 +915,13 @@ TRX_UNDO_UPD_EXIST_REC 格式如下：<br>
 <li>临时表的操作也是类似的</li>
 </ul>
 <p>配置回滚段的数量，默认为 128</p>
-<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4">
-<table style="border-spacing:0;padding:0;margin:0;border:0;width:auto;overflow:auto;display:block;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
-<pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"><code><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
 </span></code></pre></td>
 <td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
-<pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-sql" data-lang="sql"><span style="color:#ff79c6">SHOW</span> VARIABLES <span style="color:#ff79c6">LIKE</span> <span style="color:#f1fa8c">&#39;</span><span style="color:#f1fa8c">innodb_rollback_segments</span><span style="color:#f1fa8c">&#39;</span>;
-</code></pre></td></tr></table>
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"><code class="language-sql" data-lang="sql"><span style="display:flex;"><span><span style="color:#ff79c6">SHOW</span> VARIABLES <span style="color:#ff79c6">LIKE</span> <span style="color:#f1fa8c">&#39;innodb_rollback_segments&#39;</span>;
+</span></span></code></pre></td></tr></table>
 </div>
 </div><ul>
 <li>innodb_rollback_segments 设置为1，只有一个普通表空间回滚段可用，但仍有32个临时表空间回滚段</li>
@@ -720,26 +929,30 @@ TRX_UNDO_UPD_EXIST_REC 格式如下：<br>
 <li>设置为 大于33，则针对普通表的可用回滚段数量就是 该值 - 32</li>
 </ul>
 <p>设置 undo log表空间</p>
-<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4">
-<table style="border-spacing:0;padding:0;margin:0;border:0;width:auto;overflow:auto;display:block;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
-<pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">5
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"><code><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">5
 </span></code></pre></td>
 <td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
-<pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-sql" data-lang="sql"><span style="color:#6272a4">-- undo 表空间所在的目录，默认放在数据目录中
-</span><span style="color:#6272a4"></span><span style="color:#ff79c6">SHOW</span> VARIABLES <span style="color:#ff79c6">LIKE</span> <span style="color:#f1fa8c">&#39;</span><span style="color:#f1fa8c">innodb_undo_directory</span><span style="color:#f1fa8c">&#39;</span>;
-
-<span style="color:#6272a4">-- 表空间数量
-</span><span style="color:#6272a4"></span><span style="color:#ff79c6">SHOW</span> VARIABLES <span style="color:#ff79c6">LIKE</span> <span style="color:#f1fa8c">&#39;</span><span style="color:#f1fa8c">innodb_undo_tablespaces</span><span style="color:#f1fa8c">&#39;</span>;
-</code></pre></td></tr></table>
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"><code class="language-sql" data-lang="sql"><span style="display:flex;"><span><span style="color:#6272a4">-- undo 表空间所在的目录，默认放在数据目录中
+</span></span></span><span style="display:flex;"><span><span style="color:#ff79c6">SHOW</span> VARIABLES <span style="color:#ff79c6">LIKE</span> <span style="color:#f1fa8c">&#39;innodb_undo_directory&#39;</span>;
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4">-- 表空间数量
+</span></span></span><span style="display:flex;"><span><span style="color:#ff79c6">SHOW</span> VARIABLES <span style="color:#ff79c6">LIKE</span> <span style="color:#f1fa8c">&#39;innodb_undo_tablespaces&#39;</span>;
+</span></span></code></pre></td></tr></table>
 </div>
 </div><p><strong>roll_pointer</strong><br>
 聚集索引的记录中包含了 roll_pointer指针，有些类型的undo log中也包含了这个指针<br>
 它指向了一个undo log地址，这个字段由<code>7</code>个字节组成<br>
-<img src="https://v1.ax1x.com/2024/05/10/7bV8sw.jpg" alt="35"> 
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/05/10/7bV8sw.jpg">
+            <img class="mx-auto" alt="35" src="https://v1.ax1x.com/2024/05/10/7bV8sw.jpg" />
+        </a>
+    
 解释</p>
 <ul>
 <li>is_insert，表示undo log是否为 TRX_UNDO_INSERT 这种大类</li>
@@ -747,7 +960,7 @@ TRX_UNDO_UPD_EXIST_REC 格式如下：<br>
 <li>page number，4个字节</li>
 <li>offse，16K页面，2个字节足够了</li>
 </ul>
-<h3 id="rollback">rollback过程</h3>
+<h3 id="rollback过程">rollback过程</h3>
 <p>解释</p>
 <ul>
 <li>首先通过 redo log，将各个页面恢复到崩溃之前的状态</li>
@@ -758,473 +971,477 @@ TRX_UNDO_UPD_EXIST_REC 格式如下：<br>
 <li>最后一个页面中记录了事务id，这就是未提交的事务</li>
 <li>从最后一个链表往前，反向回滚，就可以将未提交的事务还原了</li>
 </ul>
-<p><img src="https://v1.ax1x.com/2024/05/10/7bWBQw.png" alt="x-16"></p>
-<h2 id="heading3">源码中的类型定义</h2>
-<h3 id="redo-log4">redo log所有类型</h3>
+<p>
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/05/10/7bWBQw.png">
+            <img class="mx-auto" alt="x-16" src="https://v1.ax1x.com/2024/05/10/7bWBQw.png" />
+        </a>
+    </p>
+<h2 id="源码中的类型定义">源码中的类型定义</h2>
+<h3 id="redo-log所有类型">redo log所有类型</h3>
 <p>文件所在位置：<br>
 mysql-8.0.28/storage/innobase/include/mtr0types.h</p>
-<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4">
-<table style="border-spacing:0;padding:0;margin:0;border:0;width:auto;overflow:auto;display:block;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
-<pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">  1
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">  2
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">  3
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">  4
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">  5
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">  6
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">  7
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">  8
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">  9
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 10
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 11
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 12
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 13
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 14
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 15
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 16
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 17
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 18
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 19
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 20
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 21
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 22
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 23
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 24
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 25
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 26
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 27
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 28
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 29
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 30
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 31
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 32
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 33
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 34
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 35
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 36
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 37
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 38
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 39
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 40
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 41
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 42
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 43
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 44
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 45
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 46
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 47
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 48
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 49
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 50
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 51
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 52
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 53
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 54
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 55
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 56
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 57
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 58
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 59
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 60
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 61
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 62
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 63
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 64
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 65
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 66
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 67
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 68
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 69
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 70
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 71
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 72
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 73
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 74
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 75
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 76
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 77
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 78
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 79
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 80
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 81
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 82
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 83
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 84
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 85
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 86
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 87
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 88
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 89
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 90
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 91
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 92
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 93
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 94
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 95
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 96
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 97
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 98
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 99
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">100
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">101
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">102
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">103
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">104
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">105
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">106
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">107
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">108
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">109
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">110
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">111
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">112
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">113
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">114
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">115
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">116
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">117
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">118
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">119
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">120
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">121
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">122
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">123
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">124
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">125
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">126
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">127
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">128
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">129
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">130
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">131
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">132
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">133
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">134
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">135
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">136
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">137
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">138
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">139
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">140
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">141
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">142
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">143
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">144
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">145
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">146
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">147
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">148
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">149
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">150
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">151
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">152
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">153
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">154
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">155
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">156
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">157
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">158
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">159
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">160
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">161
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">162
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">163
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">164
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">165
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">166
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">167
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">168
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">169
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">170
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">171
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">172
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">173
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">174
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">175
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">176
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">177
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">178
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">179
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">180
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">181
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">182
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">183
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">184
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">185
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">186
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">187
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">188
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">189
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">190
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">191
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"><code><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">  1
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">  2
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">  3
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">  4
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">  5
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">  6
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">  7
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">  8
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">  9
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 10
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 11
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 12
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 13
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 14
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 15
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 16
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 17
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 18
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 19
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 20
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 21
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 22
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 23
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 24
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 25
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 26
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 27
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 28
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 29
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 30
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 31
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 32
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 33
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 34
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 35
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 36
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 37
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 38
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 39
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 40
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 41
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 42
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 43
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 44
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 45
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 46
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 47
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 48
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 49
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 50
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 51
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 52
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 53
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 54
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 55
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 56
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 57
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 58
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 59
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 60
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 61
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 62
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 63
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 64
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 65
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 66
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 67
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 68
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 69
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 70
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 71
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 72
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 73
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 74
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 75
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 76
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 77
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 78
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 79
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 80
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 81
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 82
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 83
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 84
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 85
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 86
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 87
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 88
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 89
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 90
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 91
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 92
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 93
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 94
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 95
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 96
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 97
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 98
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 99
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">100
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">101
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">102
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">103
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">104
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">105
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">106
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">107
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">108
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">109
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">110
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">111
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">112
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">113
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">114
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">115
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">116
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">117
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">118
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">119
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">120
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">121
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">122
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">123
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">124
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">125
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">126
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">127
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">128
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">129
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">130
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">131
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">132
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">133
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">134
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">135
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">136
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">137
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">138
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">139
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">140
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">141
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">142
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">143
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">144
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">145
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">146
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">147
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">148
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">149
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">150
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">151
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">152
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">153
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">154
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">155
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">156
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">157
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">158
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">159
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">160
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">161
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">162
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">163
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">164
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">165
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">166
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">167
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">168
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">169
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">170
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">171
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">172
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">173
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">174
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">175
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">176
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">177
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">178
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">179
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">180
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">181
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">182
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">183
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">184
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">185
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">186
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">187
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">188
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">189
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">190
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">191
 </span></code></pre></td>
 <td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
-<pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-cpp" data-lang="cpp"><span style="color:#ff79c6">enum</span> <span style="color:#50fa7b">mlog_id_t</span> {
-  <span style="color:#6272a4">/** if the mtr contains only one log record for one page,
-</span><span style="color:#6272a4">  i.e., write_initial_log_record has been called only once,
-</span><span style="color:#6272a4">  this flag is ORed to the type of that first log record */</span>
-  MLOG_SINGLE_REC_FLAG <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">128</span>,
-
-  <span style="color:#6272a4">/** one byte is written */</span>
-  MLOG_1BYTE <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">1</span>,
-
-  <span style="color:#6272a4">/** 2 bytes ... */</span>
-  MLOG_2BYTES <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">2</span>,
-
-  <span style="color:#6272a4">/** 4 bytes ... */</span>
-  MLOG_4BYTES <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">4</span>,
-
-  <span style="color:#6272a4">/** 8 bytes ... */</span>
-  MLOG_8BYTES <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">8</span>,
-
-  <span style="color:#6272a4">/** Record insert */</span>
-  MLOG_REC_INSERT <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">9</span>,
-
-  <span style="color:#6272a4">/** Mark clustered index record deleted */</span>
-  MLOG_REC_CLUST_DELETE_MARK <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">10</span>,
-
-  <span style="color:#6272a4">/** Mark secondary index record deleted */</span>
-  MLOG_REC_SEC_DELETE_MARK <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">11</span>,
-
-  <span style="color:#6272a4">/** update of a record, preserves record field sizes */</span>
-  MLOG_REC_UPDATE_IN_PLACE <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">13</span>,
-
-  <span style="color:#6272a4">/*!&lt; Delete a record from a page */</span>
-  MLOG_REC_DELETE <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">14</span>,
-
-  <span style="color:#6272a4">/** Delete record list end on index page */</span>
-  MLOG_LIST_END_DELETE <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">15</span>,
-
-  <span style="color:#6272a4">/** Delete record list start on index page */</span>
-  MLOG_LIST_START_DELETE <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">16</span>,
-
-  <span style="color:#6272a4">/** Copy record list end to a new created index page */</span>
-  MLOG_LIST_END_COPY_CREATED <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">17</span>,
-
-  <span style="color:#6272a4">/** Reorganize an index page in ROW_FORMAT=REDUNDANT */</span>
-  MLOG_PAGE_REORGANIZE <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">18</span>,
-
-  <span style="color:#6272a4">/** Create an index page */</span>
-  MLOG_PAGE_CREATE <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">19</span>,
-
-  <span style="color:#6272a4">/** Insert entry in an undo log */</span>
-  MLOG_UNDO_INSERT <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">20</span>,
-
-  <span style="color:#6272a4">/** erase an undo log page end */</span>
-  MLOG_UNDO_ERASE_END <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">21</span>,
-
-  <span style="color:#6272a4">/** initialize a page in an undo log */</span>
-  MLOG_UNDO_INIT <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">22</span>,
-
-  <span style="color:#6272a4">/** reuse an insert undo log header */</span>
-  MLOG_UNDO_HDR_REUSE <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">24</span>,
-
-  <span style="color:#6272a4">/** create an undo log header */</span>
-  MLOG_UNDO_HDR_CREATE <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">25</span>,
-
-  <span style="color:#6272a4">/** mark an index record as the predefined minimum record */</span>
-  MLOG_REC_MIN_MARK <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">26</span>,
-
-  <span style="color:#6272a4">/** initialize an ibuf bitmap page */</span>
-  MLOG_IBUF_BITMAP_INIT <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">27</span>,
-
-<span style="color:#ff79c6">#</span><span style="color:#ff79c6">ifdef UNIV_LOG_LSN_DEBUG</span><span style="color:#ff79c6">
-</span><span style="color:#ff79c6"></span>  <span style="color:#6272a4">/** Current LSN */</span>
-  MLOG_LSN <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">28</span>,
-<span style="color:#ff79c6">#</span><span style="color:#ff79c6">endif </span><span style="color:#6272a4">/* UNIV_LOG_LSN_DEBUG */</span><span style="color:#ff79c6"></span><span style="color:#ff79c6">
-</span><span style="color:#ff79c6"></span>
-  <span style="color:#6272a4">/** this means that a file page is taken into use and the prior
-</span><span style="color:#6272a4">  contents of the page should be ignored: in recovery we must not
-</span><span style="color:#6272a4">  trust the lsn values stored to the file page.
-</span><span style="color:#6272a4">  Note: it&#39;s deprecated because it causes crash recovery problem
-</span><span style="color:#6272a4">  in bulk create index, and actually we don&#39;t need to reset page
-</span><span style="color:#6272a4">  lsn in recv_recover_page_func() now. */</span>
-  MLOG_INIT_FILE_PAGE <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">29</span>,
-
-  <span style="color:#6272a4">/** write a string to a page */</span>
-  MLOG_WRITE_STRING <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">30</span>,
-
-  <span style="color:#6272a4">/** If a single mtr writes several log records, this log
-</span><span style="color:#6272a4">  record ends the sequence of these records */</span>
-  MLOG_MULTI_REC_END <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">31</span>,
-
-  <span style="color:#6272a4">/** dummy log record used to pad a log block full */</span>
-  MLOG_DUMMY_RECORD <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">32</span>,
-
-  <span style="color:#6272a4">/** log record about creating an .ibd file, with format */</span>
-  MLOG_FILE_CREATE <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">33</span>,
-
-  <span style="color:#6272a4">/** rename a tablespace file that starts with (space_id,page_no) */</span>
-  MLOG_FILE_RENAME <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">34</span>,
-
-  <span style="color:#6272a4">/** delete a tablespace file that starts with (space_id,page_no) */</span>
-  MLOG_FILE_DELETE <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">35</span>,
-
-  <span style="color:#6272a4">/** mark a compact index record as the predefined minimum record */</span>
-  MLOG_COMP_REC_MIN_MARK <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">36</span>,
-
-  <span style="color:#6272a4">/** create a compact index page */</span>
-  MLOG_COMP_PAGE_CREATE <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">37</span>,
-
-  <span style="color:#6272a4">/** compact record insert */</span>
-  MLOG_COMP_REC_INSERT <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">38</span>,
-
-  <span style="color:#6272a4">/** mark compact clustered index record deleted */</span>
-  MLOG_COMP_REC_CLUST_DELETE_MARK <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">39</span>,
-
-  <span style="color:#6272a4">/** mark compact secondary index record deleted; this log
-</span><span style="color:#6272a4">  record type is redundant, as MLOG_REC_SEC_DELETE_MARK is
-</span><span style="color:#6272a4">  independent of the record format. */</span>
-  MLOG_COMP_REC_SEC_DELETE_MARK <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">40</span>,
-
-  <span style="color:#6272a4">/** update of a compact record, preserves record field sizes */</span>
-  MLOG_COMP_REC_UPDATE_IN_PLACE <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">41</span>,
-
-  <span style="color:#6272a4">/** delete a compact record from a page */</span>
-  MLOG_COMP_REC_DELETE <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">42</span>,
-
-  <span style="color:#6272a4">/** delete compact record list end on index page */</span>
-  MLOG_COMP_LIST_END_DELETE <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">43</span>,
-
-  <span style="color:#6272a4">/*** delete compact record list start on index page */</span>
-  MLOG_COMP_LIST_START_DELETE <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">44</span>,
-
-  <span style="color:#6272a4">/** copy compact record list end to a new created index page */</span>
-  MLOG_COMP_LIST_END_COPY_CREATED <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">45</span>,
-
-  <span style="color:#6272a4">/** reorganize an index page */</span>
-  MLOG_COMP_PAGE_REORGANIZE <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">46</span>,
-
-  <span style="color:#6272a4">/** write the node pointer of a record on a compressed
-</span><span style="color:#6272a4">  non-leaf B-tree page */</span>
-  MLOG_ZIP_WRITE_NODE_PTR <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">48</span>,
-
-  <span style="color:#6272a4">/** write the BLOB pointer of an externally stored column
-</span><span style="color:#6272a4">  on a compressed page */</span>
-  MLOG_ZIP_WRITE_BLOB_PTR <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">49</span>,
-
-  <span style="color:#6272a4">/** write to compressed page header */</span>
-  MLOG_ZIP_WRITE_HEADER <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">50</span>,
-
-  <span style="color:#6272a4">/** compress an index page */</span>
-  MLOG_ZIP_PAGE_COMPRESS <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">51</span>,
-
-  <span style="color:#6272a4">/** compress an index page without logging it&#39;s image */</span>
-  MLOG_ZIP_PAGE_COMPRESS_NO_DATA <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">52</span>,
-
-  <span style="color:#6272a4">/** reorganize a compressed page */</span>
-  MLOG_ZIP_PAGE_REORGANIZE <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">53</span>,
-
-  <span style="color:#6272a4">/** Create a R-Tree index page */</span>
-  MLOG_PAGE_CREATE_RTREE <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">57</span>,
-
-  <span style="color:#6272a4">/** create a R-tree compact page */</span>
-  MLOG_COMP_PAGE_CREATE_RTREE <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">58</span>,
-
-  <span style="color:#6272a4">/** this means that a file page is taken into use.
-</span><span style="color:#6272a4">  We use it to replace MLOG_INIT_FILE_PAGE. */</span>
-  MLOG_INIT_FILE_PAGE2 <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">59</span>,
-
-  <span style="color:#6272a4">/** Table is being truncated. (Marked only for file-per-table) */</span>
-  <span style="color:#6272a4">/* MLOG_TRUNCATE = 60,  Disabled for WL6378 */</span>
-
-  <span style="color:#6272a4">/** notify that an index tree is being loaded without writing
-</span><span style="color:#6272a4">  redo log about individual pages */</span>
-  MLOG_INDEX_LOAD <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">61</span>,
-
-  <span style="color:#6272a4">/** log for some persistent dynamic metadata change */</span>
-  MLOG_TABLE_DYNAMIC_META <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">62</span>,
-
-  <span style="color:#6272a4">/** create a SDI index page */</span>
-  MLOG_PAGE_CREATE_SDI <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">63</span>,
-
-  <span style="color:#6272a4">/** create a SDI compact page */</span>
-  MLOG_COMP_PAGE_CREATE_SDI <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">64</span>,
-
-  <span style="color:#6272a4">/** Extend the space */</span>
-  MLOG_FILE_EXTEND <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">65</span>,
-
-  <span style="color:#6272a4">/** Used in tests of redo log. It must never be used outside unit tests. */</span>
-  MLOG_TEST <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">66</span>,
-
-  <span style="color:#6272a4">/** biggest value (used in assertions) */</span>
-  MLOG_BIGGEST_TYPE <span style="color:#ff79c6">=</span> MLOG_TEST
-};
-</code></pre></td></tr></table>
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"><code class="language-cpp" data-lang="cpp"><span style="display:flex;"><span><span style="color:#ff79c6">enum</span> <span style="color:#50fa7b">mlog_id_t</span> {
+</span></span><span style="display:flex;"><span>  <span style="color:#6272a4">/** if the mtr contains only one log record for one page,
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">  i.e., write_initial_log_record has been called only once,
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">  this flag is ORed to the type of that first log record */</span>
+</span></span><span style="display:flex;"><span>  MLOG_SINGLE_REC_FLAG <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">128</span>,
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>  <span style="color:#6272a4">/** one byte is written */</span>
+</span></span><span style="display:flex;"><span>  MLOG_1BYTE <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">1</span>,
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>  <span style="color:#6272a4">/** 2 bytes ... */</span>
+</span></span><span style="display:flex;"><span>  MLOG_2BYTES <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">2</span>,
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>  <span style="color:#6272a4">/** 4 bytes ... */</span>
+</span></span><span style="display:flex;"><span>  MLOG_4BYTES <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">4</span>,
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>  <span style="color:#6272a4">/** 8 bytes ... */</span>
+</span></span><span style="display:flex;"><span>  MLOG_8BYTES <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">8</span>,
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>  <span style="color:#6272a4">/** Record insert */</span>
+</span></span><span style="display:flex;"><span>  MLOG_REC_INSERT <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">9</span>,
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>  <span style="color:#6272a4">/** Mark clustered index record deleted */</span>
+</span></span><span style="display:flex;"><span>  MLOG_REC_CLUST_DELETE_MARK <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">10</span>,
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>  <span style="color:#6272a4">/** Mark secondary index record deleted */</span>
+</span></span><span style="display:flex;"><span>  MLOG_REC_SEC_DELETE_MARK <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">11</span>,
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>  <span style="color:#6272a4">/** update of a record, preserves record field sizes */</span>
+</span></span><span style="display:flex;"><span>  MLOG_REC_UPDATE_IN_PLACE <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">13</span>,
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>  <span style="color:#6272a4">/*!&lt; Delete a record from a page */</span>
+</span></span><span style="display:flex;"><span>  MLOG_REC_DELETE <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">14</span>,
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>  <span style="color:#6272a4">/** Delete record list end on index page */</span>
+</span></span><span style="display:flex;"><span>  MLOG_LIST_END_DELETE <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">15</span>,
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>  <span style="color:#6272a4">/** Delete record list start on index page */</span>
+</span></span><span style="display:flex;"><span>  MLOG_LIST_START_DELETE <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">16</span>,
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>  <span style="color:#6272a4">/** Copy record list end to a new created index page */</span>
+</span></span><span style="display:flex;"><span>  MLOG_LIST_END_COPY_CREATED <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">17</span>,
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>  <span style="color:#6272a4">/** Reorganize an index page in ROW_FORMAT=REDUNDANT */</span>
+</span></span><span style="display:flex;"><span>  MLOG_PAGE_REORGANIZE <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">18</span>,
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>  <span style="color:#6272a4">/** Create an index page */</span>
+</span></span><span style="display:flex;"><span>  MLOG_PAGE_CREATE <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">19</span>,
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>  <span style="color:#6272a4">/** Insert entry in an undo log */</span>
+</span></span><span style="display:flex;"><span>  MLOG_UNDO_INSERT <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">20</span>,
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>  <span style="color:#6272a4">/** erase an undo log page end */</span>
+</span></span><span style="display:flex;"><span>  MLOG_UNDO_ERASE_END <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">21</span>,
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>  <span style="color:#6272a4">/** initialize a page in an undo log */</span>
+</span></span><span style="display:flex;"><span>  MLOG_UNDO_INIT <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">22</span>,
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>  <span style="color:#6272a4">/** reuse an insert undo log header */</span>
+</span></span><span style="display:flex;"><span>  MLOG_UNDO_HDR_REUSE <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">24</span>,
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>  <span style="color:#6272a4">/** create an undo log header */</span>
+</span></span><span style="display:flex;"><span>  MLOG_UNDO_HDR_CREATE <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">25</span>,
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>  <span style="color:#6272a4">/** mark an index record as the predefined minimum record */</span>
+</span></span><span style="display:flex;"><span>  MLOG_REC_MIN_MARK <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">26</span>,
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>  <span style="color:#6272a4">/** initialize an ibuf bitmap page */</span>
+</span></span><span style="display:flex;"><span>  MLOG_IBUF_BITMAP_INIT <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">27</span>,
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">#ifdef UNIV_LOG_LSN_DEBUG
+</span></span></span><span style="display:flex;"><span>  <span style="color:#6272a4">/** Current LSN */</span>
+</span></span><span style="display:flex;"><span>  MLOG_LSN <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">28</span>,
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">#endif </span><span style="color:#6272a4">/* UNIV_LOG_LSN_DEBUG */</span><span style="color:#ff79c6">
+</span></span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>  <span style="color:#6272a4">/** this means that a file page is taken into use and the prior
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">  contents of the page should be ignored: in recovery we must not
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">  trust the lsn values stored to the file page.
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">  Note: it&#39;s deprecated because it causes crash recovery problem
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">  in bulk create index, and actually we don&#39;t need to reset page
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">  lsn in recv_recover_page_func() now. */</span>
+</span></span><span style="display:flex;"><span>  MLOG_INIT_FILE_PAGE <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">29</span>,
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>  <span style="color:#6272a4">/** write a string to a page */</span>
+</span></span><span style="display:flex;"><span>  MLOG_WRITE_STRING <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">30</span>,
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>  <span style="color:#6272a4">/** If a single mtr writes several log records, this log
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">  record ends the sequence of these records */</span>
+</span></span><span style="display:flex;"><span>  MLOG_MULTI_REC_END <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">31</span>,
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>  <span style="color:#6272a4">/** dummy log record used to pad a log block full */</span>
+</span></span><span style="display:flex;"><span>  MLOG_DUMMY_RECORD <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">32</span>,
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>  <span style="color:#6272a4">/** log record about creating an .ibd file, with format */</span>
+</span></span><span style="display:flex;"><span>  MLOG_FILE_CREATE <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">33</span>,
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>  <span style="color:#6272a4">/** rename a tablespace file that starts with (space_id,page_no) */</span>
+</span></span><span style="display:flex;"><span>  MLOG_FILE_RENAME <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">34</span>,
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>  <span style="color:#6272a4">/** delete a tablespace file that starts with (space_id,page_no) */</span>
+</span></span><span style="display:flex;"><span>  MLOG_FILE_DELETE <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">35</span>,
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>  <span style="color:#6272a4">/** mark a compact index record as the predefined minimum record */</span>
+</span></span><span style="display:flex;"><span>  MLOG_COMP_REC_MIN_MARK <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">36</span>,
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>  <span style="color:#6272a4">/** create a compact index page */</span>
+</span></span><span style="display:flex;"><span>  MLOG_COMP_PAGE_CREATE <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">37</span>,
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>  <span style="color:#6272a4">/** compact record insert */</span>
+</span></span><span style="display:flex;"><span>  MLOG_COMP_REC_INSERT <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">38</span>,
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>  <span style="color:#6272a4">/** mark compact clustered index record deleted */</span>
+</span></span><span style="display:flex;"><span>  MLOG_COMP_REC_CLUST_DELETE_MARK <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">39</span>,
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>  <span style="color:#6272a4">/** mark compact secondary index record deleted; this log
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">  record type is redundant, as MLOG_REC_SEC_DELETE_MARK is
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">  independent of the record format. */</span>
+</span></span><span style="display:flex;"><span>  MLOG_COMP_REC_SEC_DELETE_MARK <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">40</span>,
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>  <span style="color:#6272a4">/** update of a compact record, preserves record field sizes */</span>
+</span></span><span style="display:flex;"><span>  MLOG_COMP_REC_UPDATE_IN_PLACE <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">41</span>,
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>  <span style="color:#6272a4">/** delete a compact record from a page */</span>
+</span></span><span style="display:flex;"><span>  MLOG_COMP_REC_DELETE <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">42</span>,
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>  <span style="color:#6272a4">/** delete compact record list end on index page */</span>
+</span></span><span style="display:flex;"><span>  MLOG_COMP_LIST_END_DELETE <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">43</span>,
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>  <span style="color:#6272a4">/*** delete compact record list start on index page */</span>
+</span></span><span style="display:flex;"><span>  MLOG_COMP_LIST_START_DELETE <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">44</span>,
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>  <span style="color:#6272a4">/** copy compact record list end to a new created index page */</span>
+</span></span><span style="display:flex;"><span>  MLOG_COMP_LIST_END_COPY_CREATED <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">45</span>,
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>  <span style="color:#6272a4">/** reorganize an index page */</span>
+</span></span><span style="display:flex;"><span>  MLOG_COMP_PAGE_REORGANIZE <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">46</span>,
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>  <span style="color:#6272a4">/** write the node pointer of a record on a compressed
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">  non-leaf B-tree page */</span>
+</span></span><span style="display:flex;"><span>  MLOG_ZIP_WRITE_NODE_PTR <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">48</span>,
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>  <span style="color:#6272a4">/** write the BLOB pointer of an externally stored column
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">  on a compressed page */</span>
+</span></span><span style="display:flex;"><span>  MLOG_ZIP_WRITE_BLOB_PTR <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">49</span>,
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>  <span style="color:#6272a4">/** write to compressed page header */</span>
+</span></span><span style="display:flex;"><span>  MLOG_ZIP_WRITE_HEADER <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">50</span>,
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>  <span style="color:#6272a4">/** compress an index page */</span>
+</span></span><span style="display:flex;"><span>  MLOG_ZIP_PAGE_COMPRESS <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">51</span>,
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>  <span style="color:#6272a4">/** compress an index page without logging it&#39;s image */</span>
+</span></span><span style="display:flex;"><span>  MLOG_ZIP_PAGE_COMPRESS_NO_DATA <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">52</span>,
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>  <span style="color:#6272a4">/** reorganize a compressed page */</span>
+</span></span><span style="display:flex;"><span>  MLOG_ZIP_PAGE_REORGANIZE <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">53</span>,
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>  <span style="color:#6272a4">/** Create a R-Tree index page */</span>
+</span></span><span style="display:flex;"><span>  MLOG_PAGE_CREATE_RTREE <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">57</span>,
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>  <span style="color:#6272a4">/** create a R-tree compact page */</span>
+</span></span><span style="display:flex;"><span>  MLOG_COMP_PAGE_CREATE_RTREE <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">58</span>,
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>  <span style="color:#6272a4">/** this means that a file page is taken into use.
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">  We use it to replace MLOG_INIT_FILE_PAGE. */</span>
+</span></span><span style="display:flex;"><span>  MLOG_INIT_FILE_PAGE2 <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">59</span>,
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>  <span style="color:#6272a4">/** Table is being truncated. (Marked only for file-per-table) */</span>
+</span></span><span style="display:flex;"><span>  <span style="color:#6272a4">/* MLOG_TRUNCATE = 60,  Disabled for WL6378 */</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>  <span style="color:#6272a4">/** notify that an index tree is being loaded without writing
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">  redo log about individual pages */</span>
+</span></span><span style="display:flex;"><span>  MLOG_INDEX_LOAD <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">61</span>,
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>  <span style="color:#6272a4">/** log for some persistent dynamic metadata change */</span>
+</span></span><span style="display:flex;"><span>  MLOG_TABLE_DYNAMIC_META <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">62</span>,
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>  <span style="color:#6272a4">/** create a SDI index page */</span>
+</span></span><span style="display:flex;"><span>  MLOG_PAGE_CREATE_SDI <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">63</span>,
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>  <span style="color:#6272a4">/** create a SDI compact page */</span>
+</span></span><span style="display:flex;"><span>  MLOG_COMP_PAGE_CREATE_SDI <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">64</span>,
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>  <span style="color:#6272a4">/** Extend the space */</span>
+</span></span><span style="display:flex;"><span>  MLOG_FILE_EXTEND <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">65</span>,
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>  <span style="color:#6272a4">/** Used in tests of redo log. It must never be used outside unit tests. */</span>
+</span></span><span style="display:flex;"><span>  MLOG_TEST <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">66</span>,
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>  <span style="color:#6272a4">/** biggest value (used in assertions) */</span>
+</span></span><span style="display:flex;"><span>  MLOG_BIGGEST_TYPE <span style="color:#ff79c6">=</span> MLOG_TEST
+</span></span><span style="display:flex;"><span>};
+</span></span></code></pre></td></tr></table>
 </div>
-</div><h3 id="undo-log2">undo log的所有类型</h3>
+</div><h3 id="undo-log的所有类型">undo log的所有类型</h3>
 <p>文件所在位置：<br>
 mysql-8.0.28/storage/innobase/include/trx0rec.h</p>
-<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4">
-<table style="border-spacing:0;padding:0;margin:0;border:0;width:auto;overflow:auto;display:block;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
-<pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">15
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">16
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">17
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">18
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">19
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">20
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">21
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">22
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">23
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">24
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">25
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">26
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">27
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">28
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">29
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">30
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">31
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">32
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"><code><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">15
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">16
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">17
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">18
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">19
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">20
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">21
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">22
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">23
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">24
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">25
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">26
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">27
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">28
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">29
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">30
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">31
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">32
 </span></code></pre></td>
 <td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
-<pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-cpp" data-lang="cpp"><span style="color:#ff79c6">#</span><span style="color:#ff79c6">define TRX_UNDO_INSERT_REC 11 </span><span style="color:#6272a4">/* fresh insert into clustered index */</span><span style="color:#ff79c6"></span><span style="color:#ff79c6">
-</span><span style="color:#ff79c6"></span><span style="color:#ff79c6">#</span><span style="color:#ff79c6">define TRX_UNDO_UPD_EXIST_REC        \</span><span style="color:#ff79c6">
-</span><span style="color:#ff79c6"></span>  <span style="color:#bd93f9">12</span> <span style="color:#6272a4">/* update of a non-delete-marked \
-</span><span style="color:#6272a4">     record */</span>
-<span style="color:#ff79c6">#</span><span style="color:#ff79c6">define TRX_UNDO_UPD_DEL_REC                \</span><span style="color:#ff79c6">
-</span><span style="color:#ff79c6"></span>  <span style="color:#bd93f9">13</span> <span style="color:#6272a4">/* update of a delete marked record to \
-</span><span style="color:#6272a4">     a not delete marked record; also the   \
-</span><span style="color:#6272a4">     fields of the record can change */</span>
-<span style="color:#ff79c6">#</span><span style="color:#ff79c6">define TRX_UNDO_DEL_MARK_REC              \</span><span style="color:#ff79c6">
-</span><span style="color:#ff79c6"></span>  <span style="color:#bd93f9">14</span> <span style="color:#6272a4">/* delete marking of a record; fields \
-</span><span style="color:#6272a4">     do not change */</span>
-<span style="color:#ff79c6">#</span><span style="color:#ff79c6">define TRX_UNDO_CMPL_INFO_MULT           \</span><span style="color:#ff79c6">
-</span><span style="color:#ff79c6"></span>  <span style="color:#bd93f9">16</span> <span style="color:#6272a4">/* compilation info is multiplied by \
-</span><span style="color:#6272a4">     this and ORed to the type above */</span>
-
-<span style="color:#ff79c6">#</span><span style="color:#ff79c6">define TRX_UNDO_MODIFY_BLOB              \</span><span style="color:#ff79c6">
-</span><span style="color:#ff79c6"></span>  <span style="color:#bd93f9">64</span> <span style="color:#6272a4">/* If this bit is set in type_cmpl,  \
-</span><span style="color:#6272a4">     then the undo log record has support \
-</span><span style="color:#6272a4">     for partial update of BLOBs. Also to \
-</span><span style="color:#6272a4">     make the undo log format extensible, \
-</span><span style="color:#6272a4">     introducing a new flag next to the   \
-</span><span style="color:#6272a4">     type_cmpl flag. */</span>
-
-<span style="color:#ff79c6">#</span><span style="color:#ff79c6">define TRX_UNDO_UPD_EXTERN                \</span><span style="color:#ff79c6">
-</span><span style="color:#ff79c6"></span>  <span style="color:#bd93f9">128</span> <span style="color:#6272a4">/* This bit can be ORed to type_cmpl \
-</span><span style="color:#6272a4">      to denote that we updated external   \
-</span><span style="color:#6272a4">      storage fields: used by purge to     \
-</span><span style="color:#6272a4">      free the external storage */</span>
-
-<span style="color:#6272a4">/* Operation type flags used in trx_undo_report_row_operation */</span>
-<span style="color:#ff79c6">#</span><span style="color:#ff79c6">define TRX_UNDO_INSERT_OP 1</span><span style="color:#ff79c6">
-</span><span style="color:#ff79c6"></span><span style="color:#ff79c6">#</span><span style="color:#ff79c6">define TRX_UNDO_MODIFY_OP 2</span><span style="color:#ff79c6">
-</span></code></pre></td></tr></table>
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"><code class="language-cpp" data-lang="cpp"><span style="display:flex;"><span><span style="color:#ff79c6">#define TRX_UNDO_INSERT_REC 11 </span><span style="color:#6272a4">/* fresh insert into clustered index */</span><span style="color:#ff79c6">
+</span></span></span><span style="display:flex;"><span><span style="color:#ff79c6">#define TRX_UNDO_UPD_EXIST_REC        \
+</span></span></span><span style="display:flex;"><span><span style="color:#ff79c6">  12 </span><span style="color:#6272a4">/* update of a non-delete-marked \
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">     record */</span><span style="color:#ff79c6">
+</span></span></span><span style="display:flex;"><span><span style="color:#ff79c6">#define TRX_UNDO_UPD_DEL_REC                \
+</span></span></span><span style="display:flex;"><span><span style="color:#ff79c6">  13 </span><span style="color:#6272a4">/* update of a delete marked record to \
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">     a not delete marked record; also the   \
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">     fields of the record can change */</span><span style="color:#ff79c6">
+</span></span></span><span style="display:flex;"><span><span style="color:#ff79c6">#define TRX_UNDO_DEL_MARK_REC              \
+</span></span></span><span style="display:flex;"><span><span style="color:#ff79c6">  14 </span><span style="color:#6272a4">/* delete marking of a record; fields \
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">     do not change */</span><span style="color:#ff79c6">
+</span></span></span><span style="display:flex;"><span><span style="color:#ff79c6">#define TRX_UNDO_CMPL_INFO_MULT           \
+</span></span></span><span style="display:flex;"><span><span style="color:#ff79c6">  16 </span><span style="color:#6272a4">/* compilation info is multiplied by \
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">     this and ORed to the type above */</span><span style="color:#ff79c6">
+</span></span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">#define TRX_UNDO_MODIFY_BLOB              \
+</span></span></span><span style="display:flex;"><span><span style="color:#ff79c6">  64 </span><span style="color:#6272a4">/* If this bit is set in type_cmpl,  \
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">     then the undo log record has support \
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">     for partial update of BLOBs. Also to \
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">     make the undo log format extensible, \
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">     introducing a new flag next to the   \
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">     type_cmpl flag. */</span><span style="color:#ff79c6">
+</span></span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">#define TRX_UNDO_UPD_EXTERN                \
+</span></span></span><span style="display:flex;"><span><span style="color:#ff79c6">  128 </span><span style="color:#6272a4">/* This bit can be ORed to type_cmpl \
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">      to denote that we updated external   \
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">      storage fields: used by purge to     \
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">      free the external storage */</span><span style="color:#ff79c6">
+</span></span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4">/* Operation type flags used in trx_undo_report_row_operation */</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">#define TRX_UNDO_INSERT_OP 1
+</span></span></span><span style="display:flex;"><span><span style="color:#ff79c6">#define TRX_UNDO_MODIFY_OP 2
+</span></span></span></code></pre></td></tr></table>
 </div>
-</div><h2 id="heading4">参考</h2>
+</div><h2 id="参考">参考</h2>
 <ul>
 <li><a href="https://www.modb.pro/doc/57946">说过的话就一定要办到 —— redo 日志（上）</a></li>
 <li><a href="https://www.modb.pro/doc/57947">说过的话就一定要办到 —— redo 日志（下）</a></li>
@@ -1330,6 +1547,7 @@ code.has-jax {
       </script>
     </div>
     
+
 </div>
 
 
@@ -1348,6 +1566,10 @@ code.has-jax {
     <section class="widget">
         <h3 class="widget-title">最近文章</h3>
 <ul class="widget-list">
+    
+    <li>
+        <a href="/post/2026/06/da_lian/" title="大连，11年后的再相见">大连，11年后的再相见</a>
+    </li>
     
     <li>
         <a href="/post/2026/05/volcano-notes/" title="Volcano 笔记">Volcano 笔记</a>
@@ -1385,10 +1607,6 @@ code.has-jax {
         <a href="/post/2026/04/claude_code/" title="Claude code 源码分析">Claude code 源码分析</a>
     </li>
     
-    <li>
-        <a href="/post/2026/03/iran_war/" title="Iran War">Iran War</a>
-    </li>
-    
 </ul>
 
     </section>
@@ -1415,7 +1633,7 @@ code.has-jax {
     
     <li><a href="/categories/%E6%96%87%E5%AD%A6%E5%92%8C%E8%89%BA%E6%9C%AF/">文学和艺术 (3)</a></li>
     
-    <li><a href="/categories/%E6%97%85%E8%A1%8C/">旅行 (15)</a></li>
+    <li><a href="/categories/%E6%97%85%E8%A1%8C/">旅行 (16)</a></li>
     
     <li><a href="/categories/%E6%9E%B6%E6%9E%84/">架构 (15)</a></li>
     
@@ -1449,7 +1667,7 @@ code.has-jax {
     
     <li><a href="/years/2025%E5%B9%B4/">2025年 (38)</a></li>
     
-    <li><a href="/years/2026%E5%B9%B4/">2026年 (14)</a></li>
+    <li><a href="/years/2026%E5%B9%B4/">2026年 (15)</a></li>
     
 </ul>
 
@@ -1463,9 +1681,9 @@ code.has-jax {
     
     <a href="/tags/ambari/">Ambari </a>
     
-    <a href="/tags/architecture/">architecture </a>
+    <a href="/tags/architecture/">Architecture </a>
     
-    <a href="/tags/bigdata/">bigdata </a>
+    <a href="/tags/bigdata/">Bigdata </a>
     
     <a href="/tags/btrace/">BTrace </a>
     
@@ -1473,11 +1691,11 @@ code.has-jax {
     
     <a href="/tags/c&#43;&#43;/">C&#43;&#43; </a>
     
-    <a href="/tags/calcite/">calcite </a>
+    <a href="/tags/calcite/">Calcite </a>
     
     <a href="/tags/canal/">Canal </a>
     
-    <a href="/tags/claude/">claude </a>
+    <a href="/tags/claude/">Claude </a>
     
     <a href="/tags/cmu-database/">CMU-Database </a>
     
@@ -1489,7 +1707,7 @@ code.has-jax {
     
     <a href="/tags/doris/">Doris </a>
     
-    <a href="/tags/ebpf/">eBPF </a>
+    <a href="/tags/ebpf/">EBPF </a>
     
     <a href="/tags/english/">English </a>
     
@@ -1499,7 +1717,7 @@ code.has-jax {
     
     <a href="/tags/flink/">Flink </a>
     
-    <a href="/tags/flume/">flume </a>
+    <a href="/tags/flume/">Flume </a>
     
     <a href="/tags/gc/">GC </a>
     
@@ -1509,15 +1727,15 @@ code.has-jax {
     
     <a href="/tags/hive/">Hive </a>
     
-    <a href="/tags/iceberg/">iceberg </a>
+    <a href="/tags/iceberg/">Iceberg </a>
     
     <a href="/tags/impala/">Impala </a>
     
-    <a href="/tags/janino/">janino </a>
+    <a href="/tags/janino/">Janino </a>
     
     <a href="/tags/juicefs/">JuiceFS </a>
     
-    <a href="/tags/k8s/">k8s </a>
+    <a href="/tags/k8s/">K8s </a>
     
     <a href="/tags/kafka/">Kafka </a>
     
@@ -1533,17 +1751,17 @@ code.has-jax {
     
     <a href="/tags/llvm/">LLVM </a>
     
-    <a href="/tags/log4j/">log4j </a>
+    <a href="/tags/log4j/">Log4j </a>
     
-    <a href="/tags/longhorn/">longhorn </a>
+    <a href="/tags/longhorn/">Longhorn </a>
     
     <a href="/tags/manacher/">Manacher </a>
     
     <a href="/tags/mapreduce/">MapReduce </a>
     
-    <a href="/tags/micro-service/">micro-service </a>
+    <a href="/tags/micro-service/">Micro-Service </a>
     
-    <a href="/tags/mq/">mq </a>
+    <a href="/tags/mq/">Mq </a>
     
     <a href="/tags/mysql/">MySQL </a>
     
@@ -1557,25 +1775,25 @@ code.has-jax {
     
     <a href="/tags/ozone/">Ozone </a>
     
-    <a href="/tags/parquet/">parquet </a>
+    <a href="/tags/parquet/">Parquet </a>
     
-    <a href="/tags/paxos/">paxos </a>
+    <a href="/tags/paxos/">Paxos </a>
     
     <a href="/tags/presto/">Presto </a>
     
     <a href="/tags/pytorch/">PyTorch </a>
     
-    <a href="/tags/quick-sql/">quick-sql </a>
+    <a href="/tags/quick-sql/">Quick-Sql </a>
     
-    <a href="/tags/raft/">raft </a>
+    <a href="/tags/raft/">Raft </a>
     
-    <a href="/tags/scala/">scala </a>
+    <a href="/tags/scala/">Scala </a>
     
     <a href="/tags/seatunnel/">SeaTunnel </a>
     
     <a href="/tags/simd/">SIMD </a>
     
-    <a href="/tags/snowflake/">snowflake </a>
+    <a href="/tags/snowflake/">Snowflake </a>
     
     <a href="/tags/spark/">Spark </a>
     
@@ -1589,7 +1807,7 @@ code.has-jax {
     
     <a href="/tags/tuning/">Tuning </a>
     
-    <a href="/tags/unix/">unix </a>
+    <a href="/tags/unix/">Unix </a>
     
     <a href="/tags/volcano/">Volcano </a>
     

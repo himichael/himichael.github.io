@@ -19,7 +19,7 @@
     <meta property="article:modified_time" content='2023-05-24T18:11:07&#43;08:00'>
         
     <meta name="Keywords" content="">
-    <meta name="description" content="SqlServer的列存索引">
+    <meta name="description" content="《SQL Server Column Store Indexes》：SQL Server 11代 Denali，在行存系统上增加了列存和索引结构，这些改动并不是重新来一套，而是基于现有技术的改进，如对行做了分片segment，每个 row segment 再根据 column 进一步细分为 column segment；column segment本身是现有的 blob存储，同时还利用了压缩技术，基于 column segment 又开发出了 segment directory，这个 directory包含了一些元信息如行数量、size、多少数据被编码了、min和max等，这些改动之后，还可以跟现有的lock、log、recovery、patition、mirror、replication完全兼容整合；之后查询引擎部分也会做一些改动来兼容行、列数据，这里使用了多核、bitmap filter、算子间的内存共享、SIMD等进一步优化，根据代价模型评估，选择合适的索引，测试TPC-DS时，前面大部分数据都是批的方式处理的，而且做了并行化，只有最后的聚合、重分区是用 行模式处理的，最后效率大幅度提升">
         <meta name="author" content="隔壁老王">
         
     <meta property="og:url" content="https://code0xff.org/post/2023/05/sql_server_column_store_indexes/">
@@ -73,7 +73,8 @@
             <div class="col-group">
 
                 <div class="col-8" id="main">
-                    <div class="res-cons">
+                    
+<div class="res-cons">
     
     <article class="post">
         <header>
@@ -86,12 +87,12 @@
   <ul>
     <li>
       <ul>
-        <li><a href="#heading">背景</a></li>
-        <li><a href="#heading1">索引存储结构</a></li>
-        <li><a href="#heading2">查询处理和优化</a></li>
-        <li><a href="#heading3">实验</a></li>
-        <li><a href="#heading4">关于列存的一些实例</a></li>
-        <li><a href="#heading5">参考</a></li>
+        <li><a href="#背景">背景</a></li>
+        <li><a href="#索引存储结构">索引存储结构</a></li>
+        <li><a href="#查询处理和优化">查询处理和优化</a></li>
+        <li><a href="#实验">实验</a></li>
+        <li><a href="#关于列存的一些实例">关于列存的一些实例</a></li>
+        <li><a href="#参考">参考</a></li>
       </ul>
     </li>
   </ul>
@@ -119,11 +120,15 @@
 <p>原文
 <a href="https://15721.courses.cs.cmu.edu/spring2023/papers/04-olapindexes/p1177-larson.pdf">https://15721.courses.cs.cmu.edu/spring2023/papers/04-olapindexes/p1177-larson.pdf</a></p>
 </blockquote>
-<h2 id="heading">背景</h2>
+<h2 id="背景">背景</h2>
 <p>微软在 SQL Server 11.0 版本，推出了一款纯的列数据库，代号 Denali<br>
 从测试效果看非常不错，对 TPC-DS 的 1T 数据做了测试，包含冷数据，和温数据<br>
 从结果看，列存场景比 行存有 10 - 20倍的提升<br>
-<img src="https://v1.ax1x.com/2024/05/01/7KCFR7.jpg" alt=""><br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/05/01/7KCFR7.jpg">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/05/01/7KCFR7.jpg" />
+        </a>
+    <br>
 Table 1: Observed CPU and elapsed times (in sec)</p>
 <p>SQL Server 早期有两种存储组织</p>
 <ul>
@@ -137,14 +142,22 @@ Table 1: Observed CPU and elapsed times (in sec)</p>
 <p>列存的物理数据组织方式，首先是将行分组，然后每组再分成若干个列<br>
 这里一共 3个行组，每个3 个列，一共 9个列segments<br>
 这里没每个行存都是独立的，所以不同组的列数据都是可以独立压缩的<br>
-<img src="https://v1.ax1x.com/2024/05/01/7KCoDL.jpg" alt=""> 
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/05/01/7KCoDL.jpg">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/05/01/7KCoDL.jpg" />
+        </a>
+    
 Figure 1: Converting rows to column segments</p>
-<h2 id="heading1">索引存储结构</h2>
+<h2 id="索引存储结构">索引存储结构</h2>
 <p>每个 column segment 当做 独立的 blob存储 <br>
 segment 可能很大，会被自动分成多个 page<br>
 这里还有一个 directory 来跟踪每个 segment，directory 可以通过系统 catalog sys.column_store_segments 获取<br>
 directory 也包含了一些元信息，行数量、size、多少数据被编码，min、max等<br>
-<img src="https://v1.ax1x.com/2024/05/01/7KCZFI.jpg" alt="">  
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/05/01/7KCZFI.jpg">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/05/01/7KCZFI.jpg" />
+        </a>
+    <br>
 Figure 2: Storing column segments</p>
 <p>这种存储方式 列存储索引，好处是</p>
 <ul>
@@ -175,7 +188,7 @@ SQL Server 使用的是专利技术：Vertipaq<br>
 RLE 被存储为 &lt;value, count&gt; 对<br>
 数据从磁盘 -&gt; 内存，不再是面向page的布局，而是连续的 buffer pool 布局<br>
 另外 column segment 分成一个一个的page，可以应用预读取技术</p>
-<h2 id="heading2">查询处理和优化</h2>
+<h2 id="查询处理和优化">查询处理和优化</h2>
 <p>在这种新的索引基数上需要有新的引擎，但这种引擎不是重新设计的，而是基于现有技术改进的</p>
 <ul>
 <li>对于客户来说他们使用的还是原有技术，但是新索引类型会加速查询</li>
@@ -227,9 +240,13 @@ RLE 被存储为 &lt;value, count&gt; 对<br>
 <li>从而构建出 bitmap 下推给 fact table 的 Index Scan(假设含有列式索引)</li>
 <li>减少 Index Scan 输出的数据量</li>
 </ul>
-<h2 id="heading3">实验</h2>
+<h2 id="实验">实验</h2>
 <p>数据压缩比例如下<br>
-<img src="https://v1.ax1x.com/2024/05/01/7KJB3G.jpg" alt=""><br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/05/01/7KJB3G.jpg">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/05/01/7KJB3G.jpg" />
+        </a>
+    <br>
 Table 2: Column store compression on real data sets</p>
 <p>四个 TPC-DS 查询</p>
 <ul>
@@ -238,11 +255,19 @@ Table 2: Column store compression on real data sets</p>
 <li>单表的聚合查询</li>
 <li>带子查询的复杂查询
 行存 vs 列存，在温数据的情况下对比，4个 TPC-DS 查询<br>
-<img src="https://v1.ax1x.com/2024/05/01/7KJmCt.jpg" alt=""> 
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/05/01/7KJmCt.jpg">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/05/01/7KJmCt.jpg" />
+        </a>
+    
 Table 3: Observed query times (sec) with warm buffer pool</li>
 </ul>
 <p>行存 vs 列存，在冷数据的情况下对比，4个 TPC-DS 查询 <br>
-<img src="https://v1.ax1x.com/2024/05/01/7KJTAB.jpg" alt=""> 
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/05/01/7KJTAB.jpg">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/05/01/7KJTAB.jpg" />
+        </a>
+    
 Table 4: Observed query times (sec) with cold buffer pool</p>
 <p>Q1 的查询计划如下</p>
 <ul>
@@ -251,21 +276,29 @@ Table 4: Observed query times (sec) with cold buffer pool</p>
 <li>并行的探测hash 表</li>
 <li>最终聚合在每个流上并行完成，最后将结果元组聚集到单个输出流中</li>
 <li>这里查询计划说明了 行、批是如何混合完成的，大部分处理是在批下完成的，只有最后的处理时在行下完从，那时只有 5416行
-<img src="https://v1.ax1x.com/2024/05/01/7KJ9MJ.jpg" alt=""></li>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/05/01/7KJ9MJ.jpg">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/05/01/7KJ9MJ.jpg" />
+        </a>
+    </li>
 </ul>
 <p>Q3的查询计划</p>
 <ul>
 <li>批+行混合模式，跟行模式的查询计划差不多，但性能提高很多</li>
 <li>因为使用了批处理</li>
 <li>谓词下推过滤，可以减少很多数据扫描
-<img src="https://v1.ax1x.com/2024/05/01/7KCeqV.jpg" alt=""></li>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/05/01/7KCeqV.jpg">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/05/01/7KCeqV.jpg" />
+        </a>
+    </li>
 </ul>
 <p>在SQL的Denali版本中不支持直接更新和加载带有列存储索引的表</p>
 <ul>
 <li>如果表足够小，可以删除它的列存储索引，执行更新，然后重建索引</li>
 <li>于较大的表，可以使用分区加载staging表，用列存储索引对其进行索引，然后将其切换为最新的分区</li>
 </ul>
-<h2 id="heading4">关于列存的一些实例</h2>
+<h2 id="关于列存的一些实例">关于列存的一些实例</h2>
 <p>关于列存的一些历史</p>
 <ul>
 <li>1970年代就有相关研究了，把数据拆分成更小的子集</li>
@@ -279,7 +312,7 @@ Table 4: Observed query times (sec) with cold buffer pool</p>
 <li>Ingres VectorWise是纯列数据库，但是跟 Ingres不兼容</li>
 <li>Greenplum、Aster Data是面向数仓的，最初是行存，然后增加了列存功能整合进来了</li>
 </ul>
-<h2 id="heading5">参考</h2>
+<h2 id="参考">参考</h2>
 <ul>
 <li><a href="https://blog.csdn.net/weixin_31976493/article/details/112806545">predicate 列存储索引扫描_SIGMOD'10 | SQL Server Column Store Indexes</a></li>
 </ul>
@@ -330,7 +363,8 @@ code.has-jax {
     <h2>相关文章</h2>
     <ul class="listing">
         
-        <li><a href="/post/2023/05/bitmap_index/">Bitmap Index Design and Evaluation </a></li>
+        <li><a href="/post/2023/05/bitmap_index/">Bitmap Index Design and Evaluation
+</a></li>
         
         <li><a href="/post/2023/05/column_sketches/">Column Sketches: A Scan Accelerator for Rapid and Robust Predicate Evaluation</a></li>
         
@@ -371,6 +405,7 @@ code.has-jax {
       </script>
     </div>
     
+
 </div>
 
 
@@ -389,6 +424,10 @@ code.has-jax {
     <section class="widget">
         <h3 class="widget-title">最近文章</h3>
 <ul class="widget-list">
+    
+    <li>
+        <a href="/post/2026/06/da_lian/" title="大连，11年后的再相见">大连，11年后的再相见</a>
+    </li>
     
     <li>
         <a href="/post/2026/05/volcano-notes/" title="Volcano 笔记">Volcano 笔记</a>
@@ -426,10 +465,6 @@ code.has-jax {
         <a href="/post/2026/04/claude_code/" title="Claude code 源码分析">Claude code 源码分析</a>
     </li>
     
-    <li>
-        <a href="/post/2026/03/iran_war/" title="Iran War">Iran War</a>
-    </li>
-    
 </ul>
 
     </section>
@@ -456,7 +491,7 @@ code.has-jax {
     
     <li><a href="/categories/%E6%96%87%E5%AD%A6%E5%92%8C%E8%89%BA%E6%9C%AF/">文学和艺术 (3)</a></li>
     
-    <li><a href="/categories/%E6%97%85%E8%A1%8C/">旅行 (15)</a></li>
+    <li><a href="/categories/%E6%97%85%E8%A1%8C/">旅行 (16)</a></li>
     
     <li><a href="/categories/%E6%9E%B6%E6%9E%84/">架构 (15)</a></li>
     
@@ -490,7 +525,7 @@ code.has-jax {
     
     <li><a href="/years/2025%E5%B9%B4/">2025年 (38)</a></li>
     
-    <li><a href="/years/2026%E5%B9%B4/">2026年 (14)</a></li>
+    <li><a href="/years/2026%E5%B9%B4/">2026年 (15)</a></li>
     
 </ul>
 
@@ -504,9 +539,9 @@ code.has-jax {
     
     <a href="/tags/ambari/">Ambari </a>
     
-    <a href="/tags/architecture/">architecture </a>
+    <a href="/tags/architecture/">Architecture </a>
     
-    <a href="/tags/bigdata/">bigdata </a>
+    <a href="/tags/bigdata/">Bigdata </a>
     
     <a href="/tags/btrace/">BTrace </a>
     
@@ -514,11 +549,11 @@ code.has-jax {
     
     <a href="/tags/c&#43;&#43;/">C&#43;&#43; </a>
     
-    <a href="/tags/calcite/">calcite </a>
+    <a href="/tags/calcite/">Calcite </a>
     
     <a href="/tags/canal/">Canal </a>
     
-    <a href="/tags/claude/">claude </a>
+    <a href="/tags/claude/">Claude </a>
     
     <a href="/tags/cmu-database/">CMU-Database </a>
     
@@ -530,7 +565,7 @@ code.has-jax {
     
     <a href="/tags/doris/">Doris </a>
     
-    <a href="/tags/ebpf/">eBPF </a>
+    <a href="/tags/ebpf/">EBPF </a>
     
     <a href="/tags/english/">English </a>
     
@@ -540,7 +575,7 @@ code.has-jax {
     
     <a href="/tags/flink/">Flink </a>
     
-    <a href="/tags/flume/">flume </a>
+    <a href="/tags/flume/">Flume </a>
     
     <a href="/tags/gc/">GC </a>
     
@@ -550,15 +585,15 @@ code.has-jax {
     
     <a href="/tags/hive/">Hive </a>
     
-    <a href="/tags/iceberg/">iceberg </a>
+    <a href="/tags/iceberg/">Iceberg </a>
     
     <a href="/tags/impala/">Impala </a>
     
-    <a href="/tags/janino/">janino </a>
+    <a href="/tags/janino/">Janino </a>
     
     <a href="/tags/juicefs/">JuiceFS </a>
     
-    <a href="/tags/k8s/">k8s </a>
+    <a href="/tags/k8s/">K8s </a>
     
     <a href="/tags/kafka/">Kafka </a>
     
@@ -574,17 +609,17 @@ code.has-jax {
     
     <a href="/tags/llvm/">LLVM </a>
     
-    <a href="/tags/log4j/">log4j </a>
+    <a href="/tags/log4j/">Log4j </a>
     
-    <a href="/tags/longhorn/">longhorn </a>
+    <a href="/tags/longhorn/">Longhorn </a>
     
     <a href="/tags/manacher/">Manacher </a>
     
     <a href="/tags/mapreduce/">MapReduce </a>
     
-    <a href="/tags/micro-service/">micro-service </a>
+    <a href="/tags/micro-service/">Micro-Service </a>
     
-    <a href="/tags/mq/">mq </a>
+    <a href="/tags/mq/">Mq </a>
     
     <a href="/tags/mysql/">MySQL </a>
     
@@ -598,25 +633,25 @@ code.has-jax {
     
     <a href="/tags/ozone/">Ozone </a>
     
-    <a href="/tags/parquet/">parquet </a>
+    <a href="/tags/parquet/">Parquet </a>
     
-    <a href="/tags/paxos/">paxos </a>
+    <a href="/tags/paxos/">Paxos </a>
     
     <a href="/tags/presto/">Presto </a>
     
     <a href="/tags/pytorch/">PyTorch </a>
     
-    <a href="/tags/quick-sql/">quick-sql </a>
+    <a href="/tags/quick-sql/">Quick-Sql </a>
     
-    <a href="/tags/raft/">raft </a>
+    <a href="/tags/raft/">Raft </a>
     
-    <a href="/tags/scala/">scala </a>
+    <a href="/tags/scala/">Scala </a>
     
     <a href="/tags/seatunnel/">SeaTunnel </a>
     
     <a href="/tags/simd/">SIMD </a>
     
-    <a href="/tags/snowflake/">snowflake </a>
+    <a href="/tags/snowflake/">Snowflake </a>
     
     <a href="/tags/spark/">Spark </a>
     
@@ -630,7 +665,7 @@ code.has-jax {
     
     <a href="/tags/tuning/">Tuning </a>
     
-    <a href="/tags/unix/">unix </a>
+    <a href="/tags/unix/">Unix </a>
     
     <a href="/tags/volcano/">Volcano </a>
     

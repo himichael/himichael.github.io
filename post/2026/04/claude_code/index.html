@@ -19,7 +19,7 @@
     <meta property="article:modified_time" content='2026-04-01T09:10:12&#43;08:00'>
         
     <meta name="Keywords" content="">
-    <meta name="description" content="Claude code 源码分析">
+    <meta name="description" content="围绕 Claude Code v2.1.88 泄漏源码，拆解五层架构、QueryEngine 主循环、工具与权限系统、上下文压缩、多 Agent 协调和状态流转，串起一次请求从输入到工具执行的完整链路。">
         <meta name="author" content="隔壁老王">
         
     <meta property="og:url" content="https://code0xff.org/post/2026/04/claude_code/">
@@ -76,18 +76,46 @@
                     
 <script type="module">
   import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs';
-  mermaid.initialize({ startOnLoad: true });
-</script>
-<script>
-  document.addEventListener('DOMContentLoaded', () => {
-    document.querySelectorAll('code.language-mermaid').forEach(el => {
+  document.addEventListener('DOMContentLoaded', async () => {
+    const blocks = document.querySelectorAll('code.language-mermaid');
+    if (!blocks.length) {
+      return;
+    }
+
+    mermaid.initialize({
+      startOnLoad: false,
+      flowchart: {
+        useMaxWidth: false,
+        htmlLabels: true
+      },
+      themeVariables: {
+        fontSize: '16px'
+      }
+    });
+
+    blocks.forEach((el, index) => {
+      const wrapper = document.createElement('div');
+      wrapper.className = 'mermaid-wrapper';
+
       const container = document.createElement('div');
       container.className = 'mermaid';
-      container.innerHTML = el.innerHTML;
-      el.parentNode.replaceChild(container, el);
+      container.id = `mermaid-diagram-${index}`;
+      container.textContent = el.textContent;
+
+      wrapper.appendChild(container);
+
+      const pre = el.closest('pre');
+      if (pre) {
+        pre.replaceWith(wrapper);
+      } else {
+        el.replaceWith(wrapper);
+      }
     });
+
+    await mermaid.run({ querySelector: '.mermaid' });
   });
 </script>
+
 <div class="res-cons">
     
     <article class="post">
@@ -99,39 +127,39 @@
         </date>
 <nav id="TableOfContents">
   <ul>
-    <li><a href="#heading">源码分析</a>
+    <li><a href="#源码分析">源码分析</a>
       <ul>
-        <li><a href="#heading1">代码结构</a></li>
+        <li><a href="#代码结构">代码结构</a></li>
         <li><a href="#queryengine">QueryEngine</a></li>
-        <li><a href="#40--29k-">40 个工具与 29K 行定义</a></li>
-        <li><a href="#heading2">上下文工程</a></li>
-        <li><a href="#selfhealing-memory">Self-Healing Memory</a></li>
-        <li><a href="#44--feature-flag">权限系统：44 个 Feature Flag</a></li>
-        <li><a href="#heading3">反蒸馏机制</a></li>
-        <li><a href="#heading4">挫败检测</a></li>
+        <li><a href="#40-个工具与-29k-行定义">40 个工具与 29K 行定义</a></li>
+        <li><a href="#上下文工程">上下文工程</a></li>
+        <li><a href="#self-healing-memory">Self-Healing Memory</a></li>
+        <li><a href="#权限系统44-个-feature-flag">权限系统：44 个 Feature Flag</a></li>
+        <li><a href="#反蒸馏机制">反蒸馏机制</a></li>
+        <li><a href="#挫败检测">挫败检测</a></li>
         <li><a href="#undercover-mode">Undercover Mode</a></li>
-        <li><a href="#heading5">对照表</a></li>
+        <li><a href="#对照表">对照表</a></li>
       </ul>
     </li>
-    <li><a href="#claude-code-">Claude Code 主要流程架构图</a>
+    <li><a href="#claude-code-主要流程架构图">Claude Code 主要流程架构图</a>
       <ul>
-        <li><a href="#1--startup-flow">1. 启动流程 (Startup Flow)</a></li>
-        <li><a href="#2--core-query-flow">2. 核心查询流程 (Core Query Flow)</a></li>
-        <li><a href="#3--permission-system-flow">3. 权限系统流程 (Permission System Flow)</a></li>
-        <li><a href="#4--context-compaction-flow">4. 上下文压缩流程 (Context Compaction Flow)</a></li>
-        <li><a href="#5--tool-system-architecture">5. 工具系统架构 (Tool System Architecture)</a></li>
-        <li><a href="#6-mcp--mcp-integration-flow">6. MCP 系统集成流程 (MCP Integration Flow)</a></li>
-        <li><a href="#7--agent--multiagent-coordination-flow">7. 多 Agent 协调流程 (Multi-Agent Coordination Flow)</a></li>
-        <li><a href="#8--state-management-flow">8. 状态管理流程 (State Management Flow)</a></li>
-        <li><a href="#heading6">关键数据流说明</a>
+        <li><a href="#1-启动流程-startup-flow">1. 启动流程 (Startup Flow)</a></li>
+        <li><a href="#2-核心查询流程-core-query-flow">2. 核心查询流程 (Core Query Flow)</a></li>
+        <li><a href="#3-权限系统流程-permission-system-flow">3. 权限系统流程 (Permission System Flow)</a></li>
+        <li><a href="#4-上下文压缩流程-context-compaction-flow">4. 上下文压缩流程 (Context Compaction Flow)</a></li>
+        <li><a href="#5-工具系统架构-tool-system-architecture">5. 工具系统架构 (Tool System Architecture)</a></li>
+        <li><a href="#6-mcp-系统集成流程-mcp-integration-flow">6. MCP 系统集成流程 (MCP Integration Flow)</a></li>
+        <li><a href="#7-多-agent-协调流程-multi-agent-coordination-flow">7. 多 Agent 协调流程 (Multi-Agent Coordination Flow)</a></li>
+        <li><a href="#8-状态管理流程-state-management-flow">8. 状态管理流程 (State Management Flow)</a></li>
+        <li><a href="#关键数据流说明">关键数据流说明</a>
           <ul>
-            <li><a href="#1-">1. 消息生命周期</a></li>
-            <li><a href="#2-">2. 工具调用生命周期</a></li>
-            <li><a href="#3-">3. 会话持久化</a></li>
+            <li><a href="#1-消息生命周期">1. 消息生命周期</a></li>
+            <li><a href="#2-工具调用生命周期">2. 工具调用生命周期</a></li>
+            <li><a href="#3-会话持久化">3. 会话持久化</a></li>
           </ul>
         </li>
-        <li><a href="#heading7">性能优化关键点</a></li>
-        <li><a href="#heading8">错误处理策略</a></li>
+        <li><a href="#性能优化关键点">性能优化关键点</a></li>
+        <li><a href="#错误处理策略">错误处理策略</a></li>
       </ul>
     </li>
   </ul>
@@ -155,164 +183,164 @@
         
         
         <div class="post-content">
-            <h1 id="heading">源码分析</h1>
-<h2 id="heading1">代码结构</h2>
+            <h1 id="源码分析">源码分析</h1>
+<h2 id="代码结构">代码结构</h2>
 <p>五层结构</p>
-<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4">
-<table style="border-spacing:0;padding:0;margin:0;border:0;width:auto;overflow:auto;display:block;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
-<pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">15
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">16
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">17
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">18
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">19
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">20
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">21
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">22
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">23
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">24
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">25
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">26
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">27
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"><code><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">15
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">16
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">17
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">18
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">19
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">20
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">21
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">22
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">23
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">24
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">25
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">26
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">27
 </span></code></pre></td>
 <td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
-<pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">src/
-├── main.tsx                 ← 入口层：Commander.js CLI 解析 + React/Ink 渲染
-├── bridge/                  ← 入口层：IDE 集成桥接（VS Code / JetBrains）
-├── server/                  ← 入口层：Server 模式（供桌面 App / Web 调用）
-├── remote/                  ← 入口层：远程会话
-│
-├── services/                ← 运行时层：外部服务集成
-├── screens/                 ← 运行时层：全屏 UI（认证、配置等）
-├── components/              ← 运行时层：~140 个 Ink UI 组件
-│
-├── QueryEngine.ts           ← 引擎层：46K 行，LLM 调用 / 流式 / 缓存 / 编排
-├── coordinator/             ← 引擎层：多 Agent 编排（Coordinator Mode）
-├── context.ts               ← 引擎层：系统/用户上下文收集
-├── cost-tracker.ts          ← 引擎层：Token 消耗追踪
-│
-├── Tool.ts                  ← 工具层：29K 行，所有工具类型定义 + 权限 Schema
-├── tools/                   ← 工具层：~40 个工具实现
-├── commands/                ← 工具层：~85 个斜杠命令，25K 行
-├── commands.ts              ← 工具层：命令注册中心
-├── skills/                  ← 工具层：技能系统
-├── plugins/                 ← 工具层：插件系统
-│
-├── hooks/                   ← 基础设施层：React Hooks（含权限检查）
-├── types/                   ← 基础设施层：TypeScript 类型定义
-├── utils/                   ← 基础设施层：工具函数
-├── memdir/                  ← 基础设施层：持久化记忆目录
-└── tasks/                   ← 基础设施层：任务管理
-</code></pre></td></tr></table>
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"><code class="language-shell" data-lang="shell"><span style="display:flex;"><span>src/
+</span></span><span style="display:flex;"><span>├── main.tsx                 ← 入口层：Commander.js CLI 解析 + React/Ink 渲染
+</span></span><span style="display:flex;"><span>├── bridge/                  ← 入口层：IDE 集成桥接（VS Code / JetBrains）
+</span></span><span style="display:flex;"><span>├── server/                  ← 入口层：Server 模式（供桌面 App / Web 调用）
+</span></span><span style="display:flex;"><span>├── remote/                  ← 入口层：远程会话
+</span></span><span style="display:flex;"><span>│
+</span></span><span style="display:flex;"><span>├── services/                ← 运行时层：外部服务集成
+</span></span><span style="display:flex;"><span>├── screens/                 ← 运行时层：全屏 UI（认证、配置等）
+</span></span><span style="display:flex;"><span>├── components/              ← 运行时层：~140 个 Ink UI 组件
+</span></span><span style="display:flex;"><span>│
+</span></span><span style="display:flex;"><span>├── QueryEngine.ts           ← 引擎层：46K 行，LLM 调用 / 流式 / 缓存 / 编排
+</span></span><span style="display:flex;"><span>├── coordinator/             ← 引擎层：多 Agent 编排（Coordinator Mode）
+</span></span><span style="display:flex;"><span>├── context.ts               ← 引擎层：系统/用户上下文收集
+</span></span><span style="display:flex;"><span>├── cost-tracker.ts          ← 引擎层：Token 消耗追踪
+</span></span><span style="display:flex;"><span>│
+</span></span><span style="display:flex;"><span>├── Tool.ts                  ← 工具层：29K 行，所有工具类型定义 + 权限 Schema
+</span></span><span style="display:flex;"><span>├── tools/                   ← 工具层：~40 个工具实现
+</span></span><span style="display:flex;"><span>├── commands/                ← 工具层：~85 个斜杠命令，25K 行
+</span></span><span style="display:flex;"><span>├── commands.ts              ← 工具层：命令注册中心
+</span></span><span style="display:flex;"><span>├── skills/                  ← 工具层：技能系统
+</span></span><span style="display:flex;"><span>├── plugins/                 ← 工具层：插件系统
+</span></span><span style="display:flex;"><span>│
+</span></span><span style="display:flex;"><span>├── hooks/                   ← 基础设施层：React Hooks（含权限检查）
+</span></span><span style="display:flex;"><span>├── types/                   ← 基础设施层：TypeScript 类型定义
+</span></span><span style="display:flex;"><span>├── utils/                   ← 基础设施层：工具函数
+</span></span><span style="display:flex;"><span>├── memdir/                  ← 基础设施层：持久化记忆目录
+</span></span><span style="display:flex;"><span>└── tasks/                   ← 基础设施层：任务管理
+</span></span></code></pre></td></tr></table>
 </div>
 </div><p>Claude Code 系统运行时架构</p>
 <table>
-<thead>
-<tr>
-<th>层级</th>
-<th>核心模块/文件</th>
-<th>技术栈/关键说明</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><strong>入口层（Entrypoints）</strong></td>
-<td>main.tsx、bridge/、server/、remote/</td>
-<td>Bun + React/Ink（~140 组件）</td>
-</tr>
-<tr>
-<td><strong>运行时层（Runtime）</strong></td>
-<td>services/、screens/、会话、认证、配置</td>
-<td>-</td>
-</tr>
-<tr>
-<td><strong>引擎层（Engine）</strong></td>
-<td>QueryEngine.ts (46K行)、coordinator/、context.ts、cost-tracker.ts、三层压缩</td>
-<td>-</td>
-</tr>
-<tr>
-<td><strong>工具与能力层（Tools &amp; Capabilities）</strong></td>
-<td>Tool.ts (29K行)、tools/ (~40)、commands.ts、commands/ (~85, 25K行)、skills/、plugins/</td>
-<td>-</td>
-</tr>
-<tr>
-<td><strong>基础设施层</strong></td>
-<td>hooks/、types/、utils/、memdir/、tasks/、vendor/: ripgrep、tree-sitter、audio</td>
-<td>注：原图标注笔误，层级名应为 Infrastructure Layer</td>
-</tr>
-</tbody>
+	<thead>
+			<tr>
+					<th>层级</th>
+					<th>核心模块/文件</th>
+					<th>技术栈/关键说明</th>
+			</tr>
+	</thead>
+	<tbody>
+			<tr>
+					<td><strong>入口层（Entrypoints）</strong></td>
+					<td>main.tsx、bridge/、server/、remote/</td>
+					<td>Bun + React/Ink（~140 组件）</td>
+			</tr>
+			<tr>
+					<td><strong>运行时层（Runtime）</strong></td>
+					<td>services/、screens/、会话、认证、配置</td>
+					<td>-</td>
+			</tr>
+			<tr>
+					<td><strong>引擎层（Engine）</strong></td>
+					<td>QueryEngine.ts (46K行)、coordinator/、context.ts、cost-tracker.ts、三层压缩</td>
+					<td>-</td>
+			</tr>
+			<tr>
+					<td><strong>工具与能力层（Tools &amp; Capabilities）</strong></td>
+					<td>Tool.ts (29K行)、tools/ (~40)、commands.ts、commands/ (~85, 25K行)、skills/、plugins/</td>
+					<td>-</td>
+			</tr>
+			<tr>
+					<td><strong>基础设施层</strong></td>
+					<td>hooks/、types/、utils/、memdir/、tasks/、vendor/: ripgrep、tree-sitter、audio</td>
+					<td>注：原图标注笔误，层级名应为 Infrastructure Layer</td>
+			</tr>
+	</tbody>
 </table>
 <h2 id="queryengine">QueryEngine</h2>
 <p>46,000 行 TypeScript。QueryEngine 是一个单例（singleton），<br>
 拥有一个  mutableMessages  数组——整个对话的唯一真相来源（single source of truth）。循环的核心实现用了  generator 模式：</p>
-<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4">
-<table style="border-spacing:0;padding:0;margin:0;border:0;width:auto;overflow:auto;display:block;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
-<pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">15
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">16
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">17
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">18
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">19
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">20
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">21
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">22
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">23
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">24
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">25
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"><code><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">15
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">16
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">17
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">18
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">19
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">20
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">21
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">22
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">23
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">24
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">25
 </span></code></pre></td>
 <td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
-<pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-js" data-lang="js"><span style="color:#6272a4">// 概念性伪代码，基于泄露源码的架构分析
-</span><span style="color:#6272a4"></span>async <span style="color:#8be9fd;font-style:italic">function</span><span style="color:#ff79c6">*</span> agentLoop(messages<span style="color:#ff79c6">:</span> Message[])<span style="color:#ff79c6">:</span> AsyncGenerator<span style="color:#ff79c6">&lt;</span>Event<span style="color:#ff79c6">&gt;</span> {
-  <span style="color:#ff79c6">while</span> (<span style="color:#ff79c6">true</span>) {
-    <span style="color:#ff79c6">const</span> response <span style="color:#ff79c6">=</span> await queryLLM(messages);
-
-    <span style="color:#ff79c6">for</span> (<span style="color:#ff79c6">const</span> item <span style="color:#ff79c6">of</span> response.items) {
-      <span style="color:#ff79c6">if</span> (item.type <span style="color:#ff79c6">===</span> <span style="color:#f1fa8c">&#39;text&#39;</span>) {
-        <span style="color:#ff79c6">yield</span> { type<span style="color:#ff79c6">:</span> <span style="color:#f1fa8c">&#39;text&#39;</span>, content<span style="color:#ff79c6">:</span> item.text };
-      }
-      <span style="color:#ff79c6">if</span> (item.type <span style="color:#ff79c6">===</span> <span style="color:#f1fa8c">&#39;tool_use&#39;</span>) {
-        <span style="color:#6272a4">// 权限检查
-</span><span style="color:#6272a4"></span>        <span style="color:#ff79c6">const</span> approved <span style="color:#ff79c6">=</span> await checkPermission(item.tool, item.input);
-        <span style="color:#ff79c6">if</span> (<span style="color:#ff79c6">!</span>approved) <span style="color:#ff79c6">continue</span>;
-
-        <span style="color:#6272a4">// 执行工具
-</span><span style="color:#6272a4"></span>        <span style="color:#ff79c6">const</span> result <span style="color:#ff79c6">=</span> await executeTool(item.tool, item.input);
-        messages.push({ role<span style="color:#ff79c6">:</span> <span style="color:#f1fa8c">&#39;tool_result&#39;</span>, content<span style="color:#ff79c6">:</span> result });
-
-        <span style="color:#ff79c6">yield</span> { type<span style="color:#ff79c6">:</span> <span style="color:#f1fa8c">&#39;tool_result&#39;</span>, tool<span style="color:#ff79c6">:</span> item.tool, result };
-      }
-    }
-
-    <span style="color:#ff79c6">if</span> (<span style="color:#ff79c6">!</span>response.hasToolCalls) <span style="color:#ff79c6">break</span>;  <span style="color:#6272a4">// 无工具调用 = 结束
-</span><span style="color:#6272a4"></span>  }
-}
-</code></pre></td></tr></table>
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"><code class="language-js" data-lang="js"><span style="display:flex;"><span><span style="color:#6272a4">// 概念性伪代码，基于泄露源码的架构分析
+</span></span></span><span style="display:flex;"><span><span style="color:#ff79c6">async</span> <span style="color:#8be9fd;font-style:italic">function</span><span style="color:#ff79c6">*</span> agentLoop(messages<span style="color:#ff79c6">:</span> Message[])<span style="color:#ff79c6">:</span> AsyncGenerator<span style="color:#ff79c6">&lt;</span>Event<span style="color:#ff79c6">&gt;</span> {
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">while</span> (<span style="color:#ff79c6">true</span>) {
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">const</span> response <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">await</span> queryLLM(messages);
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">for</span> (<span style="color:#ff79c6">const</span> item <span style="color:#ff79c6">of</span> response.items) {
+</span></span><span style="display:flex;"><span>      <span style="color:#ff79c6">if</span> (item.type <span style="color:#ff79c6">===</span> <span style="color:#f1fa8c">&#39;text&#39;</span>) {
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">yield</span> { type<span style="color:#ff79c6">:</span> <span style="color:#f1fa8c">&#39;text&#39;</span>, content<span style="color:#ff79c6">:</span> item.text };
+</span></span><span style="display:flex;"><span>      }
+</span></span><span style="display:flex;"><span>      <span style="color:#ff79c6">if</span> (item.type <span style="color:#ff79c6">===</span> <span style="color:#f1fa8c">&#39;tool_use&#39;</span>) {
+</span></span><span style="display:flex;"><span>        <span style="color:#6272a4">// 权限检查
+</span></span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">const</span> approved <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">await</span> checkPermission(item.tool, item.input);
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">if</span> (<span style="color:#ff79c6">!</span>approved) <span style="color:#ff79c6">continue</span>;
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>        <span style="color:#6272a4">// 执行工具
+</span></span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">const</span> result <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">await</span> executeTool(item.tool, item.input);
+</span></span><span style="display:flex;"><span>        messages.push({ role<span style="color:#ff79c6">:</span> <span style="color:#f1fa8c">&#39;tool_result&#39;</span>, content<span style="color:#ff79c6">:</span> result });
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">yield</span> { type<span style="color:#ff79c6">:</span> <span style="color:#f1fa8c">&#39;tool_result&#39;</span>, tool<span style="color:#ff79c6">:</span> item.tool, result };
+</span></span><span style="display:flex;"><span>      }
+</span></span><span style="display:flex;"><span>    }
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">if</span> (<span style="color:#ff79c6">!</span>response.hasToolCalls) <span style="color:#ff79c6">break</span>;  <span style="color:#6272a4">// 无工具调用 = 结束
+</span></span></span><span style="display:flex;"><span>  }
+</span></span><span style="display:flex;"><span>}
+</span></span></code></pre></td></tr></table>
 </div>
 </div><p>Generator 模式 相比传统的 while 循环或状态机，有哪些好处呢？</p>
 <ul>
@@ -320,48 +348,48 @@
 <li>中断是干净的，用户按 Ctrl+C，generator 直接 return，无需清理状态机</li>
 <li>预算控制是平凡的，在 yield 之间检查 Token 消耗，超预算直接 return。工具调用是递归的，子代理可以嵌套自己的 generator</li>
 </ul>
-<h2 id="40--29k-">40 个工具与 29K 行定义</h2>
+<h2 id="40-个工具与-29k-行定义">40 个工具与 29K 行定义</h2>
 <p>Claude Code 工具分层表</p>
 <table>
-<thead>
-<tr>
-<th align="left">类别</th>
-<th align="left">用户可见工具</th>
-<th align="left">内部隐藏工具</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td align="left"><strong>文件操作</strong></td>
-<td align="left">Read、Write、Edit</td>
-<td align="left">文件监控、LSP 集成</td>
-</tr>
-<tr>
-<td align="left"><strong>搜索</strong></td>
-<td align="left">Grep、Glob</td>
-<td align="left">语义搜索、AST 分析</td>
-</tr>
-<tr>
-<td align="left"><strong>执行</strong></td>
-<td align="left">Bash</td>
-<td align="left">沙箱化执行器、进程管理</td>
-</tr>
-<tr>
-<td align="left"><strong>网络</strong></td>
-<td align="left">WebFetch、WebSearch</td>
-<td align="left">OAuth 流程、API 代理</td>
-</tr>
-<tr>
-<td align="left"><strong>编排</strong></td>
-<td align="left">Agent、TodoWrite、Skill</td>
-<td align="left">Swarm 编排、上下文分叉</td>
-</tr>
-<tr>
-<td align="left"><strong>系统</strong></td>
-<td align="left">—</td>
-<td align="left">遥测上报、密钥检测、缓存管理</td>
-</tr>
-</tbody>
+	<thead>
+			<tr>
+					<th style="text-align: left">类别</th>
+					<th style="text-align: left">用户可见工具</th>
+					<th style="text-align: left">内部隐藏工具</th>
+			</tr>
+	</thead>
+	<tbody>
+			<tr>
+					<td style="text-align: left"><strong>文件操作</strong></td>
+					<td style="text-align: left">Read、Write、Edit</td>
+					<td style="text-align: left">文件监控、LSP 集成</td>
+			</tr>
+			<tr>
+					<td style="text-align: left"><strong>搜索</strong></td>
+					<td style="text-align: left">Grep、Glob</td>
+					<td style="text-align: left">语义搜索、AST 分析</td>
+			</tr>
+			<tr>
+					<td style="text-align: left"><strong>执行</strong></td>
+					<td style="text-align: left">Bash</td>
+					<td style="text-align: left">沙箱化执行器、进程管理</td>
+			</tr>
+			<tr>
+					<td style="text-align: left"><strong>网络</strong></td>
+					<td style="text-align: left">WebFetch、WebSearch</td>
+					<td style="text-align: left">OAuth 流程、API 代理</td>
+			</tr>
+			<tr>
+					<td style="text-align: left"><strong>编排</strong></td>
+					<td style="text-align: left">Agent、TodoWrite、Skill</td>
+					<td style="text-align: left">Swarm 编排、上下文分叉</td>
+			</tr>
+			<tr>
+					<td style="text-align: left"><strong>系统</strong></td>
+					<td style="text-align: left">—</td>
+					<td style="text-align: left">遥测上报、密钥检测、缓存管理</td>
+			</tr>
+	</tbody>
 </table>
 <p>每个工具都是一个离散的、权限门控的插件。工具定义不是简单的函数签名——每个工具包含以下内容</p>
 <ul>
@@ -371,7 +399,7 @@
 <li>输出格式规范（返回给模型的数据结构）</li>
 <li>错误处理逻辑（重试策略、降级方案）</li>
 </ul>
-<h2 id="heading2">上下文工程</h2>
+<h2 id="上下文工程">上下文工程</h2>
 <blockquote>
 <p>Sebastian Raschka（《Build a Large Language Model From Scratch》作者）在泄露当天发表了一篇分析文章，标题直接点出了核心洞察：Claude Code’s Real Secret Sauce Isn’t the Model.</p>
 </blockquote>
@@ -401,81 +429,81 @@
 <li>LSP 让 Claude Code 能做<strong>语义级的代码理解</strong>：定义跳转、引用查找、调用层次分析</li>
 </ul>
 <table>
-<thead>
-<tr>
-<th>优化项</th>
-<th>核心机制</th>
-<th>核心价值</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td>Git 上下文自动加载</td>
-<td>自动注入分支名、commit 记录、diff</td>
-<td>让模型天然理解 Git 工作流，支持分支操作等复杂场景</td>
-</tr>
-<tr>
-<td>静态/动态内容分界</td>
-<td>用 boundary marker 拆分静态/动态内容，静态内容全局缓存</td>
-<td>大幅降低 Token 消耗，提升响应速度，客户端自主分界更灵活</td>
-</tr>
-<tr>
-<td>文件读取去重</td>
-<td>客户端内容哈希校验，仅在文件变更时重新加载</td>
-<td>避免冗余上下文，减少 Token 浪费，提升会话效率</td>
-</tr>
-<tr>
-<td>大结果落盘</td>
-<td>超大工具结果写入临时文件，上下文仅保留摘要+路径</td>
-<td>突破上下文长度限制，按需加载完整内容</td>
-</tr>
-<tr>
-<td>LSP 集成</td>
-<td>接入语言服务器协议</td>
-<td>实现语义级代码理解，支持定义跳转、引用查找等高级能力</td>
-</tr>
-</tbody>
+	<thead>
+			<tr>
+					<th>优化项</th>
+					<th>核心机制</th>
+					<th>核心价值</th>
+			</tr>
+	</thead>
+	<tbody>
+			<tr>
+					<td>Git 上下文自动加载</td>
+					<td>自动注入分支名、commit 记录、diff</td>
+					<td>让模型天然理解 Git 工作流，支持分支操作等复杂场景</td>
+			</tr>
+			<tr>
+					<td>静态/动态内容分界</td>
+					<td>用 boundary marker 拆分静态/动态内容，静态内容全局缓存</td>
+					<td>大幅降低 Token 消耗，提升响应速度，客户端自主分界更灵活</td>
+			</tr>
+			<tr>
+					<td>文件读取去重</td>
+					<td>客户端内容哈希校验，仅在文件变更时重新加载</td>
+					<td>避免冗余上下文，减少 Token 浪费，提升会话效率</td>
+			</tr>
+			<tr>
+					<td>大结果落盘</td>
+					<td>超大工具结果写入临时文件，上下文仅保留摘要+路径</td>
+					<td>突破上下文长度限制，按需加载完整内容</td>
+			</tr>
+			<tr>
+					<td>LSP 集成</td>
+					<td>接入语言服务器协议</td>
+					<td>实现语义级代码理解，支持定义跳转、引用查找等高级能力</td>
+			</tr>
+	</tbody>
 </table>
-<h2 id="selfhealing-memory">Self-Healing Memory</h2>
+<h2 id="self-healing-memory">Self-Healing Memory</h2>
 <p>三层结构</p>
-<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4">
-<table style="border-spacing:0;padding:0;margin:0;border:0;width:auto;overflow:auto;display:block;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
-<pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"><code><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
 </span></code></pre></td>
 <td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
-<pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">第一层：MEMORY.md（轻量索引）
-  └── 每条记忆只有一行指针（~150 字符）
-  └── 永远加载在上下文中
-  └── 是<span style="color:#f1fa8c">&#34;目录&#34;</span>，不是<span style="color:#f1fa8c">&#34;内容&#34;</span>
-
-第二层：Topic Files（主题文件）
-  └── 实际的记忆内容存在独立文件中
-  └── 按需加载，不一次性塞入上下文
-  └── 类似数据库的<span style="color:#f1fa8c">&#34;索引 + 数据页&#34;</span>分离
-
-第三层：Raw Transcripts（原始记录）
-  └── 对话原文从不完整回读
-  └── 只通过 grep 检索特定标识符
-  └── 类似日志系统的<span style="color:#f1fa8c">&#34;只写不全读&#34;</span>
-</code></pre></td></tr></table>
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"><code class="language-shell" data-lang="shell"><span style="display:flex;"><span>第一层：MEMORY.md（轻量索引）
+</span></span><span style="display:flex;"><span>  └── 每条记忆只有一行指针（~150 字符）
+</span></span><span style="display:flex;"><span>  └── 永远加载在上下文中
+</span></span><span style="display:flex;"><span>  └── 是<span style="color:#f1fa8c">&#34;目录&#34;</span>，不是<span style="color:#f1fa8c">&#34;内容&#34;</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>第二层：Topic Files（主题文件）
+</span></span><span style="display:flex;"><span>  └── 实际的记忆内容存在独立文件中
+</span></span><span style="display:flex;"><span>  └── 按需加载，不一次性塞入上下文
+</span></span><span style="display:flex;"><span>  └── 类似数据库的<span style="color:#f1fa8c">&#34;索引 + 数据页&#34;</span>分离
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>第三层：Raw Transcripts（原始记录）
+</span></span><span style="display:flex;"><span>  └── 对话原文从不完整回读
+</span></span><span style="display:flex;"><span>  └── 只通过 grep 检索特定标识符
+</span></span><span style="display:flex;"><span>  └── 类似日志系统的<span style="color:#f1fa8c">&#34;只写不全读&#34;</span>
+</span></span></code></pre></td></tr></table>
 </div>
 </div><p>源码中有一条关键规则叫“Strict Write Discipline”——Agent 只有在成功写入文件之后，<br>
 才更新 MEMORY.md 索引。如果写入失败，索引不更新，这避免了“索引指向不存在的内容”的一致性问题。<br>
 这本质上是数据库中的  write-ahead logging（WAL）  的逆向——先写数据，再写索引，确保索引永远指向有效内容。</p>
-<h2 id="44--feature-flag">权限系统：44 个 Feature Flag</h2>
+<h2 id="权限系统44-个-feature-flag">权限系统：44 个 Feature Flag</h2>
 <p><strong>KAIROS</strong> 是一个守护进程模式</p>
 <ul>
 <li>当前的 Claude Code 是“被动响应式”的——你输入命令，它执行</li>
@@ -483,46 +511,46 @@
 <li>它包含一个叫  autoDream  的进程：在用户空闲时，Agent 自动进行“记忆整合”——合并分散的观察、消除逻辑矛盾、将模糊的洞察转化为确定性事实</li>
 <li>这意味着 Anthropic 正在构建一个从工具到助手到守护进程的进化路径。我们的课程停留在“工具”阶段，KAIROS 代表的是下一个阶段</li>
 </ul>
-<h2 id="heading3">反蒸馏机制</h2>
+<h2 id="反蒸馏机制">反蒸馏机制</h2>
 <p>这是什么意思？如果有人在录制 Claude Code 的 API 流量（比如通过中间人代理截获请求和响应），用这些数据来训练竞品模型——那些虚假工具定义就会污染训练数据。竞品模型会学到不存在的工具，在推理时产生幻觉</p>
-<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4">
-<table style="border-spacing:0;padding:0;margin:0;border:0;width:auto;overflow:auto;display:block;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
-<pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">5
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">6
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">7
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"><code><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">5
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">6
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">7
 </span></code></pre></td>
 <td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
-<pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">正常请求：
-  tools: <span style="color:#ff79c6">[</span>Read, Write, Edit, Bash, Grep, Glob, ...<span style="color:#ff79c6">]</span>  ← 真实工具
-
-开启反蒸馏后的请求：
-  tools: <span style="color:#ff79c6">[</span>Read, Write, Edit, Bash, Grep, Glob, ...,
-          FakeToolA, FakeToolB, FakeToolC<span style="color:#ff79c6">]</span>              ← 注入假工具
-  anti_distillation: <span style="color:#ff79c6">[</span><span style="color:#f1fa8c">&#39;fake_tools&#39;</span><span style="color:#ff79c6">]</span>                     ← 服务端标记
-</code></pre></td></tr></table>
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"><code class="language-shell" data-lang="shell"><span style="display:flex;"><span>正常请求：
+</span></span><span style="display:flex;"><span>  tools: <span style="color:#ff79c6">[</span>Read, Write, Edit, Bash, Grep, Glob, ...<span style="color:#ff79c6">]</span>  ← 真实工具
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>开启反蒸馏后的请求：
+</span></span><span style="display:flex;"><span>  tools: <span style="color:#ff79c6">[</span>Read, Write, Edit, Bash, Grep, Glob, ...,
+</span></span><span style="display:flex;"><span>          FakeToolA, FakeToolB, FakeToolC<span style="color:#ff79c6">]</span>              ← 注入假工具
+</span></span><span style="display:flex;"><span>  anti_distillation: <span style="color:#ff79c6">[</span><span style="color:#f1fa8c">&#39;fake_tools&#39;</span><span style="color:#ff79c6">]</span>                     ← 服务端标记
+</span></span></code></pre></td></tr></table>
 </div>
 </div><p>这个功能受  GrowthBook feature flag（tengu_anti_distill_fake_tool_injection）控制，只在第一方 CLI 会话中激活<br>
 源码中还有第二层反蒸馏机制，betas.ts  中的“connector-text summarization”。开启后，API 会将 Claude 在工具调用之间的中间文本进行摘要化处理，并附上加密签名。即使有人截获了流量，拿到的也是摘要而非原始推理过程</p>
-<h2 id="heading4">挫败检测</h2>
+<h2 id="挫败检测">挫败检测</h2>
 <p>源码中的  userPromptKeywords.ts  <br>
 暴露了一个出人意料的功能：用户挫败感检测。具体实现是一条正则表达式：</p>
-<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4">
-<table style="border-spacing:0;padding:0;margin:0;border:0;width:auto;overflow:auto;display:block;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
-<pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"><code><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
 </span></code></pre></td>
 <td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
-<pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">/<span style="color:#f1fa8c">\b</span><span style="color:#ff79c6">(</span>wtf|wth|ffs|omfg|shit<span style="color:#ff79c6">(</span>ty|tiest<span style="color:#ff79c6">)</span>?|dumbass|horrible|awful|
-piss<span style="color:#ff79c6">(</span>ed|ing<span style="color:#ff79c6">)</span>? off|piece of <span style="color:#ff79c6">(</span>shit|crap|junk<span style="color:#ff79c6">)</span>|what the <span style="color:#ff79c6">(</span>fuck|hell<span style="color:#ff79c6">)</span>|
-fucking? <span style="color:#ff79c6">(</span>broken|useless|terrible|awful|horrible<span style="color:#ff79c6">)</span>|fuck you|
-screw <span style="color:#ff79c6">(</span>this|you<span style="color:#ff79c6">)</span>|so frustrating|this sucks|damn it<span style="color:#ff79c6">)</span><span style="color:#f1fa8c">\b</span>/
-</code></pre></td></tr></table>
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"><code class="language-shell" data-lang="shell"><span style="display:flex;"><span>/<span style="color:#f1fa8c">\b</span><span style="color:#ff79c6">(</span>wtf|wth|ffs|omfg|shit<span style="color:#ff79c6">(</span>ty|tiest<span style="color:#ff79c6">)</span>?|dumbass|horrible|awful|
+</span></span><span style="display:flex;"><span>piss<span style="color:#ff79c6">(</span>ed|ing<span style="color:#ff79c6">)</span>? off|piece of <span style="color:#ff79c6">(</span>shit|crap|junk<span style="color:#ff79c6">)</span>|what the <span style="color:#ff79c6">(</span>fuck|hell<span style="color:#ff79c6">)</span>|
+</span></span><span style="display:flex;"><span>fucking? <span style="color:#ff79c6">(</span>broken|useless|terrible|awful|horrible<span style="color:#ff79c6">)</span>|fuck you|
+</span></span><span style="display:flex;"><span>screw <span style="color:#ff79c6">(</span>this|you<span style="color:#ff79c6">)</span>|so frustrating|this sucks|damn it<span style="color:#ff79c6">)</span><span style="color:#f1fa8c">\b</span>/
+</span></span></code></pre></td></tr></table>
 </div>
 </div><p>这条正则匹配了英语中最常见的挫败和愤怒表达——从轻微的  damn it  到重度的  fuck you。匹配结果被记录到分析系统，标记为  tengu_input_prompt  事件的  is_negative  布尔值</p>
 <p>同时还有一个  is_keep_going  布尔值——检测用户是否在失败后仍坚持继续（比如 try again、keep going）   <br>
@@ -540,99 +568,99 @@ screw <span style="color:#ff79c6">(</span>this|you<span style="color:#ff79c6">)<
 <p>这个功能本身可能是为了让 Anthropic 的工程师在使用 Claude Code 贡献开源时，避免引起不必要的关注（比如“Anthropic 在用自己的 AI 写代码”的舆论风险）。但它的存在确实触及了 AI 工程的一个前沿问题——<strong>AI 参与的透明度边界在哪里？</strong><br>
 Undercover Mode 是 Headless 模式的一个极端延伸——不仅无人值守，而且刻意隐藏 AI 的参与。这提醒我们，<strong>自动化能力越强，工程伦理的考量就越重要</strong></p>
 <table>
-<thead>
-<tr>
-<th>核心维度</th>
-<th>关键信息</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td>功能定位</td>
-<td>Anthropic 员工匿名向开源项目贡献代码的模式</td>
-</tr>
-<tr>
-<td>核心提示词</td>
-<td><code>Do not blow your cover</code>（不要暴露身份）</td>
-</tr>
-<tr>
-<td>代码特性</td>
-<td>无永久禁用该模式的方法</td>
-</tr>
-<tr>
-<td>伦理争议</td>
-<td>AI 辅助代码贡献是否需要在开源社区透明标注</td>
-</tr>
-<tr>
-<td>模式延伸</td>
-<td>是 Headless 无人值守模式的极端形态，隐藏 AI 参与</td>
-</tr>
-<tr>
-<td>核心结论</td>
-<td>自动化能力越强，工程伦理的考量越重要</td>
-</tr>
-</tbody>
+	<thead>
+			<tr>
+					<th>核心维度</th>
+					<th>关键信息</th>
+			</tr>
+	</thead>
+	<tbody>
+			<tr>
+					<td>功能定位</td>
+					<td>Anthropic 员工匿名向开源项目贡献代码的模式</td>
+			</tr>
+			<tr>
+					<td>核心提示词</td>
+					<td><code>Do not blow your cover</code>（不要暴露身份）</td>
+			</tr>
+			<tr>
+					<td>代码特性</td>
+					<td>无永久禁用该模式的方法</td>
+			</tr>
+			<tr>
+					<td>伦理争议</td>
+					<td>AI 辅助代码贡献是否需要在开源社区透明标注</td>
+			</tr>
+			<tr>
+					<td>模式延伸</td>
+					<td>是 Headless 无人值守模式的极端形态，隐藏 AI 参与</td>
+			</tr>
+			<tr>
+					<td>核心结论</td>
+					<td>自动化能力越强，工程伦理的考量越重要</td>
+			</tr>
+	</tbody>
 </table>
-<h2 id="heading5">对照表</h2>
+<h2 id="对照表">对照表</h2>
 <table>
-<thead>
-<tr>
-<th>内容</th>
-<th>源码验证</th>
-<th>发现</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><strong>Agentic Loop</strong></td>
-<td>核心循环逻辑完全一致</td>
-<td>generator 模式实现；QueryEngine 46K 行单例</td>
-</tr>
-<tr>
-<td><strong>工具系统</strong></td>
-<td>五个原子操作分类正确</td>
-<td>实际 ~40 个工具（含内部），29K 行定义；<br>功能代码与安全代码比例 ≈ 1:3</td>
-</tr>
-<tr>
-<td><strong>上下文管理</strong></td>
-<td>压缩 + 重注入策略正确</td>
-<td>Git 上下文自动加载、静态/动态 boundary marker、<br>文件读取去重、大结果落盘、LSP 语义理解</td>
-</tr>
-<tr>
-<td><strong>记忆系统</strong></td>
-<td>三级记忆体系正确</td>
-<td>Self-Healing Memory：MEMORY.md 是索引；topic files 按需加载；Strict Write Discipline</td>
-</tr>
-<tr>
-<td><strong>权限系统</strong></td>
-<td>deny→allow→ask 正确；<br>四级层次正确</td>
-<td>44 个 feature flag；KAIROS 守护进程；120+ 内部环境变量</td>
-</tr>
-<tr>
-<td><strong>Hooks 事件驱动</strong></td>
-<td>事件驱动思维正确</td>
-<td>挫败感检测用正则而非 LLM——“确定性代码处理确定性”</td>
-</tr>
-<tr>
-<td><strong>Headless 模式</strong></td>
-<td>无人值守架构正确</td>
-<td>Undercover Mode：Headless 的极端延伸</td>
-</tr>
-<tr>
-<td><strong>平台定位</strong></td>
-<td>Harness 定位完全正确</td>
-<td>5 层平台运行时；反蒸馏机制（假工具注入 + 密文摘要）</td>
-</tr>
-<tr>
-<td><strong>安全工程 / Rules权限系统</strong></td>
-<td>这次事件本身的启示</td>
-<td>Source map 泄露向量；Bun 构建行为与文档不一致；<br>CI/CD 是最薄弱环节</td>
-</tr>
-</tbody>
+	<thead>
+			<tr>
+					<th>内容</th>
+					<th>源码验证</th>
+					<th>发现</th>
+			</tr>
+	</thead>
+	<tbody>
+			<tr>
+					<td><strong>Agentic Loop</strong></td>
+					<td>核心循环逻辑完全一致</td>
+					<td>generator 模式实现；QueryEngine 46K 行单例</td>
+			</tr>
+			<tr>
+					<td><strong>工具系统</strong></td>
+					<td>五个原子操作分类正确</td>
+					<td>实际 ~40 个工具（含内部），29K 行定义；<br>功能代码与安全代码比例 ≈ 1:3</td>
+			</tr>
+			<tr>
+					<td><strong>上下文管理</strong></td>
+					<td>压缩 + 重注入策略正确</td>
+					<td>Git 上下文自动加载、静态/动态 boundary marker、<br>文件读取去重、大结果落盘、LSP 语义理解</td>
+			</tr>
+			<tr>
+					<td><strong>记忆系统</strong></td>
+					<td>三级记忆体系正确</td>
+					<td>Self-Healing Memory：MEMORY.md 是索引；topic files 按需加载；Strict Write Discipline</td>
+			</tr>
+			<tr>
+					<td><strong>权限系统</strong></td>
+					<td>deny→allow→ask 正确；<br>四级层次正确</td>
+					<td>44 个 feature flag；KAIROS 守护进程；120+ 内部环境变量</td>
+			</tr>
+			<tr>
+					<td><strong>Hooks 事件驱动</strong></td>
+					<td>事件驱动思维正确</td>
+					<td>挫败感检测用正则而非 LLM——“确定性代码处理确定性”</td>
+			</tr>
+			<tr>
+					<td><strong>Headless 模式</strong></td>
+					<td>无人值守架构正确</td>
+					<td>Undercover Mode：Headless 的极端延伸</td>
+			</tr>
+			<tr>
+					<td><strong>平台定位</strong></td>
+					<td>Harness 定位完全正确</td>
+					<td>5 层平台运行时；反蒸馏机制（假工具注入 + 密文摘要）</td>
+			</tr>
+			<tr>
+					<td><strong>安全工程 / Rules权限系统</strong></td>
+					<td>这次事件本身的启示</td>
+					<td>Source map 泄露向量；Bun 构建行为与文档不一致；<br>CI/CD 是最薄弱环节</td>
+			</tr>
+	</tbody>
 </table>
-<h1 id="claude-code-">Claude Code 主要流程架构图</h1>
-<h2 id="1--startup-flow">1. 启动流程 (Startup Flow)</h2>
-<pre><code class="language-mermaid" data-lang="mermaid">flowchart TD
+<h1 id="claude-code-主要流程架构图">Claude Code 主要流程架构图</h1>
+<h2 id="1-启动流程-startup-flow">1. 启动流程 (Startup Flow)</h2>
+<pre tabindex="0"><code class="language-mermaid" data-lang="mermaid">flowchart TD
     Start[用户启动 claude] --&gt; P1[性能分析检查点&lt;br/&gt;profileCheckpoint]
     P1 --&gt; P2[并行启动阶段]
     
@@ -663,8 +691,8 @@ Undercover Mode 是 Headless 模式的一个极端延伸——不仅无人值守
     Bridge --&gt; Ready
     Server --&gt; Ready
 </code></pre><hr>
-<h2 id="2--core-query-flow">2. 核心查询流程 (Core Query Flow)</h2>
-<pre><code class="language-mermaid" data-lang="mermaid">flowchart TB
+<h2 id="2-核心查询流程-core-query-flow">2. 核心查询流程 (Core Query Flow)</h2>
+<pre tabindex="0"><code class="language-mermaid" data-lang="mermaid">flowchart TB
     subgraph InputPhase [输入处理阶段]
         Input[用户输入] --&gt; Process[processUserInput]
         Process --&gt; Messages[消息数组]
@@ -718,8 +746,8 @@ Undercover Mode 是 Headless 模式的一个极端延伸——不仅无人值守
         Save --&gt; Done[完成]
     end
 </code></pre><hr>
-<h2 id="3--permission-system-flow">3. 权限系统流程 (Permission System Flow)</h2>
-<pre><code class="language-mermaid" data-lang="mermaid">graph TB
+<h2 id="3-权限系统流程-permission-system-flow">3. 权限系统流程 (Permission System Flow)</h2>
+<pre tabindex="0"><code class="language-mermaid" data-lang="mermaid">graph TB
     ToolCall[工具调用请求] --&gt; Check1{权限模式}
     
     Check1 --&gt;|auto| AutoMode[自动模式]
@@ -762,8 +790,8 @@ Undercover Mode 是 Headless 模式的一个极端延伸——不仅无人值守
     PlanBlock --&gt; Wait[等待计划完成]
     UseHistory --&gt; Execute
 </code></pre><hr>
-<h2 id="4--context-compaction-flow">4. 上下文压缩流程 (Context Compaction Flow)</h2>
-<pre><code class="language-mermaid" data-lang="mermaid">graph TB
+<h2 id="4-上下文压缩流程-context-compaction-flow">4. 上下文压缩流程 (Context Compaction Flow)</h2>
+<pre tabindex="0"><code class="language-mermaid" data-lang="mermaid">graph TB
     QueryStart[query 调用] --&gt; TokenCheck{Token 检查}
     
     TokenCheck --&gt;|正常| API[调用 API]
@@ -790,8 +818,8 @@ Undercover Mode 是 Headless 模式的一个极端延伸——不仅无人值守
     Stream --&gt; Update[更新消息]
     Update --&gt; Done[完成]
 </code></pre><hr>
-<h2 id="5--tool-system-architecture">5. 工具系统架构 (Tool System Architecture)</h2>
-<pre><code class="language-mermaid" data-lang="mermaid">graph TB
+<h2 id="5-工具系统架构-tool-system-architecture">5. 工具系统架构 (Tool System Architecture)</h2>
+<pre tabindex="0"><code class="language-mermaid" data-lang="mermaid">graph TB
     ToolPool[工具池] --&gt; GetTools[getTools]
     
     GetTools --&gt; GT1[内置工具]
@@ -834,8 +862,8 @@ Undercover Mode 是 Headless 模式的一个极端延伸——不仅无人值守
     Next --&gt;|是| Execution
     Next --&gt;|否| Complete[完成]
 </code></pre><hr>
-<h2 id="6-mcp--mcp-integration-flow">6. MCP 系统集成流程 (MCP Integration Flow)</h2>
-<pre><code class="language-mermaid" data-lang="mermaid">graph TB
+<h2 id="6-mcp-系统集成流程-mcp-integration-flow">6. MCP 系统集成流程 (MCP Integration Flow)</h2>
+<pre tabindex="0"><code class="language-mermaid" data-lang="mermaid">graph TB
     Startup[启动] --&gt; MCPLoad[加载 MCP 配置]
     
     MCPLoad --&gt; Config{配置类型}
@@ -886,8 +914,8 @@ Undercover Mode 是 Headless 模式的一个极端延伸——不仅无人值守
     
     Message --&gt; Output[输出]
 </code></pre><hr>
-<h2 id="7--agent--multiagent-coordination-flow">7. 多 Agent 协调流程 (Multi-Agent Coordination Flow)</h2>
-<pre><code class="language-mermaid" data-lang="mermaid">graph TB
+<h2 id="7-多-agent-协调流程-multi-agent-coordination-flow">7. 多 Agent 协调流程 (Multi-Agent Coordination Flow)</h2>
+<pre tabindex="0"><code class="language-mermaid" data-lang="mermaid">graph TB
     User[用户任务] --&gt; Coordinator[Agent 协调器]
     
     Coordinator --&gt; TaskAnalysis[任务分析]
@@ -930,8 +958,8 @@ Undercover Mode 是 Headless 模式的一个极端延伸——不仅无人值守
     
     Results --&gt; Output[输出给用户]
 </code></pre><hr>
-<h2 id="8--state-management-flow">8. 状态管理流程 (State Management Flow)</h2>
-<pre><code class="language-mermaid" data-lang="mermaid">flowchart TD
+<h2 id="8-状态管理流程-state-management-flow">8. 状态管理流程 (State Management Flow)</h2>
+<pre tabindex="0"><code class="language-mermaid" data-lang="mermaid">flowchart TD
     Init[应用启动] --&gt; CreateStore[创建 Store]
     
     CreateStore --&gt; AppState[AppState]
@@ -966,8 +994,8 @@ Undercover Mode 是 Headless 模式的一个极端延伸——不仅无人值守
     ToolOperation[工具操作] --&gt; Update
     ConfigOperation[配置操作] --&gt; Update
 </code></pre><hr>
-<h2 id="heading6">关键数据流说明</h2>
-<h3 id="1-">1. 消息生命周期</h3>
+<h2 id="关键数据流说明">关键数据流说明</h2>
+<h3 id="1-消息生命周期">1. 消息生命周期</h3>
 <ul>
 <li><strong>创建</strong>：用户输入 → <code>createUserMessage</code> → 添加到 <code>mutableMessages</code></li>
 <li><strong>处理</strong>：<code>processUserInput</code> 解析命令和附件</li>
@@ -976,7 +1004,7 @@ Undercover Mode 是 Headless 模式的一个极端延伸——不仅无人值守
 <li><strong>记录</strong>：<code>recordTranscript</code> 保存到会话存储</li>
 <li><strong>压缩</strong>：超限时触发自动压缩，生成摘要</li>
 </ul>
-<h3 id="2-">2. 工具调用生命周期</h3>
+<h3 id="2-工具调用生命周期">2. 工具调用生命周期</h3>
 <ul>
 <li><strong>发现</strong>：<code>getTools()</code> + MCP 工具发现</li>
 <li><strong>过滤</strong>：权限规则 + 特性开关</li>
@@ -985,7 +1013,7 @@ Undercover Mode 是 Headless 模式的一个极端延伸——不仅无人值守
 <li><strong>执行</strong>：<code>runTools()</code> + <code>StreamingToolExecutor</code></li>
 <li><strong>结果</strong>：<code>toolUseResult</code> → 添加到消息流</li>
 </ul>
-<h3 id="3-">3. 会话持久化</h3>
+<h3 id="3-会话持久化">3. 会话持久化</h3>
 <ul>
 <li><strong>实时保存</strong>：每个操作后异步写入</li>
 <li><strong>恢复</strong>：<code>--resume</code> 从转录加载</li>
@@ -993,7 +1021,7 @@ Undercover Mode 是 Headless 模式的一个极端延伸——不仅无人值守
 <li><strong>共享</strong>：<code>/share</code> 导出会话</li>
 </ul>
 <hr>
-<h2 id="heading7">性能优化关键点</h2>
+<h2 id="性能优化关键点">性能优化关键点</h2>
 <ol>
 <li><strong>并行启动</strong>：MDM、Keychain、模块评估并行执行</li>
 <li><strong>延迟加载</strong>：重模块动态 import()</li>
@@ -1004,7 +1032,7 @@ Undercover Mode 是 Headless 模式的一个极端延伸——不仅无人值守
 <li><strong>提示缓存</strong>：系统提示缓存减少 Token</li>
 </ol>
 <hr>
-<h2 id="heading8">错误处理策略</h2>
+<h2 id="错误处理策略">错误处理策略</h2>
 <ol>
 <li><strong>API 错误</strong>：自动重试（<code>withRetry</code>）</li>
 <li><strong>权限拒绝</strong>：记录到否认追踪（<code>DenialTracking</code>）</li>
@@ -1012,7 +1040,6 @@ Undercover Mode 是 Headless 模式的一个极端延伸——不仅无人值守
 <li><strong>上下文超限</strong>：自动压缩或拒绝</li>
 <li><strong>连接失败</strong>：重连机制 + 用户通知</li>
 </ol>
-
 			<script type="text/javascript"
         async
         src="https://cdn.bootcss.com/mathjax/2.7.3/MathJax.js?config=TeX-AMS-MML_HTMLorMML">
@@ -1081,6 +1108,7 @@ code.has-jax {
       </script>
     </div>
     
+
 </div>
 
 
@@ -1099,6 +1127,10 @@ code.has-jax {
     <section class="widget">
         <h3 class="widget-title">最近文章</h3>
 <ul class="widget-list">
+    
+    <li>
+        <a href="/post/2026/06/da_lian/" title="大连，11年后的再相见">大连，11年后的再相见</a>
+    </li>
     
     <li>
         <a href="/post/2026/05/volcano-notes/" title="Volcano 笔记">Volcano 笔记</a>
@@ -1136,10 +1168,6 @@ code.has-jax {
         <a href="/post/2026/04/claude_code/" title="Claude code 源码分析">Claude code 源码分析</a>
     </li>
     
-    <li>
-        <a href="/post/2026/03/iran_war/" title="Iran War">Iran War</a>
-    </li>
-    
 </ul>
 
     </section>
@@ -1166,7 +1194,7 @@ code.has-jax {
     
     <li><a href="/categories/%E6%96%87%E5%AD%A6%E5%92%8C%E8%89%BA%E6%9C%AF/">文学和艺术 (3)</a></li>
     
-    <li><a href="/categories/%E6%97%85%E8%A1%8C/">旅行 (15)</a></li>
+    <li><a href="/categories/%E6%97%85%E8%A1%8C/">旅行 (16)</a></li>
     
     <li><a href="/categories/%E6%9E%B6%E6%9E%84/">架构 (15)</a></li>
     
@@ -1200,7 +1228,7 @@ code.has-jax {
     
     <li><a href="/years/2025%E5%B9%B4/">2025年 (38)</a></li>
     
-    <li><a href="/years/2026%E5%B9%B4/">2026年 (14)</a></li>
+    <li><a href="/years/2026%E5%B9%B4/">2026年 (15)</a></li>
     
 </ul>
 
@@ -1214,9 +1242,9 @@ code.has-jax {
     
     <a href="/tags/ambari/">Ambari </a>
     
-    <a href="/tags/architecture/">architecture </a>
+    <a href="/tags/architecture/">Architecture </a>
     
-    <a href="/tags/bigdata/">bigdata </a>
+    <a href="/tags/bigdata/">Bigdata </a>
     
     <a href="/tags/btrace/">BTrace </a>
     
@@ -1224,11 +1252,11 @@ code.has-jax {
     
     <a href="/tags/c&#43;&#43;/">C&#43;&#43; </a>
     
-    <a href="/tags/calcite/">calcite </a>
+    <a href="/tags/calcite/">Calcite </a>
     
     <a href="/tags/canal/">Canal </a>
     
-    <a href="/tags/claude/">claude </a>
+    <a href="/tags/claude/">Claude </a>
     
     <a href="/tags/cmu-database/">CMU-Database </a>
     
@@ -1240,7 +1268,7 @@ code.has-jax {
     
     <a href="/tags/doris/">Doris </a>
     
-    <a href="/tags/ebpf/">eBPF </a>
+    <a href="/tags/ebpf/">EBPF </a>
     
     <a href="/tags/english/">English </a>
     
@@ -1250,7 +1278,7 @@ code.has-jax {
     
     <a href="/tags/flink/">Flink </a>
     
-    <a href="/tags/flume/">flume </a>
+    <a href="/tags/flume/">Flume </a>
     
     <a href="/tags/gc/">GC </a>
     
@@ -1260,15 +1288,15 @@ code.has-jax {
     
     <a href="/tags/hive/">Hive </a>
     
-    <a href="/tags/iceberg/">iceberg </a>
+    <a href="/tags/iceberg/">Iceberg </a>
     
     <a href="/tags/impala/">Impala </a>
     
-    <a href="/tags/janino/">janino </a>
+    <a href="/tags/janino/">Janino </a>
     
     <a href="/tags/juicefs/">JuiceFS </a>
     
-    <a href="/tags/k8s/">k8s </a>
+    <a href="/tags/k8s/">K8s </a>
     
     <a href="/tags/kafka/">Kafka </a>
     
@@ -1284,17 +1312,17 @@ code.has-jax {
     
     <a href="/tags/llvm/">LLVM </a>
     
-    <a href="/tags/log4j/">log4j </a>
+    <a href="/tags/log4j/">Log4j </a>
     
-    <a href="/tags/longhorn/">longhorn </a>
+    <a href="/tags/longhorn/">Longhorn </a>
     
     <a href="/tags/manacher/">Manacher </a>
     
     <a href="/tags/mapreduce/">MapReduce </a>
     
-    <a href="/tags/micro-service/">micro-service </a>
+    <a href="/tags/micro-service/">Micro-Service </a>
     
-    <a href="/tags/mq/">mq </a>
+    <a href="/tags/mq/">Mq </a>
     
     <a href="/tags/mysql/">MySQL </a>
     
@@ -1308,25 +1336,25 @@ code.has-jax {
     
     <a href="/tags/ozone/">Ozone </a>
     
-    <a href="/tags/parquet/">parquet </a>
+    <a href="/tags/parquet/">Parquet </a>
     
-    <a href="/tags/paxos/">paxos </a>
+    <a href="/tags/paxos/">Paxos </a>
     
     <a href="/tags/presto/">Presto </a>
     
     <a href="/tags/pytorch/">PyTorch </a>
     
-    <a href="/tags/quick-sql/">quick-sql </a>
+    <a href="/tags/quick-sql/">Quick-Sql </a>
     
-    <a href="/tags/raft/">raft </a>
+    <a href="/tags/raft/">Raft </a>
     
-    <a href="/tags/scala/">scala </a>
+    <a href="/tags/scala/">Scala </a>
     
     <a href="/tags/seatunnel/">SeaTunnel </a>
     
     <a href="/tags/simd/">SIMD </a>
     
-    <a href="/tags/snowflake/">snowflake </a>
+    <a href="/tags/snowflake/">Snowflake </a>
     
     <a href="/tags/spark/">Spark </a>
     
@@ -1340,7 +1368,7 @@ code.has-jax {
     
     <a href="/tags/tuning/">Tuning </a>
     
-    <a href="/tags/unix/">unix </a>
+    <a href="/tags/unix/">Unix </a>
     
     <a href="/tags/volcano/">Volcano </a>
     

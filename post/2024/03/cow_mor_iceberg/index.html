@@ -19,7 +19,7 @@
     <meta property="article:modified_time" content='2024-02-28T09:08:07&#43;08:00'>
         
     <meta name="Keywords" content="">
-    <meta name="description" content="Copy-On-Write vs Merge-On-Read in Apache Iceberg">
+    <meta name="description" content="Copy-On-Write适用的场景和优缺点，Merge-On-Read的 position deletes、equality deletes 原理，以及适用的场景，优缺点，如何选择COW和MOR，以及如何配置他们">
         <meta name="author" content="隔壁老王">
         
     <meta property="og:url" content="https://code0xff.org/post/2024/03/cow_mor_iceberg/">
@@ -73,7 +73,8 @@
             <div class="col-group">
 
                 <div class="col-8" id="main">
-                    <div class="res-cons">
+                    
+<div class="res-cons">
     
     <article class="post">
         <header>
@@ -87,8 +88,8 @@
     <li>
       <ul>
         <li><a href="#updating-tables-on-the-data-lake">Updating Tables on the Data Lake</a></li>
-        <li><a href="#cowbest-for-tables-with-frequent-reads-infrequent-writesupdates-or-large-batch-updates">CoW-Best for tables with frequent reads, infrequent writes/updates, or large batch updates</a></li>
-        <li><a href="#mor--best-for-tables-with-frequent-writesupdates">MoR - Best for tables with frequent writes/updates</a>
+        <li><a href="#cow-best-for-tables-with-frequent-reads-infrequent-writesupdates-or-large-batch-updates">CoW-Best for tables with frequent reads, infrequent writes/updates, or large batch updates</a></li>
+        <li><a href="#mor---best-for-tables-with-frequent-writesupdates">MoR - Best for tables with frequent writes/updates</a>
           <ul>
             <li><a href="#position-deletes">Position Deletes</a></li>
             <li><a href="#equality-deletes">Equality Deletes</a></li>
@@ -97,7 +98,7 @@
         </li>
         <li><a href="#when-to-use-cow-and-when-to-use-mor">When to Use COW and When to Use MOR</a></li>
         <li><a href="#configuring-cow-and-mor">Configuring COW and MOR</a></li>
-        <li><a href="#further-optional-deleteupdates-finetuning-strategies">Further Optional Delete/Updates Fine-Tuning Strategies</a></li>
+        <li><a href="#further-optional-deleteupdates-fine-tuning-strategies">Further Optional Delete/Updates Fine-Tuning Strategies</a></li>
         <li><a href="#reference">Reference</a></li>
       </ul>
     </li>
@@ -141,147 +142,189 @@ iceberg提供了 ACID保障，v2表格式 可以在不可变数据删实现 upda
 </ul>
 <p>没有一种通吃的方案，每个方案都是 trade-off，有他们合适的场景，主要考虑的是 读、写的延迟<br>
 这也不是 iceberg 特有的问题，对于其他场景，如 lambda 架构也会存在这些问题</p>
-<h2 id="cowbest-for-tables-with-frequent-reads-infrequent-writesupdates-or-large-batch-updates">CoW-Best for tables with frequent reads, infrequent writes/updates, or large batch updates</h2>
+<h2 id="cow-best-for-tables-with-frequent-reads-infrequent-writesupdates-or-large-batch-updates">CoW-Best for tables with frequent reads, infrequent writes/updates, or large batch updates</h2>
 <p>CoW，当要更新、删除 某一行、或者一批行时，会将数据文件复制一份<br>
 新版本中会包含更新的数据，删除的话，就做取反操作，将没被删除的数据重写一份<br>
 写入的速度依赖于要更新多少 数据文件（重写这些文件），在并发执行时也会导致冲突，出现更多的重试</p>
 <p>如果要更新很多行，那么 CoW 倒是不错的选择，但如果更新的行也少，也需要重写整个文件，代价就比较高了<br>
 对于读来说，没有什么额外要做的事情，正常读就可以了，所以适合 读多写少的场景</p>
-<p><img src="https://v1.ax1x.com/2024/05/21/7gEoYf.png" alt=""></p>
+<p>
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/05/21/7gEoYf.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/05/21/7gEoYf.png" />
+        </a>
+    </p>
 <table>
-<thead>
-<tr>
-<th>Summary of COW (Copy-On-Write)</th>
-<th></th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td>PROS</td>
-<td>CONS</td>
-</tr>
-<tr>
-<td>Fastest reads</td>
-<td>Expensive writes</td>
-</tr>
-<tr>
-<td>Good for infrequent updates/deletes</td>
-<td>Bad for frequent updates/deletes</td>
-</tr>
-</tbody>
+	<thead>
+			<tr>
+					<th>Summary of COW (Copy-On-Write)</th>
+					<th></th>
+			</tr>
+	</thead>
+	<tbody>
+			<tr>
+					<td>PROS</td>
+					<td>CONS</td>
+			</tr>
+			<tr>
+					<td>Fastest reads</td>
+					<td>Expensive writes</td>
+			</tr>
+			<tr>
+					<td>Good for infrequent updates/deletes</td>
+					<td>Bad for frequent updates/deletes</td>
+			</tr>
+	</tbody>
 </table>
-<h2 id="mor--best-for-tables-with-frequent-writesupdates">MoR - Best for tables with frequent writes/updates</h2>
+<h2 id="mor---best-for-tables-with-frequent-writesupdates">MoR - Best for tables with frequent writes/updates</h2>
 <p>MoR 时，文件不需要重写，只需 将更改写入到新文件中，在读取的时候使，将这些变更 merge 到原始文件中，形成 新的状态<br>
 这种方式写入时很快，但也意味着 读的时候，需要做更多的事情</p>
 <p>iceberg 是通过跟踪 update、delete的文件实现的
 如果删除一行，就将其添加到删除文件中，读取时重建这些文件<br>
 如果是更新一行，delete 文件也会个跟踪这个 update，之后读取时会忽略掉旧的数据<br>
 而做了数据压缩之后，就跟 LSM 树格式一样，只会记录合并后的少量数据，更新前的数据就会被忽略</p>
-<p><img src="https://v1.ax1x.com/2024/05/21/7gQBw3.png" alt=""></p>
+<p>
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/05/21/7gQBw3.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/05/21/7gQBw3.png" />
+        </a>
+    </p>
 <h3 id="position-deletes">Position Deletes</h3>
 <p>在这个模式中，仍然需要读取记录文件，但不需要重写文件了<br>
 而是记录被删除文件记录中的位置<br>
 这个策略 很大程度上减少了update、delete的写时间，读的时候，merge 的成本也相对较低<br>
-<img src="https://v1.ax1x.com/2024/05/21/7gQ9dc.png" alt=""></p>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/05/21/7gQ9dc.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/05/21/7gQ9dc.png" />
+        </a>
+    </p>
 <h3 id="equality-deletes">Equality Deletes</h3>
 <p>在写入的时候不需要读取任何文件，对于写时间可以进一步提升<br>
 在删除文件中记录 待删除/更新的 字段，以及值<br>
 这种策略在 更新的时候，比 Position Deletes要快很多<br>
 但是读取的代价很高，需要扫描所有的行，然后做重建<br>
-<img src="https://v1.ax1x.com/2024/05/21/7gQTOj.png" alt=""></p>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/05/21/7gQTOj.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/05/21/7gQTOj.png" />
+        </a>
+    </p>
 <h3 id="minimizing-the-read-costs">Minimizing the Read Costs</h3>
 <p>当执行压缩时，会写入新文件，这个文件根据 删除文件，旧文件做了合并重建，这样读取时就不需要做额外操作了<br>
 推荐定期执行 压缩，这样对读的的影响就降低了，同时也能保持高的写性能</p>
-<p>Types of Delete Files Summary
-|         |  How it works	|  Pros	   |    Cons	  |  How to manage read costs	   |      Good fit          |
-|  &ndash;     |      &ndash;         |   &ndash;     |      &ndash;      |               &ndash;               |         &ndash;             |
-| Position|Tracks file path and row position in file | Fast writes | Slower reads | Run compaction jobs regularly | Better forfrequent updates/deletes in which copy- on-write is not fast enough |
-| Equality|Tracks query criteria for delete/update targets|Super-fast writes|Much slower reads| | For when updates/deletes with position deletes is still not fast enough |</p>
+<p>Types of Delete Files Summary</p>
+<table>
+	<thead>
+			<tr>
+					<th></th>
+					<th>How it works</th>
+					<th>Pros</th>
+					<th>Cons</th>
+					<th>How to manage read costs</th>
+					<th>Good fit</th>
+			</tr>
+	</thead>
+	<tbody>
+			<tr>
+					<td>Position</td>
+					<td>Tracks file path and row position in file</td>
+					<td>Fast writes</td>
+					<td>Slower reads</td>
+					<td>Run compaction jobs regularly</td>
+					<td>Better forfrequent updates/deletes in which copy- on-write is not fast enough</td>
+			</tr>
+			<tr>
+					<td>Equality</td>
+					<td>Tracks query criteria for delete/update targets</td>
+					<td>Super-fast writes</td>
+					<td>Much slower reads</td>
+					<td></td>
+					<td>For when updates/deletes with position deletes is still not fast enough</td>
+			</tr>
+	</tbody>
+</table>
 <h2 id="when-to-use-cow-and-when-to-use-mor">When to Use COW and When to Use MOR</h2>
 <p>选择 CoW、MoR/position、MoR/equality 取决于如何使用表<br>
 可以根据场景预测表的使用方式，如果选择不对，也可以简单调整策略</p>
 <table>
-<thead>
-<tr>
-<th>Approach</th>
-<th>Update/Delete Frequency</th>
-<th>Insert Performance</th>
-<th>Update/Delete Latency/Performance</th>
-<th>Read Latency/Performance</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td>Copy-On-Write</td>
-<td>Infrequent updates/deletes</td>
-<td>Same</td>
-<td>Slowest</td>
-<td>Fastest</td>
-</tr>
-<tr>
-<td>Merge-On-Read Position Deletes</td>
-<td>Frequent updates/deletes</td>
-<td>Same</td>
-<td>Fast</td>
-<td>Fast</td>
-</tr>
-<tr>
-<td>Merge-On-Read Equality Deletes</td>
-<td>Frequent updates/deletes where position delete MOR is still not fast enough on the write sid</td>
-<td>Same</td>
-<td>Fastes</td>
-<td>Slowest</td>
-</tr>
-</tbody>
+	<thead>
+			<tr>
+					<th>Approach</th>
+					<th>Update/Delete Frequency</th>
+					<th>Insert Performance</th>
+					<th>Update/Delete Latency/Performance</th>
+					<th>Read Latency/Performance</th>
+			</tr>
+	</thead>
+	<tbody>
+			<tr>
+					<td>Copy-On-Write</td>
+					<td>Infrequent updates/deletes</td>
+					<td>Same</td>
+					<td>Slowest</td>
+					<td>Fastest</td>
+			</tr>
+			<tr>
+					<td>Merge-On-Read Position Deletes</td>
+					<td>Frequent updates/deletes</td>
+					<td>Same</td>
+					<td>Fast</td>
+					<td>Fast</td>
+			</tr>
+			<tr>
+					<td>Merge-On-Read Equality Deletes</td>
+					<td>Frequent updates/deletes where position delete MOR is still not fast enough on the write sid</td>
+					<td>Same</td>
+					<td>Fastes</td>
+					<td>Slowest</td>
+			</tr>
+	</tbody>
 </table>
 <h2 id="configuring-cow-and-mor">Configuring COW and MOR</h2>
 <p>COW 、MOR 不是非此即彼的选项，可以在表的配置中 独立的设置 delete、update、merge选项</p>
-<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4">
-<table style="border-spacing:0;padding:0;margin:0;border:0;width:auto;overflow:auto;display:block;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
-<pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"><code><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
 </span></code></pre></td>
 <td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
-<pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-sql" data-lang="sql"><span style="color:#ff79c6">CREATE</span> <span style="color:#ff79c6">TABLE</span> <span style="color:#ff79c6">catalog</span>.db.students (
-    id <span style="color:#8be9fd;font-style:italic">int</span>,
-    first_name string,
-    last_name string,
-    major string,
-    class_year <span style="color:#8be9fd;font-style:italic">int</span>
-) TBLPROPERTIES (
-    <span style="color:#f1fa8c">&#39;</span><span style="color:#f1fa8c">write.delete.mode</span><span style="color:#f1fa8c">&#39;</span><span style="color:#ff79c6">=</span><span style="color:#f1fa8c">&#39;</span><span style="color:#f1fa8c">copy-on-write</span><span style="color:#f1fa8c">&#39;</span>,
-    <span style="color:#f1fa8c">&#39;</span><span style="color:#f1fa8c">write.update.mode</span><span style="color:#f1fa8c">&#39;</span><span style="color:#ff79c6">=</span><span style="color:#f1fa8c">&#39;</span><span style="color:#f1fa8c">merge-on-read</span><span style="color:#f1fa8c">&#39;</span>,
-    <span style="color:#f1fa8c">&#39;</span><span style="color:#f1fa8c">write.merge.mode</span><span style="color:#f1fa8c">&#39;</span><span style="color:#ff79c6">=</span><span style="color:#f1fa8c">&#39;</span><span style="color:#f1fa8c">merge-on-read</span><span style="color:#f1fa8c">&#39;</span>
-) PARTITIONED <span style="color:#ff79c6">BY</span> (class_year) <span style="color:#ff79c6">USING</span> iceberg; 
-</code></pre></td></tr></table>
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"><code class="language-sql" data-lang="sql"><span style="display:flex;"><span><span style="color:#ff79c6">CREATE</span> <span style="color:#ff79c6">TABLE</span> <span style="color:#ff79c6">catalog</span>.db.students (
+</span></span><span style="display:flex;"><span>    id <span style="color:#8be9fd;font-style:italic">int</span>,
+</span></span><span style="display:flex;"><span>    first_name string,
+</span></span><span style="display:flex;"><span>    last_name string,
+</span></span><span style="display:flex;"><span>    major string,
+</span></span><span style="display:flex;"><span>    class_year <span style="color:#8be9fd;font-style:italic">int</span>
+</span></span><span style="display:flex;"><span>) TBLPROPERTIES (
+</span></span><span style="display:flex;"><span>    <span style="color:#f1fa8c">&#39;write.delete.mode&#39;</span><span style="color:#ff79c6">=</span><span style="color:#f1fa8c">&#39;copy-on-write&#39;</span>,
+</span></span><span style="display:flex;"><span>    <span style="color:#f1fa8c">&#39;write.update.mode&#39;</span><span style="color:#ff79c6">=</span><span style="color:#f1fa8c">&#39;merge-on-read&#39;</span>,
+</span></span><span style="display:flex;"><span>    <span style="color:#f1fa8c">&#39;write.merge.mode&#39;</span><span style="color:#ff79c6">=</span><span style="color:#f1fa8c">&#39;merge-on-read&#39;</span>
+</span></span><span style="display:flex;"><span>) PARTITIONED <span style="color:#ff79c6">BY</span> (class_year) <span style="color:#ff79c6">USING</span> iceberg; 
+</span></span></code></pre></td></tr></table>
 </div>
 </div><p>可以使用 alter 修改</p>
-<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4">
-<table style="border-spacing:0;padding:0;margin:0;border:0;width:auto;overflow:auto;display:block;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
-<pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">5
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"><code><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">5
 </span></code></pre></td>
 <td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
-<pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-sql" data-lang="sql"><span style="color:#ff79c6">ALTER</span> <span style="color:#ff79c6">TABLE</span> <span style="color:#ff79c6">catalog</span>.db.students <span style="color:#ff79c6">SET</span> TBLPROPERTIES (
-    <span style="color:#f1fa8c">&#39;</span><span style="color:#f1fa8c">write.delete.mode</span><span style="color:#f1fa8c">&#39;</span><span style="color:#ff79c6">=</span><span style="color:#f1fa8c">&#39;</span><span style="color:#f1fa8c">merge-on-read</span><span style="color:#f1fa8c">&#39;</span>,
-    <span style="color:#f1fa8c">&#39;</span><span style="color:#f1fa8c">write.update.mode</span><span style="color:#f1fa8c">&#39;</span><span style="color:#ff79c6">=</span><span style="color:#f1fa8c">&#39;</span><span style="color:#f1fa8c">copy-on-write</span><span style="color:#f1fa8c">&#39;</span>,
-    <span style="color:#f1fa8c">&#39;</span><span style="color:#f1fa8c">write.merge.mode</span><span style="color:#f1fa8c">&#39;</span><span style="color:#ff79c6">=</span><span style="color:#f1fa8c">&#39;</span><span style="color:#f1fa8c">copy-on-write</span><span style="color:#f1fa8c">&#39;</span>
-);
-</code></pre></td></tr></table>
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"><code class="language-sql" data-lang="sql"><span style="display:flex;"><span><span style="color:#ff79c6">ALTER</span> <span style="color:#ff79c6">TABLE</span> <span style="color:#ff79c6">catalog</span>.db.students <span style="color:#ff79c6">SET</span> TBLPROPERTIES (
+</span></span><span style="display:flex;"><span>    <span style="color:#f1fa8c">&#39;write.delete.mode&#39;</span><span style="color:#ff79c6">=</span><span style="color:#f1fa8c">&#39;merge-on-read&#39;</span>,
+</span></span><span style="display:flex;"><span>    <span style="color:#f1fa8c">&#39;write.update.mode&#39;</span><span style="color:#ff79c6">=</span><span style="color:#f1fa8c">&#39;copy-on-write&#39;</span>,
+</span></span><span style="display:flex;"><span>    <span style="color:#f1fa8c">&#39;write.merge.mode&#39;</span><span style="color:#ff79c6">=</span><span style="color:#f1fa8c">&#39;copy-on-write&#39;</span>
+</span></span><span style="display:flex;"><span>);
+</span></span></code></pre></td></tr></table>
 </div>
-</div><h2 id="further-optional-deleteupdates-finetuning-strategies">Further Optional Delete/Updates Fine-Tuning Strategies</h2>
+</div><h2 id="further-optional-deleteupdates-fine-tuning-strategies">Further Optional Delete/Updates Fine-Tuning Strategies</h2>
 <p>几个注意点</p>
 <ul>
 <li>分区字段一般包含在查询中，特别像时间戳这样的字段，可以加速查询</li>
@@ -289,23 +332,23 @@ iceberg提供了 ACID保障，v2表格式 可以在不可变数据删实现 upda
 <li>对单独的列做额外的元数据调整，可以用 write.metadata.metrics 对每个字段做细粒度调整</li>
 <li>比如对于流写入，一般波动不会太大，可以禁用 check-ordering 设置，这样就不会检查写入数据的字段是否与表顺序相同，可以节省时间</li>
 </ul>
-<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4">
-<table style="border-spacing:0;padding:0;margin:0;border:0;width:auto;overflow:auto;display:block;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
-<pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">5
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">6
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"><code><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">5
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">6
 </span></code></pre></td>
 <td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
-<pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-sql" data-lang="sql"><span style="color:#ff79c6">ALTER</span> <span style="color:#ff79c6">TABLE</span> <span style="color:#ff79c6">catalog</span>.db.students <span style="color:#ff79c6">SET</span> TBLPROPERTIES (
-    <span style="color:#f1fa8c">&#39;</span><span style="color:#f1fa8c">write.metadata.metrics.column.col1</span><span style="color:#f1fa8c">&#39;</span><span style="color:#ff79c6">=</span><span style="color:#f1fa8c">&#39;</span><span style="color:#f1fa8c">none</span><span style="color:#f1fa8c">&#39;</span>,
-    <span style="color:#f1fa8c">&#39;</span><span style="color:#f1fa8c">write.metadata.metrics.column.col2</span><span style="color:#f1fa8c">&#39;</span><span style="color:#ff79c6">=</span><span style="color:#f1fa8c">&#39;</span><span style="color:#f1fa8c">full</span><span style="color:#f1fa8c">&#39;</span>,
-    <span style="color:#f1fa8c">&#39;</span><span style="color:#f1fa8c">write.metadata.metrics.column.col3</span><span style="color:#f1fa8c">&#39;</span><span style="color:#ff79c6">=</span><span style="color:#f1fa8c">&#39;</span><span style="color:#f1fa8c">counts</span><span style="color:#f1fa8c">&#39;</span>,
-    <span style="color:#f1fa8c">&#39;</span><span style="color:#f1fa8c">write.metadata.metrics.column.col4</span><span style="color:#f1fa8c">&#39;</span><span style="color:#ff79c6">=</span><span style="color:#f1fa8c">&#39;</span><span style="color:#f1fa8c">truncate(16)</span><span style="color:#f1fa8c">&#39;</span>,
-);
-</code></pre></td></tr></table>
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"><code class="language-sql" data-lang="sql"><span style="display:flex;"><span><span style="color:#ff79c6">ALTER</span> <span style="color:#ff79c6">TABLE</span> <span style="color:#ff79c6">catalog</span>.db.students <span style="color:#ff79c6">SET</span> TBLPROPERTIES (
+</span></span><span style="display:flex;"><span>    <span style="color:#f1fa8c">&#39;write.metadata.metrics.column.col1&#39;</span><span style="color:#ff79c6">=</span><span style="color:#f1fa8c">&#39;none&#39;</span>,
+</span></span><span style="display:flex;"><span>    <span style="color:#f1fa8c">&#39;write.metadata.metrics.column.col2&#39;</span><span style="color:#ff79c6">=</span><span style="color:#f1fa8c">&#39;full&#39;</span>,
+</span></span><span style="display:flex;"><span>    <span style="color:#f1fa8c">&#39;write.metadata.metrics.column.col3&#39;</span><span style="color:#ff79c6">=</span><span style="color:#f1fa8c">&#39;counts&#39;</span>,
+</span></span><span style="display:flex;"><span>    <span style="color:#f1fa8c">&#39;write.metadata.metrics.column.col4&#39;</span><span style="color:#ff79c6">=</span><span style="color:#f1fa8c">&#39;truncate(16)&#39;</span>,
+</span></span><span style="display:flex;"><span>);
+</span></span></code></pre></td></tr></table>
 </div>
 </div><h2 id="reference">Reference</h2>
 <ul>
@@ -406,6 +449,7 @@ code.has-jax {
       </script>
     </div>
     
+
 </div>
 
 
@@ -424,6 +468,10 @@ code.has-jax {
     <section class="widget">
         <h3 class="widget-title">最近文章</h3>
 <ul class="widget-list">
+    
+    <li>
+        <a href="/post/2026/06/da_lian/" title="大连，11年后的再相见">大连，11年后的再相见</a>
+    </li>
     
     <li>
         <a href="/post/2026/05/volcano-notes/" title="Volcano 笔记">Volcano 笔记</a>
@@ -461,10 +509,6 @@ code.has-jax {
         <a href="/post/2026/04/claude_code/" title="Claude code 源码分析">Claude code 源码分析</a>
     </li>
     
-    <li>
-        <a href="/post/2026/03/iran_war/" title="Iran War">Iran War</a>
-    </li>
-    
 </ul>
 
     </section>
@@ -491,7 +535,7 @@ code.has-jax {
     
     <li><a href="/categories/%E6%96%87%E5%AD%A6%E5%92%8C%E8%89%BA%E6%9C%AF/">文学和艺术 (3)</a></li>
     
-    <li><a href="/categories/%E6%97%85%E8%A1%8C/">旅行 (15)</a></li>
+    <li><a href="/categories/%E6%97%85%E8%A1%8C/">旅行 (16)</a></li>
     
     <li><a href="/categories/%E6%9E%B6%E6%9E%84/">架构 (15)</a></li>
     
@@ -525,7 +569,7 @@ code.has-jax {
     
     <li><a href="/years/2025%E5%B9%B4/">2025年 (38)</a></li>
     
-    <li><a href="/years/2026%E5%B9%B4/">2026年 (14)</a></li>
+    <li><a href="/years/2026%E5%B9%B4/">2026年 (15)</a></li>
     
 </ul>
 
@@ -539,9 +583,9 @@ code.has-jax {
     
     <a href="/tags/ambari/">Ambari </a>
     
-    <a href="/tags/architecture/">architecture </a>
+    <a href="/tags/architecture/">Architecture </a>
     
-    <a href="/tags/bigdata/">bigdata </a>
+    <a href="/tags/bigdata/">Bigdata </a>
     
     <a href="/tags/btrace/">BTrace </a>
     
@@ -549,11 +593,11 @@ code.has-jax {
     
     <a href="/tags/c&#43;&#43;/">C&#43;&#43; </a>
     
-    <a href="/tags/calcite/">calcite </a>
+    <a href="/tags/calcite/">Calcite </a>
     
     <a href="/tags/canal/">Canal </a>
     
-    <a href="/tags/claude/">claude </a>
+    <a href="/tags/claude/">Claude </a>
     
     <a href="/tags/cmu-database/">CMU-Database </a>
     
@@ -565,7 +609,7 @@ code.has-jax {
     
     <a href="/tags/doris/">Doris </a>
     
-    <a href="/tags/ebpf/">eBPF </a>
+    <a href="/tags/ebpf/">EBPF </a>
     
     <a href="/tags/english/">English </a>
     
@@ -575,7 +619,7 @@ code.has-jax {
     
     <a href="/tags/flink/">Flink </a>
     
-    <a href="/tags/flume/">flume </a>
+    <a href="/tags/flume/">Flume </a>
     
     <a href="/tags/gc/">GC </a>
     
@@ -585,15 +629,15 @@ code.has-jax {
     
     <a href="/tags/hive/">Hive </a>
     
-    <a href="/tags/iceberg/">iceberg </a>
+    <a href="/tags/iceberg/">Iceberg </a>
     
     <a href="/tags/impala/">Impala </a>
     
-    <a href="/tags/janino/">janino </a>
+    <a href="/tags/janino/">Janino </a>
     
     <a href="/tags/juicefs/">JuiceFS </a>
     
-    <a href="/tags/k8s/">k8s </a>
+    <a href="/tags/k8s/">K8s </a>
     
     <a href="/tags/kafka/">Kafka </a>
     
@@ -609,17 +653,17 @@ code.has-jax {
     
     <a href="/tags/llvm/">LLVM </a>
     
-    <a href="/tags/log4j/">log4j </a>
+    <a href="/tags/log4j/">Log4j </a>
     
-    <a href="/tags/longhorn/">longhorn </a>
+    <a href="/tags/longhorn/">Longhorn </a>
     
     <a href="/tags/manacher/">Manacher </a>
     
     <a href="/tags/mapreduce/">MapReduce </a>
     
-    <a href="/tags/micro-service/">micro-service </a>
+    <a href="/tags/micro-service/">Micro-Service </a>
     
-    <a href="/tags/mq/">mq </a>
+    <a href="/tags/mq/">Mq </a>
     
     <a href="/tags/mysql/">MySQL </a>
     
@@ -633,25 +677,25 @@ code.has-jax {
     
     <a href="/tags/ozone/">Ozone </a>
     
-    <a href="/tags/parquet/">parquet </a>
+    <a href="/tags/parquet/">Parquet </a>
     
-    <a href="/tags/paxos/">paxos </a>
+    <a href="/tags/paxos/">Paxos </a>
     
     <a href="/tags/presto/">Presto </a>
     
     <a href="/tags/pytorch/">PyTorch </a>
     
-    <a href="/tags/quick-sql/">quick-sql </a>
+    <a href="/tags/quick-sql/">Quick-Sql </a>
     
-    <a href="/tags/raft/">raft </a>
+    <a href="/tags/raft/">Raft </a>
     
-    <a href="/tags/scala/">scala </a>
+    <a href="/tags/scala/">Scala </a>
     
     <a href="/tags/seatunnel/">SeaTunnel </a>
     
     <a href="/tags/simd/">SIMD </a>
     
-    <a href="/tags/snowflake/">snowflake </a>
+    <a href="/tags/snowflake/">Snowflake </a>
     
     <a href="/tags/spark/">Spark </a>
     
@@ -665,7 +709,7 @@ code.has-jax {
     
     <a href="/tags/tuning/">Tuning </a>
     
-    <a href="/tags/unix/">unix </a>
+    <a href="/tags/unix/">Unix </a>
     
     <a href="/tags/volcano/">Volcano </a>
     

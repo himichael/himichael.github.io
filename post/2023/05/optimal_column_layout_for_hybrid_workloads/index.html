@@ -19,7 +19,7 @@
     <meta property="article:modified_time" content='2023-05-13T09:23:04&#43;08:00'>
         
     <meta name="Keywords" content="">
-    <meta name="description" content="Optimal Column Layout for Hybrid Workloads">
+    <meta name="description" content="基于 HTAP 场景的列布局优化，仍然使用列布局，但是对列做水平分区，一个分区内包含多个 block，每个block 的大小是 CPU cache 的数倍，这样更好利用CPU；每个分区根据是否为边界(0 或 1 表示)，输出为一堆的 bit范围，这是一个 NP hard问题，也有相关研究可以解决此问题；工作负载包括：点查询、范围查询、插入、删除、更新；每种场景对应底层 I/O 包括 随机读、随机写、顺序读、顺序写，不同场景对于 block的访问频率也是不同的，论文给出了 10 种统计的直方图；之后收集各种负载的 block 访问情况然后离线分析，再将分析后的结果优化，输出为一堆bit，这样就可以动态调整分区，达到了自适应的效果；从性能分析结果看，可以适用于各种场景，除了读基本不变，其他场景都有大幅度提升，同时吞吐量也保持不变">
         <meta name="author" content="隔壁老王">
         
     <meta property="og:url" content="https://code0xff.org/post/2023/05/optimal_column_layout_for_hybrid_workloads/">
@@ -73,7 +73,8 @@
             <div class="col-group">
 
                 <div class="col-8" id="main">
-                    <div class="res-cons">
+                    
+<div class="res-cons">
     
     <article class="post">
         <header>
@@ -86,10 +87,10 @@
   <ul>
     <li>
       <ul>
-        <li><a href="#heading">整体分析</a></li>
-        <li><a href="#heading1">检测模型</a></li>
-        <li><a href="#heading2">性能评估</a></li>
-        <li><a href="#heading3">参考引用</a></li>
+        <li><a href="#整体分析">整体分析</a></li>
+        <li><a href="#检测模型">检测模型</a></li>
+        <li><a href="#性能评估">性能评估</a></li>
+        <li><a href="#参考引用">参考引用</a></li>
       </ul>
     </li>
   </ul>
@@ -117,7 +118,7 @@
 <p>原文
 <a href="https://15721.courses.cs.cmu.edu/spring2023/papers/03-storage/p2393-athanassoulis.pdf">https://15721.courses.cs.cmu.edu/spring2023/papers/03-storage/p2393-athanassoulis.pdf</a></p>
 </blockquote>
-<h2 id="heading">整体分析</h2>
+<h2 id="整体分析">整体分析</h2>
 <p>对于分析场景，列存是最合适的，但是列存对应更新场景并不好<br>
 而对于 HTAP 来说，是各种模式混合的场景，有读也有写<br>
 这种情况下，如果预先固定存储模式就无法针对特定场景做调优了，
@@ -135,7 +136,11 @@
 <li>如果分区粒度越细，则整体有序性越高、数据组织的结构性越强，对读越有利（快速定位数据、读更少的数据）；</li>
 <li>如果分区粒度越粗，则意味着更新时需要调整的数据快越少（简单标记、追加都可以），因而更简单的变更维护，对于更新越有利</li>
 </ul>
-<p><img src="https://v1.ax1x.com/2024/05/01/7KJfiO.jpg" alt=""><br>
+<p>
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/05/01/7KJfiO.jpg">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/05/01/7KJfiO.jpg" />
+        </a>
+    <br>
 Figure 1: Existing analytical systems have 2× higher performance than vanilla column-stores on hybrid workloads by utilizing a delta-store. Using a workload-tailored optimal column layout, Casper brings an additional 4× performance benefit.</p>
 <p>论文的贡献</p>
 <ul>
@@ -148,7 +153,11 @@ Figure 1: Existing analytical systems have 2× higher performance than vanilla c
 <ul>
 <li>如果分区数量多了，则读花费增加，但写花费降低</li>
 <li>如果允许空槽，则写花费降低，读基本不变
-<img src="https://v1.ax1x.com/2024/05/01/7KJs7Q.jpg" alt="">  
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/05/01/7KJs7Q.jpg">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/05/01/7KJs7Q.jpg" />
+        </a>
+    <br>
 Figure 2: Accessing a column is heavily affected by the structure of the column (e.g., sorted, partitioned). Read cost</li>
 <li>(a) logarithmically decreases by adding structure (partitions), while using ghost values to expand the column layout design space</li>
 <li>(b) reduces write cost linearly w.r.t. memory amplification.</li>
@@ -172,7 +181,11 @@ Figure 2: Accessing a column is heavily affected by the structure of the column 
 <ul>
 <li>点查的时候，根据索引找到需要查找的分区，然后分区内全部遍历就能找到对应的值</li>
 <li>范围查找，根据起始-结束 key，找到 第一个和最后一个分区，因为分区之间都是相对有序，落在中间的分区全部读取即可
-<img src="https://v1.ax1x.com/2024/05/01/7KJ2Vf.jpg" alt="">  
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/05/01/7KJ2Vf.jpg">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/05/01/7KJ2Vf.jpg" />
+        </a>
+    <br>
 Figure 3: Maintaining range partitions in a column chunk allows for fast execution of read queries. For point queries</li>
 <li>(b), the partition that may contain the value in question is fully scanned. For range queries</li>
 <li>(c) the partitions that (may) contain the first and the last element belonging to the range are scanned, while any intermediate partitions are blindly consumed.</li>
@@ -186,22 +199,34 @@ Figure 3: Maintaining range partitions in a column chunk allows for fast executi
 <li>一直重复这个操作，到当前分区，用最后一个覆盖要删除的值</li>
 <li>对于更新，等于 删除 + 插入</li>
 <li>先定位老的值所在的分区和位置，再定位新的值应该在的分区和位置，在这两个分区以及中间分区之间通过 Ripple 的方式正向或者负向的移动数据即可
-<img src="https://v1.ax1x.com/2024/05/01/7KJ6Xc.jpg" alt="">  
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/05/01/7KJ6Xc.jpg">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/05/01/7KJ6Xc.jpg" />
+        </a>
+    <br>
 Figure 4: Inserting and deleting data in a partitioned column chunk uses rippling and restricts data movement.</li>
 </ul>
 <p>每个分区中增加一个空值，可以减少移动<br>
-<img src="https://v1.ax1x.com/2024/05/01/7KJIww.jpg" alt="">  
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/05/01/7KJIww.jpg">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/05/01/7KJIww.jpg" />
+        </a>
+    <br>
 Figure 5: Adding ghost values allows for less data movement; inserts use empty slots and deletes create new ones.</p>
-<h2 id="heading1">检测模型</h2>
+<h2 id="检测模型">检测模型</h2>
 <p>最小代价模型</p>
-<pre><code>avg min cost(W, D, P)   
+<pre tabindex="0"><code>avg min cost(W, D, P)   
 </code></pre><p>这里的 W 是工作负载、D 是数据集、P 是 分区模式</p>
 <p>可以设置 block 的大小，它可以是缓存行的数倍，比如这里设置为 2<br>
 一个 block 就对应一个 bit 位，如果这个 bit 为0，表示不是分区边界，如果是 1 表示分区边界<br>
 下图 b，一个分区跨了三个block，第二分区是 2个block，第三个是 1个，第四个是 2个，每个分区结尾的 bit 都是设置为 1<br>
 下图 c，都是按照 2个 block 一个分区来设置<br>
 分区大粒度是可以调整的，可大可小<br>
-<img src="https://v1.ax1x.com/2024/05/01/7KJMO6.jpg" alt="">  
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/05/01/7KJMO6.jpg">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/05/01/7KJMO6.jpg" />
+        </a>
+    <br>
 Figure 6: Representing different partitioning schemes (b) and (c) with block size B = 2.</p>
 <p>在 五种基本模型(点查、范围、插入、更新、删除)，基础上，定义了<code>10</code>种直方图<br>
 用来统计访问频率</p>
@@ -216,25 +241,41 @@ Figure 6: Representing different partitioning schemes (b) and (c) with block siz
 <li>utf、utb 跟上面类似</li>
 </ul>
 <p>下图中使用了直方图，来统计每个 block 对于不同情况的访问频率<br>
-<img src="https://v1.ax1x.com/2024/05/01/7KXkw4.jpg" alt=""> 
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/05/01/7KXkw4.jpg">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/05/01/7KXkw4.jpg" />
+        </a>
+    
 Figure 7: Frequency model in action. Here we show for each operation which partitions are accessed, and consequently, which histogram buckets are updated.</p>
 <p>可以从工作负载模型中抽取样本，然后建立直方图<br>
 也可以根据数据部分建立模型<br>
-<img src="https://v1.ax1x.com/2024/05/01/7KJZm3.jpg" alt=""> 
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/05/01/7KJZm3.jpg">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/05/01/7KJZm3.jpg" />
+        </a>
+    
 Figure 8: Learning FM from (a) samples or (b) distributions.</p>
 <p>5种 基本操作对应了底层磁盘 I/O 操作，随机读、随机写、顺序读、顺序写<br>
 总工作负载代价 = 不同的基本操作的代价之和 = 不同数量的磁盘block/chunk的读写代价之和 =<br>
 不同数量的磁盘block/chunk的不同读写方式 * 总次数代价之和</p>
 <p>图9a显示了使用10M个元素的块(每个元素有100个分区)时测量的和基于模型的插入成本<br>
 图9b显示了测量的和基于模型的点查询成本<br>
-<img src="https://v1.ax1x.com/2024/05/01/7KJdhj.jpg" alt=""> 
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/05/01/7KJdhj.jpg">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/05/01/7KJdhj.jpg" />
+        </a>
+    
 Figure 9: Cost model verification for (a) inserts and (b) point queries (10M chunk, exponentially increasing partition size).</p>
 <p>通过定义block 划分，也就是一堆 1 和 0，用来标识分区的边界，连续的或者是边界<br>
 这是以 bit 位的方式输出的，有了每个 block 级别的访问频率统计信息。有对应的代价预估模型，以及分区表达输出方式<br>
 这样就可以找到最优方案了<br>
 这是一个 binary optimization problem，NP hard问题</p>
 <p>采集读写数据 &ndash;&gt; 训练基本负载模型 &ndash;&gt; 二进制优化分区 &ndash;&gt; 实际分区挑战平衡读写 &ndash;&gt; 被实际读写应用 &ndash;&gt; 采集读写数据。。。
-<img src="https://v1.ax1x.com/2024/05/01/7KJoem.jpg" alt=""> 
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/05/01/7KJoem.jpg">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/05/01/7KJoem.jpg" />
+        </a>
+    
 Figure 10: System architecture. (A) Casper uses offline workload information, (B) solves the BIP and (C) applies the partitioning. (A0) During execution monitoring, if the access patterns change, a re-partitioning cycle is triggered.</p>
 <p>由于是 HTAP 场景，还有一些问题需要关注</p>
 <ul>
@@ -242,8 +283,12 @@ Figure 10: System architecture. (A) Casper uses offline workload information, (B
 <li>压缩，使用dictionary 编码(很多数据相似)、delta编码(整数情况)，而 RLE 需要数据集有序，并且又编码解码开销，所以不如前两者</li>
 <li>分区定位，5种基本操作，都需要快速定位某个分区，因此构建一个多路搜索树、min-max等zonemap技术、面向cache line对齐等技术，都可以加速计算</li>
 </ul>
-<h2 id="heading2">性能评估</h2>
-<p><img src="https://v1.ax1x.com/2024/05/01/7KJer5.jpg" alt=""> 
+<h2 id="性能评估">性能评估</h2>
+<p>
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/05/01/7KJer5.jpg">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/05/01/7KJer5.jpg" />
+        </a>
+    
 Figure 11: Casper partitioning scales with data size.</p>
 <p>测量的数据布局包括</p>
 <ul>
@@ -258,11 +303,19 @@ Figure 11: Casper partitioning scales with data size.</p>
 可以看到，对于混合场景、更新场景 Casper 要好很多<br>
 而只读场景跟其他最好的差不多<br>
 但 Casper 目标是混合场景，从测试效果看基本是达到了<br>
-<img src="https://v1.ax1x.com/2024/05/01/7KXBSh.jpg" alt=""> 
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/05/01/7KXBSh.jpg">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/05/01/7KXBSh.jpg" />
+        </a>
+    
 Figure 12: Casper matches or significantly outperforms other column layouts approaches for a variety of workloads (experiments with 16 threads, chunks of 1M values, block size 16KB, and ghost values 0.1%).</p>
 <p>对于混合、只读、只更新的场景，Casper 比其他都要好，而且吞吐量也不会降低<br>
 基本上只有 read only的跟其他场景差不多，其他都要更好<br>
-<img src="https://v1.ax1x.com/2024/05/01/7KXLWH.jpg" alt=""> 
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/05/01/7KXLWH.jpg">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/05/01/7KXLWH.jpg" />
+        </a>
+    
 Figure 13: Casper offers significant performance benefits.</p>
 <ul>
 <li>In (a) for a hybrid workload with skewed point queries and inserts, Casper outperforms all approaches by balancing the read and update performance.</li>
@@ -272,17 +325,29 @@ Figure 13: Casper offers significant performance benefits.</p>
 <p>通过提升 ghost-value 的比列，也能提升性能<br>
 对于插入、更新、混合场景都有不少提升<br>
 1% 的数据是 ghost-value情况下，插入延迟可以降低 2倍<br>
-<img src="https://v1.ax1x.com/2024/05/01/7KXTs9.jpg" alt=""> 
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/05/01/7KXTs9.jpg">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/05/01/7KXTs9.jpg" />
+        </a>
+    
 Figure 14: Using ghost values (4 thr., 1M chunks, 16KB blocks).</p>
 <p>在满足 SLA 的同时，性能、吞吐量也没有下降<br>
 降低插入延迟的要求后， SLA 也会呈比列提高<br>
 Casper平衡了总体吞吐量，并以较小的性能损失(&lt; 3%) 满足插入SLA<br>
-<img src="https://v1.ax1x.com/2024/05/01/7KXp7Y.jpg" alt=""> 
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/05/01/7KXp7Y.jpg">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/05/01/7KXp7Y.jpg" />
+        </a>
+    
 Figure 15: Casper meets performance SLA executing a hybrid workload (Q1,Q4,Q6) (1M chunk size, 16KB block size).</p>
 <p>Casper提供了一个健壮的物理布局，它吸收了高达15%的质量位移和高达10%的旋转位移方面的不确定性，而没有任何明显的损失<br>
 然而，随着不确定性的增加，我们观察到性能损失高达60%<br>
 通过开发新的健壮调优范例，有机会获得更高的收益。我们把使用鲁棒优化技术的新问题表述作为未来的工作<br>
-<img src="https://v1.ax1x.com/2024/05/01/7KX0XZ.jpg" alt=""> 
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/05/01/7KX0XZ.jpg">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/05/01/7KX0XZ.jpg" />
+        </a>
+    
 Figure 16: Testing Casper’s robustness.</p>
 <p>总结一下</p>
 <ul>
@@ -302,7 +367,7 @@ Figure 16: Testing Casper’s robustness.</p>
 <li>Casper支持沿着三个维度进行调优，平衡读取性能、更新性能和内存利用率</li>
 <li>Ghost Values</li>
 </ul>
-<h2 id="heading3">参考引用</h2>
+<h2 id="参考引用">参考引用</h2>
 <ul>
 <li>The SAP HANA Database – An Architecture Overview. IEEE Data Engineering Bulletin, 35(1):28–33,2012.</li>
 <li>A Common Database Approach for OLTP and OLAP Using an In-Memory Column Database. In Proceedings of the ACM SIGMOD International Conference on Management of Data, pages 1–2, 2009</li>
@@ -362,7 +427,8 @@ code.has-jax {
         
         <li><a href="/post/2023/05/column-stores_vs_row-stores_how_different_are_they_really/">列存 vs 行存，到底有什么不同？</a></li>
         
-        <li><a href="/post/2023/05/lakehouse-a-new-generation-of-open-platforms-that-unify/">Lakehouse A New Generation of Open Platforms that Unify Data Warehousing and Advanced Analytics</a></li>
+        <li><a href="/post/2023/05/lakehouse-a-new-generation-of-open-platforms-that-unify/">Lakehouse A New Generation of Open Platforms that Unify
+Data Warehousing and Advanced Analytics</a></li>
         
         <li><a href="/post/2023/05/building-an-elastic-query-engine-on-disaggregated-storage/">基于存算分离下的Elastic Query Engine</a></li>
         
@@ -401,6 +467,7 @@ code.has-jax {
       </script>
     </div>
     
+
 </div>
 
 
@@ -419,6 +486,10 @@ code.has-jax {
     <section class="widget">
         <h3 class="widget-title">最近文章</h3>
 <ul class="widget-list">
+    
+    <li>
+        <a href="/post/2026/06/da_lian/" title="大连，11年后的再相见">大连，11年后的再相见</a>
+    </li>
     
     <li>
         <a href="/post/2026/05/volcano-notes/" title="Volcano 笔记">Volcano 笔记</a>
@@ -456,10 +527,6 @@ code.has-jax {
         <a href="/post/2026/04/claude_code/" title="Claude code 源码分析">Claude code 源码分析</a>
     </li>
     
-    <li>
-        <a href="/post/2026/03/iran_war/" title="Iran War">Iran War</a>
-    </li>
-    
 </ul>
 
     </section>
@@ -486,7 +553,7 @@ code.has-jax {
     
     <li><a href="/categories/%E6%96%87%E5%AD%A6%E5%92%8C%E8%89%BA%E6%9C%AF/">文学和艺术 (3)</a></li>
     
-    <li><a href="/categories/%E6%97%85%E8%A1%8C/">旅行 (15)</a></li>
+    <li><a href="/categories/%E6%97%85%E8%A1%8C/">旅行 (16)</a></li>
     
     <li><a href="/categories/%E6%9E%B6%E6%9E%84/">架构 (15)</a></li>
     
@@ -520,7 +587,7 @@ code.has-jax {
     
     <li><a href="/years/2025%E5%B9%B4/">2025年 (38)</a></li>
     
-    <li><a href="/years/2026%E5%B9%B4/">2026年 (14)</a></li>
+    <li><a href="/years/2026%E5%B9%B4/">2026年 (15)</a></li>
     
 </ul>
 
@@ -534,9 +601,9 @@ code.has-jax {
     
     <a href="/tags/ambari/">Ambari </a>
     
-    <a href="/tags/architecture/">architecture </a>
+    <a href="/tags/architecture/">Architecture </a>
     
-    <a href="/tags/bigdata/">bigdata </a>
+    <a href="/tags/bigdata/">Bigdata </a>
     
     <a href="/tags/btrace/">BTrace </a>
     
@@ -544,11 +611,11 @@ code.has-jax {
     
     <a href="/tags/c&#43;&#43;/">C&#43;&#43; </a>
     
-    <a href="/tags/calcite/">calcite </a>
+    <a href="/tags/calcite/">Calcite </a>
     
     <a href="/tags/canal/">Canal </a>
     
-    <a href="/tags/claude/">claude </a>
+    <a href="/tags/claude/">Claude </a>
     
     <a href="/tags/cmu-database/">CMU-Database </a>
     
@@ -560,7 +627,7 @@ code.has-jax {
     
     <a href="/tags/doris/">Doris </a>
     
-    <a href="/tags/ebpf/">eBPF </a>
+    <a href="/tags/ebpf/">EBPF </a>
     
     <a href="/tags/english/">English </a>
     
@@ -570,7 +637,7 @@ code.has-jax {
     
     <a href="/tags/flink/">Flink </a>
     
-    <a href="/tags/flume/">flume </a>
+    <a href="/tags/flume/">Flume </a>
     
     <a href="/tags/gc/">GC </a>
     
@@ -580,15 +647,15 @@ code.has-jax {
     
     <a href="/tags/hive/">Hive </a>
     
-    <a href="/tags/iceberg/">iceberg </a>
+    <a href="/tags/iceberg/">Iceberg </a>
     
     <a href="/tags/impala/">Impala </a>
     
-    <a href="/tags/janino/">janino </a>
+    <a href="/tags/janino/">Janino </a>
     
     <a href="/tags/juicefs/">JuiceFS </a>
     
-    <a href="/tags/k8s/">k8s </a>
+    <a href="/tags/k8s/">K8s </a>
     
     <a href="/tags/kafka/">Kafka </a>
     
@@ -604,17 +671,17 @@ code.has-jax {
     
     <a href="/tags/llvm/">LLVM </a>
     
-    <a href="/tags/log4j/">log4j </a>
+    <a href="/tags/log4j/">Log4j </a>
     
-    <a href="/tags/longhorn/">longhorn </a>
+    <a href="/tags/longhorn/">Longhorn </a>
     
     <a href="/tags/manacher/">Manacher </a>
     
     <a href="/tags/mapreduce/">MapReduce </a>
     
-    <a href="/tags/micro-service/">micro-service </a>
+    <a href="/tags/micro-service/">Micro-Service </a>
     
-    <a href="/tags/mq/">mq </a>
+    <a href="/tags/mq/">Mq </a>
     
     <a href="/tags/mysql/">MySQL </a>
     
@@ -628,25 +695,25 @@ code.has-jax {
     
     <a href="/tags/ozone/">Ozone </a>
     
-    <a href="/tags/parquet/">parquet </a>
+    <a href="/tags/parquet/">Parquet </a>
     
-    <a href="/tags/paxos/">paxos </a>
+    <a href="/tags/paxos/">Paxos </a>
     
     <a href="/tags/presto/">Presto </a>
     
     <a href="/tags/pytorch/">PyTorch </a>
     
-    <a href="/tags/quick-sql/">quick-sql </a>
+    <a href="/tags/quick-sql/">Quick-Sql </a>
     
-    <a href="/tags/raft/">raft </a>
+    <a href="/tags/raft/">Raft </a>
     
-    <a href="/tags/scala/">scala </a>
+    <a href="/tags/scala/">Scala </a>
     
     <a href="/tags/seatunnel/">SeaTunnel </a>
     
     <a href="/tags/simd/">SIMD </a>
     
-    <a href="/tags/snowflake/">snowflake </a>
+    <a href="/tags/snowflake/">Snowflake </a>
     
     <a href="/tags/spark/">Spark </a>
     
@@ -660,7 +727,7 @@ code.has-jax {
     
     <a href="/tags/tuning/">Tuning </a>
     
-    <a href="/tags/unix/">unix </a>
+    <a href="/tags/unix/">Unix </a>
     
     <a href="/tags/volcano/">Volcano </a>
     

@@ -19,7 +19,7 @@
     <meta property="article:modified_time" content='2025-01-01T01:08:07&#43;08:00'>
         
     <meta name="Keywords" content="">
-    <meta name="description" content="Spark Core相关-2">
+    <meta name="description" content="围绕 Spark Core 运行时，梳理调度、内存、shuffle、Task 执行、Standalone 部署和 YARN 模式这些主线，帮助把 Spark 作业从 Driver 到 Executor 的执行链路串起来。">
         <meta name="author" content="隔壁老王">
         
     <meta property="og:url" content="https://code0xff.org/post/2025/01/spark_core_2/">
@@ -73,7 +73,8 @@
             <div class="col-group">
 
                 <div class="col-8" id="main">
-                    <div class="res-cons">
+                    
+<div class="res-cons">
     
     <article class="post">
         <header>
@@ -86,34 +87,34 @@
   <ul>
     <li>
       <ul>
-        <li><a href="#heading">调度</a>
+        <li><a href="#调度">调度</a>
           <ul>
-            <li><a href="#heading1">调度概述</a></li>
+            <li><a href="#调度概述">调度概述</a></li>
             <li><a href="#dagscheduler">DAGScheduler</a></li>
             <li><a href="#taskscheduler">TaskScheduler</a></li>
             <li><a href="#schedulerbackend">SchedulerBackend</a></li>
           </ul>
         </li>
-        <li><a href="#heading2">计算引擎</a>
+        <li><a href="#计算引擎">计算引擎</a>
           <ul>
-            <li><a href="#heading3">内存管理</a></li>
-            <li><a href="#task-">Task 分析</a></li>
+            <li><a href="#内存管理">内存管理</a></li>
+            <li><a href="#task-分析">Task 分析</a></li>
             <li><a href="#shuffle">Shuffle</a></li>
-            <li><a href="#shuffle1">Shuffle读写</a></li>
+            <li><a href="#shuffle读写">Shuffle读写</a></li>
           </ul>
         </li>
-        <li><a href="#heading4">部署模式</a>
+        <li><a href="#部署模式">部署模式</a>
           <ul>
             <li><a href="#task">Task</a></li>
             <li><a href="#master">Master</a></li>
             <li><a href="#worker">Worker</a></li>
             <li><a href="#executor">Executor</a></li>
-            <li><a href="#local-">Local 集群部署方式</a></li>
-            <li><a href="#heading5">集群部署</a></li>
-            <li><a href="#yarn">YARN模式</a></li>
+            <li><a href="#local-集群部署方式">Local 集群部署方式</a></li>
+            <li><a href="#集群部署">集群部署</a></li>
+            <li><a href="#yarn模式">YARN模式</a></li>
           </ul>
         </li>
-        <li><a href="#heading6">参考</a></li>
+        <li><a href="#参考">参考</a></li>
       </ul>
     </li>
   </ul>
@@ -137,8 +138,8 @@
         
         
         <div class="post-content">
-            <h2 id="heading">调度</h2>
-<h3 id="heading1">调度概述</h3>
+            <h2 id="调度">调度</h2>
+<h3 id="调度概述">调度概述</h3>
 <p>调度过程</p>
 <ul>
 <li>将用户提交的 job 转换成 RDD，分解成 DAG</li>
@@ -146,66 +147,70 @@
 <li>将 task打包为 task-set 由DAGScheduler 调度 给 TaskScheduler</li>
 <li>使用集群管理器分配资源，按照调度算法做调度</li>
 <li>executor 做执行
-<img src="https://v1.ax1x.com/2024/12/14/7VTabY.png" alt=""></li>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/12/14/7VTabY.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/12/14/7VTabY.png" />
+        </a>
+    </li>
 </ul>
 <p>RDD 的几个核心函数</p>
-<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4">
-<table style="border-spacing:0;padding:0;margin:0;border:0;width:auto;overflow:auto;display:block;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
-<pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">15
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">16
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">17
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">18
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">19
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">20
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">21
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">22
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">23
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">24
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">25
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">26
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"><code><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">15
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">16
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">17
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">18
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">19
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">20
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">21
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">22
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">23
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">24
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">25
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">26
 </span></code></pre></td>
 <td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
-<pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-scala" data-lang="scala">  <span style="color:#6272a4">/*</span><span style="color:#6272a4">*</span><span style="color:#6272a4">
-</span><span style="color:#6272a4">   </span><span style="color:#6272a4">*</span><span style="color:#6272a4"> :: DeveloperApi ::
-</span><span style="color:#6272a4">   </span><span style="color:#6272a4">*</span><span style="color:#6272a4"> Implemented by subclasses to compute a given partition.
-</span><span style="color:#6272a4">   </span><span style="color:#6272a4">*/</span>
-  @DeveloperApi
-  <span style="color:#ff79c6">def</span> compute<span style="color:#ff79c6">(</span>split<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">Partition</span><span style="color:#ff79c6">,</span> context<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">TaskContext</span><span style="color:#ff79c6">)</span><span style="color:#ff79c6">:</span> <span style="color:#8be9fd">Iterator</span><span style="color:#ff79c6">[</span><span style="color:#8be9fd">T</span><span style="color:#ff79c6">]</span>
-
-  <span style="color:#6272a4">/*</span><span style="color:#6272a4">*</span><span style="color:#6272a4">
-</span><span style="color:#6272a4">   </span><span style="color:#6272a4">*</span><span style="color:#6272a4"> Implemented by subclasses to return the set of partitions in this RDD. This method will only
-</span><span style="color:#6272a4">   </span><span style="color:#6272a4">*</span><span style="color:#6272a4"> be called once, so it is safe to implement a time-consuming computation in it.
-</span><span style="color:#6272a4">   </span><span style="color:#6272a4">*</span><span style="color:#6272a4">
-</span><span style="color:#6272a4">   </span><span style="color:#6272a4">*</span><span style="color:#6272a4"> The partitions in this array must satisfy the following property:
-</span><span style="color:#6272a4">   </span><span style="color:#6272a4">*</span><span style="color:#6272a4">   `rdd.partitions.zipWithIndex.forall { case (partition, index) =&gt; partition.index == index }`
-</span><span style="color:#6272a4">   </span><span style="color:#6272a4">*/</span>
-  <span style="color:#ff79c6">protected</span> <span style="color:#ff79c6">def</span> getPartitions<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">Array</span><span style="color:#ff79c6">[</span><span style="color:#8be9fd">Partition</span><span style="color:#ff79c6">]</span>
-
-  <span style="color:#6272a4">/*</span><span style="color:#6272a4">*</span><span style="color:#6272a4">
-</span><span style="color:#6272a4">   </span><span style="color:#6272a4">*</span><span style="color:#6272a4"> Implemented by subclasses to return how this RDD depends on parent RDDs. This method will only
-</span><span style="color:#6272a4">   </span><span style="color:#6272a4">*</span><span style="color:#6272a4"> be called once, so it is safe to implement a time-consuming computation in it.
-</span><span style="color:#6272a4">   </span><span style="color:#6272a4">*/</span>
-  <span style="color:#ff79c6">protected</span> <span style="color:#ff79c6">def</span> getDependencies<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">Seq</span><span style="color:#ff79c6">[</span><span style="color:#8be9fd">Dependency</span><span style="color:#ff79c6">[</span><span style="color:#ff79c6">_</span><span style="color:#ff79c6">]</span><span style="color:#ff79c6">]</span> <span style="color:#ff79c6">=</span> deps
-
-  <span style="color:#6272a4">/*</span><span style="color:#6272a4">*</span><span style="color:#6272a4">
-</span><span style="color:#6272a4">   </span><span style="color:#6272a4">*</span><span style="color:#6272a4"> Optionally overridden by subclasses to specify placement preferences.
-</span><span style="color:#6272a4">   </span><span style="color:#6272a4">*/</span>
-  <span style="color:#ff79c6">protected</span> <span style="color:#ff79c6">def</span> getPreferredLocations<span style="color:#ff79c6">(</span>split<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">Partition</span><span style="color:#ff79c6">)</span><span style="color:#ff79c6">:</span> <span style="color:#8be9fd">Seq</span><span style="color:#ff79c6">[</span><span style="color:#8be9fd">String</span><span style="color:#ff79c6">]</span> <span style="color:#ff79c6">=</span> <span style="color:#50fa7b">Nil</span>
-</code></pre></td></tr></table>
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"><code class="language-scala" data-lang="scala"><span style="display:flex;"><span>  <span style="color:#6272a4">/**
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * :: DeveloperApi ::
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * Implemented by subclasses to compute a given partition.
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   */</span>
+</span></span><span style="display:flex;"><span>  @DeveloperApi
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">def</span> compute<span style="color:#ff79c6">(</span>split<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">Partition</span><span style="color:#ff79c6">,</span> context<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">TaskContext</span><span style="color:#ff79c6">)</span><span style="color:#ff79c6">:</span> <span style="color:#8be9fd">Iterator</span><span style="color:#ff79c6">[</span><span style="color:#8be9fd">T</span><span style="color:#ff79c6">]</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>  <span style="color:#6272a4">/**
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * Implemented by subclasses to return the set of partitions in this RDD. This method will only
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * be called once, so it is safe to implement a time-consuming computation in it.
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   *
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * The partitions in this array must satisfy the following property:
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   *   `rdd.partitions.zipWithIndex.forall { case (partition, index) =&gt; partition.index == index }`
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   */</span>
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">protected</span> <span style="color:#ff79c6">def</span> getPartitions<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">Array</span><span style="color:#ff79c6">[</span><span style="color:#8be9fd">Partition</span><span style="color:#ff79c6">]</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>  <span style="color:#6272a4">/**
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * Implemented by subclasses to return how this RDD depends on parent RDDs. This method will only
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * be called once, so it is safe to implement a time-consuming computation in it.
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   */</span>
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">protected</span> <span style="color:#ff79c6">def</span> getDependencies<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">Seq</span><span style="color:#ff79c6">[</span><span style="color:#8be9fd">Dependency</span><span style="color:#ff79c6">[</span><span style="color:#ff79c6">_</span><span style="color:#ff79c6">]]</span> <span style="color:#ff79c6">=</span> deps
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>  <span style="color:#6272a4">/**
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * Optionally overridden by subclasses to specify placement preferences.
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   */</span>
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">protected</span> <span style="color:#ff79c6">def</span> getPreferredLocations<span style="color:#ff79c6">(</span>split<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">Partition</span><span style="color:#ff79c6">)</span><span style="color:#ff79c6">:</span> <span style="color:#8be9fd">Seq</span><span style="color:#ff79c6">[</span><span style="color:#8be9fd">String</span><span style="color:#ff79c6">]</span> <span style="color:#ff79c6">=</span> <span style="color:#50fa7b">Nil</span>
+</span></span></code></pre></td></tr></table>
 </div>
 </div><p>通常数据处理的模型包括迭代计算、关系查询、MapReduce、流式处理等<br>
 Hadoop采用MapReduce模型，Storm采用流式处理模型，而Spark则借助RDD实现了以上所有模型</p>
@@ -265,164 +270,168 @@ Hadoop采用MapReduce模型，Storm采用流式处理模型，而Spark则借助R
 <li>内部维护了一个 阻塞队列</li>
 <li>根据不同的事件类型，如提交 job，会先提交到 阻塞队列中</li>
 <li>阻塞队列中拿出这个 job，
-<img src="https://v1.ax1x.com/2024/12/14/7VTZgO.png" alt=""></li>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/12/14/7VTZgO.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/12/14/7VTZgO.png" />
+        </a>
+    </li>
 </ul>
 </li>
 </ul>
 <p>最后统一处理这些 事件：</p>
-<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4">
-<table style="border-spacing:0;padding:0;margin:0;border:0;width:auto;overflow:auto;display:block;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
-<pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">15
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">16
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">17
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">18
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">19
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">20
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">21
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">22
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">23
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">24
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">25
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">26
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">27
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">28
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">29
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">30
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">31
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">32
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">33
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">34
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">35
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">36
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">37
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">38
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">39
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">40
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">41
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">42
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">43
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">44
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">45
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">46
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">47
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">48
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">49
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">50
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">51
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">52
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">53
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">54
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">55
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">56
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">57
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">58
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">59
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">60
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">61
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">62
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">63
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">64
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">65
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">66
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">67
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">68
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">69
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">70
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">71
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">72
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">73
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">74
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"><code><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">15
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">16
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">17
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">18
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">19
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">20
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">21
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">22
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">23
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">24
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">25
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">26
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">27
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">28
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">29
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">30
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">31
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">32
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">33
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">34
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">35
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">36
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">37
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">38
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">39
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">40
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">41
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">42
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">43
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">44
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">45
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">46
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">47
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">48
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">49
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">50
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">51
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">52
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">53
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">54
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">55
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">56
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">57
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">58
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">59
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">60
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">61
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">62
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">63
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">64
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">65
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">66
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">67
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">68
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">69
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">70
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">71
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">72
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">73
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">74
 </span></code></pre></td>
 <td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
-<pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-scala" data-lang="scala">  <span style="color:#ff79c6">private</span> <span style="color:#ff79c6">def</span> doOnReceive<span style="color:#ff79c6">(</span>event<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">DAGSchedulerEvent</span><span style="color:#ff79c6">)</span><span style="color:#ff79c6">:</span> <span style="color:#8be9fd">Unit</span> <span style="color:#ff79c6">=</span> event <span style="color:#ff79c6">match</span> <span style="color:#ff79c6">{</span>
-    <span style="color:#ff79c6">case</span> <span style="color:#50fa7b">JobSubmitted</span><span style="color:#ff79c6">(</span>jobId<span style="color:#ff79c6">,</span> rdd<span style="color:#ff79c6">,</span> func<span style="color:#ff79c6">,</span> partitions<span style="color:#ff79c6">,</span> callSite<span style="color:#ff79c6">,</span> listener<span style="color:#ff79c6">,</span> artifacts<span style="color:#ff79c6">,</span> properties<span style="color:#ff79c6">)</span> <span style="color:#ff79c6">=&gt;</span>
-      dagScheduler<span style="color:#ff79c6">.</span>handleJobSubmitted<span style="color:#ff79c6">(</span>jobId<span style="color:#ff79c6">,</span> rdd<span style="color:#ff79c6">,</span> func<span style="color:#ff79c6">,</span> partitions<span style="color:#ff79c6">,</span> callSite<span style="color:#ff79c6">,</span> listener<span style="color:#ff79c6">,</span> artifacts<span style="color:#ff79c6">,</span>
-        properties<span style="color:#ff79c6">)</span>
-
-    <span style="color:#ff79c6">case</span> <span style="color:#50fa7b">MapStageSubmitted</span><span style="color:#ff79c6">(</span>jobId<span style="color:#ff79c6">,</span> dependency<span style="color:#ff79c6">,</span> callSite<span style="color:#ff79c6">,</span> listener<span style="color:#ff79c6">,</span> artifacts<span style="color:#ff79c6">,</span> properties<span style="color:#ff79c6">)</span> <span style="color:#ff79c6">=&gt;</span>
-      dagScheduler<span style="color:#ff79c6">.</span>handleMapStageSubmitted<span style="color:#ff79c6">(</span>jobId<span style="color:#ff79c6">,</span> dependency<span style="color:#ff79c6">,</span> callSite<span style="color:#ff79c6">,</span> listener<span style="color:#ff79c6">,</span> artifacts<span style="color:#ff79c6">,</span>
-        properties<span style="color:#ff79c6">)</span>
-
-    <span style="color:#ff79c6">case</span> <span style="color:#50fa7b">StageCancelled</span><span style="color:#ff79c6">(</span>stageId<span style="color:#ff79c6">,</span> reason<span style="color:#ff79c6">)</span> <span style="color:#ff79c6">=&gt;</span>
-      dagScheduler<span style="color:#ff79c6">.</span>handleStageCancellation<span style="color:#ff79c6">(</span>stageId<span style="color:#ff79c6">,</span> reason<span style="color:#ff79c6">)</span>
-
-    <span style="color:#ff79c6">case</span> <span style="color:#50fa7b">JobCancelled</span><span style="color:#ff79c6">(</span>jobId<span style="color:#ff79c6">,</span> reason<span style="color:#ff79c6">)</span> <span style="color:#ff79c6">=&gt;</span>
-      dagScheduler<span style="color:#ff79c6">.</span>handleJobCancellation<span style="color:#ff79c6">(</span>jobId<span style="color:#ff79c6">,</span> reason<span style="color:#ff79c6">)</span>
-
-    <span style="color:#ff79c6">case</span> <span style="color:#50fa7b">JobGroupCancelled</span><span style="color:#ff79c6">(</span>groupId<span style="color:#ff79c6">)</span> <span style="color:#ff79c6">=&gt;</span>
-      dagScheduler<span style="color:#ff79c6">.</span>handleJobGroupCancelled<span style="color:#ff79c6">(</span>groupId<span style="color:#ff79c6">)</span>
-
-    <span style="color:#ff79c6">case</span> <span style="color:#50fa7b">JobTagCancelled</span><span style="color:#ff79c6">(</span>tag<span style="color:#ff79c6">)</span> <span style="color:#ff79c6">=&gt;</span>
-      dagScheduler<span style="color:#ff79c6">.</span>handleJobTagCancelled<span style="color:#ff79c6">(</span>tag<span style="color:#ff79c6">)</span>
-
-    <span style="color:#ff79c6">case</span> <span style="color:#50fa7b">AllJobsCancelled</span> <span style="color:#ff79c6">=&gt;</span>
-      dagScheduler<span style="color:#ff79c6">.</span>doCancelAllJobs<span style="color:#ff79c6">(</span><span style="color:#ff79c6">)</span>
-
-    <span style="color:#ff79c6">case</span> <span style="color:#50fa7b">ExecutorAdded</span><span style="color:#ff79c6">(</span>execId<span style="color:#ff79c6">,</span> host<span style="color:#ff79c6">)</span> <span style="color:#ff79c6">=&gt;</span>
-      dagScheduler<span style="color:#ff79c6">.</span>handleExecutorAdded<span style="color:#ff79c6">(</span>execId<span style="color:#ff79c6">,</span> host<span style="color:#ff79c6">)</span>
-
-    <span style="color:#ff79c6">case</span> <span style="color:#50fa7b">ExecutorLost</span><span style="color:#ff79c6">(</span>execId<span style="color:#ff79c6">,</span> reason<span style="color:#ff79c6">)</span> <span style="color:#ff79c6">=&gt;</span>
-      <span style="color:#ff79c6">val</span> workerHost <span style="color:#ff79c6">=</span> reason <span style="color:#ff79c6">match</span> <span style="color:#ff79c6">{</span>
-        <span style="color:#ff79c6">case</span> <span style="color:#50fa7b">ExecutorProcessLost</span><span style="color:#ff79c6">(</span><span style="color:#ff79c6">_</span><span style="color:#ff79c6">,</span> workerHost<span style="color:#ff79c6">,</span> <span style="color:#ff79c6">_</span><span style="color:#ff79c6">)</span> <span style="color:#ff79c6">=&gt;</span> workerHost
-        <span style="color:#ff79c6">case</span> <span style="color:#50fa7b">ExecutorDecommission</span><span style="color:#ff79c6">(</span>workerHost<span style="color:#ff79c6">,</span> <span style="color:#ff79c6">_</span><span style="color:#ff79c6">)</span> <span style="color:#ff79c6">=&gt;</span> workerHost
-        <span style="color:#ff79c6">case</span> <span style="color:#ff79c6">_</span> <span style="color:#ff79c6">=&gt;</span> <span style="color:#50fa7b">None</span>
-      <span style="color:#ff79c6">}</span>
-      dagScheduler<span style="color:#ff79c6">.</span>handleExecutorLost<span style="color:#ff79c6">(</span>execId<span style="color:#ff79c6">,</span> workerHost<span style="color:#ff79c6">)</span>
-
-    <span style="color:#ff79c6">case</span> <span style="color:#50fa7b">WorkerRemoved</span><span style="color:#ff79c6">(</span>workerId<span style="color:#ff79c6">,</span> host<span style="color:#ff79c6">,</span> message<span style="color:#ff79c6">)</span> <span style="color:#ff79c6">=&gt;</span>
-      dagScheduler<span style="color:#ff79c6">.</span>handleWorkerRemoved<span style="color:#ff79c6">(</span>workerId<span style="color:#ff79c6">,</span> host<span style="color:#ff79c6">,</span> message<span style="color:#ff79c6">)</span>
-
-    <span style="color:#ff79c6">case</span> <span style="color:#50fa7b">BeginEvent</span><span style="color:#ff79c6">(</span>task<span style="color:#ff79c6">,</span> taskInfo<span style="color:#ff79c6">)</span> <span style="color:#ff79c6">=&gt;</span>
-      dagScheduler<span style="color:#ff79c6">.</span>handleBeginEvent<span style="color:#ff79c6">(</span>task<span style="color:#ff79c6">,</span> taskInfo<span style="color:#ff79c6">)</span>
-
-    <span style="color:#ff79c6">case</span> <span style="color:#50fa7b">SpeculativeTaskSubmitted</span><span style="color:#ff79c6">(</span>task<span style="color:#ff79c6">,</span> taskIndex<span style="color:#ff79c6">)</span> <span style="color:#ff79c6">=&gt;</span>
-      dagScheduler<span style="color:#ff79c6">.</span>handleSpeculativeTaskSubmitted<span style="color:#ff79c6">(</span>task<span style="color:#ff79c6">,</span> taskIndex<span style="color:#ff79c6">)</span>
-
-    <span style="color:#ff79c6">case</span> <span style="color:#50fa7b">UnschedulableTaskSetAdded</span><span style="color:#ff79c6">(</span>stageId<span style="color:#ff79c6">,</span> stageAttemptId<span style="color:#ff79c6">)</span> <span style="color:#ff79c6">=&gt;</span>
-      dagScheduler<span style="color:#ff79c6">.</span>handleUnschedulableTaskSetAdded<span style="color:#ff79c6">(</span>stageId<span style="color:#ff79c6">,</span> stageAttemptId<span style="color:#ff79c6">)</span>
-
-    <span style="color:#ff79c6">case</span> <span style="color:#50fa7b">UnschedulableTaskSetRemoved</span><span style="color:#ff79c6">(</span>stageId<span style="color:#ff79c6">,</span> stageAttemptId<span style="color:#ff79c6">)</span> <span style="color:#ff79c6">=&gt;</span>
-      dagScheduler<span style="color:#ff79c6">.</span>handleUnschedulableTaskSetRemoved<span style="color:#ff79c6">(</span>stageId<span style="color:#ff79c6">,</span> stageAttemptId<span style="color:#ff79c6">)</span>
-
-    <span style="color:#ff79c6">case</span> <span style="color:#50fa7b">GettingResultEvent</span><span style="color:#ff79c6">(</span>taskInfo<span style="color:#ff79c6">)</span> <span style="color:#ff79c6">=&gt;</span>
-      dagScheduler<span style="color:#ff79c6">.</span>handleGetTaskResult<span style="color:#ff79c6">(</span>taskInfo<span style="color:#ff79c6">)</span>
-
-    <span style="color:#ff79c6">case</span> completion<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">CompletionEvent</span> <span style="color:#ff79c6">=&gt;</span>
-      dagScheduler<span style="color:#ff79c6">.</span>handleTaskCompletion<span style="color:#ff79c6">(</span>completion<span style="color:#ff79c6">)</span>
-
-    <span style="color:#ff79c6">case</span> <span style="color:#50fa7b">StageFailed</span><span style="color:#ff79c6">(</span>stageId<span style="color:#ff79c6">,</span> reason<span style="color:#ff79c6">,</span> exception<span style="color:#ff79c6">)</span> <span style="color:#ff79c6">=&gt;</span>
-      dagScheduler<span style="color:#ff79c6">.</span>handleStageFailed<span style="color:#ff79c6">(</span>stageId<span style="color:#ff79c6">,</span> reason<span style="color:#ff79c6">,</span> exception<span style="color:#ff79c6">)</span>
-
-    <span style="color:#ff79c6">case</span> <span style="color:#50fa7b">TaskSetFailed</span><span style="color:#ff79c6">(</span>taskSet<span style="color:#ff79c6">,</span> reason<span style="color:#ff79c6">,</span> exception<span style="color:#ff79c6">)</span> <span style="color:#ff79c6">=&gt;</span>
-      dagScheduler<span style="color:#ff79c6">.</span>handleTaskSetFailed<span style="color:#ff79c6">(</span>taskSet<span style="color:#ff79c6">,</span> reason<span style="color:#ff79c6">,</span> exception<span style="color:#ff79c6">)</span>
-
-    <span style="color:#ff79c6">case</span> <span style="color:#50fa7b">ResubmitFailedStages</span> <span style="color:#ff79c6">=&gt;</span>
-      dagScheduler<span style="color:#ff79c6">.</span>resubmitFailedStages<span style="color:#ff79c6">(</span><span style="color:#ff79c6">)</span>
-
-    <span style="color:#ff79c6">case</span> <span style="color:#50fa7b">RegisterMergeStatuses</span><span style="color:#ff79c6">(</span>stage<span style="color:#ff79c6">,</span> mergeStatuses<span style="color:#ff79c6">)</span> <span style="color:#ff79c6">=&gt;</span>
-      dagScheduler<span style="color:#ff79c6">.</span>handleRegisterMergeStatuses<span style="color:#ff79c6">(</span>stage<span style="color:#ff79c6">,</span> mergeStatuses<span style="color:#ff79c6">)</span>
-
-    <span style="color:#ff79c6">case</span> <span style="color:#50fa7b">ShuffleMergeFinalized</span><span style="color:#ff79c6">(</span>stage<span style="color:#ff79c6">)</span> <span style="color:#ff79c6">=&gt;</span>
-      dagScheduler<span style="color:#ff79c6">.</span>handleShuffleMergeFinalized<span style="color:#ff79c6">(</span>stage<span style="color:#ff79c6">,</span> stage<span style="color:#ff79c6">.</span>shuffleDep<span style="color:#ff79c6">.</span>shuffleMergeId<span style="color:#ff79c6">)</span>
-
-    <span style="color:#ff79c6">case</span> <span style="color:#50fa7b">ShufflePushCompleted</span><span style="color:#ff79c6">(</span>shuffleId<span style="color:#ff79c6">,</span> shuffleMergeId<span style="color:#ff79c6">,</span> mapIndex<span style="color:#ff79c6">)</span> <span style="color:#ff79c6">=&gt;</span>
-      dagScheduler<span style="color:#ff79c6">.</span>handleShufflePushCompleted<span style="color:#ff79c6">(</span>shuffleId<span style="color:#ff79c6">,</span> shuffleMergeId<span style="color:#ff79c6">,</span> mapIndex<span style="color:#ff79c6">)</span>
-  <span style="color:#ff79c6">}</span>
-</code></pre></td></tr></table>
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"><code class="language-scala" data-lang="scala"><span style="display:flex;"><span>  <span style="color:#ff79c6">private</span> <span style="color:#ff79c6">def</span> doOnReceive<span style="color:#ff79c6">(</span>event<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">DAGSchedulerEvent</span><span style="color:#ff79c6">)</span><span style="color:#ff79c6">:</span> <span style="color:#8be9fd">Unit</span> <span style="color:#ff79c6">=</span> event <span style="color:#ff79c6">match</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">case</span> <span style="color:#50fa7b">JobSubmitted</span><span style="color:#ff79c6">(</span>jobId<span style="color:#ff79c6">,</span> rdd<span style="color:#ff79c6">,</span> func<span style="color:#ff79c6">,</span> partitions<span style="color:#ff79c6">,</span> callSite<span style="color:#ff79c6">,</span> listener<span style="color:#ff79c6">,</span> artifacts<span style="color:#ff79c6">,</span> properties<span style="color:#ff79c6">)</span> <span style="color:#ff79c6">=&gt;</span>
+</span></span><span style="display:flex;"><span>      dagScheduler<span style="color:#ff79c6">.</span>handleJobSubmitted<span style="color:#ff79c6">(</span>jobId<span style="color:#ff79c6">,</span> rdd<span style="color:#ff79c6">,</span> func<span style="color:#ff79c6">,</span> partitions<span style="color:#ff79c6">,</span> callSite<span style="color:#ff79c6">,</span> listener<span style="color:#ff79c6">,</span> artifacts<span style="color:#ff79c6">,</span>
+</span></span><span style="display:flex;"><span>        properties<span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">case</span> <span style="color:#50fa7b">MapStageSubmitted</span><span style="color:#ff79c6">(</span>jobId<span style="color:#ff79c6">,</span> dependency<span style="color:#ff79c6">,</span> callSite<span style="color:#ff79c6">,</span> listener<span style="color:#ff79c6">,</span> artifacts<span style="color:#ff79c6">,</span> properties<span style="color:#ff79c6">)</span> <span style="color:#ff79c6">=&gt;</span>
+</span></span><span style="display:flex;"><span>      dagScheduler<span style="color:#ff79c6">.</span>handleMapStageSubmitted<span style="color:#ff79c6">(</span>jobId<span style="color:#ff79c6">,</span> dependency<span style="color:#ff79c6">,</span> callSite<span style="color:#ff79c6">,</span> listener<span style="color:#ff79c6">,</span> artifacts<span style="color:#ff79c6">,</span>
+</span></span><span style="display:flex;"><span>        properties<span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">case</span> <span style="color:#50fa7b">StageCancelled</span><span style="color:#ff79c6">(</span>stageId<span style="color:#ff79c6">,</span> reason<span style="color:#ff79c6">)</span> <span style="color:#ff79c6">=&gt;</span>
+</span></span><span style="display:flex;"><span>      dagScheduler<span style="color:#ff79c6">.</span>handleStageCancellation<span style="color:#ff79c6">(</span>stageId<span style="color:#ff79c6">,</span> reason<span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">case</span> <span style="color:#50fa7b">JobCancelled</span><span style="color:#ff79c6">(</span>jobId<span style="color:#ff79c6">,</span> reason<span style="color:#ff79c6">)</span> <span style="color:#ff79c6">=&gt;</span>
+</span></span><span style="display:flex;"><span>      dagScheduler<span style="color:#ff79c6">.</span>handleJobCancellation<span style="color:#ff79c6">(</span>jobId<span style="color:#ff79c6">,</span> reason<span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">case</span> <span style="color:#50fa7b">JobGroupCancelled</span><span style="color:#ff79c6">(</span>groupId<span style="color:#ff79c6">)</span> <span style="color:#ff79c6">=&gt;</span>
+</span></span><span style="display:flex;"><span>      dagScheduler<span style="color:#ff79c6">.</span>handleJobGroupCancelled<span style="color:#ff79c6">(</span>groupId<span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">case</span> <span style="color:#50fa7b">JobTagCancelled</span><span style="color:#ff79c6">(</span>tag<span style="color:#ff79c6">)</span> <span style="color:#ff79c6">=&gt;</span>
+</span></span><span style="display:flex;"><span>      dagScheduler<span style="color:#ff79c6">.</span>handleJobTagCancelled<span style="color:#ff79c6">(</span>tag<span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">case</span> <span style="color:#50fa7b">AllJobsCancelled</span> <span style="color:#ff79c6">=&gt;</span>
+</span></span><span style="display:flex;"><span>      dagScheduler<span style="color:#ff79c6">.</span>doCancelAllJobs<span style="color:#ff79c6">()</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">case</span> <span style="color:#50fa7b">ExecutorAdded</span><span style="color:#ff79c6">(</span>execId<span style="color:#ff79c6">,</span> host<span style="color:#ff79c6">)</span> <span style="color:#ff79c6">=&gt;</span>
+</span></span><span style="display:flex;"><span>      dagScheduler<span style="color:#ff79c6">.</span>handleExecutorAdded<span style="color:#ff79c6">(</span>execId<span style="color:#ff79c6">,</span> host<span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">case</span> <span style="color:#50fa7b">ExecutorLost</span><span style="color:#ff79c6">(</span>execId<span style="color:#ff79c6">,</span> reason<span style="color:#ff79c6">)</span> <span style="color:#ff79c6">=&gt;</span>
+</span></span><span style="display:flex;"><span>      <span style="color:#ff79c6">val</span> workerHost <span style="color:#ff79c6">=</span> reason <span style="color:#ff79c6">match</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">case</span> <span style="color:#50fa7b">ExecutorProcessLost</span><span style="color:#ff79c6">(</span><span style="color:#ff79c6">_</span><span style="color:#ff79c6">,</span> workerHost<span style="color:#ff79c6">,</span> <span style="color:#ff79c6">_</span><span style="color:#ff79c6">)</span> <span style="color:#ff79c6">=&gt;</span> workerHost
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">case</span> <span style="color:#50fa7b">ExecutorDecommission</span><span style="color:#ff79c6">(</span>workerHost<span style="color:#ff79c6">,</span> <span style="color:#ff79c6">_</span><span style="color:#ff79c6">)</span> <span style="color:#ff79c6">=&gt;</span> workerHost
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">case</span> <span style="color:#ff79c6">_</span> <span style="color:#ff79c6">=&gt;</span> <span style="color:#50fa7b">None</span>
+</span></span><span style="display:flex;"><span>      <span style="color:#ff79c6">}</span>
+</span></span><span style="display:flex;"><span>      dagScheduler<span style="color:#ff79c6">.</span>handleExecutorLost<span style="color:#ff79c6">(</span>execId<span style="color:#ff79c6">,</span> workerHost<span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">case</span> <span style="color:#50fa7b">WorkerRemoved</span><span style="color:#ff79c6">(</span>workerId<span style="color:#ff79c6">,</span> host<span style="color:#ff79c6">,</span> message<span style="color:#ff79c6">)</span> <span style="color:#ff79c6">=&gt;</span>
+</span></span><span style="display:flex;"><span>      dagScheduler<span style="color:#ff79c6">.</span>handleWorkerRemoved<span style="color:#ff79c6">(</span>workerId<span style="color:#ff79c6">,</span> host<span style="color:#ff79c6">,</span> message<span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">case</span> <span style="color:#50fa7b">BeginEvent</span><span style="color:#ff79c6">(</span>task<span style="color:#ff79c6">,</span> taskInfo<span style="color:#ff79c6">)</span> <span style="color:#ff79c6">=&gt;</span>
+</span></span><span style="display:flex;"><span>      dagScheduler<span style="color:#ff79c6">.</span>handleBeginEvent<span style="color:#ff79c6">(</span>task<span style="color:#ff79c6">,</span> taskInfo<span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">case</span> <span style="color:#50fa7b">SpeculativeTaskSubmitted</span><span style="color:#ff79c6">(</span>task<span style="color:#ff79c6">,</span> taskIndex<span style="color:#ff79c6">)</span> <span style="color:#ff79c6">=&gt;</span>
+</span></span><span style="display:flex;"><span>      dagScheduler<span style="color:#ff79c6">.</span>handleSpeculativeTaskSubmitted<span style="color:#ff79c6">(</span>task<span style="color:#ff79c6">,</span> taskIndex<span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">case</span> <span style="color:#50fa7b">UnschedulableTaskSetAdded</span><span style="color:#ff79c6">(</span>stageId<span style="color:#ff79c6">,</span> stageAttemptId<span style="color:#ff79c6">)</span> <span style="color:#ff79c6">=&gt;</span>
+</span></span><span style="display:flex;"><span>      dagScheduler<span style="color:#ff79c6">.</span>handleUnschedulableTaskSetAdded<span style="color:#ff79c6">(</span>stageId<span style="color:#ff79c6">,</span> stageAttemptId<span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">case</span> <span style="color:#50fa7b">UnschedulableTaskSetRemoved</span><span style="color:#ff79c6">(</span>stageId<span style="color:#ff79c6">,</span> stageAttemptId<span style="color:#ff79c6">)</span> <span style="color:#ff79c6">=&gt;</span>
+</span></span><span style="display:flex;"><span>      dagScheduler<span style="color:#ff79c6">.</span>handleUnschedulableTaskSetRemoved<span style="color:#ff79c6">(</span>stageId<span style="color:#ff79c6">,</span> stageAttemptId<span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">case</span> <span style="color:#50fa7b">GettingResultEvent</span><span style="color:#ff79c6">(</span>taskInfo<span style="color:#ff79c6">)</span> <span style="color:#ff79c6">=&gt;</span>
+</span></span><span style="display:flex;"><span>      dagScheduler<span style="color:#ff79c6">.</span>handleGetTaskResult<span style="color:#ff79c6">(</span>taskInfo<span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">case</span> completion<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">CompletionEvent</span> <span style="color:#ff79c6">=&gt;</span>
+</span></span><span style="display:flex;"><span>      dagScheduler<span style="color:#ff79c6">.</span>handleTaskCompletion<span style="color:#ff79c6">(</span>completion<span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">case</span> <span style="color:#50fa7b">StageFailed</span><span style="color:#ff79c6">(</span>stageId<span style="color:#ff79c6">,</span> reason<span style="color:#ff79c6">,</span> exception<span style="color:#ff79c6">)</span> <span style="color:#ff79c6">=&gt;</span>
+</span></span><span style="display:flex;"><span>      dagScheduler<span style="color:#ff79c6">.</span>handleStageFailed<span style="color:#ff79c6">(</span>stageId<span style="color:#ff79c6">,</span> reason<span style="color:#ff79c6">,</span> exception<span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">case</span> <span style="color:#50fa7b">TaskSetFailed</span><span style="color:#ff79c6">(</span>taskSet<span style="color:#ff79c6">,</span> reason<span style="color:#ff79c6">,</span> exception<span style="color:#ff79c6">)</span> <span style="color:#ff79c6">=&gt;</span>
+</span></span><span style="display:flex;"><span>      dagScheduler<span style="color:#ff79c6">.</span>handleTaskSetFailed<span style="color:#ff79c6">(</span>taskSet<span style="color:#ff79c6">,</span> reason<span style="color:#ff79c6">,</span> exception<span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">case</span> <span style="color:#50fa7b">ResubmitFailedStages</span> <span style="color:#ff79c6">=&gt;</span>
+</span></span><span style="display:flex;"><span>      dagScheduler<span style="color:#ff79c6">.</span>resubmitFailedStages<span style="color:#ff79c6">()</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">case</span> <span style="color:#50fa7b">RegisterMergeStatuses</span><span style="color:#ff79c6">(</span>stage<span style="color:#ff79c6">,</span> mergeStatuses<span style="color:#ff79c6">)</span> <span style="color:#ff79c6">=&gt;</span>
+</span></span><span style="display:flex;"><span>      dagScheduler<span style="color:#ff79c6">.</span>handleRegisterMergeStatuses<span style="color:#ff79c6">(</span>stage<span style="color:#ff79c6">,</span> mergeStatuses<span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">case</span> <span style="color:#50fa7b">ShuffleMergeFinalized</span><span style="color:#ff79c6">(</span>stage<span style="color:#ff79c6">)</span> <span style="color:#ff79c6">=&gt;</span>
+</span></span><span style="display:flex;"><span>      dagScheduler<span style="color:#ff79c6">.</span>handleShuffleMergeFinalized<span style="color:#ff79c6">(</span>stage<span style="color:#ff79c6">,</span> stage<span style="color:#ff79c6">.</span>shuffleDep<span style="color:#ff79c6">.</span>shuffleMergeId<span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">case</span> <span style="color:#50fa7b">ShufflePushCompleted</span><span style="color:#ff79c6">(</span>shuffleId<span style="color:#ff79c6">,</span> shuffleMergeId<span style="color:#ff79c6">,</span> mapIndex<span style="color:#ff79c6">)</span> <span style="color:#ff79c6">=&gt;</span>
+</span></span><span style="display:flex;"><span>      dagScheduler<span style="color:#ff79c6">.</span>handleShufflePushCompleted<span style="color:#ff79c6">(</span>shuffleId<span style="color:#ff79c6">,</span> shuffleMergeId<span style="color:#ff79c6">,</span> mapIndex<span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">}</span>
+</span></span></code></pre></td></tr></table>
 </div>
 </div><p>主要函数</p>
 <ul>
@@ -436,9 +445,17 @@ Hadoop采用MapReduce模型，Storm采用流式处理模型，而Spark则借助R
 <li>runJob</li>
 </ul>
 <p>RDD 触发，提交 job<br>
-<img src="https://v1.ax1x.com/2024/12/14/7VTeZf.png" alt=""></p>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/12/14/7VTeZf.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/12/14/7VTeZf.png" />
+        </a>
+    </p>
 <p>提交一个 job 的执行时序图<br>
-<img src="https://v1.ax1x.com/2024/12/14/7Vm9uc.png" alt=""><br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/12/14/7Vm9uc.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/12/14/7Vm9uc.png" />
+        </a>
+    <br>
 stage 创建的过程</p>
 <ul>
 <li>祖父 stage 先于 父 stage 提交</li>
@@ -457,14 +474,30 @@ stage 创建的过程</p>
 <li>根据 shuffle 边界，拆分 stage</li>
 </ul>
 <p>调用过程<br>
-<img src="https://v1.ax1x.com/2024/12/28/7VgrV4.png" alt=""></p>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/12/28/7VgrV4.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/12/28/7VgrV4.png" />
+        </a>
+    </p>
 <p>反向驱动、正向提交 <br>
-<img src="https://v1.ax1x.com/2024/12/28/7VgtXh.png" alt=""></p>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/12/28/7VgtXh.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/12/28/7VgtXh.png" />
+        </a>
+    </p>
 <p>三层调度关系<br>
-<img src="https://v1.ax1x.com/2024/12/28/7VgISq.png" alt=""></p>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/12/28/7VgISq.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/12/28/7VgISq.png" />
+        </a>
+    </p>
 <h3 id="taskscheduler">TaskScheduler</h3>
 <p>Pool 的层次关系，有点像 yarn 队列<br>
-<img src="https://v1.ax1x.com/2024/12/28/7VgChY.png" alt=""></p>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/12/28/7VgChY.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/12/28/7VgChY.png" />
+        </a>
+    </p>
 <p>Pool 提供的函数</p>
 <ul>
 <li>addSchedulable</li>
@@ -482,35 +515,35 @@ stage 创建的过程</p>
 <li>decreaseRunningTasks</li>
 </ul>
 <p>调度配置</p>
-<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4">
-<table style="border-spacing:0;padding:0;margin:0;border:0;width:auto;overflow:auto;display:block;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
-<pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"><code><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
 </span></code></pre></td>
 <td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
-<pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-xml" data-lang="xml"><span style="color:#ff79c6">&lt;allocations</span><span style="color:#ff79c6">&gt;</span>
-	<span style="color:#ff79c6">&lt;pool</span> <span style="color:#50fa7b">name=</span><span style="color:#f1fa8c">&#34;production&#34;</span><span style="color:#ff79c6">&gt;</span>
-		<span style="color:#ff79c6">&lt;schedulingMode</span><span style="color:#ff79c6">&gt;</span>FAIR<span style="color:#ff79c6">&lt;/schedulingMode&gt;</span>
-		<span style="color:#ff79c6">&lt;weight</span><span style="color:#ff79c6">&gt;</span>1<span style="color:#ff79c6">&lt;/weight&gt;</span>
-		<span style="color:#ff79c6">&lt;minShare</span><span style="color:#ff79c6">&gt;</span>2<span style="color:#ff79c6">&lt;/minShare&gt;</span>
-	<span style="color:#ff79c6">&lt;/pool&gt;</span>
-	<span style="color:#ff79c6">&lt;pool</span> <span style="color:#50fa7b">name=</span><span style="color:#f1fa8c">&#34;test&#34;</span><span style="color:#ff79c6">&gt;</span>
-		<span style="color:#ff79c6">&lt;schedulingMode</span><span style="color:#ff79c6">&gt;</span>FIFO<span style="color:#ff79c6">&lt;/schedulingMode&gt;</span>
-		<span style="color:#ff79c6">&lt;weight</span><span style="color:#ff79c6">&gt;</span>2<span style="color:#ff79c6">&lt;/weight&gt;</span>
-		<span style="color:#ff79c6">&lt;minShare</span><span style="color:#ff79c6">&gt;</span>3<span style="color:#ff79c6">&lt;/minShare&gt;</span>
-	<span style="color:#ff79c6">&lt;/pool&gt;</span>
-<span style="color:#ff79c6">&lt;/allocations&gt;</span>
-</code></pre></td></tr></table>
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"><code class="language-xml" data-lang="xml"><span style="display:flex;"><span><span style="color:#ff79c6">&lt;allocations&gt;</span>
+</span></span><span style="display:flex;"><span>	<span style="color:#ff79c6">&lt;pool</span> <span style="color:#50fa7b">name=</span><span style="color:#f1fa8c">&#34;production&#34;</span><span style="color:#ff79c6">&gt;</span>
+</span></span><span style="display:flex;"><span>		<span style="color:#ff79c6">&lt;schedulingMode&gt;</span>FAIR<span style="color:#ff79c6">&lt;/schedulingMode&gt;</span>
+</span></span><span style="display:flex;"><span>		<span style="color:#ff79c6">&lt;weight&gt;</span>1<span style="color:#ff79c6">&lt;/weight&gt;</span>
+</span></span><span style="display:flex;"><span>		<span style="color:#ff79c6">&lt;minShare&gt;</span>2<span style="color:#ff79c6">&lt;/minShare&gt;</span>
+</span></span><span style="display:flex;"><span>	<span style="color:#ff79c6">&lt;/pool&gt;</span>
+</span></span><span style="display:flex;"><span>	<span style="color:#ff79c6">&lt;pool</span> <span style="color:#50fa7b">name=</span><span style="color:#f1fa8c">&#34;test&#34;</span><span style="color:#ff79c6">&gt;</span>
+</span></span><span style="display:flex;"><span>		<span style="color:#ff79c6">&lt;schedulingMode&gt;</span>FIFO<span style="color:#ff79c6">&lt;/schedulingMode&gt;</span>
+</span></span><span style="display:flex;"><span>		<span style="color:#ff79c6">&lt;weight&gt;</span>2<span style="color:#ff79c6">&lt;/weight&gt;</span>
+</span></span><span style="display:flex;"><span>		<span style="color:#ff79c6">&lt;minShare&gt;</span>3<span style="color:#ff79c6">&lt;/minShare&gt;</span>
+</span></span><span style="display:flex;"><span>	<span style="color:#ff79c6">&lt;/pool&gt;</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">&lt;/allocations&gt;</span>
+</span></span></code></pre></td></tr></table>
 </div>
 </div><p>数据本地性</p>
 <ul>
@@ -521,7 +554,11 @@ stage 创建的过程</p>
 <li>ANY</li>
 </ul>
 <p>TaskSetManager 对本地性的判断<br>
-<img src="https://v1.ax1x.com/2024/12/28/7Vg4m9.png" alt=""></p>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/12/28/7Vg4m9.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/12/28/7Vg4m9.png" />
+        </a>
+    </p>
 <p>TaskSetManager 主要函数</p>
 <ul>
 <li>TaskSetManager</li>
@@ -542,7 +579,11 @@ stage 创建的过程</p>
 <li>5、RpcEndpoint将调用TaskScheduler的resourceOffers方法给Task提供资源</li>
 <li>6、根据调度池的 getSortedTaskSetQueue做排序</li>
 <li>7、调用Executor的launchTask方法运行Task尝试
-<img src="https://v1.ax1x.com/2024/12/28/7Vg2XI.png" alt=""></li>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/12/28/7Vg2XI.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/12/28/7Vg2XI.png" />
+        </a>
+    </li>
 </ul>
 <p>TaskSchedulerImpl对执行结果的处理 如下</p>
 <ul>
@@ -553,11 +594,19 @@ stage 创建的过程</p>
 <li>5、将结果交给 TaskSchedulerImpl处理</li>
 <li>6、更新 TaskSetManager</li>
 <li>7、触发调用 DAGScheduler的taskEnded方法，交给 JobWaiter的resultHandler函数来处理
-<img src="https://v1.ax1x.com/2024/12/28/7VgFmV.png" alt=""></li>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/12/28/7VgFmV.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/12/28/7VgFmV.png" />
+        </a>
+    </li>
 </ul>
 <h3 id="schedulerbackend">SchedulerBackend</h3>
 <p>LauncherBackend 建立、发送过程<br>
-<img src="https://v1.ax1x.com/2024/12/28/7VgXdZ.png" alt=""></p>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/12/28/7VgXdZ.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/12/28/7VgXdZ.png" />
+        </a>
+    </p>
 <p>SchedulerBackend 抽象类</p>
 <ul>
 <li>LocalSchedulerBackend</li>
@@ -576,29 +625,57 @@ stage 创建的过程</p>
 <li>MesosCoarseGrainedSchedulerBackend</li>
 </ul>
 <p>调度过程
-<img src="https://v1.ax1x.com/2024/12/28/7VgnwU.png" alt=""></p>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/12/28/7VgnwU.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/12/28/7VgnwU.png" />
+        </a>
+    </p>
 <p>DAGScheduler 将任务分解，交给 TaskScheduler<br>
 再交给 CoarseGrainedSchedulerBackend<br>
 之后启动 Executor 执行任务的过程<br>
-<img src="https://v1.ax1x.com/2024/12/28/7VgMis.png" alt=""></p>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/12/28/7VgMis.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/12/28/7VgMis.png" />
+        </a>
+    </p>
 <p>几个主要类之间的关系<br>
-<img src="https://v1.ax1x.com/2024/12/29/7Vh3m6.png" alt=""></p>
-<h2 id="heading2">计算引擎</h2>
-<h3 id="heading3">内存管理</h3>
-<p>内存相关的类图如下 
-<img src="https://v1.ax1x.com/2024/12/28/7VgZ8L.png" alt=""></p>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/12/29/7Vh3m6.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/12/29/7Vh3m6.png" />
+        </a>
+    </p>
+<h2 id="计算引擎">计算引擎</h2>
+<h3 id="内存管理">内存管理</h3>
+<p>内存相关的类图如下
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/12/28/7VgZ8L.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/12/28/7VgZ8L.png" />
+        </a>
+    </p>
 <p>内存分配</p>
 <ul>
 <li>抽象类 MemoryAllocator</li>
 <li>UnsafeMemoryAllocator</li>
 <li>HeapMemoryAllocator</li>
 </ul>
-<p>HeapMemoryAllocator的工作原理 
-<img src="https://v1.ax1x.com/2024/12/28/7VgdrJ.png" alt=""></p>
+<p>HeapMemoryAllocator的工作原理
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/12/28/7VgdrJ.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/12/28/7VgdrJ.png" />
+        </a>
+    </p>
 <p>UnsafeMemoryAllocator的工作原理<br>
-<img src="https://v1.ax1x.com/2024/12/28/7VgeeG.png" alt=""></p>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/12/28/7VgeeG.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/12/28/7VgeeG.png" />
+        </a>
+    </p>
 <p>TaskMemoryManager 和其他类之间的关系<br>
-<img src="https://v1.ax1x.com/2024/12/29/7Vh9yB.png" alt=""></p>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/12/29/7Vh9yB.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/12/29/7Vh9yB.png" />
+        </a>
+    </p>
 <p>TaskMemoryManager提供的主要函数</p>
 <ul>
 <li>acquireExecutionMemory</li>
@@ -614,135 +691,143 @@ stage 创建的过程</p>
 <li>getOffsetInPage</li>
 </ul>
 <p>MemoryConsumer的继承体系
-<img src="https://v1.ax1x.com/2024/12/29/7VhBsb.png" alt=""></p>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/12/29/7VhBsb.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/12/29/7VhBsb.png" />
+        </a>
+    </p>
 <p>类之间的关系 <br>
-<img src="https://v1.ax1x.com/2024/12/29/7VhkSt.png" alt=""></p>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/12/29/7VhkSt.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/12/29/7VhkSt.png" />
+        </a>
+    </p>
 <p>MemoryConsumer 主要结构</p>
-<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4">
-<table style="border-spacing:0;padding:0;margin:0;border:0;width:auto;overflow:auto;display:block;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
-<pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">15
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">16
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">17
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">18
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">19
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">20
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">21
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">22
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">23
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">24
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">25
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">26
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">27
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">28
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">29
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">30
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">31
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">32
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">33
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">34
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">35
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">36
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">37
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">38
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">39
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">40
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">41
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">42
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">43
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">44
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">45
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">46
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">47
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">48
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">49
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">50
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">51
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">52
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">53
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">54
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">55
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">56
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">57
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">58
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">59
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">60
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"><code><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">15
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">16
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">17
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">18
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">19
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">20
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">21
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">22
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">23
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">24
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">25
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">26
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">27
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">28
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">29
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">30
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">31
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">32
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">33
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">34
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">35
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">36
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">37
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">38
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">39
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">40
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">41
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">42
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">43
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">44
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">45
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">46
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">47
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">48
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">49
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">50
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">51
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">52
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">53
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">54
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">55
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">56
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">57
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">58
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">59
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">60
 </span></code></pre></td>
 <td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
-<pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-scala" data-lang="scala"><span style="color:#ff79c6">abstract</span> <span style="color:#ff79c6">class</span> <span style="color:#50fa7b">MemoryConsumer</span><span style="color:#ff79c6">(</span>
-    memoryManager<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">MemoryManager</span><span style="color:#ff79c6">,</span>
-    numBytes<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">Long</span><span style="color:#ff79c6">,</span>
-    memoryMode<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">MemoryMode</span><span style="color:#ff79c6">)</span> <span style="color:#ff79c6">{</span>
-
-  <span style="color:#6272a4">/*</span><span style="color:#6272a4">*</span><span style="color:#6272a4"> Current number of bytes this consumer has acquired </span><span style="color:#6272a4">*/</span>
-  <span style="color:#ff79c6">protected</span> <span style="color:#ff79c6">var</span> acquired<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">Long</span> <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">0</span>
-
-  <span style="color:#6272a4">/*</span><span style="color:#6272a4">*</span><span style="color:#6272a4"> Whether this consumer has been evicted </span><span style="color:#6272a4">*/</span>
-  <span style="color:#ff79c6">protected</span> <span style="color:#ff79c6">var</span> evicted<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">Boolean</span> <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">false</span>
-
-  <span style="color:#6272a4">/*</span><span style="color:#6272a4">*</span><span style="color:#6272a4">
-</span><span style="color:#6272a4">   </span><span style="color:#6272a4">*</span><span style="color:#6272a4"> Acquires memory from the memory manager. Returns the number of bytes actually acquired.
-</span><span style="color:#6272a4">   </span><span style="color:#6272a4">*/</span>
-  <span style="color:#ff79c6">def</span> acquireMemory<span style="color:#ff79c6">(</span>numBytes<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">Long</span><span style="color:#ff79c6">)</span><span style="color:#ff79c6">:</span> <span style="color:#8be9fd">Long</span> <span style="color:#ff79c6">=</span> synchronized <span style="color:#ff79c6">{</span>
-    <span style="color:#ff79c6">val</span> allowed <span style="color:#ff79c6">=</span> memoryManager<span style="color:#ff79c6">.</span>acquire<span style="color:#ff79c6">(</span><span style="color:#ff79c6">this</span><span style="color:#ff79c6">,</span> numBytes<span style="color:#ff79c6">)</span>
-    acquired <span style="color:#ff79c6">+=</span> allowed
-    allowed
-  <span style="color:#ff79c6">}</span>
-
-  <span style="color:#6272a4">/*</span><span style="color:#6272a4">*</span><span style="color:#6272a4">
-</span><span style="color:#6272a4">   </span><span style="color:#6272a4">*</span><span style="color:#6272a4"> Releases memory back to the memory manager.
-</span><span style="color:#6272a4">   </span><span style="color:#6272a4">*/</span>
-  <span style="color:#ff79c6">def</span> releaseMemory<span style="color:#ff79c6">(</span>numBytes<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">Long</span><span style="color:#ff79c6">)</span><span style="color:#ff79c6">:</span> <span style="color:#8be9fd">Unit</span> <span style="color:#ff79c6">=</span> synchronized <span style="color:#ff79c6">{</span>
-    <span style="color:#ff79c6">val</span> toRelease <span style="color:#ff79c6">=</span> math<span style="color:#ff79c6">.</span>min<span style="color:#ff79c6">(</span>numBytes<span style="color:#ff79c6">,</span> acquired<span style="color:#ff79c6">)</span>
-    memoryManager<span style="color:#ff79c6">.</span>release<span style="color:#ff79c6">(</span><span style="color:#ff79c6">this</span><span style="color:#ff79c6">,</span> toRelease<span style="color:#ff79c6">)</span>
-    acquired <span style="color:#ff79c6">-=</span> toRelease
-  <span style="color:#ff79c6">}</span>
-
-  <span style="color:#6272a4">/*</span><span style="color:#6272a4">*</span><span style="color:#6272a4">
-</span><span style="color:#6272a4">   </span><span style="color:#6272a4">*</span><span style="color:#6272a4"> Called by MemoryManager when this consumer needs to release memory.
-</span><span style="color:#6272a4">   </span><span style="color:#6272a4">*/</span>
-  <span style="color:#ff79c6">def</span> evict<span style="color:#ff79c6">(</span><span style="color:#ff79c6">)</span><span style="color:#ff79c6">:</span> <span style="color:#8be9fd">Long</span> <span style="color:#ff79c6">=</span> synchronized <span style="color:#ff79c6">{</span>
-    evicted <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">true</span>
-    <span style="color:#6272a4">// Implement specific eviction logic in subclasses
-</span><span style="color:#6272a4"></span>    releaseAcquiredMemory<span style="color:#ff79c6">(</span><span style="color:#ff79c6">)</span>
-  <span style="color:#ff79c6">}</span>
-
-  <span style="color:#6272a4">/*</span><span style="color:#6272a4">*</span><span style="color:#6272a4">
-</span><span style="color:#6272a4">   </span><span style="color:#6272a4">*</span><span style="color:#6272a4"> Releases all acquired memory.
-</span><span style="color:#6272a4">   </span><span style="color:#6272a4">*/</span>
-  <span style="color:#ff79c6">protected</span> <span style="color:#ff79c6">def</span> releaseAcquiredMemory<span style="color:#ff79c6">(</span><span style="color:#ff79c6">)</span><span style="color:#ff79c6">:</span> <span style="color:#8be9fd">Long</span> <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">{</span>
-    <span style="color:#ff79c6">val</span> released <span style="color:#ff79c6">=</span> acquired
-    <span style="color:#ff79c6">if</span> <span style="color:#ff79c6">(</span>released <span style="color:#ff79c6">&gt;</span> <span style="color:#bd93f9">0</span><span style="color:#ff79c6">)</span> <span style="color:#ff79c6">{</span>
-      memoryManager<span style="color:#ff79c6">.</span>release<span style="color:#ff79c6">(</span><span style="color:#ff79c6">this</span><span style="color:#ff79c6">,</span> released<span style="color:#ff79c6">)</span>
-      acquired <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">0</span>
-    <span style="color:#ff79c6">}</span>
-    released
-  <span style="color:#ff79c6">}</span>
-
-  <span style="color:#6272a4">/*</span><span style="color:#6272a4">*</span><span style="color:#6272a4">
-</span><span style="color:#6272a4">   </span><span style="color:#6272a4">*</span><span style="color:#6272a4"> Returns the current number of bytes acquired by this consumer.
-</span><span style="color:#6272a4">   </span><span style="color:#6272a4">*/</span>
-  <span style="color:#ff79c6">def</span> getAcquiredMemory<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">Long</span> <span style="color:#ff79c6">=</span> synchronized <span style="color:#ff79c6">{</span> acquired <span style="color:#ff79c6">}</span>
-
-  <span style="color:#6272a4">/*</span><span style="color:#6272a4">*</span><span style="color:#6272a4">
-</span><span style="color:#6272a4">   </span><span style="color:#6272a4">*</span><span style="color:#6272a4"> Whether this consumer has been evicted.
-</span><span style="color:#6272a4">   </span><span style="color:#6272a4">*/</span>
-  <span style="color:#ff79c6">def</span> isEvicted<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">Boolean</span> <span style="color:#ff79c6">=</span> synchronized <span style="color:#ff79c6">{</span> evicted <span style="color:#ff79c6">}</span>
-<span style="color:#ff79c6">}</span>
-</code></pre></td></tr></table>
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"><code class="language-scala" data-lang="scala"><span style="display:flex;"><span><span style="color:#ff79c6">abstract</span> <span style="color:#ff79c6">class</span> <span style="color:#50fa7b">MemoryConsumer</span><span style="color:#ff79c6">(</span>
+</span></span><span style="display:flex;"><span>    memoryManager<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">MemoryManager</span><span style="color:#ff79c6">,</span>
+</span></span><span style="display:flex;"><span>    numBytes<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">Long</span><span style="color:#ff79c6">,</span>
+</span></span><span style="display:flex;"><span>    memoryMode<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">MemoryMode</span><span style="color:#ff79c6">)</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>  <span style="color:#6272a4">/** Current number of bytes this consumer has acquired */</span>
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">protected</span> <span style="color:#ff79c6">var</span> acquired<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">Long</span> <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">0</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>  <span style="color:#6272a4">/** Whether this consumer has been evicted */</span>
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">protected</span> <span style="color:#ff79c6">var</span> evicted<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">Boolean</span> <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">false</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>  <span style="color:#6272a4">/**
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * Acquires memory from the memory manager. Returns the number of bytes actually acquired.
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   */</span>
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">def</span> acquireMemory<span style="color:#ff79c6">(</span>numBytes<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">Long</span><span style="color:#ff79c6">)</span><span style="color:#ff79c6">:</span> <span style="color:#8be9fd">Long</span> <span style="color:#ff79c6">=</span> synchronized <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">val</span> allowed <span style="color:#ff79c6">=</span> memoryManager<span style="color:#ff79c6">.</span>acquire<span style="color:#ff79c6">(</span><span style="color:#ff79c6">this</span><span style="color:#ff79c6">,</span> numBytes<span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>    acquired <span style="color:#ff79c6">+=</span> allowed
+</span></span><span style="display:flex;"><span>    allowed
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">}</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>  <span style="color:#6272a4">/**
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * Releases memory back to the memory manager.
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   */</span>
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">def</span> releaseMemory<span style="color:#ff79c6">(</span>numBytes<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">Long</span><span style="color:#ff79c6">)</span><span style="color:#ff79c6">:</span> <span style="color:#8be9fd">Unit</span> <span style="color:#ff79c6">=</span> synchronized <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">val</span> toRelease <span style="color:#ff79c6">=</span> math<span style="color:#ff79c6">.</span>min<span style="color:#ff79c6">(</span>numBytes<span style="color:#ff79c6">,</span> acquired<span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>    memoryManager<span style="color:#ff79c6">.</span>release<span style="color:#ff79c6">(</span><span style="color:#ff79c6">this</span><span style="color:#ff79c6">,</span> toRelease<span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>    acquired <span style="color:#ff79c6">-=</span> toRelease
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">}</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>  <span style="color:#6272a4">/**
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * Called by MemoryManager when this consumer needs to release memory.
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   */</span>
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">def</span> evict<span style="color:#ff79c6">()</span><span style="color:#ff79c6">:</span> <span style="color:#8be9fd">Long</span> <span style="color:#ff79c6">=</span> synchronized <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>    evicted <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">true</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#6272a4">// Implement specific eviction logic in subclasses
+</span></span></span><span style="display:flex;"><span>    releaseAcquiredMemory<span style="color:#ff79c6">()</span>
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">}</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>  <span style="color:#6272a4">/**
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * Releases all acquired memory.
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   */</span>
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">protected</span> <span style="color:#ff79c6">def</span> releaseAcquiredMemory<span style="color:#ff79c6">()</span><span style="color:#ff79c6">:</span> <span style="color:#8be9fd">Long</span> <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">val</span> released <span style="color:#ff79c6">=</span> acquired
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">if</span> <span style="color:#ff79c6">(</span>released <span style="color:#ff79c6">&gt;</span> <span style="color:#bd93f9">0</span><span style="color:#ff79c6">)</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>      memoryManager<span style="color:#ff79c6">.</span>release<span style="color:#ff79c6">(</span><span style="color:#ff79c6">this</span><span style="color:#ff79c6">,</span> released<span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>      acquired <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">0</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">}</span>
+</span></span><span style="display:flex;"><span>    released
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">}</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>  <span style="color:#6272a4">/**
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * Returns the current number of bytes acquired by this consumer.
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   */</span>
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">def</span> getAcquiredMemory<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">Long</span> <span style="color:#ff79c6">=</span> synchronized <span style="color:#ff79c6">{</span> acquired <span style="color:#ff79c6">}</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>  <span style="color:#6272a4">/**
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   * Whether this consumer has been evicted.
+</span></span></span><span style="display:flex;"><span><span style="color:#6272a4">   */</span>
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">def</span> isEvicted<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">Boolean</span> <span style="color:#ff79c6">=</span> synchronized <span style="color:#ff79c6">{</span> evicted <span style="color:#ff79c6">}</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">}</span>
+</span></span></code></pre></td></tr></table>
 </div>
 </div><p>MemoryConsumer 两个子类</p>
 <ul>
@@ -757,8 +842,12 @@ stage 创建的过程</p>
 <li>MemoryStore: Handles the actual allocation and deallocation of memory blocks, distinguishing between on-heap and off-heap memory.</li>
 </ul>
 <p>执行内存的整体架构<br>
-<img src="https://v1.ax1x.com/2024/12/29/7VhpWP.png" alt=""></p>
-<h3 id="task-">Task 分析</h3>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/12/29/7VhpWP.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/12/29/7VhpWP.png" />
+        </a>
+    </p>
+<h3 id="task-分析">Task 分析</h3>
 <p>Task抽象类</p>
 <ul>
 <li>ShuffleMapTask</li>
@@ -770,12 +859,24 @@ stage 创建的过程</p>
 <li>TaskContextImpl</li>
 </ul>
 <p>TaskContext 会启动新线程，运行 Task<br>
-<img src="https://v1.ax1x.com/2024/12/29/7VhLjw.png" alt=""></p>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/12/29/7VhLjw.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/12/29/7VhLjw.png" />
+        </a>
+    </p>
 <h3 id="shuffle">Shuffle</h3>
 <p>创建过程
-<img src="https://v1.ax1x.com/2024/12/29/7Vh7tQ.png" alt=""></p>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/12/29/7Vh7tQ.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/12/29/7Vh7tQ.png" />
+        </a>
+    </p>
 <p>索引过程<br>
-<img src="https://v1.ax1x.com/2024/12/29/7Vhl8O.png" alt=""></p>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/12/29/7Vhl8O.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/12/29/7Vhl8O.png" />
+        </a>
+    </p>
 <p>IndexShuffleBlockResolver  作用</p>
 <ul>
 <li>Resolves Shuffle Blocks: It translates logical shuffle block identifiers into physical storage locations on disk.</li>
@@ -796,7 +897,11 @@ stage 创建的过程</p>
 <li>2、添加了 10这个元素</li>
 <li>3、添加 20这个元素</li>
 <li>4、添加 10、20、30 三个元素
-<img src="https://v1.ax1x.com/2024/12/29/7VhEef.png" alt=""></li>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/12/29/7VhEef.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/12/29/7VhEef.png" />
+        </a>
+    </li>
 </ul>
 <p>WritablePartitionedPairCollection</p>
 <ul>
@@ -806,11 +911,15 @@ stage 创建的过程</p>
 <p>AppendOnlyMap</p>
 <ul>
 <li>Efficient Memory Usage:AppendOnlyMap is optimized for scenarios where data grows incrementally without requiring costly operations like deletion or resizing.</li>
-<li>Open Addressing for Hash Collisions:Uses open addressing to resolve hash collisions, minimizing memory usage compared to structures like Java's HashMap which rely on linked lists for collisions.</li>
+<li>Open Addressing for Hash Collisions:Uses open addressing to resolve hash collisions, minimizing memory usage compared to structures like Java&rsquo;s HashMap which rely on linked lists for collisions.</li>
 <li>Custom Growth Mechanism:The map dynamically resizes its internal array when the load factor exceeds a threshold, maintaining performance as data grows.</li>
-<li>Specialized for Spark Use Cases: Focused on Spark's data aggregation needs where intermediate results (e.g., during shuffle or reduce operations) accumulate but do not need to be removed.</li>
+<li>Specialized for Spark Use Cases: Focused on Spark&rsquo;s data aggregation needs where intermediate results (e.g., during shuffle or reduce operations) accumulate but do not need to be removed.</li>
 </ul>
-<p><img src="https://v1.ax1x.com/2024/12/29/7VhNyc.png" alt=""><br>
+<p>
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/12/29/7VhNyc.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/12/29/7VhNyc.png" />
+        </a>
+    <br>
 解释</p>
 <ul>
 <li>传入的key为（0,Apache），value为1，计算得到pos为6，由于2×6＝12的索引位置没有元素，因此将（0,Apache）放入data数组索引为12的位置，将1放入索引为2×6+1＝13的位置</li>
@@ -820,9 +929,17 @@ stage 创建的过程</p>
 <p>AppendOnlyMap<br>
 基于开放地址的 hashmap，根据阈值做 翻倍增长</p>
 <p>如下 AppendOnlyMap，经过三次探测找到了合适的位置<br>
-<img src="https://v1.ax1x.com/2024/12/29/7VhqU3.png" alt=""></p>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/12/29/7VhqU3.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/12/29/7VhqU3.png" />
+        </a>
+    </p>
 <p>数据溢出的判断过程<br>
-<img src="https://v1.ax1x.com/2024/12/29/7Vhusj.png" alt=""></p>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/12/29/7Vhusj.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/12/29/7Vhusj.png" />
+        </a>
+    </p>
 <p>几个排序、溢出类的类图</p>
 <ul>
 <li>这几个类都是继承了 MemoryConsumer或者其子类 Spillable</li>
@@ -831,73 +948,81 @@ stage 创建的过程</p>
 <li>ShuffleExternalSorter、UnsafeExternalSorter 基于shuffle写入和off-heap 排序，都有spill</li>
 <li>ShuffleExternalSorter 调用了 DiskBlockObjectWriter，UnsafeExternalSorter有自己的磁盘写入</li>
 <li>和几个类都是调用 iterator，迭代遍历写入磁盘<br>
-<img src="https://v1.ax1x.com/2024/12/29/7VhyE5.png" alt=""></li>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/12/29/7VhyE5.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/12/29/7VhyE5.png" />
+        </a>
+    </li>
 </ul>
 <table>
-<thead>
-<tr>
-<th><strong>Feature</strong></th>
-<th><strong>ExternalSorter</strong></th>
-<th><strong>ExternalAppendOnlyMap</strong></th>
-<th><strong>UnsafeExternalSorter</strong></th>
-<th><strong>ShuffleExternalSorter</strong></th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><strong>Primary Use Case</strong></td>
-<td>Sorting and optional aggregation</td>
-<td>Key-value aggregation</td>
-<td>Sorting binary row data</td>
-<td>Sorting and shuffling intermediate data</td>
-</tr>
-<tr>
-<td><strong>Data Format</strong></td>
-<td>Key-value pairs</td>
-<td>Key-value pairs</td>
-<td>Binary-encoded rows</td>
-<td>Binary-encoded rows</td>
-</tr>
-<tr>
-<td><strong>Aggregation Support</strong></td>
-<td>Optional (via combining comparator)</td>
-<td>Yes (custom aggregation functions)</td>
-<td>No</td>
-<td>No</td>
-</tr>
-<tr>
-<td><strong>Spill Mechanism</strong></td>
-<td>Sorts and spills sorted chunks</td>
-<td>Spills serialized key-value pairs</td>
-<td>Spills binary data</td>
-<td>Spills binary data</td>
-</tr>
-<tr>
-<td><strong>Final Merge</strong></td>
-<td>Merges sorted chunks</td>
-<td>Merges aggregated chunks</td>
-<td>Merges binary data</td>
-<td>Optimized merge for shuffle output</td>
-</tr>
-<tr>
-<td><strong>Memory Efficiency</strong></td>
-<td>Standard object-based memory management</td>
-<td>Standard object-based memory management</td>
-<td>Off-heap memory, avoids GC overhead</td>
-<td>Off-heap memory, avoids GC overhead</td>
-</tr>
-<tr>
-<td><strong>Performance</strong></td>
-<td>Optimized for sorting and aggregation</td>
-<td>Optimized for key-value aggregation</td>
-<td>Highly optimized for sorting binary data</td>
-<td>Optimized for shuffle performance</td>
-</tr>
-</tbody>
+	<thead>
+			<tr>
+					<th><strong>Feature</strong></th>
+					<th><strong>ExternalSorter</strong></th>
+					<th><strong>ExternalAppendOnlyMap</strong></th>
+					<th><strong>UnsafeExternalSorter</strong></th>
+					<th><strong>ShuffleExternalSorter</strong></th>
+			</tr>
+	</thead>
+	<tbody>
+			<tr>
+					<td><strong>Primary Use Case</strong></td>
+					<td>Sorting and optional aggregation</td>
+					<td>Key-value aggregation</td>
+					<td>Sorting binary row data</td>
+					<td>Sorting and shuffling intermediate data</td>
+			</tr>
+			<tr>
+					<td><strong>Data Format</strong></td>
+					<td>Key-value pairs</td>
+					<td>Key-value pairs</td>
+					<td>Binary-encoded rows</td>
+					<td>Binary-encoded rows</td>
+			</tr>
+			<tr>
+					<td><strong>Aggregation Support</strong></td>
+					<td>Optional (via combining comparator)</td>
+					<td>Yes (custom aggregation functions)</td>
+					<td>No</td>
+					<td>No</td>
+			</tr>
+			<tr>
+					<td><strong>Spill Mechanism</strong></td>
+					<td>Sorts and spills sorted chunks</td>
+					<td>Spills serialized key-value pairs</td>
+					<td>Spills binary data</td>
+					<td>Spills binary data</td>
+			</tr>
+			<tr>
+					<td><strong>Final Merge</strong></td>
+					<td>Merges sorted chunks</td>
+					<td>Merges aggregated chunks</td>
+					<td>Merges binary data</td>
+					<td>Optimized merge for shuffle output</td>
+			</tr>
+			<tr>
+					<td><strong>Memory Efficiency</strong></td>
+					<td>Standard object-based memory management</td>
+					<td>Standard object-based memory management</td>
+					<td>Off-heap memory, avoids GC overhead</td>
+					<td>Off-heap memory, avoids GC overhead</td>
+			</tr>
+			<tr>
+					<td><strong>Performance</strong></td>
+					<td>Optimized for sorting and aggregation</td>
+					<td>Optimized for key-value aggregation</td>
+					<td>Highly optimized for sorting binary data</td>
+					<td>Optimized for shuffle performance</td>
+			</tr>
+	</tbody>
 </table>
 <p>map任务中间结果持久化的整体流程<br>
-<img src="https://v1.ax1x.com/2024/12/29/7VhHcm.png" alt=""></p>
-<h3 id="shuffle1">Shuffle读写</h3>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/12/29/7VhHcm.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/12/29/7VhHcm.png" />
+        </a>
+    </p>
+<h3 id="shuffle读写">Shuffle读写</h3>
 <p>几个shuffle 的类图结构</p>
 <ul>
 <li>父类都是 ShuffleWriter</li>
@@ -906,12 +1031,24 @@ stage 创建的过程</p>
 <li>它只有一个实现类 LocalDiskShuffleMapOutputWriter</li>
 <li>又关联了ShufflePartitionWriter、ShuffleBlockResolver，并使用 java.io 类完成最终写入</li>
 <li>map端不需要在持久化数据之前进行聚合、排序等操作。可以用：BypassMergeSortShuffleWriter
-<img src="https://v1.ax1x.com/2024/12/29/7VhhG9.png" alt=""></li>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/12/29/7VhhG9.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/12/29/7VhhG9.png" />
+        </a>
+    </li>
 </ul>
 <p>SortShuffleWriter在map端聚合的执行流程，也可以不在 map 端聚合<br>
-<img src="https://v1.ax1x.com/2024/12/29/7Vh8tY.png" alt=""></p>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/12/29/7Vh8tY.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/12/29/7Vh8tY.png" />
+        </a>
+    </p>
 <p>BypassMergeSortShuffleWriter的write方法的执行流程
-<img src="https://v1.ax1x.com/2024/12/29/7VhGoH.png" alt=""></p>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/12/29/7VhGoH.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/12/29/7VhGoH.png" />
+        </a>
+    </p>
 <p>shuffle read 相关的类</p>
 <ul>
 <li>核心是委托给 ShuffleBlockFetcherIterator 完成的</li>
@@ -919,72 +1056,112 @@ stage 创建的过程</p>
 <li>可能从远端获取，也可能从 本地获取</li>
 <li>根据 FetchResult 的结果，有不同的 case 判断</li>
 <li>BlockStoreShuffleReader表示reducer从其他Block文件中读取 起始、结束指定范围内的数据
-<img src="https://v1.ax1x.com/2024/12/29/7Vh5yZ.png" alt=""></li>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/12/29/7Vh5yZ.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/12/29/7Vh5yZ.png" />
+        </a>
+    </li>
 </ul>
 <p>划分本地与远端Block
-<img src="https://v1.ax1x.com/2024/12/29/7VhAUU.png" alt=""></p>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/12/29/7VhAUU.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/12/29/7VhAUU.png" />
+        </a>
+    </p>
 <p>此外还有一个 ShuffleManager 抽象类</p>
-<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4">
-<table style="border-spacing:0;padding:0;margin:0;border:0;width:auto;overflow:auto;display:block;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
-<pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"><code><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
 </span></code></pre></td>
 <td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
-<pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-scala" data-lang="scala">  <span style="color:#ff79c6">def</span> getWriter<span style="color:#ff79c6">[</span><span style="color:#8be9fd">K</span>, <span style="color:#8be9fd">V</span><span style="color:#ff79c6">]</span><span style="color:#ff79c6">(</span>
-      handle<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">ShuffleHandle</span><span style="color:#ff79c6">,</span>
-      mapId<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">Long</span><span style="color:#ff79c6">,</span>
-      context<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">TaskContext</span><span style="color:#ff79c6">,</span>
-      metrics<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">ShuffleWriteMetricsReporter</span><span style="color:#ff79c6">)</span><span style="color:#ff79c6">:</span> <span style="color:#8be9fd">ShuffleWriter</span><span style="color:#ff79c6">[</span><span style="color:#8be9fd">K</span>, <span style="color:#8be9fd">V</span><span style="color:#ff79c6">]</span>
-	  
-  <span style="color:#ff79c6">def</span> getReader<span style="color:#ff79c6">[</span><span style="color:#8be9fd">K</span>, <span style="color:#8be9fd">C</span><span style="color:#ff79c6">]</span><span style="color:#ff79c6">(</span>
-      handle<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">ShuffleHandle</span><span style="color:#ff79c6">,</span>
-      startMapIndex<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">Int</span><span style="color:#ff79c6">,</span>
-      endMapIndex<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">Int</span><span style="color:#ff79c6">,</span>
-      startPartition<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">Int</span><span style="color:#ff79c6">,</span>
-      endPartition<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">Int</span><span style="color:#ff79c6">,</span>
-      context<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">TaskContext</span><span style="color:#ff79c6">,</span>
-      metrics<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">ShuffleReadMetricsReporter</span><span style="color:#ff79c6">)</span><span style="color:#ff79c6">:</span> <span style="color:#8be9fd">ShuffleReader</span><span style="color:#ff79c6">[</span><span style="color:#8be9fd">K</span>, <span style="color:#8be9fd">C</span><span style="color:#ff79c6">]</span>	  
-</code></pre></td></tr></table>
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"><code class="language-scala" data-lang="scala"><span style="display:flex;"><span>  <span style="color:#ff79c6">def</span> getWriter<span style="color:#ff79c6">[</span><span style="color:#8be9fd">K</span>, <span style="color:#8be9fd">V</span><span style="color:#ff79c6">](</span>
+</span></span><span style="display:flex;"><span>      handle<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">ShuffleHandle</span><span style="color:#ff79c6">,</span>
+</span></span><span style="display:flex;"><span>      mapId<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">Long</span><span style="color:#ff79c6">,</span>
+</span></span><span style="display:flex;"><span>      context<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">TaskContext</span><span style="color:#ff79c6">,</span>
+</span></span><span style="display:flex;"><span>      metrics<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">ShuffleWriteMetricsReporter</span><span style="color:#ff79c6">)</span><span style="color:#ff79c6">:</span> <span style="color:#8be9fd">ShuffleWriter</span><span style="color:#ff79c6">[</span><span style="color:#8be9fd">K</span>, <span style="color:#8be9fd">V</span><span style="color:#ff79c6">]</span>
+</span></span><span style="display:flex;"><span>	  
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">def</span> getReader<span style="color:#ff79c6">[</span><span style="color:#8be9fd">K</span>, <span style="color:#8be9fd">C</span><span style="color:#ff79c6">](</span>
+</span></span><span style="display:flex;"><span>      handle<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">ShuffleHandle</span><span style="color:#ff79c6">,</span>
+</span></span><span style="display:flex;"><span>      startMapIndex<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">Int</span><span style="color:#ff79c6">,</span>
+</span></span><span style="display:flex;"><span>      endMapIndex<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">Int</span><span style="color:#ff79c6">,</span>
+</span></span><span style="display:flex;"><span>      startPartition<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">Int</span><span style="color:#ff79c6">,</span>
+</span></span><span style="display:flex;"><span>      endPartition<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">Int</span><span style="color:#ff79c6">,</span>
+</span></span><span style="display:flex;"><span>      context<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">TaskContext</span><span style="color:#ff79c6">,</span>
+</span></span><span style="display:flex;"><span>      metrics<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">ShuffleReadMetricsReporter</span><span style="color:#ff79c6">)</span><span style="color:#ff79c6">:</span> <span style="color:#8be9fd">ShuffleReader</span><span style="color:#ff79c6">[</span><span style="color:#8be9fd">K</span>, <span style="color:#8be9fd">C</span><span style="color:#ff79c6">]</span>	  
+</span></span></code></pre></td></tr></table>
 </div>
 </div><p>ShuffleManager 的类图<br>
-<img src="https://v1.ax1x.com/2024/12/29/7VhV2q.png" alt=""></p>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/12/29/7VhV2q.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/12/29/7VhV2q.png" />
+        </a>
+    </p>
 <p>map端和reduce端都进行聚合
-<img src="https://v1.ax1x.com/2024/12/29/7VhcEs.png" alt=""></p>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/12/29/7VhcEs.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/12/29/7VhcEs.png" />
+        </a>
+    </p>
 <p>map端缓存和reduce端不聚合
-<img src="https://v1.ax1x.com/2024/12/29/7Vhvca.png" alt=""></p>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/12/29/7Vhvca.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/12/29/7Vhvca.png" />
+        </a>
+    </p>
 <p>map端使用Tungsten缓存和reduce端不聚合
-<img src="https://v1.ax1x.com/2024/12/29/7Vhan7.png" alt=""></p>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/12/29/7Vhan7.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/12/29/7Vhan7.png" />
+        </a>
+    </p>
 <p>map端临时Shuffle文件的合并与reduce端聚合
-<img src="https://v1.ax1x.com/2024/12/29/7VhOpI.png" alt=""></p>
-<h2 id="heading4">部署模式</h2>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/12/29/7VhOpI.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/12/29/7VhOpI.png" />
+        </a>
+    </p>
+<h2 id="部署模式">部署模式</h2>
 <h3 id="task">Task</h3>
 <p>Task 相关的类图</p>
 <ul>
 <li>Executor 调用 launchTask，在新线程中启动 TaskRunner</li>
 <li>TaskRunner 又会启动 Task
-<img src="https://v1.ax1x.com/2024/12/31/7VO6NI.png" alt=""></li>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/12/31/7VO6NI.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/12/31/7VO6NI.png" />
+        </a>
+    </li>
 </ul>
 <p>心跳相关类图</p>
 <ul>
 <li>接收到 Inbox 后，执行HeartbeatReceiver</li>
 <li>这里会执行接收逻辑，同时也会回复 ack 响应</li>
 <li>根据 case 类做响应的判断
-<img src="https://v1.ax1x.com/2024/12/31/7VOFaV.png" alt=""></li>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/12/31/7VOFaV.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/12/31/7VOFaV.png" />
+        </a>
+    </li>
 </ul>
 <p>Task的机制<br>
-<img src="https://v1.ax1x.com/2024/12/28/7VgsW7.png" alt=""></p>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/12/28/7VgsW7.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/12/28/7VgsW7.png" />
+        </a>
+    </p>
 <h3 id="master">Master</h3>
 <p>当 master 故障后，选举出新的 master</p>
 <ul>
@@ -1004,7 +1181,11 @@ stage 创建的过程</p>
 <li>关联了 worker，application、driver 等info 类</li>
 <li>还有一些 metrics、web-ui 的类</li>
 <li>以接收到数据后的一些 case 类，根据case 条件调用相应的判断<br>
-<img src="https://v1.ax1x.com/2024/12/31/7VUA76.png" alt=""></li>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/12/31/7VUA76.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/12/31/7VUA76.png" />
+        </a>
+    </li>
 </ul>
 <p>Master 包含的一些功能</p>
 <ul>
@@ -1019,14 +1200,22 @@ stage 创建的过程</p>
 <li>比如当前需要 2C8G，id-2 不满足，id-1 满足</li>
 <li>调度到 id-1 后，同时修改 id-1 剩余的资源</li>
 <li>之后发送 RPC 请求，运行 driver
-<img src="https://v1.ax1x.com/2025/01/01/7VU1Um.png" alt=""></li>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/01/01/7VU1Um.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2025/01/01/7VU1Um.png" />
+        </a>
+    </li>
 </ul>
 <p>executor 分配过程</p>
 <ul>
 <li>默认 spreadOutApps 是开启的</li>
 <li>会将 executor尽可能跨多个 worker 分配</li>
 <li>每个 executor的CPU和内存，不能跨节点，必须在一个worker 上<br>
-<img src="https://v1.ax1x.com/2025/01/01/7VUUy5.png" alt=""></li>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/01/01/7VUUy5.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2025/01/01/7VUUy5.png" />
+        </a>
+    </li>
 </ul>
 <p>假设</p>
 <ul>
@@ -1048,7 +1237,11 @@ stage 创建的过程</p>
 <li>处理Executor的状态变化</li>
 </ul>
 <p>Master领导选举的流程
-<img src="https://v1.ax1x.com/2025/01/01/7V1mQw.png" alt=""></p>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/01/01/7V1mQw.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2025/01/01/7V1mQw.png" />
+        </a>
+    </p>
 <h3 id="worker">Worker</h3>
 <p>相关类图</p>
 <ul>
@@ -1056,7 +1249,11 @@ stage 创建的过程</p>
 <li>根据 case 处理不同的事件</li>
 <li>它会关联一个 ExternalShuffleService类</li>
 <li>这个类用来接收 reducer的读取shuffle数据，元信息回存储在 roacksDB或者 levelDB中<br>
-<img src="https://v1.ax1x.com/2025/01/01/7VUPs4.png" alt=""></li>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/01/01/7VUPs4.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2025/01/01/7VUPs4.png" />
+        </a>
+    </li>
 </ul>
 <p>启动过程</p>
 <ul>
@@ -1074,9 +1271,17 @@ stage 创建的过程</p>
 <li>向Master发送心跳</li>
 </ul>
 <p>注册Worker的完整流程<br>
-<img src="https://v1.ax1x.com/2025/01/01/7V1kUe.png" alt=""></p>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/01/01/7V1kUe.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2025/01/01/7V1kUe.png" />
+        </a>
+    </p>
 <p>Worker心跳及超时检查的流程
-<img src="https://v1.ax1x.com/2025/01/01/7V1B2P.png" alt=""></p>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/01/01/7V1B2P.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2025/01/01/7V1B2P.png" />
+        </a>
+    </p>
 <p>Executor 启动</p>
 <ul>
 <li>通过 ExecutorRunner 启动的</li>
@@ -1161,8 +1366,12 @@ stage 创建的过程</p>
 </li>
 </ul>
 <p>Master、worker、executor之间的调用关系<br>
-<img src="https://v1.ax1x.com/2024/12/28/7Vgi7a.png" alt=""></p>
-<h3 id="local-">Local 集群部署方式</h3>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/12/28/7Vgi7a.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/12/28/7Vgi7a.png" />
+        </a>
+    </p>
+<h3 id="local-集群部署方式">Local 集群部署方式</h3>
 <p>local-cluster部署模式的启动过程</p>
 <ul>
 <li>由 LocalSparkCluster启动 Master</li>
@@ -1170,7 +1379,11 @@ stage 创建的过程</p>
 <li>之后 LocalSparkCluster 创建 Woker，Woker 向 Master注册</li>
 <li>在创建出 StandloneSchedulerBackend，并由它创建出 StandaloneAppClient</li>
 <li>StandaloneAppClient 会向 Master注册
-<img src="https://v1.ax1x.com/2025/01/01/7V1X0O.png" alt=""></li>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/01/01/7V1X0O.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2025/01/01/7V1X0O.png" />
+        </a>
+    </li>
 </ul>
 <p>local-cluster部署模式下的Executor资源分配过程</p>
 <ul>
@@ -1179,7 +1392,11 @@ stage 创建的过程</p>
 <li>CoarseGrainedExecutorBackend 会向 Driver注册 executor 信息</li>
 <li>CoarseGrainedExecutorBackend 会启动 Executor</li>
 <li>CoarseGrainedExecutorBackend 和 Executor 在各种模式下都是一个 JVM内的
-<img src="https://v1.ax1x.com/2025/01/01/7V1j5Q.png" alt=""></li>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/01/01/7V1j5Q.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2025/01/01/7V1j5Q.png" />
+        </a>
+    </li>
 </ul>
 <p>local-cluster部署模式下的任提交过程</p>
 <ul>
@@ -1188,16 +1405,24 @@ stage 创建的过程</p>
 <li>Driver 发送给 CoarseGrainedExecutorBackend 进程，launchTask</li>
 <li>CoarseGrainedExecutorBackend 启动 Executor，，并调用Executor#launchTask 启动 Task</li>
 <li>Executor 会不断更新 Task状态，并同步给 Driver
-<img src="https://v1.ax1x.com/2025/01/01/7V1n4f.png" alt=""></li>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/01/01/7V1n4f.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2025/01/01/7V1n4f.png" />
+        </a>
+    </li>
 </ul>
-<h3 id="heading5">集群部署</h3>
+<h3 id="集群部署">集群部署</h3>
 <p>Standalone部署模式的启动过程</p>
 <ul>
 <li>Standalone模式下会有多个 Master，每个Master都会向 ZK 注册选举</li>
 <li>Worker 会向 Master注册信息</li>
 <li>启动 Dirver，TaskSchedulerImpl会调用 StandaloneSchedulerBackend，再启动 StandaloneAppClinet</li>
 <li>之后Driver 向 Master 注册
-<img src="https://v1.ax1x.com/2025/01/01/7V1Mkc.png" alt=""></li>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/01/01/7V1Mkc.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2025/01/01/7V1Mkc.png" />
+        </a>
+    </li>
 </ul>
 <p>Standalone部署模式下的Executor资源分配过程</p>
 <ul>
@@ -1207,7 +1432,11 @@ stage 创建的过程</p>
 <li>CoarseGrainedExecutorBackend会向 Dirver 注册</li>
 <li>启动 executor 并向 driver 注册</li>
 <li>CoarseGrainedExecutorBackend会向创建 WorkerWatcher，后者负责跟Worker通讯
-<img src="https://v1.ax1x.com/2025/01/01/7V1fb3.png" alt=""></li>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/01/01/7V1fb3.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2025/01/01/7V1fb3.png" />
+        </a>
+    </li>
 </ul>
 <p>Application 退出</p>
 <ul>
@@ -1222,7 +1451,11 @@ stage 创建的过程</p>
 <li>worker会转交给master</li>
 <li>mater将 driver发送 launchExecutor 命令</li>
 <li>启动 executor并将driver 注册
-<img src="https://v1.ax1x.com/2025/01/01/7V1iPj.png" alt=""></li>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/01/01/7V1iPj.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2025/01/01/7V1iPj.png" />
+        </a>
+    </li>
 </ul>
 <p>Worker异常退出的容错处理</p>
 <ul>
@@ -1232,7 +1465,11 @@ stage 创建的过程</p>
 <li>master会向driver发送 executor状态更新的消息</li>
 <li>driver 会发送启动 executor 的消息</li>
 <li>master向其他 worker节点发送 launchExecutor 的消息
-<img src="https://v1.ax1x.com/2025/01/01/7V1sF5.png" alt=""></li>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/01/01/7V1sF5.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2025/01/01/7V1sF5.png" />
+        </a>
+    </li>
 </ul>
 <p>ZooKeeper热备和选举示意图</p>
 <ul>
@@ -1241,7 +1478,11 @@ stage 创建的过程</p>
 <li>如果worker退出，则driver无法提交任务</li>
 <li>新的driver 也无法提交任务</li>
 <li>新master选举后会重新跟worker、driver通讯<br>
-<img src="https://v1.ax1x.com/2025/01/01/7V16qm.png" alt=""></li>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/01/01/7V16qm.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2025/01/01/7V16qm.png" />
+        </a>
+    </li>
 </ul>
 <p><strong>Key Components</strong></p>
 <ol>
@@ -1254,50 +1495,54 @@ stage 创建的过程</p>
 </ol>
 <p><strong>Deployment Modes and Relationships</strong></p>
 <table>
-<thead>
-<tr>
-<th><strong>Mode</strong></th>
-<th><strong>Master</strong> Process</th>
-<th><strong>Worker</strong> Process</th>
-<th><strong>Driver</strong> Process</th>
-<th><strong>Executor</strong> Process</th>
-<th><strong>Component Relationship</strong></th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><strong>Local-Cluster</strong></td>
-<td>Single JVM</td>
-<td>Simulated as threads in JVM</td>
-<td>Same JVM</td>
-<td>Same JVM (threads simulate executors)</td>
-<td>All components run in the same JVM. <code>CoarseGrainedExecutorBackend</code> and <code>Executor</code> in the same thread.</td>
-</tr>
-<tr>
-<td><strong>Standalone Cluster</strong></td>
-<td>Separate JVM</td>
-<td>Separate JVM</td>
-<td>Separate JVM</td>
-<td>Separate JVM per executor</td>
-<td><code>Master</code> manages <code>Workers</code>. Each <code>Worker</code> launches executors. <code>CoarseGrainedExecutorBackend</code> and <code>Executor</code> in the same executor process.</td>
-</tr>
-<tr>
-<td><strong>YARN/Kubernetes</strong></td>
-<td>N/A</td>
-<td>N/A</td>
-<td>Separate JVM</td>
-<td>Separate JVM per executor</td>
-<td>Cluster manager launches executors. <code>CoarseGrainedExecutorBackend</code> and <code>Executor</code> in the same executor process.</td>
-</tr>
-</tbody>
+	<thead>
+			<tr>
+					<th><strong>Mode</strong></th>
+					<th><strong>Master</strong> Process</th>
+					<th><strong>Worker</strong> Process</th>
+					<th><strong>Driver</strong> Process</th>
+					<th><strong>Executor</strong> Process</th>
+					<th><strong>Component Relationship</strong></th>
+			</tr>
+	</thead>
+	<tbody>
+			<tr>
+					<td><strong>Local-Cluster</strong></td>
+					<td>Single JVM</td>
+					<td>Simulated as threads in JVM</td>
+					<td>Same JVM</td>
+					<td>Same JVM (threads simulate executors)</td>
+					<td>All components run in the same JVM. <code>CoarseGrainedExecutorBackend</code> and <code>Executor</code> in the same thread.</td>
+			</tr>
+			<tr>
+					<td><strong>Standalone Cluster</strong></td>
+					<td>Separate JVM</td>
+					<td>Separate JVM</td>
+					<td>Separate JVM</td>
+					<td>Separate JVM per executor</td>
+					<td><code>Master</code> manages <code>Workers</code>. Each <code>Worker</code> launches executors. <code>CoarseGrainedExecutorBackend</code> and <code>Executor</code> in the same executor process.</td>
+			</tr>
+			<tr>
+					<td><strong>YARN/Kubernetes</strong></td>
+					<td>N/A</td>
+					<td>N/A</td>
+					<td>Separate JVM</td>
+					<td>Separate JVM per executor</td>
+					<td>Cluster manager launches executors. <code>CoarseGrainedExecutorBackend</code> and <code>Executor</code> in the same executor process.</td>
+			</tr>
+	</tbody>
 </table>
-<h3 id="yarn">YARN模式</h3>
+<h3 id="yarn模式">YARN模式</h3>
 <p>YARN的架构</p>
 <ul>
 <li>ResourceManager（RM）：全局资源管理器，负责整个集群的资源管理与分配</li>
 <li>ApplicationMaster（AM）与RM通信获取资源，将作业划分为更细粒度的任务，与NodeManager（NM）通信启动或停止任务，监控失败任务</li>
 <li>NodeManager（NM）：单个节点上的资源与任务管理器，它负责向RM定时汇报本节点的资源使用情况及各个Container的状态
-<img src="https://v1.ax1x.com/2024/05/21/7gEFJ6.png" alt=""></li>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/05/21/7gEFJ6.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/05/21/7gEFJ6.png" />
+        </a>
+    </li>
 </ul>
 <p>cluster 模式下，spark整合YARN</p>
 <ul>
@@ -1306,60 +1551,72 @@ stage 创建的过程</p>
 <li>AM 请求 RM 获取资源</li>
 <li>AM 向 NM 创建 executor</li>
 <li>executor 跟AM 通讯
-<img src="https://v1.ax1x.com/2025/01/01/7V1Fa4.png" alt=""></li>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/01/01/7V1Fa4.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2025/01/01/7V1Fa4.png" />
+        </a>
+    </li>
 </ul>
 <p>client 模式下</p>
 <ul>
 <li>spark的driver运行在客户端</li>
 <li>还是会启动 AM，然后创建executor</li>
 <li>executor 跟 client通讯
-<img src="https://v1.ax1x.com/2025/01/01/7V1ZMh.png" alt=""></li>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/01/01/7V1ZMh.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2025/01/01/7V1ZMh.png" />
+        </a>
+    </li>
 </ul>
 <p>cluster模式、client模式对比</p>
 <table>
-<thead>
-<tr>
-<th><strong>Aspect</strong></th>
-<th><strong>YARN Client Mode</strong></th>
-<th><strong>YARN Cluster Mode</strong></th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><strong>Driver Location</strong></td>
-<td>Runs on the client machine.</td>
-<td>Runs inside the YARN cluster.</td>
-</tr>
-<tr>
-<td><strong>Fault Tolerance</strong></td>
-<td>Less fault-tolerant (client failures affect execution).</td>
-<td>More fault-tolerant (driver managed by YARN).</td>
-</tr>
-<tr>
-<td><strong>Network Latency</strong></td>
-<td>Higher latency due to driver-executor communication over WAN.</td>
-<td>Lower latency as driver and executors are co-located.</td>
-</tr>
-<tr>
-<td><strong>Use Case</strong></td>
-<td>Interactive applications (e.g., Spark Shell).</td>
-<td>Batch or production jobs with no user interaction.</td>
-</tr>
-<tr>
-<td><strong>Resource Allocation</strong></td>
-<td>Client handles driver resources, YARN manages executors.</td>
-<td>YARN manages both driver and executor resources.</td>
-</tr>
-<tr>
-<td><strong>Client Dependency</strong></td>
-<td>The client must remain active for the driver.</td>
-<td>The client can disconnect after submission.</td>
-</tr>
-</tbody>
+	<thead>
+			<tr>
+					<th><strong>Aspect</strong></th>
+					<th><strong>YARN Client Mode</strong></th>
+					<th><strong>YARN Cluster Mode</strong></th>
+			</tr>
+	</thead>
+	<tbody>
+			<tr>
+					<td><strong>Driver Location</strong></td>
+					<td>Runs on the client machine.</td>
+					<td>Runs inside the YARN cluster.</td>
+			</tr>
+			<tr>
+					<td><strong>Fault Tolerance</strong></td>
+					<td>Less fault-tolerant (client failures affect execution).</td>
+					<td>More fault-tolerant (driver managed by YARN).</td>
+			</tr>
+			<tr>
+					<td><strong>Network Latency</strong></td>
+					<td>Higher latency due to driver-executor communication over WAN.</td>
+					<td>Lower latency as driver and executors are co-located.</td>
+			</tr>
+			<tr>
+					<td><strong>Use Case</strong></td>
+					<td>Interactive applications (e.g., Spark Shell).</td>
+					<td>Batch or production jobs with no user interaction.</td>
+			</tr>
+			<tr>
+					<td><strong>Resource Allocation</strong></td>
+					<td>Client handles driver resources, YARN manages executors.</td>
+					<td>YARN manages both driver and executor resources.</td>
+			</tr>
+			<tr>
+					<td><strong>Client Dependency</strong></td>
+					<td>The client must remain active for the driver.</td>
+					<td>The client can disconnect after submission.</td>
+			</tr>
+	</tbody>
 </table>
 <p>一个汇总图<br>
-<img src="https://v1.ax1x.com/2025/02/07/7WrfxI.png" alt="64"></p>
-<h2 id="heading6">参考</h2>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2025/02/07/7WrfxI.png">
+            <img class="mx-auto" alt="64" src="https://v1.ax1x.com/2025/02/07/7WrfxI.png" />
+        </a>
+    </p>
+<h2 id="参考">参考</h2>
 <ul>
 <li><a href="https://blog.csdn.net/otengyue/article/details/106733031">Spark源码分析之调度框架详解</a></li>
 <li><a href="https://www.sqlboy.tech/pages/6c29c6/">Spark RDD 源码分析</a></li>
@@ -1369,7 +1626,6 @@ stage 创建的过程</p>
 <li><a href="https://blog.csdn.net/lu070828/article/details/141355638">Spark-driver和executor启动过程</a></li>
 <li><a href="https://www.processon.com/view/57073a1ae4b0bf3d8ff530f3">spark运行机制</a></li>
 </ul>
-
 			<script type="text/javascript"
         async
         src="https://cdn.bootcss.com/mathjax/2.7.3/MathJax.js?config=TeX-AMS-MML_HTMLorMML">
@@ -1455,6 +1711,7 @@ code.has-jax {
       </script>
     </div>
     
+
 </div>
 
 
@@ -1473,6 +1730,10 @@ code.has-jax {
     <section class="widget">
         <h3 class="widget-title">最近文章</h3>
 <ul class="widget-list">
+    
+    <li>
+        <a href="/post/2026/06/da_lian/" title="大连，11年后的再相见">大连，11年后的再相见</a>
+    </li>
     
     <li>
         <a href="/post/2026/05/volcano-notes/" title="Volcano 笔记">Volcano 笔记</a>
@@ -1510,10 +1771,6 @@ code.has-jax {
         <a href="/post/2026/04/claude_code/" title="Claude code 源码分析">Claude code 源码分析</a>
     </li>
     
-    <li>
-        <a href="/post/2026/03/iran_war/" title="Iran War">Iran War</a>
-    </li>
-    
 </ul>
 
     </section>
@@ -1540,7 +1797,7 @@ code.has-jax {
     
     <li><a href="/categories/%E6%96%87%E5%AD%A6%E5%92%8C%E8%89%BA%E6%9C%AF/">文学和艺术 (3)</a></li>
     
-    <li><a href="/categories/%E6%97%85%E8%A1%8C/">旅行 (15)</a></li>
+    <li><a href="/categories/%E6%97%85%E8%A1%8C/">旅行 (16)</a></li>
     
     <li><a href="/categories/%E6%9E%B6%E6%9E%84/">架构 (15)</a></li>
     
@@ -1574,7 +1831,7 @@ code.has-jax {
     
     <li><a href="/years/2025%E5%B9%B4/">2025年 (38)</a></li>
     
-    <li><a href="/years/2026%E5%B9%B4/">2026年 (14)</a></li>
+    <li><a href="/years/2026%E5%B9%B4/">2026年 (15)</a></li>
     
 </ul>
 
@@ -1588,9 +1845,9 @@ code.has-jax {
     
     <a href="/tags/ambari/">Ambari </a>
     
-    <a href="/tags/architecture/">architecture </a>
+    <a href="/tags/architecture/">Architecture </a>
     
-    <a href="/tags/bigdata/">bigdata </a>
+    <a href="/tags/bigdata/">Bigdata </a>
     
     <a href="/tags/btrace/">BTrace </a>
     
@@ -1598,11 +1855,11 @@ code.has-jax {
     
     <a href="/tags/c&#43;&#43;/">C&#43;&#43; </a>
     
-    <a href="/tags/calcite/">calcite </a>
+    <a href="/tags/calcite/">Calcite </a>
     
     <a href="/tags/canal/">Canal </a>
     
-    <a href="/tags/claude/">claude </a>
+    <a href="/tags/claude/">Claude </a>
     
     <a href="/tags/cmu-database/">CMU-Database </a>
     
@@ -1614,7 +1871,7 @@ code.has-jax {
     
     <a href="/tags/doris/">Doris </a>
     
-    <a href="/tags/ebpf/">eBPF </a>
+    <a href="/tags/ebpf/">EBPF </a>
     
     <a href="/tags/english/">English </a>
     
@@ -1624,7 +1881,7 @@ code.has-jax {
     
     <a href="/tags/flink/">Flink </a>
     
-    <a href="/tags/flume/">flume </a>
+    <a href="/tags/flume/">Flume </a>
     
     <a href="/tags/gc/">GC </a>
     
@@ -1634,15 +1891,15 @@ code.has-jax {
     
     <a href="/tags/hive/">Hive </a>
     
-    <a href="/tags/iceberg/">iceberg </a>
+    <a href="/tags/iceberg/">Iceberg </a>
     
     <a href="/tags/impala/">Impala </a>
     
-    <a href="/tags/janino/">janino </a>
+    <a href="/tags/janino/">Janino </a>
     
     <a href="/tags/juicefs/">JuiceFS </a>
     
-    <a href="/tags/k8s/">k8s </a>
+    <a href="/tags/k8s/">K8s </a>
     
     <a href="/tags/kafka/">Kafka </a>
     
@@ -1658,17 +1915,17 @@ code.has-jax {
     
     <a href="/tags/llvm/">LLVM </a>
     
-    <a href="/tags/log4j/">log4j </a>
+    <a href="/tags/log4j/">Log4j </a>
     
-    <a href="/tags/longhorn/">longhorn </a>
+    <a href="/tags/longhorn/">Longhorn </a>
     
     <a href="/tags/manacher/">Manacher </a>
     
     <a href="/tags/mapreduce/">MapReduce </a>
     
-    <a href="/tags/micro-service/">micro-service </a>
+    <a href="/tags/micro-service/">Micro-Service </a>
     
-    <a href="/tags/mq/">mq </a>
+    <a href="/tags/mq/">Mq </a>
     
     <a href="/tags/mysql/">MySQL </a>
     
@@ -1682,25 +1939,25 @@ code.has-jax {
     
     <a href="/tags/ozone/">Ozone </a>
     
-    <a href="/tags/parquet/">parquet </a>
+    <a href="/tags/parquet/">Parquet </a>
     
-    <a href="/tags/paxos/">paxos </a>
+    <a href="/tags/paxos/">Paxos </a>
     
     <a href="/tags/presto/">Presto </a>
     
     <a href="/tags/pytorch/">PyTorch </a>
     
-    <a href="/tags/quick-sql/">quick-sql </a>
+    <a href="/tags/quick-sql/">Quick-Sql </a>
     
-    <a href="/tags/raft/">raft </a>
+    <a href="/tags/raft/">Raft </a>
     
-    <a href="/tags/scala/">scala </a>
+    <a href="/tags/scala/">Scala </a>
     
     <a href="/tags/seatunnel/">SeaTunnel </a>
     
     <a href="/tags/simd/">SIMD </a>
     
-    <a href="/tags/snowflake/">snowflake </a>
+    <a href="/tags/snowflake/">Snowflake </a>
     
     <a href="/tags/spark/">Spark </a>
     
@@ -1714,7 +1971,7 @@ code.has-jax {
     
     <a href="/tags/tuning/">Tuning </a>
     
-    <a href="/tags/unix/">unix </a>
+    <a href="/tags/unix/">Unix </a>
     
     <a href="/tags/volcano/">Volcano </a>
     

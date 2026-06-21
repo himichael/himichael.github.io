@@ -99,7 +99,13 @@
         </div>
         
         <div class="post-content">
-            MemorySegment 是Flink的最小内存分配单元、默认 32KB，先放到内存中，也可以序列化，借助KryoSerializer等、内存不够序列化到 磁盘。 HeapMemorySegment 提供了操作堆内存的方法；DataOutputView 扩展了java.io.DataOuput，提供多个写入视图、DataInputView 接口扩展了 java.io.DataInput，提供多个读取视图、MemoryManager主要用于管理排序、哈希和缓存等操作对应的内存空间，且这些操作主要集中在离线计算场景中、NetworkBufferPool通过MemorySegmentFactory申请用于存储NetworkBuffer的MemorySegment内存空间。调用过程：TaskManager &ndash;&gt; TaskSlot  &ndash;&gt; MemorySegment。序列化和反序列化，TypeInformation 分为：BasicTypeInfo、BasicArrayTypeInfo、CompositeType、WritableTypeInfo、GenericTypeInfo
+            <p>重点包括：</p>
+<ul>
+<li><strong>MemorySegment</strong> 是 Flink 最小的内存分配单元，默认 32KB，既可以直接驻留内存，也可以在必要时借助序列化写到磁盘</li>
+<li><strong>HeapMemorySegment</strong>、<strong>DataInputView</strong>、<strong>DataOutputView</strong> 这些基础抽象分别负责堆内内存访问、读取视图和写入视图，是上层算子和序列化框架的基础</li>
+<li><strong>MemoryManager</strong> 主要管理排序、哈希、缓存等更偏离线计算的内存，而 <strong>NetworkBufferPool</strong> 则通过 <code>MemorySegmentFactory</code> 申请网络缓冲区使用的内存</li>
+<li>调用链可以从 <strong>TaskManager -&gt; TaskSlot -&gt; MemorySegment</strong> 这条路径去理解，后面再结合 <strong>KryoSerializer</strong> 和 <code>TypeInformation</code> 看 Flink 的序列化体系怎么工作</li>
+</ul>
         </div>
         <div class="post-image-strip post-image-strip-list" data-image-count="9">
     <button class="post-image-strip-nav post-image-strip-prev" type="button" aria-label="Scroll thumbnails left">&lt;</button>
@@ -135,7 +141,13 @@
         </div>
         
         <div class="post-content">
-            由Akka 构建的 RPC通讯，Dispatcher，JobMaster、ResourceManager等都继承了RpcEndpoint。RpcServer接口通过AkkaInvocationHandler动态代理类实现。TaskManager之间通过Netty 做通讯，RecordWriter先写到本地buffer，在根据选择输出到ResultPartition，最后发送到netty-server，对端的netty-client接收后，转发给 InputGate&ndash;&gt;OperatorChain 的 head 算子，再转给StreamTaskInput（同样也有local buffer）。直接从外部源数据读取数据的SourceStreamTask和SourceReaderStreamTask、支持从网络或本地获取数据的OneInputStreamTask和TwoInputStreamTask。ResultPartition：实际上是ExecutionGraph 中 IntermediateResultPartition 对应的底层物理实现，含多个 ResultSubPartiton 实例。PipelinedResultPartition（类似presto）、BoundedBlockingResultPartition（类似spark）、HsResultPartition (Hybrid Shuffle)、SortMergeResultPartition、BufferWritingResultPartition。ConnectorManager 和 NettyConnectionManager。基于信用的反压机制，每个 creadit 表示一个上游的 buffer（默认 32KB）
+            <p>重点包括：</p>
+<ul>
+<li><strong>RPC 层</strong>：Flink 早期基于 <strong>Akka</strong> 构建 RPC，<code>Dispatcher</code>、<code>JobMaster</code>、<code>ResourceManager</code> 等组件都继承 <code>RpcEndpoint</code>，而 <code>RpcServer</code> 则通过 <code>AkkaInvocationHandler</code> 完成动态代理</li>
+<li><strong>网络栈</strong>：TaskManager 之间的数据传输走 <strong>Netty</strong>，数据从 <code>RecordWriter</code> 写入本地 buffer，再进入 <code>ResultPartition</code>，最后发给对端的 Netty，再转入 <code>InputGate -&gt; OperatorChain -&gt; StreamTaskInput</code></li>
+<li><strong>任务执行模型</strong>：包括直接从外部源读取数据的 <code>SourceStreamTask</code> / <code>SourceReaderStreamTask</code>，以及支持从网络或本地消费数据的 <code>OneInputStreamTask</code> / <code>TwoInputStreamTask</code></li>
+<li><strong>Shuffle 与反压</strong>：<code>ResultPartition</code> 是 <code>IntermediateResultPartition</code> 的底层物理实现，包含多种实现形态；而基于 <strong>credit</strong> 的反压机制里，每个 credit 基本就对应一个上游 buffer（默认 32KB）</li>
+</ul>
         </div>
         <div class="post-image-strip post-image-strip-list" data-image-count="40">
     <button class="post-image-strip-nav post-image-strip-prev" type="button" aria-label="Scroll thumbnails left">&lt;</button>
@@ -171,7 +183,12 @@
         </div>
         
         <div class="post-content">
-            状态管理类图，都是继承 State 的，通用的包括MapState，ValueState，BroadcastState等，还有InternalKvState 接口内部使用。根据DataStream数据集是否基于key 分组，操作分为：KeyedState 类型、OperatorState 类型。 KeyedStateBackend，通过SPI 技术用loader加载工厂类，再创建对应的后端，如：HeapKeyedStateBackend 、RocksDBKeyedStateBackend。StateTable抽象类，实现包括CopyOnWriteStateTable、NestedMapsStateTable。OperatorState 状态管理后端：OperatorStateBackend、RawKeyedStateInputs，所有算子的状态数据都只能存储在JVM堆内存中。StateBackend包括：MemoryStateBackend、FsStateBackend、RocksDBStateBackend。Checkpoint的执行过程分为三个阶段：启动、执行、确认完成。通过job-manager触发，下游算子对齐barrier事件，触发算子checkpoint操作，并继续发送到下游和返回ack，直到所有sink完成checkpoint，job-manager通知所有task，完成此次checkpoint操作
+            <p>把 <code>Flink</code> 的状态数据、后端实现和 <code>checkpoint</code> 主线串起来：</p>
+<ul>
+<li>先看 <code>State</code> 体系本身，包括 <code>MapState</code>、<code>ValueState</code>、<code>BroadcastState</code> 以及内部使用的 <code>InternalKvState</code></li>
+<li>再看 <code>KeyedState</code> 和 <code>OperatorState</code> 两条实现路径，以及 <code>Heap</code>、<code>RocksDB</code>、<code>StateTable</code>、<code>OperatorStateBackend</code> 这些核心组件</li>
+<li>最后把 checkpoint 的触发、barrier 对齐、下游传播、ACK 回传和 job-manager 确认完成的过程连起来</li>
+</ul>
         </div>
         <div class="post-image-strip post-image-strip-list" data-image-count="26">
     <button class="post-image-strip-nav post-image-strip-prev" type="button" aria-label="Scroll thumbnails left">&lt;</button>
@@ -207,7 +224,12 @@
         </div>
         
         <div class="post-content">
-            先由 ClusterClientFactory 创建 ClusterDescriptor、然后通过 ClusterDescriptor 创建 ClusterClientProvier、最终基于 ClusterClientProvier 实例获取 ClusterClient。支持容器化部署的 AbstractContainerizedClusterClientFactory、不支持容器化部署的 StandaloneClientFactory。通过YarnClient提交应用，YarnClusterClient跟JobManager交互，通过YarnResouceManager来启动YarnTaskExecutorRrunner&ndash;&gt;TaskExecutor。TaskExecutor 是内部执行组件，负责真正的执行，以及 状态管理、checkpoint、slots 等；由fabric8 API提交到 api-server，再提交configmap，创建resource-manager pod，再创建出 task-manager pod
+            <p>主要看 <code>Flink</code> 集群是怎么被创建出来、怎么和外部资源管理器打交道的，重点包括：</p>
+<ul>
+<li><code>ClusterClientFactory -&gt; ClusterDescriptor -&gt; ClusterClientProvider -&gt; ClusterClient</code> 这条客户端侧的入口链路</li>
+<li><code>AbstractContainerizedClusterClientFactory</code>、<code>StandaloneClientFactory</code> 这些不同部署模式下的工厂实现</li>
+<li>Yarn 和 Kubernetes 两条典型路径里，<code>ResourceManager</code>、<code>TaskExecutor</code>、<code>fabric8</code>、pod/Container 启动之间的关系</li>
+</ul>
         </div>
         <div class="post-image-strip post-image-strip-list" data-image-count="10">
     <button class="post-image-strip-nav post-image-strip-prev" type="button" aria-label="Scroll thumbnails left">&lt;</button>
@@ -243,7 +265,12 @@
         </div>
         
         <div class="post-content">
-            通过CLIFrontend  提交应用，不同类型的集群对应不同的PipelineExecutor实现类（SPI方式加载），包括remote、yarn、k8s工厂类；支持离线批计算的ExecutionEnvironment、支持流计算的StreamExecutionEnvironment。StreamGraphGenerator 将 Transformation 集合转换为 ，在PipelineExector中将StreamGraph对象转换成JobGraph数据结构，在JobManager服务中将JobGraph转换为ExecutionGraphStreamGraph，将具体的Task部署到TaskManager中进行调度和执行。一些组件：Dispatcher、JobManagerRunner、JobMaster、SlotPool资源管理。TaskManager中根据TaskDeploymentDescriptor的信息启动Task实例，Task成功添加至taskSlotTable，会立即启动Task线程 。Task 的主要逻辑在 doRun()中， 通过反射来触发 StreamTask 内部的 Operator 执行。使用了Mail box 方式处理任务。StreamElement分类：StreamRecord数据、Watermark事件。Task重启策略：固定延时重启（fixed-delay）、按失败率重启（failure-rate）、无重启（none）。容错：重启全部，重启部分
+            <p>重点是把“提交一个 Flink 作业”拆成几个明确阶段：</p>
+<ul>
+<li>从 <code>CLIFrontend</code>、<code>PackagedProgram</code>、<code>DefaultExecutorServiceLoader</code> 到不同集群类型下的 <code>PipelineExecutor</code></li>
+<li>从 <code>ExecutionEnvironment</code>、<code>StreamExecutionEnvironment</code> 生成 <code>StreamGraph</code> / <code>JobGraph</code>，再交给运行时调度</li>
+<li>再往后看 <code>Dispatcher</code>、<code>JobMaster</code>、<code>SlotPool</code>、<code>TaskDeploymentDescriptor</code>、<code>StreamTask</code>、Mailbox、重启策略这些运行阶段的关键组件</li>
+</ul>
         </div>
         <div class="post-image-strip post-image-strip-list" data-image-count="31">
     <button class="post-image-strip-nav post-image-strip-prev" type="button" aria-label="Scroll thumbnails left">&lt;</button>
@@ -279,7 +306,12 @@
         </div>
         
         <div class="post-content">
-            StreamOperator，AbstractStreamOperator：各种算子都会继承这个类、包含了各种内部实现。AbstractUdfStreamOperator：StreamFlatMap 继承了这个类，StreamFilter也是（内部会调用userFunction.filter()执行自定义的算子逻辑）。OneInputStreamOperator，可以输入一个算子、TwoInputStreamOperator，可以输入两个算子、通过不断叠加 二元输入，就可以实现多个算子输入。RichFunction、Function、SourceFunction 和 SinkFunction、支持端到端一致性的 TwoPhaseCommitSinkFunction。执行过程：SourceStreamTask#run(继承Thread) &ndash;&gt; StreamSource#run() &ndash;&gt; SimpleSource；StreamSink#processElement() &ndash;&gt;  MySink#invoke()。ProcessFunction：低级别API，提供细粒度控制。	KeyedProcessFunction，Watermark，TimerService
+            <p><code>DataStream</code> 在运行时到底会落到哪些算子和线程模型上：</p>
+<ul>
+<li>从 <code>StreamOperator</code>、<code>AbstractStreamOperator</code>、<code>AbstractUdfStreamOperator</code> 一路看到单输入、双输入算子的继承体系</li>
+<li>再看 <code>SourceFunction</code>、<code>SinkFunction</code>、<code>TwoPhaseCommitSinkFunction</code>、<code>ProcessFunction</code>、<code>KeyedProcessFunction</code> 这些常用扩展点</li>
+<li>最后顺着 <code>SourceStreamTask -&gt; StreamSource -&gt; user function</code> 和 <code>StreamSink -&gt; invoke()</code> 这条路径，把 <code>Watermark</code>、<code>TimerService</code>、端到端一致性串起来</li>
+</ul>
         </div>
         <div class="post-image-strip post-image-strip-list" data-image-count="15">
     <button class="post-image-strip-nav post-image-strip-prev" type="button" aria-label="Scroll thumbnails left">&lt;</button>
@@ -315,7 +347,12 @@
         </div>
         
         <div class="post-content">
-            架构：flink-program 优化后通过 Actor-System提交到 JobManager（调度，checkpoint）并跟TaskMnager交互，分发任务，同时检查心跳，statistics、任务状态、TaskManager中包括了内存、I/O manager。 Application集群，Session集群。启动流程：还会创建其他一些组件、create RPC service、JMX service、blob server、delegationTokenManager、metricRegistry、haServices、heartbeatServices。ResourceManager内部包含了：JobManagerGateway、WebMonitorEndpoint、ResourceManagerGateway、DispatcherGateway、TaskExecutorGateway
+            <p><code>Flink</code> 运行时的脑图，重点包括：</p>
+<ul>
+<li>Session 集群、Application 集群两种模式，以及客户端、JobManager、TaskManager 之间的基本关系</li>
+<li>作业从提交到调度执行的主链路，包括心跳、checkpoint、slot 分配、任务状态汇报</li>
+<li>运行时启动时会顺带拉起的组件，比如 RPC service、blob server、metric registry、HA service、heartbeat service 等</li>
+</ul>
         </div>
         <div class="post-image-strip post-image-strip-list" data-image-count="22">
     <button class="post-image-strip-nav post-image-strip-prev" type="button" aria-label="Scroll thumbnails left">&lt;</button>
@@ -351,7 +388,12 @@
         </div>
         
         <div class="post-content">
-            StreamGraph，会根据 stream、batch 做转换，流的转换为 StreamGraph，批的转换为 OptimizedPlan，最后统一转换为 JobGraph，将算子链接在一起，之后根据并行度生成ExecutionGraph，最后做物理执行。StreamNode、StreamEdge、StreamGrapgh。Plan 继承 Visitor，后面对 Plan 做优化可以用访问者模式遍历。JobGraph和相关的类：JobVertex、JobEdge、IntermediateDataSet
+            <p><code>Flink</code> 逻辑计划到物理执行的主线整理，重点包括：</p>
+<ul>
+<li>流任务如何先转换成 <code>StreamGraph</code>，批任务如何进入 <code>OptimizedPlan</code>，最后统一落到 <code>JobGraph</code></li>
+<li><code>StreamNode</code>、<code>StreamEdge</code>、<code>JobVertex</code>、<code>JobEdge</code>、<code>IntermediateDataSet</code> 这些图结构节点和边分别代表什么</li>
+<li>再往后如何结合并行度、算子链和调度需求，生成最终的 <code>ExecutionGraph</code> 并进入物理执行</li>
+</ul>
         </div>
         <div class="post-image-strip post-image-strip-list" data-image-count="15">
     <button class="post-image-strip-nav post-image-strip-prev" type="button" aria-label="Scroll thumbnails left">&lt;</button>
@@ -387,7 +429,12 @@
         </div>
         
         <div class="post-content">
-            RPC协议，客户端&lt;-&gt;RM，RM&lt;-&gt;NM，RM&lt;-&gt;AM，AM&lt;-&gt;NM，ADMIN&lt;-&gt;RM。使用了reactor模式，类似tomcat和jetty，也使用了异步事件处理模式。RM 内部的模块：用户交互的Web服务模块、NM管理模块、AM管理模块、application管理模块、状态机管理模块、安全管理模块、资源分配模块；其中包括ApplicationMasterService、AMLivelinessMonitor；状态机包括：RMApp 状态机、RMAppAttempt 状态机、RMContainer 状态机、RMNode 状态机。 资源调度体系：FIFO、Capacity Scheduler、Fari Scheduler；第一层，RM 中的资源调度器将资源分配给各个 AM、第二层，AM 再进一步将资源分配给它内部的各个任务；资源抢占流程、资源计算方式。层级管理方式：子队列，可以嵌套、最少容量，可以使用父队列的容量比、调度器有限选择当前资源使用率最低的、最大容量、用户权限管理。NodeManage内部模块：NodeStatusUpdater、ContainerManager、ContainerExecutor、NodeHealthCheckerService、DeletionService、Security、WebServer。分布式缓存，将应用所需的资源下载到本地再运行：public、private、application三个可见性；应用结束后会自动上传日志到HDFS，之后由JobHistory 负责清理。NM内部包括：Application 状态机、Container 状态机、LocalizedResource 状态机。container启动包括：资源本地化、启动(LinuxContainerExecutor cgroup管理)、资源清理
+            <p>总结：</p>
+<ul>
+<li>先看 <code>client &lt;-&gt; RM</code>、<code>RM &lt;-&gt; NM</code>、<code>RM &lt;-&gt; AM</code>、<code>AM &lt;-&gt; NM</code> 这些 RPC 通信关系，以及 reactor 和异步事件处理模型</li>
+<li>再看 <code>ResourceManager</code>、<code>NodeManager</code>、<code>ApplicationMaster</code> 内部模块、状态机和资源调度器</li>
+<li>最后把队列层级、资源抢占、分布式缓存、日志回收、container 本地化启动和清理这些运行细节串起来</li>
+</ul>
         </div>
         <div class="post-image-strip post-image-strip-list" data-image-count="55">
     <button class="post-image-strip-nav post-image-strip-prev" type="button" aria-label="Scroll thumbnails left">&lt;</button>
@@ -423,7 +470,12 @@
         </div>
         
         <div class="post-content">
-            DataSourceRegister注册过程，自定阅读XXRelationProvider，DataSource 查找过程，DataFrameReader，DataFrameWriter，CheckpointRDDPartition，ReliableCheckpointRDD，SparkSession内部包含的变量SparkContext、sharedState、SQLContext、RuntimeConfig
+            <p>总结：</p>
+<ul>
+<li><code>DataSourceRegister</code> 的注册方式，以及自定义 <code>XXRelationProvider</code> 是怎么被 Spark 发现和加载的</li>
+<li><code>DataSource</code> 的查找过程，以及 <code>DataFrameReader</code>、<code>DataFrameWriter</code> 在读写路径里的角色</li>
+<li>顺手补到 <code>CheckpointRDDPartition</code>、<code>ReliableCheckpointRDD</code> 和 <code>SparkSession</code> 内部的 <code>SparkContext</code>、<code>sharedState</code>、<code>SQLContext</code>、<code>RuntimeConfig</code></li>
+</ul>
         </div>
         <div class="post-image-strip post-image-strip-list" data-image-count="2">
     <button class="post-image-strip-nav post-image-strip-prev" type="button" aria-label="Scroll thumbnails left">&lt;</button>
@@ -490,6 +542,10 @@
 <ul class="widget-list">
     
     <li>
+        <a href="/post/2026/06/da_lian/" title="大连，11年后的再相见">大连，11年后的再相见</a>
+    </li>
+    
+    <li>
         <a href="/post/2026/05/volcano-notes/" title="Volcano 笔记">Volcano 笔记</a>
     </li>
     
@@ -525,10 +581,6 @@
         <a href="/post/2026/04/claude_code/" title="Claude code 源码分析">Claude code 源码分析</a>
     </li>
     
-    <li>
-        <a href="/post/2026/03/iran_war/" title="Iran War">Iran War</a>
-    </li>
-    
 </ul>
 
     </section>
@@ -555,7 +607,7 @@
     
     <li><a href="/categories/%E6%96%87%E5%AD%A6%E5%92%8C%E8%89%BA%E6%9C%AF/">文学和艺术 (3)</a></li>
     
-    <li><a href="/categories/%E6%97%85%E8%A1%8C/">旅行 (15)</a></li>
+    <li><a href="/categories/%E6%97%85%E8%A1%8C/">旅行 (16)</a></li>
     
     <li><a href="/categories/%E6%9E%B6%E6%9E%84/">架构 (15)</a></li>
     
@@ -589,7 +641,7 @@
     
     <li><a href="/years/2025%E5%B9%B4/">2025年 (38)</a></li>
     
-    <li><a href="/years/2026%E5%B9%B4/">2026年 (14)</a></li>
+    <li><a href="/years/2026%E5%B9%B4/">2026年 (15)</a></li>
     
 </ul>
 
@@ -603,9 +655,9 @@
     
     <a href="/tags/ambari/">Ambari </a>
     
-    <a href="/tags/architecture/">architecture </a>
+    <a href="/tags/architecture/">Architecture </a>
     
-    <a href="/tags/bigdata/">bigdata </a>
+    <a href="/tags/bigdata/">Bigdata </a>
     
     <a href="/tags/btrace/">BTrace </a>
     
@@ -613,11 +665,11 @@
     
     <a href="/tags/c&#43;&#43;/">C&#43;&#43; </a>
     
-    <a href="/tags/calcite/">calcite </a>
+    <a href="/tags/calcite/">Calcite </a>
     
     <a href="/tags/canal/">Canal </a>
     
-    <a href="/tags/claude/">claude </a>
+    <a href="/tags/claude/">Claude </a>
     
     <a href="/tags/cmu-database/">CMU-Database </a>
     
@@ -629,7 +681,7 @@
     
     <a href="/tags/doris/">Doris </a>
     
-    <a href="/tags/ebpf/">eBPF </a>
+    <a href="/tags/ebpf/">EBPF </a>
     
     <a href="/tags/english/">English </a>
     
@@ -639,7 +691,7 @@
     
     <a href="/tags/flink/">Flink </a>
     
-    <a href="/tags/flume/">flume </a>
+    <a href="/tags/flume/">Flume </a>
     
     <a href="/tags/gc/">GC </a>
     
@@ -649,15 +701,15 @@
     
     <a href="/tags/hive/">Hive </a>
     
-    <a href="/tags/iceberg/">iceberg </a>
+    <a href="/tags/iceberg/">Iceberg </a>
     
     <a href="/tags/impala/">Impala </a>
     
-    <a href="/tags/janino/">janino </a>
+    <a href="/tags/janino/">Janino </a>
     
     <a href="/tags/juicefs/">JuiceFS </a>
     
-    <a href="/tags/k8s/">k8s </a>
+    <a href="/tags/k8s/">K8s </a>
     
     <a href="/tags/kafka/">Kafka </a>
     
@@ -673,17 +725,17 @@
     
     <a href="/tags/llvm/">LLVM </a>
     
-    <a href="/tags/log4j/">log4j </a>
+    <a href="/tags/log4j/">Log4j </a>
     
-    <a href="/tags/longhorn/">longhorn </a>
+    <a href="/tags/longhorn/">Longhorn </a>
     
     <a href="/tags/manacher/">Manacher </a>
     
     <a href="/tags/mapreduce/">MapReduce </a>
     
-    <a href="/tags/micro-service/">micro-service </a>
+    <a href="/tags/micro-service/">Micro-Service </a>
     
-    <a href="/tags/mq/">mq </a>
+    <a href="/tags/mq/">Mq </a>
     
     <a href="/tags/mysql/">MySQL </a>
     
@@ -697,25 +749,25 @@
     
     <a href="/tags/ozone/">Ozone </a>
     
-    <a href="/tags/parquet/">parquet </a>
+    <a href="/tags/parquet/">Parquet </a>
     
-    <a href="/tags/paxos/">paxos </a>
+    <a href="/tags/paxos/">Paxos </a>
     
     <a href="/tags/presto/">Presto </a>
     
     <a href="/tags/pytorch/">PyTorch </a>
     
-    <a href="/tags/quick-sql/">quick-sql </a>
+    <a href="/tags/quick-sql/">Quick-Sql </a>
     
-    <a href="/tags/raft/">raft </a>
+    <a href="/tags/raft/">Raft </a>
     
-    <a href="/tags/scala/">scala </a>
+    <a href="/tags/scala/">Scala </a>
     
     <a href="/tags/seatunnel/">SeaTunnel </a>
     
     <a href="/tags/simd/">SIMD </a>
     
-    <a href="/tags/snowflake/">snowflake </a>
+    <a href="/tags/snowflake/">Snowflake </a>
     
     <a href="/tags/spark/">Spark </a>
     
@@ -729,7 +781,7 @@
     
     <a href="/tags/tuning/">Tuning </a>
     
-    <a href="/tags/unix/">unix </a>
+    <a href="/tags/unix/">Unix </a>
     
     <a href="/tags/volcano/">Volcano </a>
     

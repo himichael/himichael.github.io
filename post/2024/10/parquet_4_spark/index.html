@@ -19,7 +19,8 @@
     <meta property="article:modified_time" content='2024-10-02T09:08:07&#43;08:00'>
         
     <meta name="Keywords" content="">
-    <meta name="description" content="Spark中的 parquet 原理">
+    <meta name="description" content="Spark执行Delta的过程，通过自定义的format格式，到DataFrameWriter.saveToV1Source，在是到DeltaDataSource#createRealation，写入做优化事务处理，再用FileFormatWriter创建多个Task并行写入，之后就是到Parquet内部执行阶段。Parquet包含Row Groups，往下是Column Chunk，再往下是Page，文件尾部包含Footer和一些元数据信息。Spark是按行写入的，一次写一行，每行写对应的 column。Parquet编码包括Dictionary Encoding、Run Length Encoding (RLE)、Delta Encoding。读取的主要类是VectorizedParquetRecordReader执行一批读取，调用VectorizedColumnReaders(对应每个column)，再调用VectorizedValuesReader(读取一个column中的一段数据)，返回由上层应用消费 。
+">
         <meta name="author" content="隔壁老王">
         
     <meta property="og:url" content="https://code0xff.org/post/2024/10/parquet_4_spark/">
@@ -73,7 +74,8 @@
             <div class="col-group">
 
                 <div class="col-8" id="main">
-                    <div class="res-cons">
+                    
+<div class="res-cons">
     
     <article class="post">
         <header>
@@ -86,11 +88,11 @@
   <ul>
     <li>
       <ul>
-        <li><a href="#heading">概览</a></li>
-        <li><a href="#parquet-">Parquet 内部</a></li>
+        <li><a href="#概览">概览</a></li>
+        <li><a href="#parquet-内部">Parquet 内部</a></li>
         <li><a href="#parquet-encoding">Parquet Encoding</a></li>
         <li><a href="#vectorised-parquet-reading">Vectorised Parquet Reading</a></li>
-        <li><a href="#heading1">参考</a></li>
+        <li><a href="#参考">参考</a></li>
       </ul>
     </li>
   </ul>
@@ -114,186 +116,198 @@
         
         
         <div class="post-content">
-            <h2 id="heading">概览</h2>
+            <h2 id="概览">概览</h2>
 <p>Spark + Delta-Lake，写入Parquet 文件，总体流程如下：<br>
-<img src="https://v1.ax1x.com/2024/09/25/7xCsuq.png" alt=""><br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/09/25/7xCsuq.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/09/25/7xCsuq.png" />
+        </a>
+    <br>
 图片来自 -&gt; <a href="https://dataninjago.com/2021/12/03/databricks-deep-dive-1-table-writing-journey-overview/">这里</a></p>
-<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4">
-<table style="border-spacing:0;padding:0;margin:0;border:0;width:auto;overflow:auto;display:block;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
-<pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">5
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">6
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">7
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">8
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">9
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"><code><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">5
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">6
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">7
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">8
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">9
 </span></code></pre></td>
 <td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
-<pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-scala" data-lang="scala">df<span style="color:#ff79c6">.</span>write<span style="color:#ff79c6">.</span>format<span style="color:#ff79c6">(</span><span style="color:#f1fa8c">&#34;delta&#34;</span><span style="color:#ff79c6">)</span><span style="color:#ff79c6">.</span>save<span style="color:#ff79c6">(</span>path<span style="color:#ff79c6">)</span>
-
-<span style="color:#ff79c6">def</span> write<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">DataFrameWriter</span><span style="color:#ff79c6">[</span><span style="color:#8be9fd">T</span><span style="color:#ff79c6">]</span> <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">{</span>
-  <span style="color:#ff79c6">if</span> <span style="color:#ff79c6">(</span>isStreaming<span style="color:#ff79c6">)</span> <span style="color:#ff79c6">{</span>
-    logicalPlan<span style="color:#ff79c6">.</span>failAnalysis<span style="color:#ff79c6">(</span>
-	  <span style="color:#f1fa8c">&#34;&#39;write&#39; can not be called on streaming Dataset/DataFrame&#34;</span><span style="color:#ff79c6">)</span>
-  <span style="color:#ff79c6">}</span>
-  <span style="color:#ff79c6">new</span> <span style="color:#50fa7b">DataFrameWriter</span><span style="color:#ff79c6">[</span><span style="color:#8be9fd">T</span><span style="color:#ff79c6">]</span><span style="color:#ff79c6">(</span><span style="color:#ff79c6">this</span><span style="color:#ff79c6">)</span>
-<span style="color:#ff79c6">}</span>
-</code></pre></td></tr></table>
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"><code class="language-scala" data-lang="scala"><span style="display:flex;"><span>df<span style="color:#ff79c6">.</span>write<span style="color:#ff79c6">.</span>format<span style="color:#ff79c6">(</span><span style="color:#f1fa8c">&#34;delta&#34;</span><span style="color:#ff79c6">).</span>save<span style="color:#ff79c6">(</span>path<span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">def</span> write<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">DataFrameWriter</span><span style="color:#ff79c6">[</span><span style="color:#8be9fd">T</span><span style="color:#ff79c6">]</span> <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">if</span> <span style="color:#ff79c6">(</span>isStreaming<span style="color:#ff79c6">)</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>    logicalPlan<span style="color:#ff79c6">.</span>failAnalysis<span style="color:#ff79c6">(</span>
+</span></span><span style="display:flex;"><span>	  <span style="color:#f1fa8c">&#34;&#39;write&#39; can not be called on streaming Dataset/DataFrame&#34;</span><span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">}</span>
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">new</span> <span style="color:#50fa7b">DataFrameWriter</span><span style="color:#ff79c6">[</span><span style="color:#8be9fd">T</span><span style="color:#ff79c6">](</span><span style="color:#ff79c6">this</span><span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">}</span>
+</span></span></code></pre></td></tr></table>
 </div>
 </div><p>format(&ldquo;delta&rdquo;) 这个别名的注册，是通过<code>DeltaDataSource</code>实现了这个接口<br>
 以插件的形式，注入到 Spark 中<br>
-<img src="https://v1.ax1x.com/2024/09/25/7xC2Ds.png" alt=""></p>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/09/25/7xC2Ds.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/09/25/7xC2Ds.png" />
+        </a>
+    </p>
 <p>DataFrameWrite 会将执行流程 转到 saveToV1Source  函数，这个函数又会调用 planForWriting</p>
-<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4">
-<table style="border-spacing:0;padding:0;margin:0;border:0;width:auto;overflow:auto;display:block;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
-<pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"><code><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
 </span></code></pre></td>
 <td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
-<pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-scala" data-lang="scala">  <span style="color:#ff79c6">def</span> planForWriting<span style="color:#ff79c6">(</span>mode<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">SaveMode</span><span style="color:#ff79c6">,</span> data<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">LogicalPlan</span><span style="color:#ff79c6">)</span><span style="color:#ff79c6">:</span> <span style="color:#8be9fd">LogicalPlan</span> <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">{</span>
-    providingInstance<span style="color:#ff79c6">(</span><span style="color:#ff79c6">)</span> <span style="color:#ff79c6">match</span> <span style="color:#ff79c6">{</span>
-      <span style="color:#ff79c6">case</span> dataSource<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">CreatableRelationProvider</span> <span style="color:#ff79c6">=&gt;</span>
-        disallowWritingIntervals<span style="color:#ff79c6">(</span>data<span style="color:#ff79c6">.</span>schema<span style="color:#ff79c6">.</span>map<span style="color:#ff79c6">(</span><span style="color:#ff79c6">_</span><span style="color:#ff79c6">.</span>dataType<span style="color:#ff79c6">)</span><span style="color:#ff79c6">,</span> forbidAnsiIntervals <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">true</span><span style="color:#ff79c6">)</span>
-        <span style="color:#50fa7b">SaveIntoDataSourceCommand</span><span style="color:#ff79c6">(</span>data<span style="color:#ff79c6">,</span> dataSource<span style="color:#ff79c6">,</span> caseInsensitiveOptions<span style="color:#ff79c6">,</span> mode<span style="color:#ff79c6">)</span>
-      <span style="color:#ff79c6">case</span> format<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">FileFormat</span> <span style="color:#ff79c6">=&gt;</span>
-        disallowWritingIntervals<span style="color:#ff79c6">(</span>data<span style="color:#ff79c6">.</span>schema<span style="color:#ff79c6">.</span>map<span style="color:#ff79c6">(</span><span style="color:#ff79c6">_</span><span style="color:#ff79c6">.</span>dataType<span style="color:#ff79c6">)</span><span style="color:#ff79c6">,</span> forbidAnsiIntervals <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">false</span><span style="color:#ff79c6">)</span>
-        <span style="color:#50fa7b">DataSource</span><span style="color:#ff79c6">.</span>validateSchema<span style="color:#ff79c6">(</span>data<span style="color:#ff79c6">.</span>schema<span style="color:#ff79c6">)</span>
-        planForWritingFileFormat<span style="color:#ff79c6">(</span>format<span style="color:#ff79c6">,</span> mode<span style="color:#ff79c6">,</span> data<span style="color:#ff79c6">)</span>
-      <span style="color:#ff79c6">case</span> <span style="color:#ff79c6">_</span> <span style="color:#ff79c6">=&gt;</span> <span style="color:#ff79c6">throw</span> <span style="color:#ff79c6">new</span> <span style="color:#50fa7b">IllegalStateException</span><span style="color:#ff79c6">(</span>
-        <span style="color:#f1fa8c">s&#34;</span><span style="color:#f1fa8c">${</span>providingClass<span style="color:#ff79c6">.</span>getCanonicalName<span style="color:#f1fa8c">}</span><span style="color:#f1fa8c"> does not allow create table as select.</span><span style="color:#f1fa8c">&#34;</span><span style="color:#ff79c6">)</span>
-    <span style="color:#ff79c6">}</span>
-  <span style="color:#ff79c6">}</span>
-</code></pre></td></tr></table>
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"><code class="language-scala" data-lang="scala"><span style="display:flex;"><span>  <span style="color:#ff79c6">def</span> planForWriting<span style="color:#ff79c6">(</span>mode<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">SaveMode</span><span style="color:#ff79c6">,</span> data<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">LogicalPlan</span><span style="color:#ff79c6">)</span><span style="color:#ff79c6">:</span> <span style="color:#8be9fd">LogicalPlan</span> <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>    providingInstance<span style="color:#ff79c6">()</span> <span style="color:#ff79c6">match</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>      <span style="color:#ff79c6">case</span> dataSource<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">CreatableRelationProvider</span> <span style="color:#ff79c6">=&gt;</span>
+</span></span><span style="display:flex;"><span>        disallowWritingIntervals<span style="color:#ff79c6">(</span>data<span style="color:#ff79c6">.</span>schema<span style="color:#ff79c6">.</span>map<span style="color:#ff79c6">(</span><span style="color:#ff79c6">_</span><span style="color:#ff79c6">.</span>dataType<span style="color:#ff79c6">),</span> forbidAnsiIntervals <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">true</span><span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#50fa7b">SaveIntoDataSourceCommand</span><span style="color:#ff79c6">(</span>data<span style="color:#ff79c6">,</span> dataSource<span style="color:#ff79c6">,</span> caseInsensitiveOptions<span style="color:#ff79c6">,</span> mode<span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>      <span style="color:#ff79c6">case</span> format<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">FileFormat</span> <span style="color:#ff79c6">=&gt;</span>
+</span></span><span style="display:flex;"><span>        disallowWritingIntervals<span style="color:#ff79c6">(</span>data<span style="color:#ff79c6">.</span>schema<span style="color:#ff79c6">.</span>map<span style="color:#ff79c6">(</span><span style="color:#ff79c6">_</span><span style="color:#ff79c6">.</span>dataType<span style="color:#ff79c6">),</span> forbidAnsiIntervals <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">false</span><span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#50fa7b">DataSource</span><span style="color:#ff79c6">.</span>validateSchema<span style="color:#ff79c6">(</span>data<span style="color:#ff79c6">.</span>schema<span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>        planForWritingFileFormat<span style="color:#ff79c6">(</span>format<span style="color:#ff79c6">,</span> mode<span style="color:#ff79c6">,</span> data<span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>      <span style="color:#ff79c6">case</span> <span style="color:#ff79c6">_</span> <span style="color:#ff79c6">=&gt;</span> <span style="color:#ff79c6">throw</span> <span style="color:#ff79c6">new</span> <span style="color:#50fa7b">IllegalStateException</span><span style="color:#ff79c6">(</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#f1fa8c">s&#34;</span><span style="color:#f1fa8c">${</span>providingClass<span style="color:#ff79c6">.</span>getCanonicalName<span style="color:#f1fa8c">}</span><span style="color:#f1fa8c"> does not allow create table as select.&#34;</span><span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">}</span>
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">}</span>
+</span></span></code></pre></td></tr></table>
 </div>
 </div><p>然后执行 SaveIntoDataSourceCommand</p>
-<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4">
-<table style="border-spacing:0;padding:0;margin:0;border:0;width:auto;overflow:auto;display:block;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
-<pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">15
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">16
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">17
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">18
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">19
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"><code><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">15
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">16
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">17
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">18
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">19
 </span></code></pre></td>
 <td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
-<pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-scala" data-lang="scala"><span style="color:#ff79c6">case</span> <span style="color:#ff79c6">class</span> <span style="color:#50fa7b">SaveIntoDataSourceCommand</span><span style="color:#ff79c6">(</span>
-    query<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">LogicalPlan</span><span style="color:#ff79c6">,</span>
-    dataSource<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">CreatableRelationProvider</span><span style="color:#ff79c6">,</span>
-    options<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">Map</span><span style="color:#ff79c6">[</span><span style="color:#8be9fd">String</span>, <span style="color:#8be9fd">String</span><span style="color:#ff79c6">]</span><span style="color:#ff79c6">,</span>
-    mode<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">SaveMode</span><span style="color:#ff79c6">)</span> <span style="color:#ff79c6">extends</span> <span style="color:#50fa7b">LeafRunnableCommand</span> <span style="color:#ff79c6">{</span>
-
-  <span style="color:#ff79c6">override</span> <span style="color:#ff79c6">def</span> innerChildren<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">Seq</span><span style="color:#ff79c6">[</span><span style="color:#8be9fd">QueryPlan</span><span style="color:#ff79c6">[</span><span style="color:#ff79c6">_</span><span style="color:#ff79c6">]</span><span style="color:#ff79c6">]</span> <span style="color:#ff79c6">=</span> <span style="color:#50fa7b">Seq</span><span style="color:#ff79c6">(</span>query<span style="color:#ff79c6">)</span>
-
-  <span style="color:#ff79c6">override</span> <span style="color:#ff79c6">def</span> run<span style="color:#ff79c6">(</span>sparkSession<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">SparkSession</span><span style="color:#ff79c6">)</span><span style="color:#ff79c6">:</span> <span style="color:#8be9fd">Seq</span><span style="color:#ff79c6">[</span><span style="color:#8be9fd">Row</span><span style="color:#ff79c6">]</span> <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">{</span>
-    <span style="color:#ff79c6">val</span> relation <span style="color:#ff79c6">=</span> dataSource<span style="color:#ff79c6">.</span>createRelation<span style="color:#ff79c6">(</span>
-      sparkSession<span style="color:#ff79c6">.</span>sqlContext<span style="color:#ff79c6">,</span> mode<span style="color:#ff79c6">,</span> options<span style="color:#ff79c6">,</span> <span style="color:#50fa7b">Dataset</span><span style="color:#ff79c6">.</span>ofRows<span style="color:#ff79c6">(</span>sparkSession<span style="color:#ff79c6">,</span> query<span style="color:#ff79c6">)</span><span style="color:#ff79c6">)</span>
-
-    <span style="color:#ff79c6">try</span> <span style="color:#ff79c6">{</span>
-      <span style="color:#ff79c6">val</span> logicalRelation <span style="color:#ff79c6">=</span> <span style="color:#50fa7b">LogicalRelation</span><span style="color:#ff79c6">(</span>relation<span style="color:#ff79c6">,</span> relation<span style="color:#ff79c6">.</span>schema<span style="color:#ff79c6">.</span>toAttributes<span style="color:#ff79c6">,</span> <span style="color:#50fa7b">None</span><span style="color:#ff79c6">,</span> <span style="color:#ff79c6">false</span><span style="color:#ff79c6">)</span>
-      sparkSession<span style="color:#ff79c6">.</span>sharedState<span style="color:#ff79c6">.</span>cacheManager<span style="color:#ff79c6">.</span>recacheByPlan<span style="color:#ff79c6">(</span>sparkSession<span style="color:#ff79c6">,</span> logicalRelation<span style="color:#ff79c6">)</span>
-    <span style="color:#ff79c6">}</span> <span style="color:#ff79c6">catch</span> <span style="color:#ff79c6">{</span>
-      <span style="color:#ff79c6">case</span> <span style="color:#50fa7b">NonFatal</span><span style="color:#ff79c6">(</span><span style="color:#ff79c6">_</span><span style="color:#ff79c6">)</span> <span style="color:#ff79c6">=&gt;</span>
-        <span style="color:#6272a4">// some data source can not support return a valid relation, e.g. `KafkaSourceProvider`
-</span><span style="color:#6272a4"></span>    <span style="color:#ff79c6">}</span>
-</code></pre></td></tr></table>
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"><code class="language-scala" data-lang="scala"><span style="display:flex;"><span><span style="color:#ff79c6">case</span> <span style="color:#ff79c6">class</span> <span style="color:#50fa7b">SaveIntoDataSourceCommand</span><span style="color:#ff79c6">(</span>
+</span></span><span style="display:flex;"><span>    query<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">LogicalPlan</span><span style="color:#ff79c6">,</span>
+</span></span><span style="display:flex;"><span>    dataSource<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">CreatableRelationProvider</span><span style="color:#ff79c6">,</span>
+</span></span><span style="display:flex;"><span>    options<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">Map</span><span style="color:#ff79c6">[</span><span style="color:#8be9fd">String</span>, <span style="color:#8be9fd">String</span><span style="color:#ff79c6">],</span>
+</span></span><span style="display:flex;"><span>    mode<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">SaveMode</span><span style="color:#ff79c6">)</span> <span style="color:#ff79c6">extends</span> <span style="color:#50fa7b">LeafRunnableCommand</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">override</span> <span style="color:#ff79c6">def</span> innerChildren<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">Seq</span><span style="color:#ff79c6">[</span><span style="color:#8be9fd">QueryPlan</span><span style="color:#ff79c6">[</span><span style="color:#ff79c6">_</span><span style="color:#ff79c6">]]</span> <span style="color:#ff79c6">=</span> <span style="color:#50fa7b">Seq</span><span style="color:#ff79c6">(</span>query<span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">override</span> <span style="color:#ff79c6">def</span> run<span style="color:#ff79c6">(</span>sparkSession<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">SparkSession</span><span style="color:#ff79c6">)</span><span style="color:#ff79c6">:</span> <span style="color:#8be9fd">Seq</span><span style="color:#ff79c6">[</span><span style="color:#8be9fd">Row</span><span style="color:#ff79c6">]</span> <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">val</span> relation <span style="color:#ff79c6">=</span> dataSource<span style="color:#ff79c6">.</span>createRelation<span style="color:#ff79c6">(</span>
+</span></span><span style="display:flex;"><span>      sparkSession<span style="color:#ff79c6">.</span>sqlContext<span style="color:#ff79c6">,</span> mode<span style="color:#ff79c6">,</span> options<span style="color:#ff79c6">,</span> <span style="color:#50fa7b">Dataset</span><span style="color:#ff79c6">.</span>ofRows<span style="color:#ff79c6">(</span>sparkSession<span style="color:#ff79c6">,</span> query<span style="color:#ff79c6">))</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">try</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>      <span style="color:#ff79c6">val</span> logicalRelation <span style="color:#ff79c6">=</span> <span style="color:#50fa7b">LogicalRelation</span><span style="color:#ff79c6">(</span>relation<span style="color:#ff79c6">,</span> relation<span style="color:#ff79c6">.</span>schema<span style="color:#ff79c6">.</span>toAttributes<span style="color:#ff79c6">,</span> <span style="color:#50fa7b">None</span><span style="color:#ff79c6">,</span> <span style="color:#ff79c6">false</span><span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>      sparkSession<span style="color:#ff79c6">.</span>sharedState<span style="color:#ff79c6">.</span>cacheManager<span style="color:#ff79c6">.</span>recacheByPlan<span style="color:#ff79c6">(</span>sparkSession<span style="color:#ff79c6">,</span> logicalRelation<span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">}</span> <span style="color:#ff79c6">catch</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>      <span style="color:#ff79c6">case</span> <span style="color:#50fa7b">NonFatal</span><span style="color:#ff79c6">(</span><span style="color:#ff79c6">_</span><span style="color:#ff79c6">)</span> <span style="color:#ff79c6">=&gt;</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#6272a4">// some data source can not support return a valid relation, e.g. `KafkaSourceProvider`
+</span></span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">}</span>
+</span></span></code></pre></td></tr></table>
 </div>
 </div><p>这里调用<code>createRelation</code>，所以会创建出<code>DeltaDataSource</code><br>
 这里包含了 事务优化，写数据文件，写元数据等</p>
-<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4">
-<table style="border-spacing:0;padding:0;margin:0;border:0;width:auto;overflow:auto;display:block;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
-<pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">15
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">16
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">17
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">18
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">19
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">20
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">21
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">22
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">23
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">24
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">25
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">26
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">27
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">28
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"><code><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">15
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">16
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">17
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">18
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">19
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">20
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">21
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">22
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">23
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">24
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">25
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">26
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">27
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">28
 </span></code></pre></td>
 <td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
-<pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-scala" data-lang="scala">  <span style="color:#ff79c6">override</span> <span style="color:#ff79c6">def</span> createRelation<span style="color:#ff79c6">(</span>
-      sqlContext<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">SQLContext</span><span style="color:#ff79c6">,</span>
-      mode<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">SaveMode</span><span style="color:#ff79c6">,</span>
-      parameters<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">Map</span><span style="color:#ff79c6">[</span><span style="color:#8be9fd">String</span>, <span style="color:#8be9fd">String</span><span style="color:#ff79c6">]</span><span style="color:#ff79c6">,</span>
-      data<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">DataFrame</span><span style="color:#ff79c6">)</span><span style="color:#ff79c6">:</span> <span style="color:#8be9fd">BaseRelation</span> <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">{</span>
-    <span style="color:#ff79c6">val</span> path <span style="color:#ff79c6">=</span> parameters<span style="color:#ff79c6">.</span>getOrElse<span style="color:#ff79c6">(</span><span style="color:#f1fa8c">&#34;path&#34;</span><span style="color:#ff79c6">,</span> <span style="color:#ff79c6">{</span>
-      <span style="color:#ff79c6">throw</span> <span style="color:#50fa7b">DeltaErrors</span><span style="color:#ff79c6">.</span>pathNotSpecifiedException
-    <span style="color:#ff79c6">}</span><span style="color:#ff79c6">)</span>
-    <span style="color:#ff79c6">val</span> partitionColumns <span style="color:#ff79c6">=</span> parameters<span style="color:#ff79c6">.</span>get<span style="color:#ff79c6">(</span><span style="color:#50fa7b">DeltaSourceUtils</span><span style="color:#ff79c6">.</span><span style="color:#50fa7b">PARTITIONING_COLUMNS_KEY</span><span style="color:#ff79c6">)</span>
-      <span style="color:#ff79c6">.</span>map<span style="color:#ff79c6">(</span><span style="color:#50fa7b">DeltaDataSource</span><span style="color:#ff79c6">.</span>decodePartitioningColumns<span style="color:#ff79c6">)</span>
-      <span style="color:#ff79c6">.</span>getOrElse<span style="color:#ff79c6">(</span><span style="color:#50fa7b">Nil</span><span style="color:#ff79c6">)</span>
-
-    <span style="color:#ff79c6">val</span> deltaLog <span style="color:#ff79c6">=</span> <span style="color:#50fa7b">DeltaLog</span><span style="color:#ff79c6">.</span>forTable<span style="color:#ff79c6">(</span>sqlContext<span style="color:#ff79c6">.</span>sparkSession<span style="color:#ff79c6">,</span> <span style="color:#ff79c6">new</span> <span style="color:#50fa7b">Path</span><span style="color:#ff79c6">(</span>path<span style="color:#ff79c6">)</span><span style="color:#ff79c6">,</span> parameters<span style="color:#ff79c6">)</span>
-    <span style="color:#50fa7b">WriteIntoDelta</span><span style="color:#ff79c6">(</span>
-      deltaLog <span style="color:#ff79c6">=</span> deltaLog<span style="color:#ff79c6">,</span>
-      mode <span style="color:#ff79c6">=</span> mode<span style="color:#ff79c6">,</span>
-      <span style="color:#ff79c6">new</span> <span style="color:#50fa7b">DeltaOptions</span><span style="color:#ff79c6">(</span>parameters<span style="color:#ff79c6">,</span> sqlContext<span style="color:#ff79c6">.</span>sparkSession<span style="color:#ff79c6">.</span>sessionState<span style="color:#ff79c6">.</span>conf<span style="color:#ff79c6">)</span><span style="color:#ff79c6">,</span>
-      partitionColumns <span style="color:#ff79c6">=</span> partitionColumns<span style="color:#ff79c6">,</span>
-      configuration <span style="color:#ff79c6">=</span> <span style="color:#50fa7b">DeltaConfigs</span><span style="color:#ff79c6">.</span>validateConfigurations<span style="color:#ff79c6">(</span>
-        parameters<span style="color:#ff79c6">.</span>filterKeys<span style="color:#ff79c6">(</span><span style="color:#ff79c6">_</span><span style="color:#ff79c6">.</span>startsWith<span style="color:#ff79c6">(</span><span style="color:#f1fa8c">&#34;delta.&#34;</span><span style="color:#ff79c6">)</span><span style="color:#ff79c6">)</span><span style="color:#ff79c6">.</span>toMap<span style="color:#ff79c6">)</span><span style="color:#ff79c6">,</span>
-      data <span style="color:#ff79c6">=</span> data<span style="color:#ff79c6">,</span>
-      <span style="color:#6272a4">// empty catalogTable is acceptable as the code path is only for path based writes
-</span><span style="color:#6272a4"></span>      <span style="color:#6272a4">// (df.write.save(&#34;path&#34;)) which does not need to use/update catalog
-</span><span style="color:#6272a4"></span>      catalogTableOpt <span style="color:#ff79c6">=</span> <span style="color:#50fa7b">None</span>
-      <span style="color:#ff79c6">)</span><span style="color:#ff79c6">.</span>run<span style="color:#ff79c6">(</span>sqlContext<span style="color:#ff79c6">.</span>sparkSession<span style="color:#ff79c6">)</span>
-
-    deltaLog<span style="color:#ff79c6">.</span>createRelation<span style="color:#ff79c6">(</span><span style="color:#ff79c6">)</span>
-  <span style="color:#ff79c6">}</span>
-</code></pre></td></tr></table>
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"><code class="language-scala" data-lang="scala"><span style="display:flex;"><span>  <span style="color:#ff79c6">override</span> <span style="color:#ff79c6">def</span> createRelation<span style="color:#ff79c6">(</span>
+</span></span><span style="display:flex;"><span>      sqlContext<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">SQLContext</span><span style="color:#ff79c6">,</span>
+</span></span><span style="display:flex;"><span>      mode<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">SaveMode</span><span style="color:#ff79c6">,</span>
+</span></span><span style="display:flex;"><span>      parameters<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">Map</span><span style="color:#ff79c6">[</span><span style="color:#8be9fd">String</span>, <span style="color:#8be9fd">String</span><span style="color:#ff79c6">],</span>
+</span></span><span style="display:flex;"><span>      data<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">DataFrame</span><span style="color:#ff79c6">)</span><span style="color:#ff79c6">:</span> <span style="color:#8be9fd">BaseRelation</span> <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">val</span> path <span style="color:#ff79c6">=</span> parameters<span style="color:#ff79c6">.</span>getOrElse<span style="color:#ff79c6">(</span><span style="color:#f1fa8c">&#34;path&#34;</span><span style="color:#ff79c6">,</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>      <span style="color:#ff79c6">throw</span> <span style="color:#50fa7b">DeltaErrors</span><span style="color:#ff79c6">.</span>pathNotSpecifiedException
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">})</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">val</span> partitionColumns <span style="color:#ff79c6">=</span> parameters<span style="color:#ff79c6">.</span>get<span style="color:#ff79c6">(</span><span style="color:#50fa7b">DeltaSourceUtils</span><span style="color:#ff79c6">.</span><span style="color:#50fa7b">PARTITIONING_COLUMNS_KEY</span><span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>      <span style="color:#ff79c6">.</span>map<span style="color:#ff79c6">(</span><span style="color:#50fa7b">DeltaDataSource</span><span style="color:#ff79c6">.</span>decodePartitioningColumns<span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>      <span style="color:#ff79c6">.</span>getOrElse<span style="color:#ff79c6">(</span><span style="color:#50fa7b">Nil</span><span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">val</span> deltaLog <span style="color:#ff79c6">=</span> <span style="color:#50fa7b">DeltaLog</span><span style="color:#ff79c6">.</span>forTable<span style="color:#ff79c6">(</span>sqlContext<span style="color:#ff79c6">.</span>sparkSession<span style="color:#ff79c6">,</span> <span style="color:#ff79c6">new</span> <span style="color:#50fa7b">Path</span><span style="color:#ff79c6">(</span>path<span style="color:#ff79c6">),</span> parameters<span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#50fa7b">WriteIntoDelta</span><span style="color:#ff79c6">(</span>
+</span></span><span style="display:flex;"><span>      deltaLog <span style="color:#ff79c6">=</span> deltaLog<span style="color:#ff79c6">,</span>
+</span></span><span style="display:flex;"><span>      mode <span style="color:#ff79c6">=</span> mode<span style="color:#ff79c6">,</span>
+</span></span><span style="display:flex;"><span>      <span style="color:#ff79c6">new</span> <span style="color:#50fa7b">DeltaOptions</span><span style="color:#ff79c6">(</span>parameters<span style="color:#ff79c6">,</span> sqlContext<span style="color:#ff79c6">.</span>sparkSession<span style="color:#ff79c6">.</span>sessionState<span style="color:#ff79c6">.</span>conf<span style="color:#ff79c6">),</span>
+</span></span><span style="display:flex;"><span>      partitionColumns <span style="color:#ff79c6">=</span> partitionColumns<span style="color:#ff79c6">,</span>
+</span></span><span style="display:flex;"><span>      configuration <span style="color:#ff79c6">=</span> <span style="color:#50fa7b">DeltaConfigs</span><span style="color:#ff79c6">.</span>validateConfigurations<span style="color:#ff79c6">(</span>
+</span></span><span style="display:flex;"><span>        parameters<span style="color:#ff79c6">.</span>filterKeys<span style="color:#ff79c6">(</span><span style="color:#ff79c6">_</span><span style="color:#ff79c6">.</span>startsWith<span style="color:#ff79c6">(</span><span style="color:#f1fa8c">&#34;delta.&#34;</span><span style="color:#ff79c6">)).</span>toMap<span style="color:#ff79c6">),</span>
+</span></span><span style="display:flex;"><span>      data <span style="color:#ff79c6">=</span> data<span style="color:#ff79c6">,</span>
+</span></span><span style="display:flex;"><span>      <span style="color:#6272a4">// empty catalogTable is acceptable as the code path is only for path based writes
+</span></span></span><span style="display:flex;"><span>      <span style="color:#6272a4">// (df.write.save(&#34;path&#34;)) which does not need to use/update catalog
+</span></span></span><span style="display:flex;"><span>      catalogTableOpt <span style="color:#ff79c6">=</span> <span style="color:#50fa7b">None</span>
+</span></span><span style="display:flex;"><span>      <span style="color:#ff79c6">).</span>run<span style="color:#ff79c6">(</span>sqlContext<span style="color:#ff79c6">.</span>sparkSession<span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    deltaLog<span style="color:#ff79c6">.</span>createRelation<span style="color:#ff79c6">()</span>
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">}</span>
+</span></span></code></pre></td></tr></table>
 </div>
 </div><p>参考代码，<a href="https://github.com/delta-io/delta/blob/master/spark/src/main/scala/org/apache/spark/sql/delta/sources/DeltaDataSource.scala#L180">这里</a></p>
 <p>最后是调用<code>FileFormatWriter</code>，将数据写入存储系统<br>
 这里会创建多个 Task，然后并行的写入<br>
 如果写入成功，最后会做一些统计信息，否则就是丢弃<br>
-<img src="https://v1.ax1x.com/2024/09/25/7xC6fa.png" alt=""></p>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/09/25/7xC6fa.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/09/25/7xC6fa.png" />
+        </a>
+    </p>
 <p>对于每个 Task内部，则是调用<code>ParquetOutputWriter</code>，开始写入 Parquet</p>
-<h2 id="parquet-">Parquet 内部</h2>
+<h2 id="parquet-内部">Parquet 内部</h2>
 <p>一些概念</p>
 <ul>
 <li>Magic Number and File Signature</li>
@@ -316,79 +330,99 @@
 </ul>
 </li>
 <li>Metadata<br>
-<img src="https://v1.ax1x.com/2024/09/25/7xCZl7.png" alt=""></li>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/09/25/7xCZl7.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/09/25/7xCZl7.png" />
+        </a>
+    </li>
 </ul>
 <p>Spark内部执行 ParquetOutputWriter，然后创建 ParquetOutputFormat<br>
-<img src="https://v1.ax1x.com/2024/09/25/7xCdAI.pnp" alt="">
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/09/25/7xCdAI.pnp">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/09/25/7xCdAI.pnp" />
+        </a>
+    
 之后会将 Spark SQL Catalyst InternalRow 转为 Parquet messages
 ParquetFileWriter 封装了文件级别操作，然后设置 magic number<br>
-<img src="https://v1.ax1x.com/2024/09/25/7xCeJV.png" alt=""></p>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/09/25/7xCeJV.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/09/25/7xCeJV.png" />
+        </a>
+    </p>
 <p>Parquet 虽然是按照列来存储的，但是 DataFrame 是按照 row by row 处理的<br>
 也就是不断遍历：Iterator[InternalRow]<br>
-<img src="https://v1.ax1x.com/2024/09/25/7xJ9TL.png" alt=""></p>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/09/25/7xJ9TL.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/09/25/7xJ9TL.png" />
+        </a>
+    </p>
 <p>调用<code>org.apache.parquet.hadoop.InternalParquetRecordWriter</code></p>
-<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4">
-<table style="border-spacing:0;padding:0;margin:0;border:0;width:auto;overflow:auto;display:block;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
-<pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">5
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"><code><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">5
 </span></code></pre></td>
 <td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
-<pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-java" data-lang="java">  <span style="color:#8be9fd;font-style:italic">public</span> <span style="color:#8be9fd">void</span> <span style="color:#50fa7b">write</span><span style="color:#ff79c6">(</span>T value<span style="color:#ff79c6">)</span> <span style="color:#8be9fd;font-style:italic">throws</span> IOException<span style="color:#ff79c6">,</span> InterruptedException <span style="color:#ff79c6">{</span>
-    writeSupport<span style="color:#ff79c6">.</span><span style="color:#50fa7b">write</span><span style="color:#ff79c6">(</span>value<span style="color:#ff79c6">)</span><span style="color:#ff79c6">;</span>
-    <span style="color:#ff79c6">+</span><span style="color:#ff79c6">+</span> recordCount<span style="color:#ff79c6">;</span>
-    checkBlockSizeReached<span style="color:#ff79c6">(</span><span style="color:#ff79c6">)</span><span style="color:#ff79c6">;</span>
-  <span style="color:#ff79c6">}</span>
-</code></pre></td></tr></table>
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"><code class="language-java" data-lang="java"><span style="display:flex;"><span>  <span style="color:#8be9fd;font-style:italic">public</span> <span style="color:#8be9fd">void</span> <span style="color:#50fa7b">write</span>(T value) <span style="color:#8be9fd;font-style:italic">throws</span> IOException, InterruptedException {
+</span></span><span style="display:flex;"><span>    writeSupport.<span style="color:#50fa7b">write</span>(value);
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">++</span> recordCount;
+</span></span><span style="display:flex;"><span>    checkBlockSizeReached();
+</span></span><span style="display:flex;"><span>  }
+</span></span></code></pre></td></tr></table>
 </div>
 </div><p>再调用 实现类<code>org.apache.spark.sql.execution.datasources.parquet.ParquetWriteSupport</code></p>
-<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4">
-<table style="border-spacing:0;padding:0;margin:0;border:0;width:auto;overflow:auto;display:block;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
-<pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">15
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">16
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">17
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">18
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"><code><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">15
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">16
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">17
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">18
 </span></code></pre></td>
 <td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
-<pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-scala" data-lang="scala">  <span style="color:#ff79c6">override</span> <span style="color:#ff79c6">def</span> write<span style="color:#ff79c6">(</span>row<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">InternalRow</span><span style="color:#ff79c6">)</span><span style="color:#ff79c6">:</span> <span style="color:#8be9fd">Unit</span> <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">{</span>
-    consumeMessage <span style="color:#ff79c6">{</span>
-      writeFields<span style="color:#ff79c6">(</span>row<span style="color:#ff79c6">,</span> schema<span style="color:#ff79c6">,</span> rootFieldWriters<span style="color:#ff79c6">)</span>
-    <span style="color:#ff79c6">}</span>
-  <span style="color:#ff79c6">}</span>
-
-  <span style="color:#ff79c6">private</span> <span style="color:#ff79c6">def</span> writeFields<span style="color:#ff79c6">(</span>
-      row<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">InternalRow</span><span style="color:#ff79c6">,</span> schema<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">StructType</span><span style="color:#ff79c6">,</span> fieldWriters<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">Array</span><span style="color:#ff79c6">[</span><span style="color:#8be9fd">ValueWriter</span><span style="color:#ff79c6">]</span><span style="color:#ff79c6">)</span><span style="color:#ff79c6">:</span> <span style="color:#8be9fd">Unit</span> <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">{</span>
-    <span style="color:#ff79c6">var</span> i <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">0</span>
-    <span style="color:#ff79c6">while</span> <span style="color:#ff79c6">(</span>i <span style="color:#ff79c6">&lt;</span> row<span style="color:#ff79c6">.</span>numFields<span style="color:#ff79c6">)</span> <span style="color:#ff79c6">{</span>
-      <span style="color:#ff79c6">if</span> <span style="color:#ff79c6">(</span><span style="color:#ff79c6">!</span>row<span style="color:#ff79c6">.</span>isNullAt<span style="color:#ff79c6">(</span>i<span style="color:#ff79c6">)</span><span style="color:#ff79c6">)</span> <span style="color:#ff79c6">{</span>
-        consumeField<span style="color:#ff79c6">(</span>schema<span style="color:#ff79c6">(</span>i<span style="color:#ff79c6">)</span><span style="color:#ff79c6">.</span>name<span style="color:#ff79c6">,</span> i<span style="color:#ff79c6">)</span> <span style="color:#ff79c6">{</span>
-          fieldWriters<span style="color:#ff79c6">(</span>i<span style="color:#ff79c6">)</span><span style="color:#ff79c6">.</span>apply<span style="color:#ff79c6">(</span>row<span style="color:#ff79c6">,</span> i<span style="color:#ff79c6">)</span>
-        <span style="color:#ff79c6">}</span>
-      <span style="color:#ff79c6">}</span>
-      i <span style="color:#ff79c6">+=</span> <span style="color:#bd93f9">1</span>
-    <span style="color:#ff79c6">}</span>
-  <span style="color:#ff79c6">}</span>
-</code></pre></td></tr></table>
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"><code class="language-scala" data-lang="scala"><span style="display:flex;"><span>  <span style="color:#ff79c6">override</span> <span style="color:#ff79c6">def</span> write<span style="color:#ff79c6">(</span>row<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">InternalRow</span><span style="color:#ff79c6">)</span><span style="color:#ff79c6">:</span> <span style="color:#8be9fd">Unit</span> <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>    consumeMessage <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>      writeFields<span style="color:#ff79c6">(</span>row<span style="color:#ff79c6">,</span> schema<span style="color:#ff79c6">,</span> rootFieldWriters<span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">}</span>
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">}</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">private</span> <span style="color:#ff79c6">def</span> writeFields<span style="color:#ff79c6">(</span>
+</span></span><span style="display:flex;"><span>      row<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">InternalRow</span><span style="color:#ff79c6">,</span> schema<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">StructType</span><span style="color:#ff79c6">,</span> fieldWriters<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">Array</span><span style="color:#ff79c6">[</span><span style="color:#8be9fd">ValueWriter</span><span style="color:#ff79c6">])</span><span style="color:#ff79c6">:</span> <span style="color:#8be9fd">Unit</span> <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">var</span> i <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">0</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">while</span> <span style="color:#ff79c6">(</span>i <span style="color:#ff79c6">&lt;</span> row<span style="color:#ff79c6">.</span>numFields<span style="color:#ff79c6">)</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>      <span style="color:#ff79c6">if</span> <span style="color:#ff79c6">(!</span>row<span style="color:#ff79c6">.</span>isNullAt<span style="color:#ff79c6">(</span>i<span style="color:#ff79c6">))</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>        consumeField<span style="color:#ff79c6">(</span>schema<span style="color:#ff79c6">(</span>i<span style="color:#ff79c6">).</span>name<span style="color:#ff79c6">,</span> i<span style="color:#ff79c6">)</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>          fieldWriters<span style="color:#ff79c6">(</span>i<span style="color:#ff79c6">).</span>apply<span style="color:#ff79c6">(</span>row<span style="color:#ff79c6">,</span> i<span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">}</span>
+</span></span><span style="display:flex;"><span>      <span style="color:#ff79c6">}</span>
+</span></span><span style="display:flex;"><span>      i <span style="color:#ff79c6">+=</span> <span style="color:#bd93f9">1</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">}</span>
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">}</span>
+</span></span></code></pre></td></tr></table>
 </div>
 </div><p>在 Parquet 端，调用 ValuesWriter对输入的值做编码
 相关的编码实现类如下：<br>
-<img src="https://v1.ax1x.com/2024/09/25/7xJkgJ.png" alt=""></p>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/09/25/7xJkgJ.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/09/25/7xJkgJ.png" />
+        </a>
+    </p>
 <p>当达到 page 的阈值后，就会压缩这些数据，包括</p>
 <ul>
 <li>value count</li>
@@ -396,66 +430,82 @@ ParquetFileWriter 封装了文件级别操作，然后设置 magic number<br>
 <li>min/max value</li>
 </ul>
 <p>parquet 内部按照 array list of byte[] (List&lt;byte[]&gt;) 存储的<br>
-<img src="https://v1.ax1x.com/2024/09/25/7xJTdB.png" alt=""><br>
-<img src="https://v1.ax1x.com/2024/09/25/7xJput.png" alt=""></p>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/09/25/7xJTdB.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/09/25/7xJTdB.png" />
+        </a>
+    <br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/09/25/7xJput.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/09/25/7xJput.png" />
+        </a>
+    </p>
 <p>以上都是发生在 memory 中，真正的写磁盘是触发到了 row group 阈值</p>
-<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4">
-<table style="border-spacing:0;padding:0;margin:0;border:0;width:auto;overflow:auto;display:block;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
-<pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">15
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">16
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">17
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">18
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">19
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">20
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">21
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">22
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">23
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"><code><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">15
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">16
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">17
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">18
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">19
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">20
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">21
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">22
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">23
 </span></code></pre></td>
 <td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
-<pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-java" data-lang="java">  <span style="color:#8be9fd;font-style:italic">private</span> <span style="color:#8be9fd">void</span> <span style="color:#50fa7b">flushRowGroupToStore</span><span style="color:#ff79c6">(</span><span style="color:#ff79c6">)</span>
-      <span style="color:#8be9fd;font-style:italic">throws</span> IOException <span style="color:#ff79c6">{</span>
-    recordConsumer<span style="color:#ff79c6">.</span><span style="color:#50fa7b">flush</span><span style="color:#ff79c6">(</span><span style="color:#ff79c6">)</span><span style="color:#ff79c6">;</span>
-    LOG<span style="color:#ff79c6">.</span><span style="color:#50fa7b">debug</span><span style="color:#ff79c6">(</span><span style="color:#f1fa8c">&#34;Flushing mem columnStore to file. allocated memory: {}&#34;</span><span style="color:#ff79c6">,</span> columnStore<span style="color:#ff79c6">.</span><span style="color:#50fa7b">getAllocatedSize</span><span style="color:#ff79c6">(</span><span style="color:#ff79c6">)</span><span style="color:#ff79c6">)</span><span style="color:#ff79c6">;</span>
-    <span style="color:#ff79c6">if</span> <span style="color:#ff79c6">(</span>columnStore<span style="color:#ff79c6">.</span><span style="color:#50fa7b">getAllocatedSize</span><span style="color:#ff79c6">(</span><span style="color:#ff79c6">)</span> <span style="color:#ff79c6">&gt;</span> <span style="color:#ff79c6">(</span>3 <span style="color:#ff79c6">*</span> rowGroupSizeThreshold<span style="color:#ff79c6">)</span><span style="color:#ff79c6">)</span> <span style="color:#ff79c6">{</span>
-      LOG<span style="color:#ff79c6">.</span><span style="color:#50fa7b">warn</span><span style="color:#ff79c6">(</span><span style="color:#f1fa8c">&#34;Too much memory used: {}&#34;</span><span style="color:#ff79c6">,</span> columnStore<span style="color:#ff79c6">.</span><span style="color:#50fa7b">memUsageString</span><span style="color:#ff79c6">(</span><span style="color:#ff79c6">)</span><span style="color:#ff79c6">)</span><span style="color:#ff79c6">;</span>
-    <span style="color:#ff79c6">}</span>
-
-    <span style="color:#ff79c6">if</span> <span style="color:#ff79c6">(</span>recordCount <span style="color:#ff79c6">&gt;</span> 0<span style="color:#ff79c6">)</span> <span style="color:#ff79c6">{</span>
-      rowGroupOrdinal<span style="color:#ff79c6">+</span><span style="color:#ff79c6">+</span><span style="color:#ff79c6">;</span>
-      parquetFileWriter<span style="color:#ff79c6">.</span><span style="color:#50fa7b">startBlock</span><span style="color:#ff79c6">(</span>recordCount<span style="color:#ff79c6">)</span><span style="color:#ff79c6">;</span>
-      columnStore<span style="color:#ff79c6">.</span><span style="color:#50fa7b">flush</span><span style="color:#ff79c6">(</span><span style="color:#ff79c6">)</span><span style="color:#ff79c6">;</span>
-      pageStore<span style="color:#ff79c6">.</span><span style="color:#50fa7b">flushToFileWriter</span><span style="color:#ff79c6">(</span>parquetFileWriter<span style="color:#ff79c6">)</span><span style="color:#ff79c6">;</span>
-      recordCount <span style="color:#ff79c6">=</span> 0<span style="color:#ff79c6">;</span>
-      parquetFileWriter<span style="color:#ff79c6">.</span><span style="color:#50fa7b">endBlock</span><span style="color:#ff79c6">(</span><span style="color:#ff79c6">)</span><span style="color:#ff79c6">;</span>
-      <span style="color:#ff79c6">this</span><span style="color:#ff79c6">.</span><span style="color:#50fa7b">nextRowGroupSize</span> <span style="color:#ff79c6">=</span> Math<span style="color:#ff79c6">.</span><span style="color:#50fa7b">min</span><span style="color:#ff79c6">(</span>
-          parquetFileWriter<span style="color:#ff79c6">.</span><span style="color:#50fa7b">getNextRowGroupSize</span><span style="color:#ff79c6">(</span><span style="color:#ff79c6">)</span><span style="color:#ff79c6">,</span>
-          rowGroupSizeThreshold<span style="color:#ff79c6">)</span><span style="color:#ff79c6">;</span>
-    <span style="color:#ff79c6">}</span>
-
-    columnStore <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">null</span><span style="color:#ff79c6">;</span>
-    pageStore <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">null</span><span style="color:#ff79c6">;</span>
-  <span style="color:#ff79c6">}</span>
-</code></pre></td></tr></table>
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"><code class="language-java" data-lang="java"><span style="display:flex;"><span>  <span style="color:#8be9fd;font-style:italic">private</span> <span style="color:#8be9fd">void</span> <span style="color:#50fa7b">flushRowGroupToStore</span>()
+</span></span><span style="display:flex;"><span>      <span style="color:#8be9fd;font-style:italic">throws</span> IOException {
+</span></span><span style="display:flex;"><span>    recordConsumer.<span style="color:#50fa7b">flush</span>();
+</span></span><span style="display:flex;"><span>    LOG.<span style="color:#50fa7b">debug</span>(<span style="color:#f1fa8c">&#34;Flushing mem columnStore to file. allocated memory: {}&#34;</span>, columnStore.<span style="color:#50fa7b">getAllocatedSize</span>());
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">if</span> (columnStore.<span style="color:#50fa7b">getAllocatedSize</span>() <span style="color:#ff79c6">&gt;</span> (3 <span style="color:#ff79c6">*</span> rowGroupSizeThreshold)) {
+</span></span><span style="display:flex;"><span>      LOG.<span style="color:#50fa7b">warn</span>(<span style="color:#f1fa8c">&#34;Too much memory used: {}&#34;</span>, columnStore.<span style="color:#50fa7b">memUsageString</span>());
+</span></span><span style="display:flex;"><span>    }
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">if</span> (recordCount <span style="color:#ff79c6">&gt;</span> 0) {
+</span></span><span style="display:flex;"><span>      rowGroupOrdinal<span style="color:#ff79c6">++</span>;
+</span></span><span style="display:flex;"><span>      parquetFileWriter.<span style="color:#50fa7b">startBlock</span>(recordCount);
+</span></span><span style="display:flex;"><span>      columnStore.<span style="color:#50fa7b">flush</span>();
+</span></span><span style="display:flex;"><span>      pageStore.<span style="color:#50fa7b">flushToFileWriter</span>(parquetFileWriter);
+</span></span><span style="display:flex;"><span>      recordCount <span style="color:#ff79c6">=</span> 0;
+</span></span><span style="display:flex;"><span>      parquetFileWriter.<span style="color:#50fa7b">endBlock</span>();
+</span></span><span style="display:flex;"><span>      <span style="color:#ff79c6">this</span>.<span style="color:#50fa7b">nextRowGroupSize</span> <span style="color:#ff79c6">=</span> Math.<span style="color:#50fa7b">min</span>(
+</span></span><span style="display:flex;"><span>          parquetFileWriter.<span style="color:#50fa7b">getNextRowGroupSize</span>(),
+</span></span><span style="display:flex;"><span>          rowGroupSizeThreshold);
+</span></span><span style="display:flex;"><span>    }
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    columnStore <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">null</span>;
+</span></span><span style="display:flex;"><span>    pageStore <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">null</span>;
+</span></span><span style="display:flex;"><span>  }
+</span></span></code></pre></td></tr></table>
 </div>
-</div><p><img src="https://v1.ax1x.com/2024/09/25/7xJLOb.png" alt=""><br>
+</div><p>
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/09/25/7xJLOb.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/09/25/7xJLOb.png" />
+        </a>
+    <br>
 之后，Parquet解除当前的列存储和页存储并重新初始化新的存储，并继续读取剩余的数据框行并重复该过程<br>
 FileMetaData Write<br>
 在最后，将所有 row group 的 meta 信息存储<br>
-<img src="https://v1.ax1x.com/2024/09/25/7xJ0fe.png" alt=""></p>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/09/25/7xJ0fe.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/09/25/7xJ0fe.png" />
+        </a>
+    </p>
 <h2 id="parquet-encoding">Parquet Encoding</h2>
 <p>Dictionary Encoding</p>
 <ul>
@@ -468,106 +518,122 @@ FileMetaData Write<br>
 <li>可以看做是 dictionary encoding 的补充</li>
 <li>如果一个值反复出现了多次，就记录【出现的次数】- 【值的内容】</li>
 <li>如果column 中包括的都是不相同的值，则效果就不好了
-<img src="https://v1.ax1x.com/2024/10/05/7xIRvt.png" alt=""></li>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/10/05/7xIRvt.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/10/05/7xIRvt.png" />
+        </a>
+    </li>
 </ul>
 <p>Delta Encoding</p>
 <ul>
 <li>适合时间戳这样的，用 long 来表示每个时间戳的值</li>
 <li>起始值是一个比较大的值，而后面每次变化其实不大</li>
 <li>只需要很少的 bit 就可以存储每次增量的变化
-<img src="https://v1.ax1x.com/2024/10/05/7xIYIb.png" alt=""></li>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/10/05/7xIYIb.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/10/05/7xIYIb.png" />
+        </a>
+    </li>
 </ul>
 <p>parquet 如何实现 encoding</p>
 <ul>
 <li>根类是 ValuesWriter</li>
 <li>实现的抽象类是 DictionaryValuesWriter，它下面还有各种类型的 具体实现类
-<img src="https://v1.ax1x.com/2024/10/05/7xItLe.png" alt=""></li>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/10/05/7xItLe.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/10/05/7xItLe.png" />
+        </a>
+    </li>
 </ul>
 <p>下面是 PlainBinaryDictionaryValuesWriter</p>
-<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4">
-<table style="border-spacing:0;padding:0;margin:0;border:0;width:auto;overflow:auto;display:block;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
-<pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">15
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">16
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">17
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">18
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">19
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">20
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">21
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">22
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">23
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">24
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"><code><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">15
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">16
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">17
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">18
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">19
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">20
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">21
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">22
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">23
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">24
 </span></code></pre></td>
 <td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
-<pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-java" data-lang="java"><span style="color:#8be9fd;font-style:italic">public</span> <span style="color:#8be9fd;font-style:italic">static</span> <span style="color:#8be9fd;font-style:italic">class</span> <span style="color:#50fa7b">PlainBinaryDictionaryValuesWriter</span> <span style="color:#8be9fd;font-style:italic">extends</span> DictionaryValuesWriter <span style="color:#ff79c6">{</span>
-
-    <span style="color:#6272a4">/* type specific dictionary content */</span>
-    <span style="color:#8be9fd;font-style:italic">protected</span> Object2IntMap<span style="color:#ff79c6">&lt;</span>Binary<span style="color:#ff79c6">&gt;</span> binaryDictionaryContent <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">new</span> Object2IntLinkedOpenHashMap<span style="color:#ff79c6">&lt;</span><span style="color:#ff79c6">&gt;</span><span style="color:#ff79c6">(</span><span style="color:#ff79c6">)</span><span style="color:#ff79c6">;</span>
-
-    <span style="color:#8be9fd;font-style:italic">public</span> <span style="color:#50fa7b">PlainBinaryDictionaryValuesWriter</span><span style="color:#ff79c6">(</span><span style="color:#8be9fd">int</span> maxDictionaryByteSize<span style="color:#ff79c6">,</span> Encoding encodingForDataPage<span style="color:#ff79c6">,</span> 
-	Encoding encodingForDictionaryPage<span style="color:#ff79c6">,</span> ByteBufferAllocator allocator<span style="color:#ff79c6">)</span> <span style="color:#ff79c6">{</span>
-      <span style="color:#8be9fd;font-style:italic">super</span><span style="color:#ff79c6">(</span>maxDictionaryByteSize<span style="color:#ff79c6">,</span> encodingForDataPage<span style="color:#ff79c6">,</span> encodingForDictionaryPage<span style="color:#ff79c6">,</span> allocator<span style="color:#ff79c6">)</span><span style="color:#ff79c6">;</span>
-      binaryDictionaryContent<span style="color:#ff79c6">.</span><span style="color:#50fa7b">defaultReturnValue</span><span style="color:#ff79c6">(</span><span style="color:#ff79c6">-</span>1<span style="color:#ff79c6">)</span><span style="color:#ff79c6">;</span>
-    <span style="color:#ff79c6">}</span>
-
-    @Override
-    <span style="color:#8be9fd;font-style:italic">public</span> <span style="color:#8be9fd">void</span> <span style="color:#50fa7b">writeBytes</span><span style="color:#ff79c6">(</span>Binary v<span style="color:#ff79c6">)</span> <span style="color:#ff79c6">{</span>
-      <span style="color:#8be9fd">int</span> id <span style="color:#ff79c6">=</span> binaryDictionaryContent<span style="color:#ff79c6">.</span><span style="color:#50fa7b">getInt</span><span style="color:#ff79c6">(</span>v<span style="color:#ff79c6">)</span><span style="color:#ff79c6">;</span>
-      <span style="color:#ff79c6">if</span> <span style="color:#ff79c6">(</span>id <span style="color:#ff79c6">=</span><span style="color:#ff79c6">=</span> <span style="color:#ff79c6">-</span>1<span style="color:#ff79c6">)</span> <span style="color:#ff79c6">{</span>
-        id <span style="color:#ff79c6">=</span> binaryDictionaryContent<span style="color:#ff79c6">.</span><span style="color:#50fa7b">size</span><span style="color:#ff79c6">(</span><span style="color:#ff79c6">)</span><span style="color:#ff79c6">;</span>
-        binaryDictionaryContent<span style="color:#ff79c6">.</span><span style="color:#50fa7b">put</span><span style="color:#ff79c6">(</span>v<span style="color:#ff79c6">.</span><span style="color:#50fa7b">copy</span><span style="color:#ff79c6">(</span><span style="color:#ff79c6">)</span><span style="color:#ff79c6">,</span> id<span style="color:#ff79c6">)</span><span style="color:#ff79c6">;</span>
-        <span style="color:#6272a4">// length as int (4 bytes) + actual bytes
-</span><span style="color:#6272a4"></span>        dictionaryByteSize <span style="color:#ff79c6">+</span><span style="color:#ff79c6">=</span> 4L <span style="color:#ff79c6">+</span> v<span style="color:#ff79c6">.</span><span style="color:#50fa7b">length</span><span style="color:#ff79c6">(</span><span style="color:#ff79c6">)</span><span style="color:#ff79c6">;</span>
-      <span style="color:#ff79c6">}</span>
-      encodedValues<span style="color:#ff79c6">.</span><span style="color:#50fa7b">add</span><span style="color:#ff79c6">(</span>id<span style="color:#ff79c6">)</span><span style="color:#ff79c6">;</span>
-    <span style="color:#ff79c6">}</span>
-。。。
-	
-</code></pre></td></tr></table>
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"><code class="language-java" data-lang="java"><span style="display:flex;"><span><span style="color:#8be9fd;font-style:italic">public</span> <span style="color:#8be9fd;font-style:italic">static</span> <span style="color:#8be9fd;font-style:italic">class</span> <span style="color:#50fa7b">PlainBinaryDictionaryValuesWriter</span> <span style="color:#8be9fd;font-style:italic">extends</span> DictionaryValuesWriter {
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#6272a4">/* type specific dictionary content */</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#8be9fd;font-style:italic">protected</span> Object2IntMap<span style="color:#ff79c6">&lt;</span>Binary<span style="color:#ff79c6">&gt;</span> binaryDictionaryContent <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">new</span> Object2IntLinkedOpenHashMap<span style="color:#ff79c6">&lt;&gt;</span>();
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#8be9fd;font-style:italic">public</span> <span style="color:#50fa7b">PlainBinaryDictionaryValuesWriter</span>(<span style="color:#8be9fd">int</span> maxDictionaryByteSize, Encoding encodingForDataPage, 
+</span></span><span style="display:flex;"><span>	Encoding encodingForDictionaryPage, ByteBufferAllocator allocator) {
+</span></span><span style="display:flex;"><span>      <span style="color:#8be9fd;font-style:italic">super</span>(maxDictionaryByteSize, encodingForDataPage, encodingForDictionaryPage, allocator);
+</span></span><span style="display:flex;"><span>      binaryDictionaryContent.<span style="color:#50fa7b">defaultReturnValue</span>(<span style="color:#ff79c6">-</span>1);
+</span></span><span style="display:flex;"><span>    }
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    @Override
+</span></span><span style="display:flex;"><span>    <span style="color:#8be9fd;font-style:italic">public</span> <span style="color:#8be9fd">void</span> <span style="color:#50fa7b">writeBytes</span>(Binary v) {
+</span></span><span style="display:flex;"><span>      <span style="color:#8be9fd">int</span> id <span style="color:#ff79c6">=</span> binaryDictionaryContent.<span style="color:#50fa7b">getInt</span>(v);
+</span></span><span style="display:flex;"><span>      <span style="color:#ff79c6">if</span> (id <span style="color:#ff79c6">==</span> <span style="color:#ff79c6">-</span>1) {
+</span></span><span style="display:flex;"><span>        id <span style="color:#ff79c6">=</span> binaryDictionaryContent.<span style="color:#50fa7b">size</span>();
+</span></span><span style="display:flex;"><span>        binaryDictionaryContent.<span style="color:#50fa7b">put</span>(v.<span style="color:#50fa7b">copy</span>(), id);
+</span></span><span style="display:flex;"><span>        <span style="color:#6272a4">// length as int (4 bytes) + actual bytes</span>
+</span></span><span style="display:flex;"><span>        dictionaryByteSize <span style="color:#ff79c6">+=</span> 4L <span style="color:#ff79c6">+</span> v.<span style="color:#50fa7b">length</span>();
+</span></span><span style="display:flex;"><span>      }
+</span></span><span style="display:flex;"><span>      encodedValues.<span style="color:#50fa7b">add</span>(id);
+</span></span><span style="display:flex;"><span>    }
+</span></span><span style="display:flex;"><span>。。。
+</span></span><span style="display:flex;"><span>	
+</span></span></code></pre></td></tr></table>
 </div>
 </div><p>内部使用 hash-map 做编号的，超过阈值后，将 这个编号信息 flush</p>
 <p>RLE 的实现是<code>RunLengthBitPackingHybridValuesWriter</code>
 如果重复的次数超过 8 次，使用下面算法</p>
-<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4">
-<table style="border-spacing:0;padding:0;margin:0;border:0;width:auto;overflow:auto;display:block;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
-<pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"><code><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
 </span></code></pre></td>
 <td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
-<pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">rle-run :<span style="color:#ff79c6">=</span> &lt;rle-header&gt; &lt;repeated-value&gt;
-rle-header :<span style="color:#ff79c6">=</span> varint-encode<span style="color:#ff79c6">(</span><span style="color:#ff79c6">(</span>rle-run-len<span style="color:#ff79c6">)</span> <span style="color:#f1fa8c">&lt;&lt; 1)
-</span><span style="color:#f1fa8c">repeated-value := value that is repeated, using a fixed-width of round-up-to-next-byte(bit-width)
-</span><span style="color:#f1fa8c">*varint-encode is ULEB01</span><span style="color:#bd93f9">28</span> coding
-</code></pre></td></tr></table>
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"><code class="language-shell" data-lang="shell"><span style="display:flex;"><span>rle-run :<span style="color:#ff79c6">=</span> &lt;rle-header&gt; &lt;repeated-value&gt;
+</span></span><span style="display:flex;"><span>rle-header :<span style="color:#ff79c6">=</span> varint-encode<span style="color:#ff79c6">((</span>rle-run-len<span style="color:#ff79c6">)</span> <span style="color:#f1fa8c">&lt;&lt; 1)
+</span></span></span><span style="display:flex;"><span><span style="color:#f1fa8c">repeated-value := value that is repeated, using a fixed-width of round-up-to-next-byte(bit-width)
+</span></span></span><span style="display:flex;"><span><span style="color:#f1fa8c">*varint-encode is ULEB01</span><span style="color:#bd93f9">28</span> coding
+</span></span></code></pre></td></tr></table>
 </div>
-</div><p><img src="https://v1.ax1x.com/2024/10/05/7xIzxP.png" alt=""><br>
+</div><p>
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/10/05/7xIzxP.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/10/05/7xIzxP.png" />
+        </a>
+    <br>
 否则使用下面算法</p>
-<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4">
-<table style="border-spacing:0;padding:0;margin:0;border:0;width:auto;overflow:auto;display:block;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
-<pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"><code><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
 </span></code></pre></td>
 <td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
-<pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">bit-packed-run :<span style="color:#ff79c6">=</span> &lt;bit-packed-header&gt; &lt;bit-packed-values&gt;
-bit-packed-header :<span style="color:#ff79c6">=</span> varint-encode<span style="color:#ff79c6">(</span>&lt;bit-pack-scaled-run-len&gt; <span style="color:#f1fa8c">&lt;&lt; 1 | 1</span><span style="color:#ff79c6">)</span>
-bit-pack-scaled-run-len :<span style="color:#ff79c6">=</span> <span style="color:#ff79c6">(</span>bit-packed-run-len<span style="color:#ff79c6">)</span> / 8
-</code></pre></td></tr></table>
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"><code class="language-shell" data-lang="shell"><span style="display:flex;"><span>bit-packed-run :<span style="color:#ff79c6">=</span> &lt;bit-packed-header&gt; &lt;bit-packed-values&gt;
+</span></span><span style="display:flex;"><span>bit-packed-header :<span style="color:#ff79c6">=</span> varint-encode<span style="color:#ff79c6">(</span>&lt;bit-pack-scaled-run-len&gt; <span style="color:#f1fa8c">&lt;&lt; 1 | 1</span><span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>bit-pack-scaled-run-len :<span style="color:#ff79c6">=</span> <span style="color:#ff79c6">(</span>bit-packed-run-len<span style="color:#ff79c6">)</span> / <span style="color:#bd93f9">8</span>
+</span></span></code></pre></td></tr></table>
 </div>
 </div><p>delta 的实现很多，包括</p>
 <ul>
@@ -577,115 +643,137 @@ bit-pack-scaled-run-len :<span style="color:#ff79c6">=</span> <span style="color
 <li>DeltaByteArrayWriter</li>
 </ul>
 <p>就是通过计算本次，前一次的差值来写入的<br>
-<img src="https://v1.ax1x.com/2024/10/05/7xI44w.png" alt=""></p>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/10/05/7xI44w.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/10/05/7xI44w.png" />
+        </a>
+    </p>
 <p>parquet 通过 factory 创建不同的 writer<br>
-<img src="https://v1.ax1x.com/2024/10/05/7xIJ96.png" alt=""></p>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/10/05/7xIJ96.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/10/05/7xIJ96.png" />
+        </a>
+    </p>
 <p>接口类</p>
-<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4">
-<table style="border-spacing:0;padding:0;margin:0;border:0;width:auto;overflow:auto;display:block;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
-<pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">5
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"><code><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">5
 </span></code></pre></td>
 <td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
-<pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-java" data-lang="java"><span style="color:#8be9fd;font-style:italic">public</span> <span style="color:#8be9fd;font-style:italic">interface</span> <span style="color:#50fa7b">ValuesWriterFactory</span> <span style="color:#ff79c6">{</span>
-    <span style="color:#8be9fd">void</span> <span style="color:#50fa7b">initialize</span><span style="color:#ff79c6">(</span>ParquetProperties var1<span style="color:#ff79c6">)</span><span style="color:#ff79c6">;</span>
-
-    ValuesWriter <span style="color:#50fa7b">newValuesWriter</span><span style="color:#ff79c6">(</span>ColumnDescriptor var1<span style="color:#ff79c6">)</span><span style="color:#ff79c6">;</span>
-<span style="color:#ff79c6">}</span>
-</code></pre></td></tr></table>
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"><code class="language-java" data-lang="java"><span style="display:flex;"><span><span style="color:#8be9fd;font-style:italic">public</span> <span style="color:#8be9fd;font-style:italic">interface</span> <span style="color:#50fa7b">ValuesWriterFactory</span> {
+</span></span><span style="display:flex;"><span>    <span style="color:#8be9fd">void</span> <span style="color:#50fa7b">initialize</span>(ParquetProperties var1);
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    ValuesWriter <span style="color:#50fa7b">newValuesWriter</span>(ColumnDescriptor var1);
+</span></span><span style="display:flex;"><span>}
+</span></span></code></pre></td></tr></table>
 </div>
 </div><p>DefaultValuesWriterFactory 的主要实现</p>
-<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4">
-<table style="border-spacing:0;padding:0;margin:0;border:0;width:auto;overflow:auto;display:block;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
-<pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">15
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">16
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">17
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">18
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">19
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">20
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">21
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">22
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">23
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">24
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">25
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">26
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">27
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">28
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">29
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">30
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">31
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">32
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">33
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">34
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">35
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"><code><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">15
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">16
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">17
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">18
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">19
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">20
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">21
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">22
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">23
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">24
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">25
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">26
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">27
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">28
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">29
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">30
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">31
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">32
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">33
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">34
 </span></code></pre></td>
 <td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
-<pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-java" data-lang="java">    <span style="color:#8be9fd;font-style:italic">public</span> ValuesWriter <span style="color:#50fa7b">newValuesWriter</span><span style="color:#ff79c6">(</span>ColumnDescriptor descriptor<span style="color:#ff79c6">)</span> <span style="color:#ff79c6">{</span>
-        <span style="color:#ff79c6">return</span> <span style="color:#ff79c6">this</span><span style="color:#ff79c6">.</span><span style="color:#50fa7b">delegateFactory</span><span style="color:#ff79c6">.</span><span style="color:#50fa7b">newValuesWriter</span><span style="color:#ff79c6">(</span>descriptor<span style="color:#ff79c6">)</span><span style="color:#ff79c6">;</span>
-    <span style="color:#ff79c6">}</span>
-
-    <span style="color:#8be9fd;font-style:italic">static</span> DictionaryValuesWriter <span style="color:#50fa7b">dictionaryWriter</span><span style="color:#ff79c6">(</span>ColumnDescriptor path<span style="color:#ff79c6">,</span> ParquetProperties properties<span style="color:#ff79c6">,</span> Encoding dictPageEncoding<span style="color:#ff79c6">,</span> Encoding 
-	dataPageEncoding<span style="color:#ff79c6">)</span> <span style="color:#ff79c6">{</span>
-        <span style="color:#ff79c6">switch</span><span style="color:#ff79c6">(</span>path<span style="color:#ff79c6">.</span><span style="color:#50fa7b">getType</span><span style="color:#ff79c6">(</span><span style="color:#ff79c6">)</span><span style="color:#ff79c6">)</span> <span style="color:#ff79c6">{</span>
-        <span style="color:#ff79c6">case</span> BOOLEAN<span style="color:#ff79c6">:</span>
-            <span style="color:#ff79c6">throw</span> <span style="color:#ff79c6">new</span> IllegalArgumentException<span style="color:#ff79c6">(</span><span style="color:#f1fa8c">&#34;no dictionary encoding for BOOLEAN&#34;</span><span style="color:#ff79c6">)</span><span style="color:#ff79c6">;</span>
-        <span style="color:#ff79c6">case</span> BINARY<span style="color:#ff79c6">:</span>
-            <span style="color:#ff79c6">return</span> <span style="color:#ff79c6">new</span> PlainBinaryDictionaryValuesWriter<span style="color:#ff79c6">(</span>properties<span style="color:#ff79c6">.</span><span style="color:#50fa7b">getDictionaryPageSizeThreshold</span><span style="color:#ff79c6">(</span><span style="color:#ff79c6">)</span><span style="color:#ff79c6">,</span> dataPageEncoding<span style="color:#ff79c6">,</span> dictPageEncoding<span style="color:#ff79c6">,</span> 
-			properties<span style="color:#ff79c6">.</span><span style="color:#50fa7b">getAllocator</span><span style="color:#ff79c6">(</span><span style="color:#ff79c6">)</span><span style="color:#ff79c6">)</span><span style="color:#ff79c6">;</span>
-        <span style="color:#ff79c6">case</span> INT32<span style="color:#ff79c6">:</span>
-            <span style="color:#ff79c6">return</span> <span style="color:#ff79c6">new</span> PlainIntegerDictionaryValuesWriter<span style="color:#ff79c6">(</span>properties<span style="color:#ff79c6">.</span><span style="color:#50fa7b">getDictionaryPageSizeThreshold</span><span style="color:#ff79c6">(</span><span style="color:#ff79c6">)</span><span style="color:#ff79c6">,</span> dataPageEncoding<span style="color:#ff79c6">,</span> dictPageEncoding<span style="color:#ff79c6">,</span> 
-			properties<span style="color:#ff79c6">.</span><span style="color:#50fa7b">getAllocator</span><span style="color:#ff79c6">(</span><span style="color:#ff79c6">)</span><span style="color:#ff79c6">)</span><span style="color:#ff79c6">;</span>
-        <span style="color:#ff79c6">case</span> INT64<span style="color:#ff79c6">:</span>
-            <span style="color:#ff79c6">return</span> <span style="color:#ff79c6">new</span> PlainLongDictionaryValuesWriter<span style="color:#ff79c6">(</span>properties<span style="color:#ff79c6">.</span><span style="color:#50fa7b">getDictionaryPageSizeThreshold</span><span style="color:#ff79c6">(</span><span style="color:#ff79c6">)</span><span style="color:#ff79c6">,</span> dataPageEncoding<span style="color:#ff79c6">,</span> dictPageEncoding<span style="color:#ff79c6">,</span> 
-			properties<span style="color:#ff79c6">.</span><span style="color:#50fa7b">getAllocator</span><span style="color:#ff79c6">(</span><span style="color:#ff79c6">)</span><span style="color:#ff79c6">)</span><span style="color:#ff79c6">;</span>
-        <span style="color:#ff79c6">case</span> INT96<span style="color:#ff79c6">:</span>
-            <span style="color:#ff79c6">return</span> <span style="color:#ff79c6">new</span> PlainFixedLenArrayDictionaryValuesWriter<span style="color:#ff79c6">(</span>properties<span style="color:#ff79c6">.</span><span style="color:#50fa7b">getDictionaryPageSizeThreshold</span><span style="color:#ff79c6">(</span><span style="color:#ff79c6">)</span><span style="color:#ff79c6">,</span> 12<span style="color:#ff79c6">,</span> dataPageEncoding<span style="color:#ff79c6">,</span> 
-			dictPageEncoding<span style="color:#ff79c6">,</span> properties<span style="color:#ff79c6">.</span><span style="color:#50fa7b">getAllocator</span><span style="color:#ff79c6">(</span><span style="color:#ff79c6">)</span><span style="color:#ff79c6">)</span><span style="color:#ff79c6">;</span>
-        <span style="color:#ff79c6">case</span> DOUBLE<span style="color:#ff79c6">:</span>
-            <span style="color:#ff79c6">return</span> <span style="color:#ff79c6">new</span> PlainDoubleDictionaryValuesWriter<span style="color:#ff79c6">(</span>properties<span style="color:#ff79c6">.</span><span style="color:#50fa7b">getDictionaryPageSizeThreshold</span><span style="color:#ff79c6">(</span><span style="color:#ff79c6">)</span><span style="color:#ff79c6">,</span> dataPageEncoding<span style="color:#ff79c6">,</span> dictPageEncoding<span style="color:#ff79c6">,</span> 
-			properties<span style="color:#ff79c6">.</span><span style="color:#50fa7b">getAllocator</span><span style="color:#ff79c6">(</span><span style="color:#ff79c6">)</span><span style="color:#ff79c6">)</span><span style="color:#ff79c6">;</span>
-        <span style="color:#ff79c6">case</span> FLOAT<span style="color:#ff79c6">:</span>
-            <span style="color:#ff79c6">return</span> <span style="color:#ff79c6">new</span> PlainFloatDictionaryValuesWriter<span style="color:#ff79c6">(</span>properties<span style="color:#ff79c6">.</span><span style="color:#50fa7b">getDictionaryPageSizeThreshold</span><span style="color:#ff79c6">(</span><span style="color:#ff79c6">)</span><span style="color:#ff79c6">,</span> dataPageEncoding<span style="color:#ff79c6">,</span> dictPageEncoding<span style="color:#ff79c6">,</span> 
-			properties<span style="color:#ff79c6">.</span><span style="color:#50fa7b">getAllocator</span><span style="color:#ff79c6">(</span><span style="color:#ff79c6">)</span><span style="color:#ff79c6">)</span><span style="color:#ff79c6">;</span>
-        <span style="color:#ff79c6">case</span> FIXED_LEN_BYTE_ARRAY<span style="color:#ff79c6">:</span>
-            <span style="color:#ff79c6">return</span> <span style="color:#ff79c6">new</span> PlainFixedLenArrayDictionaryValuesWriter<span style="color:#ff79c6">(</span>properties<span style="color:#ff79c6">.</span><span style="color:#50fa7b">getDictionaryPageSizeThreshold</span><span style="color:#ff79c6">(</span><span style="color:#ff79c6">)</span><span style="color:#ff79c6">,</span> path<span style="color:#ff79c6">.</span><span style="color:#50fa7b">getTypeLength</span><span style="color:#ff79c6">(</span><span style="color:#ff79c6">)</span><span style="color:#ff79c6">,</span> 
-			dataPageEncoding<span style="color:#ff79c6">,</span> dictPageEncoding<span style="color:#ff79c6">,</span> properties<span style="color:#ff79c6">.</span><span style="color:#50fa7b">getAllocator</span><span style="color:#ff79c6">(</span><span style="color:#ff79c6">)</span><span style="color:#ff79c6">)</span><span style="color:#ff79c6">;</span>
-        <span style="color:#ff79c6">default</span><span style="color:#ff79c6">:</span>
-            <span style="color:#ff79c6">throw</span> <span style="color:#ff79c6">new</span> IllegalArgumentException<span style="color:#ff79c6">(</span><span style="color:#f1fa8c">&#34;Unknown type &#34;</span> <span style="color:#ff79c6">+</span> path<span style="color:#ff79c6">.</span><span style="color:#50fa7b">getType</span><span style="color:#ff79c6">(</span><span style="color:#ff79c6">)</span><span style="color:#ff79c6">)</span><span style="color:#ff79c6">;</span>
-        <span style="color:#ff79c6">}</span>
-    <span style="color:#ff79c6">}</span>
-
-</code></pre></td></tr></table>
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"><code class="language-java" data-lang="java"><span style="display:flex;"><span>    <span style="color:#8be9fd;font-style:italic">public</span> ValuesWriter <span style="color:#50fa7b">newValuesWriter</span>(ColumnDescriptor descriptor) {
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">return</span> <span style="color:#ff79c6">this</span>.<span style="color:#50fa7b">delegateFactory</span>.<span style="color:#50fa7b">newValuesWriter</span>(descriptor);
+</span></span><span style="display:flex;"><span>    }
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#8be9fd;font-style:italic">static</span> DictionaryValuesWriter <span style="color:#50fa7b">dictionaryWriter</span>(ColumnDescriptor path, ParquetProperties properties, Encoding dictPageEncoding, Encoding 
+</span></span><span style="display:flex;"><span>	dataPageEncoding) {
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">switch</span>(path.<span style="color:#50fa7b">getType</span>()) {
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">case</span> BOOLEAN:
+</span></span><span style="display:flex;"><span>            <span style="color:#ff79c6">throw</span> <span style="color:#ff79c6">new</span> IllegalArgumentException(<span style="color:#f1fa8c">&#34;no dictionary encoding for BOOLEAN&#34;</span>);
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">case</span> BINARY:
+</span></span><span style="display:flex;"><span>            <span style="color:#ff79c6">return</span> <span style="color:#ff79c6">new</span> PlainBinaryDictionaryValuesWriter(properties.<span style="color:#50fa7b">getDictionaryPageSizeThreshold</span>(), dataPageEncoding, dictPageEncoding, 
+</span></span><span style="display:flex;"><span>			properties.<span style="color:#50fa7b">getAllocator</span>());
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">case</span> INT32:
+</span></span><span style="display:flex;"><span>            <span style="color:#ff79c6">return</span> <span style="color:#ff79c6">new</span> PlainIntegerDictionaryValuesWriter(properties.<span style="color:#50fa7b">getDictionaryPageSizeThreshold</span>(), dataPageEncoding, dictPageEncoding, 
+</span></span><span style="display:flex;"><span>			properties.<span style="color:#50fa7b">getAllocator</span>());
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">case</span> INT64:
+</span></span><span style="display:flex;"><span>            <span style="color:#ff79c6">return</span> <span style="color:#ff79c6">new</span> PlainLongDictionaryValuesWriter(properties.<span style="color:#50fa7b">getDictionaryPageSizeThreshold</span>(), dataPageEncoding, dictPageEncoding, 
+</span></span><span style="display:flex;"><span>			properties.<span style="color:#50fa7b">getAllocator</span>());
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">case</span> INT96:
+</span></span><span style="display:flex;"><span>            <span style="color:#ff79c6">return</span> <span style="color:#ff79c6">new</span> PlainFixedLenArrayDictionaryValuesWriter(properties.<span style="color:#50fa7b">getDictionaryPageSizeThreshold</span>(), 12, dataPageEncoding, 
+</span></span><span style="display:flex;"><span>			dictPageEncoding, properties.<span style="color:#50fa7b">getAllocator</span>());
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">case</span> DOUBLE:
+</span></span><span style="display:flex;"><span>            <span style="color:#ff79c6">return</span> <span style="color:#ff79c6">new</span> PlainDoubleDictionaryValuesWriter(properties.<span style="color:#50fa7b">getDictionaryPageSizeThreshold</span>(), dataPageEncoding, dictPageEncoding, 
+</span></span><span style="display:flex;"><span>			properties.<span style="color:#50fa7b">getAllocator</span>());
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">case</span> FLOAT:
+</span></span><span style="display:flex;"><span>            <span style="color:#ff79c6">return</span> <span style="color:#ff79c6">new</span> PlainFloatDictionaryValuesWriter(properties.<span style="color:#50fa7b">getDictionaryPageSizeThreshold</span>(), dataPageEncoding, dictPageEncoding, 
+</span></span><span style="display:flex;"><span>			properties.<span style="color:#50fa7b">getAllocator</span>());
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">case</span> FIXED_LEN_BYTE_ARRAY:
+</span></span><span style="display:flex;"><span>            <span style="color:#ff79c6">return</span> <span style="color:#ff79c6">new</span> PlainFixedLenArrayDictionaryValuesWriter(properties.<span style="color:#50fa7b">getDictionaryPageSizeThreshold</span>(), path.<span style="color:#50fa7b">getTypeLength</span>(), 
+</span></span><span style="display:flex;"><span>			dataPageEncoding, dictPageEncoding, properties.<span style="color:#50fa7b">getAllocator</span>());
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">default</span>:
+</span></span><span style="display:flex;"><span>            <span style="color:#ff79c6">throw</span> <span style="color:#ff79c6">new</span> IllegalArgumentException(<span style="color:#f1fa8c">&#34;Unknown type &#34;</span> <span style="color:#ff79c6">+</span> path.<span style="color:#50fa7b">getType</span>());
+</span></span><span style="display:flex;"><span>        }
+</span></span><span style="display:flex;"><span>    }
+</span></span></code></pre></td></tr></table>
 </div>
 </div><p>也实现自定义的 encoding 类，只要继承 ValuesWriterFactory 即可 <br>
 然后 在 org.apache.parquet.column.Build#withValuesWriterFactory 进行设置</p>
 <h2 id="vectorised-parquet-reading">Vectorised Parquet Reading</h2>
 <p>早期的时候是一次读一行，现在改为一次读一个 batch</p>
 <p>ColumnBatch 包装了若干个 ColumnVectors，ColumnVectors 包括了一个列的若干值   <br>
-<img src="https://v1.ax1x.com/2024/10/08/7xM9FH.png" alt=""></p>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/10/08/7xM9FH.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/10/08/7xM9FH.png" />
+        </a>
+    </p>
 <p>ColumnBatch 也提供了 row 迭代的访问方式，
-<img src="https://v1.ax1x.com/2024/10/08/7xML0s.png" alt=""></p>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/10/08/7xML0s.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/10/08/7xML0s.png" />
+        </a>
+    </p>
 <p>提供了获取各种数据类型的方式<br>
-<img src="https://v1.ax1x.com/2024/10/08/7xMmMq.png" alt=""></p>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/10/08/7xMmMq.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/10/08/7xMmMq.png" />
+        </a>
+    </p>
 <p>Spark 在读取的时候，是重用了 ColumnVector 实例，这样开销就很小了<br>
-<img src="https://v1.ax1x.com/2024/10/08/7xM7kI.png" alt=""></p>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/10/08/7xM7kI.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/10/08/7xM7kI.png" />
+        </a>
+    </p>
 <p>Spark实现的parquet 主要包含</p>
 <ul>
 <li>VectorizedParquetRecordReader</li>
@@ -700,7 +788,11 @@ bit-pack-scaled-run-len :<span style="color:#ff79c6">=</span> <span style="color
 <li>有两个版本的VectorizedRleValuesReader (RLE/Bit-PackingHybrid)</li>
 <li>以及VectorizedPlainValuesReader(for plain encoding)</li>
 <li>最后将这些数据返回给 VectorizedParquetRecordReader，再由上层进一步消费
-<img src="https://v1.ax1x.com/2024/10/08/7xMNFJ.png" alt=""></li>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/10/08/7xMNFJ.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/10/08/7xMNFJ.png" />
+        </a>
+    </li>
 </ul>
 <p>VectorizedParquetRecordReader</p>
 <ul>
@@ -710,76 +802,88 @@ bit-pack-scaled-run-len :<span style="color:#ff79c6">=</span> <span style="color
 <li>再通过VectorizedColumnReader 读每个 batach column</li>
 </ul>
 <p>VectorizedParquetRecordReader#nextBatch 主要逻辑：</p>
-<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4">
-<table style="border-spacing:0;padding:0;margin:0;border:0;width:auto;overflow:auto;display:block;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
-<pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">15
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">16
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">17
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">18
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">19
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">20
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">21
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">22
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">23
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">24
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">25
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">26
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"><code><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">15
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">16
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">17
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">18
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">19
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">20
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">21
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">22
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">23
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">24
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">25
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">26
 </span></code></pre></td>
 <td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
-<pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-java" data-lang="java">  <span style="color:#8be9fd;font-style:italic">public</span> <span style="color:#8be9fd">boolean</span> <span style="color:#50fa7b">nextBatch</span><span style="color:#ff79c6">(</span><span style="color:#ff79c6">)</span> <span style="color:#8be9fd;font-style:italic">throws</span> IOException <span style="color:#ff79c6">{</span>
-    <span style="color:#ff79c6">for</span> <span style="color:#ff79c6">(</span>ParquetColumnVector vector <span style="color:#ff79c6">:</span> columnVectors<span style="color:#ff79c6">)</span> <span style="color:#ff79c6">{</span>
-      vector<span style="color:#ff79c6">.</span><span style="color:#50fa7b">reset</span><span style="color:#ff79c6">(</span><span style="color:#ff79c6">)</span><span style="color:#ff79c6">;</span>
-    <span style="color:#ff79c6">}</span>
-    columnarBatch<span style="color:#ff79c6">.</span><span style="color:#50fa7b">setNumRows</span><span style="color:#ff79c6">(</span>0<span style="color:#ff79c6">)</span><span style="color:#ff79c6">;</span>
-    <span style="color:#ff79c6">if</span> <span style="color:#ff79c6">(</span>rowsReturned <span style="color:#ff79c6">&gt;</span><span style="color:#ff79c6">=</span> totalRowCount<span style="color:#ff79c6">)</span> <span style="color:#ff79c6">return</span> <span style="color:#ff79c6">false</span><span style="color:#ff79c6">;</span>
-    checkEndOfRowGroup<span style="color:#ff79c6">(</span><span style="color:#ff79c6">)</span><span style="color:#ff79c6">;</span>
-
-    <span style="color:#8be9fd">int</span> num <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">(</span><span style="color:#8be9fd">int</span><span style="color:#ff79c6">)</span> Math<span style="color:#ff79c6">.</span><span style="color:#50fa7b">min</span><span style="color:#ff79c6">(</span>capacity<span style="color:#ff79c6">,</span> totalCountLoadedSoFar <span style="color:#ff79c6">-</span> rowsReturned<span style="color:#ff79c6">)</span><span style="color:#ff79c6">;</span>
-    <span style="color:#ff79c6">for</span> <span style="color:#ff79c6">(</span>ParquetColumnVector cv <span style="color:#ff79c6">:</span> columnVectors<span style="color:#ff79c6">)</span> <span style="color:#ff79c6">{</span>
-      <span style="color:#ff79c6">for</span> <span style="color:#ff79c6">(</span>ParquetColumnVector leafCv <span style="color:#ff79c6">:</span> cv<span style="color:#ff79c6">.</span><span style="color:#50fa7b">getLeaves</span><span style="color:#ff79c6">(</span><span style="color:#ff79c6">)</span><span style="color:#ff79c6">)</span> <span style="color:#ff79c6">{</span>
-        VectorizedColumnReader columnReader <span style="color:#ff79c6">=</span> leafCv<span style="color:#ff79c6">.</span><span style="color:#50fa7b">getColumnReader</span><span style="color:#ff79c6">(</span><span style="color:#ff79c6">)</span><span style="color:#ff79c6">;</span>
-        <span style="color:#ff79c6">if</span> <span style="color:#ff79c6">(</span>columnReader <span style="color:#ff79c6">!</span><span style="color:#ff79c6">=</span> <span style="color:#ff79c6">null</span><span style="color:#ff79c6">)</span> <span style="color:#ff79c6">{</span>
-          columnReader<span style="color:#ff79c6">.</span><span style="color:#50fa7b">readBatch</span><span style="color:#ff79c6">(</span>num<span style="color:#ff79c6">,</span> leafCv<span style="color:#ff79c6">.</span><span style="color:#50fa7b">getValueVector</span><span style="color:#ff79c6">(</span><span style="color:#ff79c6">)</span><span style="color:#ff79c6">,</span>
-            leafCv<span style="color:#ff79c6">.</span><span style="color:#50fa7b">getRepetitionLevelVector</span><span style="color:#ff79c6">(</span><span style="color:#ff79c6">)</span><span style="color:#ff79c6">,</span> leafCv<span style="color:#ff79c6">.</span><span style="color:#50fa7b">getDefinitionLevelVector</span><span style="color:#ff79c6">(</span><span style="color:#ff79c6">)</span><span style="color:#ff79c6">)</span><span style="color:#ff79c6">;</span>
-        <span style="color:#ff79c6">}</span>
-      <span style="color:#ff79c6">}</span>
-      cv<span style="color:#ff79c6">.</span><span style="color:#50fa7b">assemble</span><span style="color:#ff79c6">(</span><span style="color:#ff79c6">)</span><span style="color:#ff79c6">;</span>
-    <span style="color:#ff79c6">}</span>
-
-    rowsReturned <span style="color:#ff79c6">+</span><span style="color:#ff79c6">=</span> num<span style="color:#ff79c6">;</span>
-    columnarBatch<span style="color:#ff79c6">.</span><span style="color:#50fa7b">setNumRows</span><span style="color:#ff79c6">(</span>num<span style="color:#ff79c6">)</span><span style="color:#ff79c6">;</span>
-    numBatched <span style="color:#ff79c6">=</span> num<span style="color:#ff79c6">;</span>
-    batchIdx <span style="color:#ff79c6">=</span> 0<span style="color:#ff79c6">;</span>
-    <span style="color:#ff79c6">return</span> <span style="color:#ff79c6">true</span><span style="color:#ff79c6">;</span>
-  <span style="color:#ff79c6">}</span>
-</code></pre></td></tr></table>
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"><code class="language-java" data-lang="java"><span style="display:flex;"><span>  <span style="color:#8be9fd;font-style:italic">public</span> <span style="color:#8be9fd">boolean</span> <span style="color:#50fa7b">nextBatch</span>() <span style="color:#8be9fd;font-style:italic">throws</span> IOException {
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">for</span> (ParquetColumnVector vector : columnVectors) {
+</span></span><span style="display:flex;"><span>      vector.<span style="color:#50fa7b">reset</span>();
+</span></span><span style="display:flex;"><span>    }
+</span></span><span style="display:flex;"><span>    columnarBatch.<span style="color:#50fa7b">setNumRows</span>(0);
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">if</span> (rowsReturned <span style="color:#ff79c6">&gt;=</span> totalRowCount) <span style="color:#ff79c6">return</span> <span style="color:#ff79c6">false</span>;
+</span></span><span style="display:flex;"><span>    checkEndOfRowGroup();
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#8be9fd">int</span> num <span style="color:#ff79c6">=</span> (<span style="color:#8be9fd">int</span>) Math.<span style="color:#50fa7b">min</span>(capacity, totalCountLoadedSoFar <span style="color:#ff79c6">-</span> rowsReturned);
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">for</span> (ParquetColumnVector cv : columnVectors) {
+</span></span><span style="display:flex;"><span>      <span style="color:#ff79c6">for</span> (ParquetColumnVector leafCv : cv.<span style="color:#50fa7b">getLeaves</span>()) {
+</span></span><span style="display:flex;"><span>        VectorizedColumnReader columnReader <span style="color:#ff79c6">=</span> leafCv.<span style="color:#50fa7b">getColumnReader</span>();
+</span></span><span style="display:flex;"><span>        <span style="color:#ff79c6">if</span> (columnReader <span style="color:#ff79c6">!=</span> <span style="color:#ff79c6">null</span>) {
+</span></span><span style="display:flex;"><span>          columnReader.<span style="color:#50fa7b">readBatch</span>(num, leafCv.<span style="color:#50fa7b">getValueVector</span>(),
+</span></span><span style="display:flex;"><span>            leafCv.<span style="color:#50fa7b">getRepetitionLevelVector</span>(), leafCv.<span style="color:#50fa7b">getDefinitionLevelVector</span>());
+</span></span><span style="display:flex;"><span>        }
+</span></span><span style="display:flex;"><span>      }
+</span></span><span style="display:flex;"><span>      cv.<span style="color:#50fa7b">assemble</span>();
+</span></span><span style="display:flex;"><span>    }
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    rowsReturned <span style="color:#ff79c6">+=</span> num;
+</span></span><span style="display:flex;"><span>    columnarBatch.<span style="color:#50fa7b">setNumRows</span>(num);
+</span></span><span style="display:flex;"><span>    numBatched <span style="color:#ff79c6">=</span> num;
+</span></span><span style="display:flex;"><span>    batchIdx <span style="color:#ff79c6">=</span> 0;
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">return</span> <span style="color:#ff79c6">true</span>;
+</span></span><span style="display:flex;"><span>  }
+</span></span></code></pre></td></tr></table>
 </div>
 </div><p>VectorizedColumnReader &amp; VectorizedValuesReader</p>
 <ul>
 <li>VectorizedColumnReader 创建对应的 ColumnDescriptor</li>
 <li>执行readBatch 时，传递两个参数，total(读batch 的数量)，column</li>
 </ul>
-<p><img src="https://v1.ax1x.com/2024/10/08/7xMuqG.png" alt=""></p>
+<p>
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/10/08/7xMuqG.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/10/08/7xMuqG.png" />
+        </a>
+    </p>
 <p>如果 isCurrentPageDictionaryEncoded 被打开，则计算  dictionary encoded column values
-<img src="https://v1.ax1x.com/2024/10/08/7xMyMt.png" alt=""></p>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/10/08/7xMyMt.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/10/08/7xMyMt.png" />
+        </a>
+    </p>
 <p>如果isCurrentPageDictionaryEncoded 关闭，则根据类型做解码
-<img src="https://v1.ax1x.com/2024/10/08/7xMK3b.png" alt=""><br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/10/08/7xMK3b.png">
+            <img class="mx-auto" alt="" src="https://v1.ax1x.com/2024/10/08/7xMK3b.png" />
+        </a>
+    <br>
 这里是通过 VectorizedValueReader 来读取，并解码的</p>
-<h2 id="heading1">参考</h2>
+<h2 id="参考">参考</h2>
 <ul>
 <li><a href="https://dataninjago.com/2021/12/03/databricks-deep-dive-1-table-writing-journey-overview/">Parquet for Spark Deep Dive (1) – Table Writing Journey Overview</a></li>
 <li><a href="https://dataninjago.com/2021/12/05/databricks-deep-dive-2-parquet-write-internal/">Parquet for Spark Deep Dive (2) – Parquet Write Internal</a></li>
@@ -855,6 +959,7 @@ code.has-jax {
       </script>
     </div>
     
+
 </div>
 
 
@@ -873,6 +978,10 @@ code.has-jax {
     <section class="widget">
         <h3 class="widget-title">最近文章</h3>
 <ul class="widget-list">
+    
+    <li>
+        <a href="/post/2026/06/da_lian/" title="大连，11年后的再相见">大连，11年后的再相见</a>
+    </li>
     
     <li>
         <a href="/post/2026/05/volcano-notes/" title="Volcano 笔记">Volcano 笔记</a>
@@ -910,10 +1019,6 @@ code.has-jax {
         <a href="/post/2026/04/claude_code/" title="Claude code 源码分析">Claude code 源码分析</a>
     </li>
     
-    <li>
-        <a href="/post/2026/03/iran_war/" title="Iran War">Iran War</a>
-    </li>
-    
 </ul>
 
     </section>
@@ -940,7 +1045,7 @@ code.has-jax {
     
     <li><a href="/categories/%E6%96%87%E5%AD%A6%E5%92%8C%E8%89%BA%E6%9C%AF/">文学和艺术 (3)</a></li>
     
-    <li><a href="/categories/%E6%97%85%E8%A1%8C/">旅行 (15)</a></li>
+    <li><a href="/categories/%E6%97%85%E8%A1%8C/">旅行 (16)</a></li>
     
     <li><a href="/categories/%E6%9E%B6%E6%9E%84/">架构 (15)</a></li>
     
@@ -974,7 +1079,7 @@ code.has-jax {
     
     <li><a href="/years/2025%E5%B9%B4/">2025年 (38)</a></li>
     
-    <li><a href="/years/2026%E5%B9%B4/">2026年 (14)</a></li>
+    <li><a href="/years/2026%E5%B9%B4/">2026年 (15)</a></li>
     
 </ul>
 
@@ -988,9 +1093,9 @@ code.has-jax {
     
     <a href="/tags/ambari/">Ambari </a>
     
-    <a href="/tags/architecture/">architecture </a>
+    <a href="/tags/architecture/">Architecture </a>
     
-    <a href="/tags/bigdata/">bigdata </a>
+    <a href="/tags/bigdata/">Bigdata </a>
     
     <a href="/tags/btrace/">BTrace </a>
     
@@ -998,11 +1103,11 @@ code.has-jax {
     
     <a href="/tags/c&#43;&#43;/">C&#43;&#43; </a>
     
-    <a href="/tags/calcite/">calcite </a>
+    <a href="/tags/calcite/">Calcite </a>
     
     <a href="/tags/canal/">Canal </a>
     
-    <a href="/tags/claude/">claude </a>
+    <a href="/tags/claude/">Claude </a>
     
     <a href="/tags/cmu-database/">CMU-Database </a>
     
@@ -1014,7 +1119,7 @@ code.has-jax {
     
     <a href="/tags/doris/">Doris </a>
     
-    <a href="/tags/ebpf/">eBPF </a>
+    <a href="/tags/ebpf/">EBPF </a>
     
     <a href="/tags/english/">English </a>
     
@@ -1024,7 +1129,7 @@ code.has-jax {
     
     <a href="/tags/flink/">Flink </a>
     
-    <a href="/tags/flume/">flume </a>
+    <a href="/tags/flume/">Flume </a>
     
     <a href="/tags/gc/">GC </a>
     
@@ -1034,15 +1139,15 @@ code.has-jax {
     
     <a href="/tags/hive/">Hive </a>
     
-    <a href="/tags/iceberg/">iceberg </a>
+    <a href="/tags/iceberg/">Iceberg </a>
     
     <a href="/tags/impala/">Impala </a>
     
-    <a href="/tags/janino/">janino </a>
+    <a href="/tags/janino/">Janino </a>
     
     <a href="/tags/juicefs/">JuiceFS </a>
     
-    <a href="/tags/k8s/">k8s </a>
+    <a href="/tags/k8s/">K8s </a>
     
     <a href="/tags/kafka/">Kafka </a>
     
@@ -1058,17 +1163,17 @@ code.has-jax {
     
     <a href="/tags/llvm/">LLVM </a>
     
-    <a href="/tags/log4j/">log4j </a>
+    <a href="/tags/log4j/">Log4j </a>
     
-    <a href="/tags/longhorn/">longhorn </a>
+    <a href="/tags/longhorn/">Longhorn </a>
     
     <a href="/tags/manacher/">Manacher </a>
     
     <a href="/tags/mapreduce/">MapReduce </a>
     
-    <a href="/tags/micro-service/">micro-service </a>
+    <a href="/tags/micro-service/">Micro-Service </a>
     
-    <a href="/tags/mq/">mq </a>
+    <a href="/tags/mq/">Mq </a>
     
     <a href="/tags/mysql/">MySQL </a>
     
@@ -1082,25 +1187,25 @@ code.has-jax {
     
     <a href="/tags/ozone/">Ozone </a>
     
-    <a href="/tags/parquet/">parquet </a>
+    <a href="/tags/parquet/">Parquet </a>
     
-    <a href="/tags/paxos/">paxos </a>
+    <a href="/tags/paxos/">Paxos </a>
     
     <a href="/tags/presto/">Presto </a>
     
     <a href="/tags/pytorch/">PyTorch </a>
     
-    <a href="/tags/quick-sql/">quick-sql </a>
+    <a href="/tags/quick-sql/">Quick-Sql </a>
     
-    <a href="/tags/raft/">raft </a>
+    <a href="/tags/raft/">Raft </a>
     
-    <a href="/tags/scala/">scala </a>
+    <a href="/tags/scala/">Scala </a>
     
     <a href="/tags/seatunnel/">SeaTunnel </a>
     
     <a href="/tags/simd/">SIMD </a>
     
-    <a href="/tags/snowflake/">snowflake </a>
+    <a href="/tags/snowflake/">Snowflake </a>
     
     <a href="/tags/spark/">Spark </a>
     
@@ -1114,7 +1219,7 @@ code.has-jax {
     
     <a href="/tags/tuning/">Tuning </a>
     
-    <a href="/tags/unix/">unix </a>
+    <a href="/tags/unix/">Unix </a>
     
     <a href="/tags/volcano/">Volcano </a>
     

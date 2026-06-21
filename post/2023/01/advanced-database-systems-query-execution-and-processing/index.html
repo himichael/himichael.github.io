@@ -19,7 +19,7 @@
     <meta property="article:modified_time" content='2023-01-22T19:35:19&#43;08:00'>
         
     <meta name="Keywords" content="">
-    <meta name="description" content="深入数据库系统: Query Execution &amp; Processing">
+    <meta name="description" content="这一部分是属于 执行引擎组件，由于现代系统从I/O变为CPU瓶颈，CPU的指令依赖、分支预测就阻塞了并行优化；MonetDB/X100就指出了火山模型、物化模型的问题，后使用了向量化/批模型来优化，为后续系统提供了方向。查询处理又包括：自顶向下vs字底向上；并行化包括：水平(exchange算子)、垂直、以及混合；worker的分配还包括单核单线程、单核pool；列存重建使用早期物化&#43;SIP达到了早期物化的简单，同时兼具性能；主内存系统中二级索引和scan都有用，但需要综合考虑：选择性；硬件参数、数据布局、并发，优化器也需要配合重构整合；Oracle首创的混合行&#43;列存储，又进一步提供了表达式替换(本质上是语法树子节点替换)">
         <meta name="author" content="隔壁老王">
         
     <meta property="og:url" content="https://code0xff.org/post/2023/01/advanced-database-systems-query-execution-and-processing/">
@@ -73,7 +73,8 @@
             <div class="col-group">
 
                 <div class="col-8" id="main">
-                    <div class="res-cons">
+                    
+<div class="res-cons">
     
     <article class="post">
         <header>
@@ -86,17 +87,17 @@
   <ul>
     <li>
       <ul>
-        <li><a href="#heading">背景</a></li>
-        <li><a href="#heading1">课程总结</a></li>
-        <li><a href="#heading2">论文总结</a>
+        <li><a href="#背景">背景</a></li>
+        <li><a href="#课程总结">课程总结</a></li>
+        <li><a href="#论文总结">论文总结</a>
           <ul>
-            <li><a href="#monetdbx100-hyperpipelining-query-execution">MonetDB/X100: Hyper-Pipelining Query Execution</a></li>
+            <li><a href="#monetdbx100-hyper-pipelining-query-execution">MonetDB/X100: Hyper-Pipelining Query Execution</a></li>
             <li><a href="#materialization-strategies-in-the-vertica-analytic-database-lessons-learned">Materialization Strategies in the Vertica Analytic Database: Lessons Learned</a></li>
-            <li><a href="#access-path-selection-in-mainmemory-optimized-data-systems-should-i-scan-or-should-i-probe">Access Path Selection in Main-Memory Optimized Data Systems Should I Scan or Should I Probe</a></li>
-            <li><a href="#accelerating-analytics-with-dynamic-inmemory-expressions">Accelerating Analytics with Dynamic In-Memory Expressions</a></li>
+            <li><a href="#access-path-selection-in-main-memory-optimized-data-systems-should-i-scan-or-should-i-probe">Access Path Selection in Main-Memory Optimized Data Systems Should I Scan or Should I Probe</a></li>
+            <li><a href="#accelerating-analytics-with-dynamic-in-memory-expressions">Accelerating Analytics with Dynamic In-Memory Expressions</a></li>
           </ul>
         </li>
-        <li><a href="#heading3">参考</a></li>
+        <li><a href="#参考">参考</a></li>
       </ul>
     </li>
   </ul>
@@ -120,7 +121,7 @@
         
         
         <div class="post-content">
-            <h2 id="heading">背景</h2>
+            <h2 id="背景">背景</h2>
 <p>相关资料</p>
 <ul>
 <li><a href="https://15721.courses.cs.cmu.edu/spring2023/schedule.html#feb-06-2023">2023年</a></li>
@@ -133,9 +134,13 @@
 <li><a href="/post/2023/01/materialization-strategies-in-the-vertica-analytic-database-lessons-learned/">Materialization Strategies in the Vertica Analytic Database: Lessons Learned</a></li>
 <li><a href="/post/2023/01/accelerating-analytics-with-dynamic-in-memory-expressions/">Accelerating Analytics with Dynamic In-Memory Expressions</a></li>
 </ul>
-<h2 id="heading1">课程总结</h2>
+<h2 id="课程总结">课程总结</h2>
 <p>整体架构<br>
-<img src="https://v1.ax1x.com/2024/05/01/7KI4Qw.jpg" alt="1"></p>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/05/01/7KI4Qw.jpg">
+            <img class="mx-auto" alt="1" src="https://v1.ax1x.com/2024/05/01/7KI4Qw.jpg" />
+        </a>
+    </p>
 <p>假设数据集已经全部放到内存中了<br>
 优化目标</p>
 <ul>
@@ -160,45 +165,49 @@
 <li>DMBS一般是顺序scan时执行filter操作，但是几乎不可能预测正确</li>
 </ul>
 <p>Scalar (Branching)</p>
-<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4">
-<table style="border-spacing:0;padding:0;margin:0;border:0;width:auto;overflow:auto;display:block;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
-<pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">5
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">6
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"><code><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">5
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">6
 </span></code></pre></td>
 <td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
-<pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-cpp" data-lang="cpp">i <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">0</span>
-<span style="color:#ff79c6">for</span> t in <span style="color:#8be9fd;font-style:italic">table</span>:
-	key <span style="color:#ff79c6">=</span> t.key
-	<span style="color:#ff79c6">if</span> (key≥low) <span style="color:#ff79c6">&amp;</span><span style="color:#ff79c6">&amp;</span> (key≤high)<span style="color:#ff79c6">:</span>
-		copy(t, output[i])
-		i <span style="color:#ff79c6">=</span> i <span style="color:#ff79c6">+</span> <span style="color:#bd93f9">1</span>
-</code></pre></td></tr></table>
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"><code class="language-cpp" data-lang="cpp"><span style="display:flex;"><span>i <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">0</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">for</span> t in <span style="color:#8be9fd;font-style:italic">table</span>:
+</span></span><span style="display:flex;"><span>	key <span style="color:#ff79c6">=</span> t.key
+</span></span><span style="display:flex;"><span>	<span style="color:#ff79c6">if</span> (key≥low) <span style="color:#ff79c6">&amp;&amp;</span> (key≤high)<span style="color:#ff79c6">:</span>
+</span></span><span style="display:flex;"><span>		copy(t, output[i])
+</span></span><span style="display:flex;"><span>		i <span style="color:#ff79c6">=</span> i <span style="color:#ff79c6">+</span> <span style="color:#bd93f9">1</span>
+</span></span></code></pre></td></tr></table>
 </div>
 </div><p>Scalar (Branchless)</p>
-<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4">
-<table style="border-spacing:0;padding:0;margin:0;border:0;width:auto;overflow:auto;display:block;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
-<pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">5
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">6
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"><code><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">5
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">6
 </span></code></pre></td>
 <td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
-<pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-cpp" data-lang="cpp">i <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">0</span>
-<span style="color:#ff79c6">for</span> t in <span style="color:#8be9fd;font-style:italic">table</span>:
-	copy(t, output[i])
-	key <span style="color:#ff79c6">=</span> t.key
-	m <span style="color:#ff79c6">=</span> (key≥low <span style="color:#ff79c6">?</span> <span style="color:#bd93f9">1</span> <span style="color:#ff79c6">:</span> <span style="color:#bd93f9">0</span>) <span style="color:#ff79c6">&amp;</span><span style="color:#ff79c6">&amp;</span> (key≤high <span style="color:#ff79c6">?</span> <span style="color:#bd93f9">1</span> <span style="color:#ff79c6">:</span> <span style="color:#bd93f9">0</span>)
-	i <span style="color:#ff79c6">=</span> i <span style="color:#ff79c6">+</span> m
-</code></pre></td></tr></table>
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"><code class="language-cpp" data-lang="cpp"><span style="display:flex;"><span>i <span style="color:#ff79c6">=</span> <span style="color:#bd93f9">0</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">for</span> t in <span style="color:#8be9fd;font-style:italic">table</span>:
+</span></span><span style="display:flex;"><span>	copy(t, output[i])
+</span></span><span style="display:flex;"><span>	key <span style="color:#ff79c6">=</span> t.key
+</span></span><span style="display:flex;"><span>	m <span style="color:#ff79c6">=</span> (key≥low <span style="color:#ff79c6">?</span> <span style="color:#bd93f9">1</span> <span style="color:#ff79c6">:</span> <span style="color:#bd93f9">0</span>) <span style="color:#ff79c6">&amp;&amp;</span> (key≤high <span style="color:#ff79c6">?</span> <span style="color:#bd93f9">1</span> <span style="color:#ff79c6">:</span> <span style="color:#bd93f9">0</span>)
+</span></span><span style="display:flex;"><span>	i <span style="color:#ff79c6">=</span> i <span style="color:#ff79c6">+</span> m
+</span></span></code></pre></td></tr></table>
 </div>
 </div><p>selection scans，如下：  <br>
-<img src="https://v1.ax1x.com/2024/05/01/7KIt2P.jpg" alt="2"></p>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/05/01/7KIt2P.jpg">
+            <img class="mx-auto" alt="2" src="https://v1.ax1x.com/2024/05/01/7KIt2P.jpg" />
+        </a>
+    </p>
 <p>处理模型</p>
 <ul>
 <li>Iterator Model(Volcano、Pipeline)</li>
@@ -257,9 +266,21 @@
 <li>仍然需要exchange操作，将中间结果片段做合并，也叫 pipelined parallelism.</li>
 <li>两个算法不是排斥的，每个关系算子都有并行算法</li>
 </ul>
-<p><img src="https://v1.ax1x.com/2024/05/01/7KIjLQ.png" alt="query_execution-12.jpg">
-<img src="https://v1.ax1x.com/2024/05/01/7KICc6.png" alt="query_execution-13.jpg"><br>
-<img src="https://v1.ax1x.com/2024/05/01/7KIJnO.png" alt="query_execution-14.jpg"></p>
+<p>
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/05/01/7KIjLQ.png">
+            <img class="mx-auto" alt="query_execution-12.jpg" src="https://v1.ax1x.com/2024/05/01/7KIjLQ.png" />
+        </a>
+    
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/05/01/7KICc6.png">
+            <img class="mx-auto" alt="query_execution-13.jpg" src="https://v1.ax1x.com/2024/05/01/7KICc6.png" />
+        </a>
+    <br>
+
+        <a data-fancybox="gallery" href="https://v1.ax1x.com/2024/05/01/7KIJnO.png">
+            <img class="mx-auto" alt="query_execution-14.jpg" src="https://v1.ax1x.com/2024/05/01/7KIJnO.png" />
+        </a>
+    </p>
 <p>决定 查询计划的工作节点的数量依赖</p>
 <ul>
 <li>CPU核数</li>
@@ -280,8 +301,8 @@
 </ul>
 <p>向量化、字底向上 的执行方式更适合 OLAP<br>
 对于现代CPU来说，最有效的方式 不是总产生最有效的执行策略</p>
-<h2 id="heading2">论文总结</h2>
-<h3 id="monetdbx100-hyperpipelining-query-execution">MonetDB/X100: Hyper-Pipelining Query Execution</h3>
+<h2 id="论文总结">论文总结</h2>
+<h3 id="monetdbx100-hyper-pipelining-query-execution">MonetDB/X100: Hyper-Pipelining Query Execution</h3>
 <p>CIDR 2005</p>
 <ul>
 <li>现代CPU的制作工艺缩小、芯片内的电路也在缩短、速度也就提高了</li>
@@ -339,7 +360,7 @@
 <li>Vertica系统应该使用了这种方式</li>
 <li>使用TPC-DS 直接评估早期、延迟、早期+SIP三种效果，但只给了9种场景，总体看早期+SIP比延迟略好，但场景略偏少了点</li>
 </ul>
-<h3 id="access-path-selection-in-mainmemory-optimized-data-systems-should-i-scan-or-should-i-probe">Access Path Selection in Main-Memory Optimized Data Systems Should I Scan or Should I Probe</h3>
+<h3 id="access-path-selection-in-main-memory-optimized-data-systems-should-i-scan-or-should-i-probe">Access Path Selection in Main-Memory Optimized Data Systems Should I Scan or Should I Probe</h3>
 <p>SIGMOD 2017</p>
 <ul>
 <li>对于主内存数据库来说，二级索引似乎并不重要，因为顺序扫描比索引更快</li>
@@ -366,7 +387,7 @@
 <li>不太清楚哪些系统使用了论文中的实现方式，这可能要对优化器和数据采用做很大重构了</li>
 <li>对不同机器配置，分别测试了并发、选择性、数据布局场景综合考量，并给出了scan和index的热力图分布，测试场景比较充分</li>
 </ul>
-<h3 id="accelerating-analytics-with-dynamic-inmemory-expressions">Accelerating Analytics with Dynamic In-Memory Expressions</h3>
+<h3 id="accelerating-analytics-with-dynamic-in-memory-expressions">Accelerating Analytics with Dynamic In-Memory Expressions</h3>
 <p>VLDB 2016</p>
 <ul>
 <li>Oracle12发布了基于列的内存数据库，它是混合格式的，磁盘存储(buffer pool)是基于行的，分析内存是基于列的</li>
@@ -394,7 +415,7 @@
 <li>Oracle12之后就实现了这种机制，对OLAP场景做进一步加速</li>
 <li>对TCP-H、JSON、混合OLTP三个场景做了测试，基本考虑各种场景，测试覆盖面比较广</li>
 </ul>
-<h2 id="heading3">参考</h2>
+<h2 id="参考">参考</h2>
 <ul>
 <li><a href="https://www.informationweek.com/database/ingres-unveils-vectorwise-database-engine/d/d-id/1089785">Renamed to Vectorwise and acquired by Actian in 2010</a></li>
 <li><a href="https://www.actian.com/analytic-database/avalanche/">Rebranded as Vector and Avalanche</a></li>
@@ -498,6 +519,7 @@ code.has-jax {
       </script>
     </div>
     
+
 </div>
 
 
@@ -516,6 +538,10 @@ code.has-jax {
     <section class="widget">
         <h3 class="widget-title">最近文章</h3>
 <ul class="widget-list">
+    
+    <li>
+        <a href="/post/2026/06/da_lian/" title="大连，11年后的再相见">大连，11年后的再相见</a>
+    </li>
     
     <li>
         <a href="/post/2026/05/volcano-notes/" title="Volcano 笔记">Volcano 笔记</a>
@@ -553,10 +579,6 @@ code.has-jax {
         <a href="/post/2026/04/claude_code/" title="Claude code 源码分析">Claude code 源码分析</a>
     </li>
     
-    <li>
-        <a href="/post/2026/03/iran_war/" title="Iran War">Iran War</a>
-    </li>
-    
 </ul>
 
     </section>
@@ -583,7 +605,7 @@ code.has-jax {
     
     <li><a href="/categories/%E6%96%87%E5%AD%A6%E5%92%8C%E8%89%BA%E6%9C%AF/">文学和艺术 (3)</a></li>
     
-    <li><a href="/categories/%E6%97%85%E8%A1%8C/">旅行 (15)</a></li>
+    <li><a href="/categories/%E6%97%85%E8%A1%8C/">旅行 (16)</a></li>
     
     <li><a href="/categories/%E6%9E%B6%E6%9E%84/">架构 (15)</a></li>
     
@@ -617,7 +639,7 @@ code.has-jax {
     
     <li><a href="/years/2025%E5%B9%B4/">2025年 (38)</a></li>
     
-    <li><a href="/years/2026%E5%B9%B4/">2026年 (14)</a></li>
+    <li><a href="/years/2026%E5%B9%B4/">2026年 (15)</a></li>
     
 </ul>
 
@@ -631,9 +653,9 @@ code.has-jax {
     
     <a href="/tags/ambari/">Ambari </a>
     
-    <a href="/tags/architecture/">architecture </a>
+    <a href="/tags/architecture/">Architecture </a>
     
-    <a href="/tags/bigdata/">bigdata </a>
+    <a href="/tags/bigdata/">Bigdata </a>
     
     <a href="/tags/btrace/">BTrace </a>
     
@@ -641,11 +663,11 @@ code.has-jax {
     
     <a href="/tags/c&#43;&#43;/">C&#43;&#43; </a>
     
-    <a href="/tags/calcite/">calcite </a>
+    <a href="/tags/calcite/">Calcite </a>
     
     <a href="/tags/canal/">Canal </a>
     
-    <a href="/tags/claude/">claude </a>
+    <a href="/tags/claude/">Claude </a>
     
     <a href="/tags/cmu-database/">CMU-Database </a>
     
@@ -657,7 +679,7 @@ code.has-jax {
     
     <a href="/tags/doris/">Doris </a>
     
-    <a href="/tags/ebpf/">eBPF </a>
+    <a href="/tags/ebpf/">EBPF </a>
     
     <a href="/tags/english/">English </a>
     
@@ -667,7 +689,7 @@ code.has-jax {
     
     <a href="/tags/flink/">Flink </a>
     
-    <a href="/tags/flume/">flume </a>
+    <a href="/tags/flume/">Flume </a>
     
     <a href="/tags/gc/">GC </a>
     
@@ -677,15 +699,15 @@ code.has-jax {
     
     <a href="/tags/hive/">Hive </a>
     
-    <a href="/tags/iceberg/">iceberg </a>
+    <a href="/tags/iceberg/">Iceberg </a>
     
     <a href="/tags/impala/">Impala </a>
     
-    <a href="/tags/janino/">janino </a>
+    <a href="/tags/janino/">Janino </a>
     
     <a href="/tags/juicefs/">JuiceFS </a>
     
-    <a href="/tags/k8s/">k8s </a>
+    <a href="/tags/k8s/">K8s </a>
     
     <a href="/tags/kafka/">Kafka </a>
     
@@ -701,17 +723,17 @@ code.has-jax {
     
     <a href="/tags/llvm/">LLVM </a>
     
-    <a href="/tags/log4j/">log4j </a>
+    <a href="/tags/log4j/">Log4j </a>
     
-    <a href="/tags/longhorn/">longhorn </a>
+    <a href="/tags/longhorn/">Longhorn </a>
     
     <a href="/tags/manacher/">Manacher </a>
     
     <a href="/tags/mapreduce/">MapReduce </a>
     
-    <a href="/tags/micro-service/">micro-service </a>
+    <a href="/tags/micro-service/">Micro-Service </a>
     
-    <a href="/tags/mq/">mq </a>
+    <a href="/tags/mq/">Mq </a>
     
     <a href="/tags/mysql/">MySQL </a>
     
@@ -725,25 +747,25 @@ code.has-jax {
     
     <a href="/tags/ozone/">Ozone </a>
     
-    <a href="/tags/parquet/">parquet </a>
+    <a href="/tags/parquet/">Parquet </a>
     
-    <a href="/tags/paxos/">paxos </a>
+    <a href="/tags/paxos/">Paxos </a>
     
     <a href="/tags/presto/">Presto </a>
     
     <a href="/tags/pytorch/">PyTorch </a>
     
-    <a href="/tags/quick-sql/">quick-sql </a>
+    <a href="/tags/quick-sql/">Quick-Sql </a>
     
-    <a href="/tags/raft/">raft </a>
+    <a href="/tags/raft/">Raft </a>
     
-    <a href="/tags/scala/">scala </a>
+    <a href="/tags/scala/">Scala </a>
     
     <a href="/tags/seatunnel/">SeaTunnel </a>
     
     <a href="/tags/simd/">SIMD </a>
     
-    <a href="/tags/snowflake/">snowflake </a>
+    <a href="/tags/snowflake/">Snowflake </a>
     
     <a href="/tags/spark/">Spark </a>
     
@@ -757,7 +779,7 @@ code.has-jax {
     
     <a href="/tags/tuning/">Tuning </a>
     
-    <a href="/tags/unix/">unix </a>
+    <a href="/tags/unix/">Unix </a>
     
     <a href="/tags/volcano/">Volcano </a>
     

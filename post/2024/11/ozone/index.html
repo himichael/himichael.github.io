@@ -19,7 +19,7 @@
     <meta property="article:modified_time" content='2024-11-04T09:08:07&#43;08:00'>
         
     <meta name="Keywords" content="">
-    <meta name="description" content="ozone">
+    <meta name="description" content="ozone的三个角色Ozone Manager (OM)，Storage Container Manager (SCM)，DataNode，三个角色的具体存储内容，datanode中数据存储在 container中，按照offset保存数据的位置，recon 提供管理界面，ozone mager和 SCM 的高可用：使用 rocksdb &#43; raft 实现的，这里用的是：ratis。整合spark，flink，presto/trino，doris 都比较容易">
         <meta name="author" content="隔壁老王">
         
     <meta property="og:url" content="https://code0xff.org/post/2024/11/ozone/">
@@ -73,7 +73,8 @@
             <div class="col-group">
 
                 <div class="col-8" id="main">
-                    <div class="res-cons">
+                    
+<div class="res-cons">
     
     <article class="post">
         <header>
@@ -86,15 +87,15 @@
   <ul>
     <li>
       <ul>
-        <li><a href="#heading">概念</a></li>
-        <li><a href="#heading1">存储方案</a></li>
-        <li><a href="#heading2">整合</a>
+        <li><a href="#概念">概念</a></li>
+        <li><a href="#存储方案">存储方案</a></li>
+        <li><a href="#整合">整合</a>
           <ul>
-            <li><a href="#ozone">ozone整合</a></li>
-            <li><a href="#minio">minio整合</a></li>
+            <li><a href="#ozone整合">ozone整合</a></li>
+            <li><a href="#minio整合">minio整合</a></li>
           </ul>
         </li>
-        <li><a href="#heading3">参考</a></li>
+        <li><a href="#参考">参考</a></li>
       </ul>
     </li>
   </ul>
@@ -118,504 +119,555 @@
         
         
         <div class="post-content">
-            <h2 id="heading">概念</h2>
+            <h2 id="概念">概念</h2>
 <p>三个角色</p>
 <table>
-<thead>
-<tr>
-<th>Component</th>
-<th>Data Stored</th>
-<th>Replication</th>
-<th>Replication Method</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td>Ozone Manager (OM)</td>
-<td>Full namespace metadata</td>
-<td>Fully replicated on all OM nodes</td>
-<td>Raft (Apache Ratis)</td>
-</tr>
-<tr>
-<td>Storage Container Manager (SCM)</td>
-<td>Full storage metadata</td>
-<td>Fully replicated on all SCM nodes</td>
-<td>Raft (Apache Ratis)</td>
-</tr>
-<tr>
-<td>DataNode</td>
-<td>Actual data blocks</td>
-<td>Replicated as per replication factor (e.g., 3 replicas)</td>
-<td>Managed by SCM pipelines</td>
-</tr>
-</tbody>
+	<thead>
+			<tr>
+					<th>Component</th>
+					<th>Data Stored</th>
+					<th>Replication</th>
+					<th>Replication Method</th>
+			</tr>
+	</thead>
+	<tbody>
+			<tr>
+					<td>Ozone Manager (OM)</td>
+					<td>Full namespace metadata</td>
+					<td>Fully replicated on all OM nodes</td>
+					<td>Raft (Apache Ratis)</td>
+			</tr>
+			<tr>
+					<td>Storage Container Manager (SCM)</td>
+					<td>Full storage metadata</td>
+					<td>Fully replicated on all SCM nodes</td>
+					<td>Raft (Apache Ratis)</td>
+			</tr>
+			<tr>
+					<td>DataNode</td>
+					<td>Actual data blocks</td>
+					<td>Replicated as per replication factor (e.g., 3 replicas)</td>
+					<td>Managed by SCM pipelines</td>
+			</tr>
+	</tbody>
 </table>
 <p>架构 <br>
-<img src="https://ozone.apache.org/docs/edge/concept/ozoneBlockDiagram.png" alt=""></p>
+
+        <a data-fancybox="gallery" href="https://ozone.apache.org/docs/edge/concept/ozoneBlockDiagram.png">
+            <img class="mx-auto" alt="" src="https://ozone.apache.org/docs/edge/concept/ozoneBlockDiagram.png" />
+        </a>
+    </p>
 <p>om 的 处理过程<br>
-<img src="https://ozone.apache.org/docs/edge/concept/OzoneManager-WritePath.png" alt=""></p>
+
+        <a data-fancybox="gallery" href="https://ozone.apache.org/docs/edge/concept/OzoneManager-WritePath.png">
+            <img class="mx-auto" alt="" src="https://ozone.apache.org/docs/edge/concept/OzoneManager-WritePath.png" />
+        </a>
+    </p>
 <p>om 存储的元数据大致内容</p>
-<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4">
-<table style="border-spacing:0;padding:0;margin:0;border:0;width:auto;overflow:auto;display:block;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
-<pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">5
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">6
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"><code><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">5
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">6
 </span></code></pre></td>
 <td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
-<pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">Container: c1
-  ├── Block: b1 <span style="color:#ff79c6">(</span>DataNode1, DataNode2, DataNode3<span style="color:#ff79c6">)</span>
-  ├── Block: b2 <span style="color:#ff79c6">(</span>DataNode1, DataNode2, DataNode3<span style="color:#ff79c6">)</span>
-
-Container: c2
-  ├── Block: b3 <span style="color:#ff79c6">(</span>DataNode4, DataNode5, DataNode6<span style="color:#ff79c6">)</span>
-</code></pre></td></tr></table>
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"><code class="language-shell" data-lang="shell"><span style="display:flex;"><span>Container: c1
+</span></span><span style="display:flex;"><span>  ├── Block: b1 <span style="color:#ff79c6">(</span>DataNode1, DataNode2, DataNode3<span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>  ├── Block: b2 <span style="color:#ff79c6">(</span>DataNode1, DataNode2, DataNode3<span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>Container: c2
+</span></span><span style="display:flex;"><span>  ├── Block: b3 <span style="color:#ff79c6">(</span>DataNode4, DataNode5, DataNode6<span style="color:#ff79c6">)</span>
+</span></span></code></pre></td></tr></table>
 </div>
 </div><p>存储在 rocksdb 中的内容</p>
-<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4">
-<table style="border-spacing:0;padding:0;margin:0;border:0;width:auto;overflow:auto;display:block;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
-<pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">5
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">6
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">7
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">8
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"><code><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">5
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">6
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">7
 </span></code></pre></td>
 <td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
-<pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-json" data-lang="json">{
-  <span style="color:#ff79c6">&#34;container_id&#34;</span>: <span style="color:#f1fa8c">&#34;c1&#34;</span>,
-  <span style="color:#ff79c6">&#34;blocks&#34;</span>: [<span style="color:#f1fa8c">&#34;b1&#34;</span>, <span style="color:#f1fa8c">&#34;b2&#34;</span>],
-  <span style="color:#ff79c6">&#34;replication_factor&#34;</span>: <span style="color:#bd93f9">3</span>,
-  <span style="color:#ff79c6">&#34;pipeline&#34;</span>: <span style="color:#f1fa8c">&#34;pipeline_1&#34;</span>,
-  <span style="color:#ff79c6">&#34;datanodes&#34;</span>: [<span style="color:#f1fa8c">&#34;datanode1&#34;</span>, <span style="color:#f1fa8c">&#34;datanode2&#34;</span>, <span style="color:#f1fa8c">&#34;datanode3&#34;</span>]
-}
-
-</code></pre></td></tr></table>
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"><code class="language-json" data-lang="json"><span style="display:flex;"><span>{
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">&#34;container_id&#34;</span>: <span style="color:#f1fa8c">&#34;c1&#34;</span>,
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">&#34;blocks&#34;</span>: [<span style="color:#f1fa8c">&#34;b1&#34;</span>, <span style="color:#f1fa8c">&#34;b2&#34;</span>],
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">&#34;replication_factor&#34;</span>: <span style="color:#bd93f9">3</span>,
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">&#34;pipeline&#34;</span>: <span style="color:#f1fa8c">&#34;pipeline_1&#34;</span>,
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">&#34;datanodes&#34;</span>: [<span style="color:#f1fa8c">&#34;datanode1&#34;</span>, <span style="color:#f1fa8c">&#34;datanode2&#34;</span>, <span style="color:#f1fa8c">&#34;datanode3&#34;</span>]
+</span></span><span style="display:flex;"><span>}
+</span></span></code></pre></td></tr></table>
 </div>
 </div><p>scm 的处理过程<br>
-<img src="https://ozone.apache.org/docs/edge/concept/StorageContainerManager.png" alt=""></p>
+
+        <a data-fancybox="gallery" href="https://ozone.apache.org/docs/edge/concept/StorageContainerManager.png">
+            <img class="mx-auto" alt="" src="https://ozone.apache.org/docs/edge/concept/StorageContainerManager.png" />
+        </a>
+    </p>
 <p>存储的内容</p>
-<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4">
-<table style="border-spacing:0;padding:0;margin:0;border:0;width:auto;overflow:auto;display:block;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
-<pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">5
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">6
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"><code><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">5
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">6
 </span></code></pre></td>
 <td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
-<pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">Container: c1
-  ├── Block: b1 <span style="color:#ff79c6">(</span>DataNode1, DataNode2, DataNode3<span style="color:#ff79c6">)</span>
-  ├── Block: b2 <span style="color:#ff79c6">(</span>DataNode1, DataNode2, DataNode3<span style="color:#ff79c6">)</span>
-
-Container: c2
-  ├── Block: b3 <span style="color:#ff79c6">(</span>DataNode4, DataNode5, DataNode6<span style="color:#ff79c6">)</span>
-</code></pre></td></tr></table>
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"><code class="language-shell" data-lang="shell"><span style="display:flex;"><span>Container: c1
+</span></span><span style="display:flex;"><span>  ├── Block: b1 <span style="color:#ff79c6">(</span>DataNode1, DataNode2, DataNode3<span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>  ├── Block: b2 <span style="color:#ff79c6">(</span>DataNode1, DataNode2, DataNode3<span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>Container: c2
+</span></span><span style="display:flex;"><span>  ├── Block: b3 <span style="color:#ff79c6">(</span>DataNode4, DataNode5, DataNode6<span style="color:#ff79c6">)</span>
+</span></span></code></pre></td></tr></table>
 </div>
 </div><p>存储在 rocksdb 中的内容</p>
-<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4">
-<table style="border-spacing:0;padding:0;margin:0;border:0;width:auto;overflow:auto;display:block;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
-<pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"><code><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
 </span></code></pre></td>
 <td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
-<pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-json" data-lang="json">{
-  <span style="color:#ff79c6">&#34;block_id&#34;</span>: <span style="color:#f1fa8c">&#34;b1&#34;</span>,
-  <span style="color:#ff79c6">&#34;container_id&#34;</span>: <span style="color:#f1fa8c">&#34;c1&#34;</span>,
-  <span style="color:#ff79c6">&#34;size&#34;</span>: <span style="color:#f1fa8c">&#34;4MB&#34;</span>,
-  <span style="color:#ff79c6">&#34;checksum&#34;</span>: <span style="color:#f1fa8c">&#34;abc123&#34;</span>,
-  <span style="color:#ff79c6">&#34;replicas&#34;</span>: [
-    {<span style="color:#ff79c6">&#34;datanode&#34;</span>: <span style="color:#f1fa8c">&#34;datanode1&#34;</span>, <span style="color:#ff79c6">&#34;location&#34;</span>: <span style="color:#f1fa8c">&#34;/path/to/block1&#34;</span>},
-    {<span style="color:#ff79c6">&#34;datanode&#34;</span>: <span style="color:#f1fa8c">&#34;datanode2&#34;</span>, <span style="color:#ff79c6">&#34;location&#34;</span>: <span style="color:#f1fa8c">&#34;/path/to/block1&#34;</span>},
-    {<span style="color:#ff79c6">&#34;datanode&#34;</span>: <span style="color:#f1fa8c">&#34;datanode3&#34;</span>, <span style="color:#ff79c6">&#34;location&#34;</span>: <span style="color:#f1fa8c">&#34;/path/to/block1&#34;</span>}
-  ]
-}
-</code></pre></td></tr></table>
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"><code class="language-json" data-lang="json"><span style="display:flex;"><span>{
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">&#34;block_id&#34;</span>: <span style="color:#f1fa8c">&#34;b1&#34;</span>,
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">&#34;container_id&#34;</span>: <span style="color:#f1fa8c">&#34;c1&#34;</span>,
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">&#34;size&#34;</span>: <span style="color:#f1fa8c">&#34;4MB&#34;</span>,
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">&#34;checksum&#34;</span>: <span style="color:#f1fa8c">&#34;abc123&#34;</span>,
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">&#34;replicas&#34;</span>: [
+</span></span><span style="display:flex;"><span>    {<span style="color:#ff79c6">&#34;datanode&#34;</span>: <span style="color:#f1fa8c">&#34;datanode1&#34;</span>, <span style="color:#ff79c6">&#34;location&#34;</span>: <span style="color:#f1fa8c">&#34;/path/to/block1&#34;</span>},
+</span></span><span style="display:flex;"><span>    {<span style="color:#ff79c6">&#34;datanode&#34;</span>: <span style="color:#f1fa8c">&#34;datanode2&#34;</span>, <span style="color:#ff79c6">&#34;location&#34;</span>: <span style="color:#f1fa8c">&#34;/path/to/block1&#34;</span>},
+</span></span><span style="display:flex;"><span>    {<span style="color:#ff79c6">&#34;datanode&#34;</span>: <span style="color:#f1fa8c">&#34;datanode3&#34;</span>, <span style="color:#ff79c6">&#34;location&#34;</span>: <span style="color:#f1fa8c">&#34;/path/to/block1&#34;</span>}
+</span></span><span style="display:flex;"><span>  ]
+</span></span><span style="display:flex;"><span>}
+</span></span></code></pre></td></tr></table>
 </div>
 </div><p>datanode 类似 HDFS 的datanode，是真正存储数据的地方</p>
 <ul>
 <li>会先分配一个 container，默认 5G</li>
 <li>多个文件都是放到一个 container中，按照offset区分
-<img src="https://ozone.apache.org/docs/edge/concept/ContainerMetadata.png" alt=""></li>
+
+        <a data-fancybox="gallery" href="https://ozone.apache.org/docs/edge/concept/ContainerMetadata.png">
+            <img class="mx-auto" alt="" src="https://ozone.apache.org/docs/edge/concept/ContainerMetadata.png" />
+        </a>
+    </li>
 </ul>
 <p>recon 提供管理界面<br>
-<img src="https://ozone.apache.org/docs/edge/concept/ReconHighLevelDesign.png" alt=""></p>
+
+        <a data-fancybox="gallery" href="https://ozone.apache.org/docs/edge/concept/ReconHighLevelDesign.png">
+            <img class="mx-auto" alt="" src="https://ozone.apache.org/docs/edge/concept/ReconHighLevelDesign.png" />
+        </a>
+    </p>
 <p>高可用，使用 rocksdb + raft 实现的<br>
-<img src="https://ozone.apache.org/docs/edge/feature/HA-OM.png" alt=""></p>
+
+        <a data-fancybox="gallery" href="https://ozone.apache.org/docs/edge/feature/HA-OM.png">
+            <img class="mx-auto" alt="" src="https://ozone.apache.org/docs/edge/feature/HA-OM.png" />
+        </a>
+    </p>
 <p>其中 raft 使用的是 apache 开源的 raft 实现库</p>
 <blockquote>
 <p><a href="https://github.com/apache/ratis">https://github.com/apache/ratis</a></p>
 </blockquote>
 <p>安全，可以整合 ranger 和 kberos<br>
 自带了一些 ACL<br>
-<img src="https://ozone.apache.org/docs/edge/feature/scm-secure-ha.png" alt=""></p>
+
+        <a data-fancybox="gallery" href="https://ozone.apache.org/docs/edge/feature/scm-secure-ha.png">
+            <img class="mx-auto" alt="" src="https://ozone.apache.org/docs/edge/feature/scm-secure-ha.png" />
+        </a>
+    </p>
 <p>文件的元数据布局<br>
-<img src="https://ozone.apache.org/docs/edge/zh/feature/PrefixFSO-Format.png" alt=""></p>
-<h2 id="heading1">存储方案</h2>
+
+        <a data-fancybox="gallery" href="https://ozone.apache.org/docs/edge/zh/feature/PrefixFSO-Format.png">
+            <img class="mx-auto" alt="" src="https://ozone.apache.org/docs/edge/zh/feature/PrefixFSO-Format.png" />
+        </a>
+    </p>
+<h2 id="存储方案">存储方案</h2>
 <p>HDFS 替代存储的性能对比</p>
 <table>
-<thead>
-<tr>
-<th><strong>Feature</strong></th>
-<th><strong>Apache Ozone</strong></th>
-<th><strong>Ceph</strong></th>
-<th><strong>Cluster Storage (General)</strong></th>
-<th><strong>MinIO</strong></th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><strong>Storage Type</strong></td>
-<td>Object Storage (HDFS Compatible)</td>
-<td>Object, Block, File Storage</td>
-<td>Varies (File, Block, etc.)</td>
-<td>Object Storage (S3 Compatible)</td>
-</tr>
-<tr>
-<td><strong>Hadoop Integration</strong></td>
-<td>Full Integration</td>
-<td>Limited (via S3 Gateway)</td>
-<td>Varies</td>
-<td>None (direct S3 interface)</td>
-</tr>
-<tr>
-<td><strong>Ease of Deployment</strong></td>
-<td>Moderate</td>
-<td>Complex</td>
-<td>Varies</td>
-<td>Easy</td>
-</tr>
-<tr>
-<td><strong>Performance</strong></td>
-<td>Optimized for small/large files</td>
-<td>High performance with scalability</td>
-<td>Depends on system</td>
-<td>High throughput, low latency</td>
-</tr>
-<tr>
-<td><strong>Use Case</strong></td>
-<td>Big Data Analytics</td>
-<td>Multi-purpose storage</td>
-<td>HPC, scalable general storage</td>
-<td>Cloud-native object storage</td>
-</tr>
-</tbody>
+	<thead>
+			<tr>
+					<th><strong>Feature</strong></th>
+					<th><strong>Apache Ozone</strong></th>
+					<th><strong>Ceph</strong></th>
+					<th><strong>Cluster Storage (General)</strong></th>
+					<th><strong>MinIO</strong></th>
+			</tr>
+	</thead>
+	<tbody>
+			<tr>
+					<td><strong>Storage Type</strong></td>
+					<td>Object Storage (HDFS Compatible)</td>
+					<td>Object, Block, File Storage</td>
+					<td>Varies (File, Block, etc.)</td>
+					<td>Object Storage (S3 Compatible)</td>
+			</tr>
+			<tr>
+					<td><strong>Hadoop Integration</strong></td>
+					<td>Full Integration</td>
+					<td>Limited (via S3 Gateway)</td>
+					<td>Varies</td>
+					<td>None (direct S3 interface)</td>
+			</tr>
+			<tr>
+					<td><strong>Ease of Deployment</strong></td>
+					<td>Moderate</td>
+					<td>Complex</td>
+					<td>Varies</td>
+					<td>Easy</td>
+			</tr>
+			<tr>
+					<td><strong>Performance</strong></td>
+					<td>Optimized for small/large files</td>
+					<td>High performance with scalability</td>
+					<td>Depends on system</td>
+					<td>High throughput, low latency</td>
+			</tr>
+			<tr>
+					<td><strong>Use Case</strong></td>
+					<td>Big Data Analytics</td>
+					<td>Multi-purpose storage</td>
+					<td>HPC, scalable general storage</td>
+					<td>Cloud-native object storage</td>
+			</tr>
+	</tbody>
 </table>
-<h2 id="heading2">整合</h2>
-<h3 id="ozone">ozone整合</h3>
+<h2 id="整合">整合</h2>
+<h3 id="ozone整合">ozone整合</h3>
 <p>整合 spark</p>
-<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4">
-<table style="border-spacing:0;padding:0;margin:0;border:0;width:auto;overflow:auto;display:block;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
-<pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">5
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"><code><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">5
 </span></code></pre></td>
 <td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
-<pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">spark-submit <span style="color:#f1fa8c">\</span>
-  --master <span style="color:#8be9fd;font-style:italic">local</span> <span style="color:#f1fa8c">\</span>
-  --conf spark.hadoop.fs.defaultFS<span style="color:#ff79c6">=</span>ofs://ozone1 <span style="color:#f1fa8c">\</span>
-  --conf spark.hadoop.ozone.om.address<span style="color:#ff79c6">=</span>localhost:9862 <span style="color:#f1fa8c">\</span>
-  --class your.package.YourApp your-spark-app.jar
-</code></pre></td></tr></table>
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"><code class="language-shell" data-lang="shell"><span style="display:flex;"><span>spark-submit <span style="color:#f1fa8c">\
+</span></span></span><span style="display:flex;"><span>  --master <span style="color:#8be9fd;font-style:italic">local</span> <span style="color:#f1fa8c">\
+</span></span></span><span style="display:flex;"><span>  --conf spark.hadoop.fs.defaultFS<span style="color:#ff79c6">=</span>ofs://ozone1 <span style="color:#f1fa8c">\
+</span></span></span><span style="display:flex;"><span>  --conf spark.hadoop.ozone.om.address<span style="color:#ff79c6">=</span>localhost:9862 <span style="color:#f1fa8c">\
+</span></span></span><span style="display:flex;"><span>  --class your.package.YourApp your-spark-app.jar
+</span></span></code></pre></td></tr></table>
 </div>
 </div><p>代码</p>
-<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4">
-<table style="border-spacing:0;padding:0;margin:0;border:0;width:auto;overflow:auto;display:block;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
-<pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">15
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"><code><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">15
 </span></code></pre></td>
 <td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
-<pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-scala" data-lang="scala"><span style="color:#ff79c6">import</span> org.apache.spark.sql.SparkSession
-
-<span style="color:#ff79c6">val</span> spark <span style="color:#ff79c6">=</span> <span style="color:#50fa7b">SparkSession</span><span style="color:#ff79c6">.</span>builder<span style="color:#ff79c6">(</span><span style="color:#ff79c6">)</span>
-  <span style="color:#ff79c6">.</span>appName<span style="color:#ff79c6">(</span><span style="color:#f1fa8c">&#34;Spark with Ozone&#34;</span><span style="color:#ff79c6">)</span>
-  <span style="color:#ff79c6">.</span>config<span style="color:#ff79c6">(</span><span style="color:#f1fa8c">&#34;spark.hadoop.fs.defaultFS&#34;</span><span style="color:#ff79c6">,</span> <span style="color:#f1fa8c">&#34;ofs://ozone1&#34;</span><span style="color:#ff79c6">)</span>
-  <span style="color:#ff79c6">.</span>config<span style="color:#ff79c6">(</span><span style="color:#f1fa8c">&#34;spark.hadoop.ozone.om.address&#34;</span><span style="color:#ff79c6">,</span> <span style="color:#f1fa8c">&#34;localhost:9862&#34;</span><span style="color:#ff79c6">)</span>
-  <span style="color:#ff79c6">.</span>getOrCreate<span style="color:#ff79c6">(</span><span style="color:#ff79c6">)</span>
-
-<span style="color:#ff79c6">val</span> data <span style="color:#ff79c6">=</span> <span style="color:#50fa7b">Seq</span><span style="color:#ff79c6">(</span><span style="color:#ff79c6">(</span><span style="color:#f1fa8c">&#34;Alice&#34;</span><span style="color:#ff79c6">,</span> <span style="color:#bd93f9">25</span><span style="color:#ff79c6">)</span><span style="color:#ff79c6">,</span> <span style="color:#ff79c6">(</span><span style="color:#f1fa8c">&#34;Bob&#34;</span><span style="color:#ff79c6">,</span> <span style="color:#bd93f9">30</span><span style="color:#ff79c6">)</span><span style="color:#ff79c6">)</span>
-<span style="color:#ff79c6">val</span> df <span style="color:#ff79c6">=</span> spark<span style="color:#ff79c6">.</span>createDataFrame<span style="color:#ff79c6">(</span>data<span style="color:#ff79c6">)</span><span style="color:#ff79c6">.</span>toDF<span style="color:#ff79c6">(</span><span style="color:#f1fa8c">&#34;name&#34;</span><span style="color:#ff79c6">,</span> <span style="color:#f1fa8c">&#34;age&#34;</span><span style="color:#ff79c6">)</span>
-
-df<span style="color:#ff79c6">.</span>write<span style="color:#ff79c6">.</span>format<span style="color:#ff79c6">(</span><span style="color:#f1fa8c">&#34;parquet&#34;</span><span style="color:#ff79c6">)</span><span style="color:#ff79c6">.</span>save<span style="color:#ff79c6">(</span><span style="color:#f1fa8c">&#34;ofs://ozone1/mybucket/spark_data&#34;</span><span style="color:#ff79c6">)</span>
-
-<span style="color:#ff79c6">val</span> readDF <span style="color:#ff79c6">=</span> spark<span style="color:#ff79c6">.</span>read<span style="color:#ff79c6">.</span>format<span style="color:#ff79c6">(</span><span style="color:#f1fa8c">&#34;parquet&#34;</span><span style="color:#ff79c6">)</span><span style="color:#ff79c6">.</span>load<span style="color:#ff79c6">(</span><span style="color:#f1fa8c">&#34;ofs://ozone1/mybucket/spark_data&#34;</span><span style="color:#ff79c6">)</span>
-readDF<span style="color:#ff79c6">.</span>show<span style="color:#ff79c6">(</span><span style="color:#ff79c6">)</span>
-</code></pre></td></tr></table>
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"><code class="language-scala" data-lang="scala"><span style="display:flex;"><span><span style="color:#ff79c6">import</span> org.apache.spark.sql.SparkSession
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">val</span> spark <span style="color:#ff79c6">=</span> <span style="color:#50fa7b">SparkSession</span><span style="color:#ff79c6">.</span>builder<span style="color:#ff79c6">()</span>
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">.</span>appName<span style="color:#ff79c6">(</span><span style="color:#f1fa8c">&#34;Spark with Ozone&#34;</span><span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">.</span>config<span style="color:#ff79c6">(</span><span style="color:#f1fa8c">&#34;spark.hadoop.fs.defaultFS&#34;</span><span style="color:#ff79c6">,</span> <span style="color:#f1fa8c">&#34;ofs://ozone1&#34;</span><span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">.</span>config<span style="color:#ff79c6">(</span><span style="color:#f1fa8c">&#34;spark.hadoop.ozone.om.address&#34;</span><span style="color:#ff79c6">,</span> <span style="color:#f1fa8c">&#34;localhost:9862&#34;</span><span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">.</span>getOrCreate<span style="color:#ff79c6">()</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">val</span> data <span style="color:#ff79c6">=</span> <span style="color:#50fa7b">Seq</span><span style="color:#ff79c6">((</span><span style="color:#f1fa8c">&#34;Alice&#34;</span><span style="color:#ff79c6">,</span> <span style="color:#bd93f9">25</span><span style="color:#ff79c6">),</span> <span style="color:#ff79c6">(</span><span style="color:#f1fa8c">&#34;Bob&#34;</span><span style="color:#ff79c6">,</span> <span style="color:#bd93f9">30</span><span style="color:#ff79c6">))</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">val</span> df <span style="color:#ff79c6">=</span> spark<span style="color:#ff79c6">.</span>createDataFrame<span style="color:#ff79c6">(</span>data<span style="color:#ff79c6">).</span>toDF<span style="color:#ff79c6">(</span><span style="color:#f1fa8c">&#34;name&#34;</span><span style="color:#ff79c6">,</span> <span style="color:#f1fa8c">&#34;age&#34;</span><span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>df<span style="color:#ff79c6">.</span>write<span style="color:#ff79c6">.</span>format<span style="color:#ff79c6">(</span><span style="color:#f1fa8c">&#34;parquet&#34;</span><span style="color:#ff79c6">).</span>save<span style="color:#ff79c6">(</span><span style="color:#f1fa8c">&#34;ofs://ozone1/mybucket/spark_data&#34;</span><span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">val</span> readDF <span style="color:#ff79c6">=</span> spark<span style="color:#ff79c6">.</span>read<span style="color:#ff79c6">.</span>format<span style="color:#ff79c6">(</span><span style="color:#f1fa8c">&#34;parquet&#34;</span><span style="color:#ff79c6">).</span>load<span style="color:#ff79c6">(</span><span style="color:#f1fa8c">&#34;ofs://ozone1/mybucket/spark_data&#34;</span><span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>readDF<span style="color:#ff79c6">.</span>show<span style="color:#ff79c6">()</span>
+</span></span></code></pre></td></tr></table>
 </div>
 </div><hr>
 <p>整合 flink</p>
-<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4">
-<table style="border-spacing:0;padding:0;margin:0;border:0;width:auto;overflow:auto;display:block;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
-<pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"><code><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
 </span></code></pre></td>
 <td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
-<pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-scala" data-lang="scala"><span style="color:#ff79c6">import</span> org.apache.flink.api.scala._
-<span style="color:#ff79c6">import</span> org.apache.flink.streaming.api.scala.StreamExecutionEnvironment
-
-<span style="color:#ff79c6">object</span> <span style="color:#50fa7b">FlinkOzoneExample</span> <span style="color:#ff79c6">{</span>
-  <span style="color:#ff79c6">def</span> main<span style="color:#ff79c6">(</span>args<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">Array</span><span style="color:#ff79c6">[</span><span style="color:#8be9fd">String</span><span style="color:#ff79c6">]</span><span style="color:#ff79c6">)</span><span style="color:#ff79c6">:</span> <span style="color:#8be9fd">Unit</span> <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">{</span>
-    <span style="color:#ff79c6">val</span> env <span style="color:#ff79c6">=</span> <span style="color:#50fa7b">StreamExecutionEnvironment</span><span style="color:#ff79c6">.</span>getExecutionEnvironment
-
-    <span style="color:#ff79c6">val</span> data <span style="color:#ff79c6">=</span> env<span style="color:#ff79c6">.</span>fromElements<span style="color:#ff79c6">(</span><span style="color:#ff79c6">(</span><span style="color:#f1fa8c">&#34;Alice&#34;</span><span style="color:#ff79c6">,</span> <span style="color:#bd93f9">25</span><span style="color:#ff79c6">)</span><span style="color:#ff79c6">,</span> <span style="color:#ff79c6">(</span><span style="color:#f1fa8c">&#34;Bob&#34;</span><span style="color:#ff79c6">,</span> <span style="color:#bd93f9">30</span><span style="color:#ff79c6">)</span><span style="color:#ff79c6">)</span>
-
-    data<span style="color:#ff79c6">.</span>writeAsCsv<span style="color:#ff79c6">(</span><span style="color:#f1fa8c">&#34;ofs://ozone1/mybucket/flink_data&#34;</span><span style="color:#ff79c6">)</span>
-
-    env<span style="color:#ff79c6">.</span>execute<span style="color:#ff79c6">(</span><span style="color:#f1fa8c">&#34;Flink Ozone Integration&#34;</span><span style="color:#ff79c6">)</span>
-  <span style="color:#ff79c6">}</span>
-<span style="color:#ff79c6">}</span>
-</code></pre></td></tr></table>
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"><code class="language-scala" data-lang="scala"><span style="display:flex;"><span><span style="color:#ff79c6">import</span> org.apache.flink.api.scala._
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">import</span> org.apache.flink.streaming.api.scala.StreamExecutionEnvironment
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">object</span> <span style="color:#50fa7b">FlinkOzoneExample</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">def</span> main<span style="color:#ff79c6">(</span>args<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">Array</span><span style="color:#ff79c6">[</span><span style="color:#8be9fd">String</span><span style="color:#ff79c6">])</span><span style="color:#ff79c6">:</span> <span style="color:#8be9fd">Unit</span> <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">val</span> env <span style="color:#ff79c6">=</span> <span style="color:#50fa7b">StreamExecutionEnvironment</span><span style="color:#ff79c6">.</span>getExecutionEnvironment
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">val</span> data <span style="color:#ff79c6">=</span> env<span style="color:#ff79c6">.</span>fromElements<span style="color:#ff79c6">((</span><span style="color:#f1fa8c">&#34;Alice&#34;</span><span style="color:#ff79c6">,</span> <span style="color:#bd93f9">25</span><span style="color:#ff79c6">),</span> <span style="color:#ff79c6">(</span><span style="color:#f1fa8c">&#34;Bob&#34;</span><span style="color:#ff79c6">,</span> <span style="color:#bd93f9">30</span><span style="color:#ff79c6">))</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    data<span style="color:#ff79c6">.</span>writeAsCsv<span style="color:#ff79c6">(</span><span style="color:#f1fa8c">&#34;ofs://ozone1/mybucket/flink_data&#34;</span><span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    env<span style="color:#ff79c6">.</span>execute<span style="color:#ff79c6">(</span><span style="color:#f1fa8c">&#34;Flink Ozone Integration&#34;</span><span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">}</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">}</span>
+</span></span></code></pre></td></tr></table>
 </div>
 </div><hr>
 <p>presto、trino</p>
-<pre><code class="language-properties" data-lang="properties">hive.metastore.uri=thrift://localhost:9083
-hive.s3.warehouse.dir=ofs://ozone1/mybucket/
-fs.defaultFS=ofs://ozone1
-ozone.om.address=localhost:9862
-</code></pre><p>然后直接查询就可以了</p>
-<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4">
-<table style="border-spacing:0;padding:0;margin:0;border:0;width:auto;overflow:auto;display:block;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
-<pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"><code><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
 </span></code></pre></td>
 <td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
-<pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-sql" data-lang="sql"><span style="color:#ff79c6">SELECT</span> <span style="color:#ff79c6">*</span> <span style="color:#ff79c6">FROM</span> mybucket.my_table <span style="color:#ff79c6">WHERE</span> age <span style="color:#ff79c6">&gt;</span> <span style="color:#bd93f9">25</span>;
-</code></pre></td></tr></table>
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"><code class="language-properties" data-lang="properties"><span style="display:flex;"><span><span style="color:#50fa7b">hive.metastore.uri</span><span style="color:#ff79c6">=</span><span style="color:#f1fa8c">thrift://localhost:9083</span>
+</span></span><span style="display:flex;"><span><span style="color:#50fa7b">hive.s3.warehouse.dir</span><span style="color:#ff79c6">=</span><span style="color:#f1fa8c">ofs://ozone1/mybucket/</span>
+</span></span><span style="display:flex;"><span><span style="color:#50fa7b">fs.defaultFS</span><span style="color:#ff79c6">=</span><span style="color:#f1fa8c">ofs://ozone1</span>
+</span></span><span style="display:flex;"><span><span style="color:#50fa7b">ozone.om.address</span><span style="color:#ff79c6">=</span><span style="color:#f1fa8c">localhost:9862</span>
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>然后直接查询就可以了</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"><code><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"><code class="language-sql" data-lang="sql"><span style="display:flex;"><span><span style="color:#ff79c6">SELECT</span> <span style="color:#ff79c6">*</span> <span style="color:#ff79c6">FROM</span> mybucket.my_table <span style="color:#ff79c6">WHERE</span> age <span style="color:#ff79c6">&gt;</span> <span style="color:#bd93f9">25</span>;
+</span></span></code></pre></td></tr></table>
 </div>
 </div><hr>
 <p>impala，因为是兼容 hdfs，所以整合也很简单</p>
-<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4">
-<table style="border-spacing:0;padding:0;margin:0;border:0;width:auto;overflow:auto;display:block;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
-<pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"><code><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
 </span></code></pre></td>
 <td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
-<pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-sql" data-lang="sql"><span style="color:#ff79c6">SET</span> fs.defaultFS<span style="color:#ff79c6">=</span>ofs:<span style="color:#ff79c6">/</span><span style="color:#ff79c6">/</span>ozone1;
-<span style="color:#ff79c6">SELECT</span> <span style="color:#ff79c6">*</span> <span style="color:#ff79c6">FROM</span> mybucket.my_table;
-</code></pre></td></tr></table>
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"><code class="language-sql" data-lang="sql"><span style="display:flex;"><span><span style="color:#ff79c6">SET</span> fs.defaultFS<span style="color:#ff79c6">=</span>ofs:<span style="color:#ff79c6">//</span>ozone1;
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">SELECT</span> <span style="color:#ff79c6">*</span> <span style="color:#ff79c6">FROM</span> mybucket.my_table;
+</span></span></code></pre></td></tr></table>
 </div>
 </div><hr>
 <p>doris</p>
-<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4">
-<table style="border-spacing:0;padding:0;margin:0;border:0;width:auto;overflow:auto;display:block;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
-<pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"><code><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
 </span></code></pre></td>
 <td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
-<pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-sql" data-lang="sql"><span style="color:#ff79c6">CREATE</span> <span style="color:#ff79c6">EXTERNAL</span> <span style="color:#ff79c6">TABLE</span> my_external_table (
-    id <span style="color:#8be9fd;font-style:italic">INT</span>,
-    name STRING
-)
-PROPERTIES (
-    <span style="color:#f1fa8c">&#34;</span><span style="color:#f1fa8c">fs.defaultFS</span><span style="color:#f1fa8c">&#34;</span><span style="color:#ff79c6">=</span><span style="color:#f1fa8c">&#34;</span><span style="color:#f1fa8c">ofs://ozone1</span><span style="color:#f1fa8c">&#34;</span>,
-    <span style="color:#f1fa8c">&#34;</span><span style="color:#f1fa8c">path</span><span style="color:#f1fa8c">&#34;</span><span style="color:#ff79c6">=</span><span style="color:#f1fa8c">&#34;</span><span style="color:#f1fa8c">ofs://ozone1/mybucket/doris_data/</span><span style="color:#f1fa8c">&#34;</span>
-);
-
-<span style="color:#ff79c6">SELECT</span> <span style="color:#ff79c6">*</span> <span style="color:#ff79c6">FROM</span> my_external_table;
-</code></pre></td></tr></table>
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"><code class="language-sql" data-lang="sql"><span style="display:flex;"><span><span style="color:#ff79c6">CREATE</span> <span style="color:#ff79c6">EXTERNAL</span> <span style="color:#ff79c6">TABLE</span> my_external_table (
+</span></span><span style="display:flex;"><span>    id <span style="color:#8be9fd;font-style:italic">INT</span>,
+</span></span><span style="display:flex;"><span>    name STRING
+</span></span><span style="display:flex;"><span>)
+</span></span><span style="display:flex;"><span>PROPERTIES (
+</span></span><span style="display:flex;"><span>    <span style="color:#f1fa8c">&#34;fs.defaultFS&#34;</span><span style="color:#ff79c6">=</span><span style="color:#f1fa8c">&#34;ofs://ozone1&#34;</span>,
+</span></span><span style="display:flex;"><span>    <span style="color:#f1fa8c">&#34;path&#34;</span><span style="color:#ff79c6">=</span><span style="color:#f1fa8c">&#34;ofs://ozone1/mybucket/doris_data/&#34;</span>
+</span></span><span style="display:flex;"><span>);
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">SELECT</span> <span style="color:#ff79c6">*</span> <span style="color:#ff79c6">FROM</span> my_external_table;
+</span></span></code></pre></td></tr></table>
 </div>
-</div><h3 id="minio">minio整合</h3>
+</div><h3 id="minio整合">minio整合</h3>
 <p>整合spark</p>
-<pre><code class="language-properties" data-lang="properties">spark.hadoop.fs.s3a.endpoint=http://&lt;minio-host&gt;:9000
-spark.hadoop.fs.s3a.access.key=&lt;your-access-key&gt;
-spark.hadoop.fs.s3a.secret.key=&lt;your-secret-key&gt;
-spark.hadoop.fs.s3a.path.style.access=true
-spark.hadoop.fs.s3a.impl=org.apache.hadoop.fs.s3a.S3AFileSystem
-</code></pre><p>代码</p>
-<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4">
-<table style="border-spacing:0;padding:0;margin:0;border:0;width:auto;overflow:auto;display:block;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
-<pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">15
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">16
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">17
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">18
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">19
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"><code><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">5
 </span></code></pre></td>
 <td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
-<pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-scala" data-lang="scala"><span style="color:#ff79c6">import</span> org.apache.spark.sql.SparkSession
-
-<span style="color:#ff79c6">val</span> spark <span style="color:#ff79c6">=</span> <span style="color:#50fa7b">SparkSession</span><span style="color:#ff79c6">.</span>builder<span style="color:#ff79c6">(</span><span style="color:#ff79c6">)</span>
-  <span style="color:#ff79c6">.</span>appName<span style="color:#ff79c6">(</span><span style="color:#f1fa8c">&#34;Spark with MinIO&#34;</span><span style="color:#ff79c6">)</span>
-  <span style="color:#ff79c6">.</span>config<span style="color:#ff79c6">(</span><span style="color:#f1fa8c">&#34;spark.hadoop.fs.s3a.endpoint&#34;</span><span style="color:#ff79c6">,</span> <span style="color:#f1fa8c">&#34;http://localhost:9000&#34;</span><span style="color:#ff79c6">)</span>
-  <span style="color:#ff79c6">.</span>config<span style="color:#ff79c6">(</span><span style="color:#f1fa8c">&#34;spark.hadoop.fs.s3a.access.key&#34;</span><span style="color:#ff79c6">,</span> <span style="color:#f1fa8c">&#34;minioadmin&#34;</span><span style="color:#ff79c6">)</span>
-  <span style="color:#ff79c6">.</span>config<span style="color:#ff79c6">(</span><span style="color:#f1fa8c">&#34;spark.hadoop.fs.s3a.secret.key&#34;</span><span style="color:#ff79c6">,</span> <span style="color:#f1fa8c">&#34;minioadmin&#34;</span><span style="color:#ff79c6">)</span>
-  <span style="color:#ff79c6">.</span>config<span style="color:#ff79c6">(</span><span style="color:#f1fa8c">&#34;spark.hadoop.fs.s3a.path.style.access&#34;</span><span style="color:#ff79c6">,</span> <span style="color:#f1fa8c">&#34;true&#34;</span><span style="color:#ff79c6">)</span>
-  <span style="color:#ff79c6">.</span>getOrCreate<span style="color:#ff79c6">(</span><span style="color:#ff79c6">)</span>
-
-<span style="color:#ff79c6">val</span> data <span style="color:#ff79c6">=</span> <span style="color:#50fa7b">Seq</span><span style="color:#ff79c6">(</span><span style="color:#ff79c6">(</span><span style="color:#f1fa8c">&#34;Alice&#34;</span><span style="color:#ff79c6">,</span> <span style="color:#bd93f9">28</span><span style="color:#ff79c6">)</span><span style="color:#ff79c6">,</span> <span style="color:#ff79c6">(</span><span style="color:#f1fa8c">&#34;Bob&#34;</span><span style="color:#ff79c6">,</span> <span style="color:#bd93f9">35</span><span style="color:#ff79c6">)</span><span style="color:#ff79c6">)</span>
-<span style="color:#ff79c6">val</span> df <span style="color:#ff79c6">=</span> spark<span style="color:#ff79c6">.</span>createDataFrame<span style="color:#ff79c6">(</span>data<span style="color:#ff79c6">)</span><span style="color:#ff79c6">.</span>toDF<span style="color:#ff79c6">(</span><span style="color:#f1fa8c">&#34;name&#34;</span><span style="color:#ff79c6">,</span> <span style="color:#f1fa8c">&#34;age&#34;</span><span style="color:#ff79c6">)</span>
-
-<span style="color:#6272a4">// Write to MinIO
-</span><span style="color:#6272a4"></span>df<span style="color:#ff79c6">.</span>write<span style="color:#ff79c6">.</span>parquet<span style="color:#ff79c6">(</span><span style="color:#f1fa8c">&#34;s3a://mybucket/spark/data&#34;</span><span style="color:#ff79c6">)</span>
-
-<span style="color:#6272a4">// Read from MinIO
-</span><span style="color:#6272a4"></span><span style="color:#ff79c6">val</span> readDF <span style="color:#ff79c6">=</span> spark<span style="color:#ff79c6">.</span>read<span style="color:#ff79c6">.</span>parquet<span style="color:#ff79c6">(</span><span style="color:#f1fa8c">&#34;s3a://mybucket/spark/data&#34;</span><span style="color:#ff79c6">)</span>
-readDF<span style="color:#ff79c6">.</span>show<span style="color:#ff79c6">(</span><span style="color:#ff79c6">)</span>
-</code></pre></td></tr></table>
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"><code class="language-properties" data-lang="properties"><span style="display:flex;"><span><span style="color:#50fa7b">spark.hadoop.fs.s3a.endpoint</span><span style="color:#ff79c6">=</span><span style="color:#f1fa8c">http://&lt;minio-host&gt;:9000</span>
+</span></span><span style="display:flex;"><span><span style="color:#50fa7b">spark.hadoop.fs.s3a.access.key</span><span style="color:#ff79c6">=</span><span style="color:#f1fa8c">&lt;your-access-key&gt;</span>
+</span></span><span style="display:flex;"><span><span style="color:#50fa7b">spark.hadoop.fs.s3a.secret.key</span><span style="color:#ff79c6">=</span><span style="color:#f1fa8c">&lt;your-secret-key&gt;</span>
+</span></span><span style="display:flex;"><span><span style="color:#50fa7b">spark.hadoop.fs.s3a.path.style.access</span><span style="color:#ff79c6">=</span><span style="color:#f1fa8c">true</span>
+</span></span><span style="display:flex;"><span><span style="color:#50fa7b">spark.hadoop.fs.s3a.impl</span><span style="color:#ff79c6">=</span><span style="color:#f1fa8c">org.apache.hadoop.fs.s3a.S3AFileSystem</span>
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>代码</p>
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"><code><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">15
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">16
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">17
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">18
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">19
+</span></code></pre></td>
+<td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"><code class="language-scala" data-lang="scala"><span style="display:flex;"><span><span style="color:#ff79c6">import</span> org.apache.spark.sql.SparkSession
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">val</span> spark <span style="color:#ff79c6">=</span> <span style="color:#50fa7b">SparkSession</span><span style="color:#ff79c6">.</span>builder<span style="color:#ff79c6">()</span>
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">.</span>appName<span style="color:#ff79c6">(</span><span style="color:#f1fa8c">&#34;Spark with MinIO&#34;</span><span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">.</span>config<span style="color:#ff79c6">(</span><span style="color:#f1fa8c">&#34;spark.hadoop.fs.s3a.endpoint&#34;</span><span style="color:#ff79c6">,</span> <span style="color:#f1fa8c">&#34;http://localhost:9000&#34;</span><span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">.</span>config<span style="color:#ff79c6">(</span><span style="color:#f1fa8c">&#34;spark.hadoop.fs.s3a.access.key&#34;</span><span style="color:#ff79c6">,</span> <span style="color:#f1fa8c">&#34;minioadmin&#34;</span><span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">.</span>config<span style="color:#ff79c6">(</span><span style="color:#f1fa8c">&#34;spark.hadoop.fs.s3a.secret.key&#34;</span><span style="color:#ff79c6">,</span> <span style="color:#f1fa8c">&#34;minioadmin&#34;</span><span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">.</span>config<span style="color:#ff79c6">(</span><span style="color:#f1fa8c">&#34;spark.hadoop.fs.s3a.path.style.access&#34;</span><span style="color:#ff79c6">,</span> <span style="color:#f1fa8c">&#34;true&#34;</span><span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">.</span>getOrCreate<span style="color:#ff79c6">()</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">val</span> data <span style="color:#ff79c6">=</span> <span style="color:#50fa7b">Seq</span><span style="color:#ff79c6">((</span><span style="color:#f1fa8c">&#34;Alice&#34;</span><span style="color:#ff79c6">,</span> <span style="color:#bd93f9">28</span><span style="color:#ff79c6">),</span> <span style="color:#ff79c6">(</span><span style="color:#f1fa8c">&#34;Bob&#34;</span><span style="color:#ff79c6">,</span> <span style="color:#bd93f9">35</span><span style="color:#ff79c6">))</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">val</span> df <span style="color:#ff79c6">=</span> spark<span style="color:#ff79c6">.</span>createDataFrame<span style="color:#ff79c6">(</span>data<span style="color:#ff79c6">).</span>toDF<span style="color:#ff79c6">(</span><span style="color:#f1fa8c">&#34;name&#34;</span><span style="color:#ff79c6">,</span> <span style="color:#f1fa8c">&#34;age&#34;</span><span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4">// Write to MinIO
+</span></span></span><span style="display:flex;"><span>df<span style="color:#ff79c6">.</span>write<span style="color:#ff79c6">.</span>parquet<span style="color:#ff79c6">(</span><span style="color:#f1fa8c">&#34;s3a://mybucket/spark/data&#34;</span><span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#6272a4">// Read from MinIO
+</span></span></span><span style="display:flex;"><span><span style="color:#ff79c6">val</span> readDF <span style="color:#ff79c6">=</span> spark<span style="color:#ff79c6">.</span>read<span style="color:#ff79c6">.</span>parquet<span style="color:#ff79c6">(</span><span style="color:#f1fa8c">&#34;s3a://mybucket/spark/data&#34;</span><span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>readDF<span style="color:#ff79c6">.</span>show<span style="color:#ff79c6">()</span>
+</span></span></code></pre></td></tr></table>
 </div>
 </div><hr>
 <p>flink 整合</p>
-<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4">
-<table style="border-spacing:0;padding:0;margin:0;border:0;width:auto;overflow:auto;display:block;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
-<pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">5
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"><code><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">2
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">3
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">4
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">5
 </span></code></pre></td>
 <td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
-<pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-yaml" data-lang="yaml">s3.endpoint: http://&lt;minio-host&gt;:<span style="color:#bd93f9">9000</span>
-s3.access-key: &lt;your-access-key<span style="color:#f1fa8c">&gt;</span><span style="color:#f1fa8c">
-</span><span style="color:#f1fa8c"></span><span style="color:#f1fa8c">s3.secret-key: &lt;your-secret-key&gt;</span>
-s3.path-style-access: <span style="color:#ff79c6">true</span>
-s3.filesystem.impl: org.apache.hadoop.fs.s3a.S3AFileSystem
-</code></pre></td></tr></table>
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"><code class="language-yaml" data-lang="yaml"><span style="display:flex;"><span><span style="color:#ff79c6">s3.endpoint</span>: http://&lt;minio-host&gt;:9000
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">s3.access-key</span>: &lt;your-access-key&gt;
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">s3.secret-key</span>: &lt;your-secret-key&gt;
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">s3.path-style-access</span>: <span style="color:#ff79c6">true</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">s3.filesystem.impl</span>: org.apache.hadoop.fs.s3a.S3AFileSystem
+</span></span></code></pre></td></tr></table>
 </div>
 </div><p>代码</p>
-<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4">
-<table style="border-spacing:0;padding:0;margin:0;border:0;width:auto;overflow:auto;display:block;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
-<pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"><code><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">13
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">14
 </span></code></pre></td>
 <td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
-<pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-scala" data-lang="scala"><span style="color:#ff79c6">import</span> org.apache.flink.api.scala._
-
-<span style="color:#ff79c6">object</span> <span style="color:#50fa7b">FlinkMinIOExample</span> <span style="color:#ff79c6">{</span>
-  <span style="color:#ff79c6">def</span> main<span style="color:#ff79c6">(</span>args<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">Array</span><span style="color:#ff79c6">[</span><span style="color:#8be9fd">String</span><span style="color:#ff79c6">]</span><span style="color:#ff79c6">)</span><span style="color:#ff79c6">:</span> <span style="color:#8be9fd">Unit</span> <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">{</span>
-    <span style="color:#ff79c6">val</span> env <span style="color:#ff79c6">=</span> <span style="color:#50fa7b">ExecutionEnvironment</span><span style="color:#ff79c6">.</span>getExecutionEnvironment
-
-    <span style="color:#ff79c6">val</span> data <span style="color:#ff79c6">=</span> env<span style="color:#ff79c6">.</span>fromElements<span style="color:#ff79c6">(</span><span style="color:#ff79c6">(</span><span style="color:#f1fa8c">&#34;Alice&#34;</span><span style="color:#ff79c6">,</span> <span style="color:#bd93f9">28</span><span style="color:#ff79c6">)</span><span style="color:#ff79c6">,</span> <span style="color:#ff79c6">(</span><span style="color:#f1fa8c">&#34;Bob&#34;</span><span style="color:#ff79c6">,</span> <span style="color:#bd93f9">35</span><span style="color:#ff79c6">)</span><span style="color:#ff79c6">)</span>
-
-    <span style="color:#6272a4">// Write to MinIO
-</span><span style="color:#6272a4"></span>    data<span style="color:#ff79c6">.</span>writeAsCsv<span style="color:#ff79c6">(</span><span style="color:#f1fa8c">&#34;s3a://mybucket/flink/data&#34;</span><span style="color:#ff79c6">)</span>
-
-    env<span style="color:#ff79c6">.</span>execute<span style="color:#ff79c6">(</span><span style="color:#f1fa8c">&#34;Flink with MinIO&#34;</span><span style="color:#ff79c6">)</span>
-  <span style="color:#ff79c6">}</span>
-<span style="color:#ff79c6">}</span>
-</code></pre></td></tr></table>
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"><code class="language-scala" data-lang="scala"><span style="display:flex;"><span><span style="color:#ff79c6">import</span> org.apache.flink.api.scala._
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">object</span> <span style="color:#50fa7b">FlinkMinIOExample</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">def</span> main<span style="color:#ff79c6">(</span>args<span style="color:#ff79c6">:</span> <span style="color:#8be9fd">Array</span><span style="color:#ff79c6">[</span><span style="color:#8be9fd">String</span><span style="color:#ff79c6">])</span><span style="color:#ff79c6">:</span> <span style="color:#8be9fd">Unit</span> <span style="color:#ff79c6">=</span> <span style="color:#ff79c6">{</span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">val</span> env <span style="color:#ff79c6">=</span> <span style="color:#50fa7b">ExecutionEnvironment</span><span style="color:#ff79c6">.</span>getExecutionEnvironment
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#ff79c6">val</span> data <span style="color:#ff79c6">=</span> env<span style="color:#ff79c6">.</span>fromElements<span style="color:#ff79c6">((</span><span style="color:#f1fa8c">&#34;Alice&#34;</span><span style="color:#ff79c6">,</span> <span style="color:#bd93f9">28</span><span style="color:#ff79c6">),</span> <span style="color:#ff79c6">(</span><span style="color:#f1fa8c">&#34;Bob&#34;</span><span style="color:#ff79c6">,</span> <span style="color:#bd93f9">35</span><span style="color:#ff79c6">))</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    <span style="color:#6272a4">// Write to MinIO
+</span></span></span><span style="display:flex;"><span>    data<span style="color:#ff79c6">.</span>writeAsCsv<span style="color:#ff79c6">(</span><span style="color:#f1fa8c">&#34;s3a://mybucket/flink/data&#34;</span><span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span>    env<span style="color:#ff79c6">.</span>execute<span style="color:#ff79c6">(</span><span style="color:#f1fa8c">&#34;Flink with MinIO&#34;</span><span style="color:#ff79c6">)</span>
+</span></span><span style="display:flex;"><span>  <span style="color:#ff79c6">}</span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">}</span>
+</span></span></code></pre></td></tr></table>
 </div>
 </div><hr>
 <p>presto/trino</p>
-<pre><code class="language-propertiesconnector.name=hive" data-lang="propertiesconnector.name=hive">hive.s3.aws-access-key=&lt;your-access-key&gt;
+<pre tabindex="0"><code class="language-propertiesconnector.name=hive" data-lang="propertiesconnector.name=hive">hive.s3.aws-access-key=&lt;your-access-key&gt;
 hive.s3.aws-secret-key=&lt;your-secret-key&gt;
 hive.s3.endpoint=http://&lt;minio-host&gt;:9000
 hive.s3.path-style-access=true
 hive.s3.file-system-type=EMRFS
 </code></pre><p>查询</p>
-<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4">
-<table style="border-spacing:0;padding:0;margin:0;border:0;width:auto;overflow:auto;display:block;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
-<pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"><code><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">1
 </span></code></pre></td>
 <td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
-<pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-sql" data-lang="sql"><span style="color:#ff79c6">SELECT</span> <span style="color:#ff79c6">*</span> <span style="color:#ff79c6">FROM</span> mybucket.my_table <span style="color:#ff79c6">WHERE</span> age <span style="color:#ff79c6">&gt;</span> <span style="color:#bd93f9">30</span>;
-</code></pre></td></tr></table>
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"><code class="language-sql" data-lang="sql"><span style="display:flex;"><span><span style="color:#ff79c6">SELECT</span> <span style="color:#ff79c6">*</span> <span style="color:#ff79c6">FROM</span> mybucket.my_table <span style="color:#ff79c6">WHERE</span> age <span style="color:#ff79c6">&gt;</span> <span style="color:#bd93f9">30</span>;
+</span></span></code></pre></td></tr></table>
 </div>
 </div><hr>
 <p>doris 整合</p>
-<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4">
-<table style="border-spacing:0;padding:0;margin:0;border:0;width:auto;overflow:auto;display:block;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
-<pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
-</span><span style="margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
+<div class="highlight"><div style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;">
+<table style="border-spacing:0;padding:0;margin:0;border:0;"><tr><td style="vertical-align:top;padding:0;margin:0;border:0;">
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"><code><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 1
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 2
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 3
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 4
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 5
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 6
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 7
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 8
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f"> 9
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">10
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">11
+</span><span style="white-space:pre;-webkit-user-select:none;user-select:none;margin-right:0.4em;padding:0 0.4em 0 0.4em;color:#7f7f7f">12
 </span></code></pre></td>
 <td style="vertical-align:top;padding:0;margin:0;border:0;;width:100%">
-<pre style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-sql" data-lang="sql"><span style="color:#ff79c6">CREATE</span> <span style="color:#ff79c6">EXTERNAL</span> <span style="color:#ff79c6">TABLE</span> my_external_table (
-  id <span style="color:#8be9fd;font-style:italic">INT</span>,
-  name STRING
-)
-PROPERTIES (
-  <span style="color:#f1fa8c">&#34;</span><span style="color:#f1fa8c">s3.endpoint</span><span style="color:#f1fa8c">&#34;</span> <span style="color:#ff79c6">=</span> <span style="color:#f1fa8c">&#34;</span><span style="color:#f1fa8c">http://&lt;minio-host&gt;:9000</span><span style="color:#f1fa8c">&#34;</span>,
-  <span style="color:#f1fa8c">&#34;</span><span style="color:#f1fa8c">s3.access_key</span><span style="color:#f1fa8c">&#34;</span> <span style="color:#ff79c6">=</span> <span style="color:#f1fa8c">&#34;</span><span style="color:#f1fa8c">&lt;your-access-key&gt;</span><span style="color:#f1fa8c">&#34;</span>,
-  <span style="color:#f1fa8c">&#34;</span><span style="color:#f1fa8c">s3.secret_key</span><span style="color:#f1fa8c">&#34;</span> <span style="color:#ff79c6">=</span> <span style="color:#f1fa8c">&#34;</span><span style="color:#f1fa8c">&lt;your-secret-key&gt;</span><span style="color:#f1fa8c">&#34;</span>,
-  <span style="color:#f1fa8c">&#34;</span><span style="color:#f1fa8c">s3.path</span><span style="color:#f1fa8c">&#34;</span> <span style="color:#ff79c6">=</span> <span style="color:#f1fa8c">&#34;</span><span style="color:#f1fa8c">s3a://mybucket/doris/data/</span><span style="color:#f1fa8c">&#34;</span>
-);
-
-<span style="color:#ff79c6">SELECT</span> <span style="color:#ff79c6">*</span> <span style="color:#ff79c6">FROM</span> my_external_table;
-</code></pre></td></tr></table>
+<pre tabindex="0" style="color:#f8f8f2;background-color:#282a36;-moz-tab-size:4;-o-tab-size:4;tab-size:4;-webkit-text-size-adjust:none;"><code class="language-sql" data-lang="sql"><span style="display:flex;"><span><span style="color:#ff79c6">CREATE</span> <span style="color:#ff79c6">EXTERNAL</span> <span style="color:#ff79c6">TABLE</span> my_external_table (
+</span></span><span style="display:flex;"><span>  id <span style="color:#8be9fd;font-style:italic">INT</span>,
+</span></span><span style="display:flex;"><span>  name STRING
+</span></span><span style="display:flex;"><span>)
+</span></span><span style="display:flex;"><span>PROPERTIES (
+</span></span><span style="display:flex;"><span>  <span style="color:#f1fa8c">&#34;s3.endpoint&#34;</span> <span style="color:#ff79c6">=</span> <span style="color:#f1fa8c">&#34;http://&lt;minio-host&gt;:9000&#34;</span>,
+</span></span><span style="display:flex;"><span>  <span style="color:#f1fa8c">&#34;s3.access_key&#34;</span> <span style="color:#ff79c6">=</span> <span style="color:#f1fa8c">&#34;&lt;your-access-key&gt;&#34;</span>,
+</span></span><span style="display:flex;"><span>  <span style="color:#f1fa8c">&#34;s3.secret_key&#34;</span> <span style="color:#ff79c6">=</span> <span style="color:#f1fa8c">&#34;&lt;your-secret-key&gt;&#34;</span>,
+</span></span><span style="display:flex;"><span>  <span style="color:#f1fa8c">&#34;s3.path&#34;</span> <span style="color:#ff79c6">=</span> <span style="color:#f1fa8c">&#34;s3a://mybucket/doris/data/&#34;</span>
+</span></span><span style="display:flex;"><span>);
+</span></span><span style="display:flex;"><span>
+</span></span><span style="display:flex;"><span><span style="color:#ff79c6">SELECT</span> <span style="color:#ff79c6">*</span> <span style="color:#ff79c6">FROM</span> my_external_table;
+</span></span></code></pre></td></tr></table>
 </div>
-</div><h2 id="heading3">参考</h2>
+</div><h2 id="参考">参考</h2>
 <ul>
 <li><a href="https://www.atbigapp.com/blog/1825834443916763136">有哪些开源的大数据管理平台？</a></li>
 </ul>
@@ -688,6 +740,7 @@ code.has-jax {
       </script>
     </div>
     
+
 </div>
 
 
@@ -706,6 +759,10 @@ code.has-jax {
     <section class="widget">
         <h3 class="widget-title">最近文章</h3>
 <ul class="widget-list">
+    
+    <li>
+        <a href="/post/2026/06/da_lian/" title="大连，11年后的再相见">大连，11年后的再相见</a>
+    </li>
     
     <li>
         <a href="/post/2026/05/volcano-notes/" title="Volcano 笔记">Volcano 笔记</a>
@@ -743,10 +800,6 @@ code.has-jax {
         <a href="/post/2026/04/claude_code/" title="Claude code 源码分析">Claude code 源码分析</a>
     </li>
     
-    <li>
-        <a href="/post/2026/03/iran_war/" title="Iran War">Iran War</a>
-    </li>
-    
 </ul>
 
     </section>
@@ -773,7 +826,7 @@ code.has-jax {
     
     <li><a href="/categories/%E6%96%87%E5%AD%A6%E5%92%8C%E8%89%BA%E6%9C%AF/">文学和艺术 (3)</a></li>
     
-    <li><a href="/categories/%E6%97%85%E8%A1%8C/">旅行 (15)</a></li>
+    <li><a href="/categories/%E6%97%85%E8%A1%8C/">旅行 (16)</a></li>
     
     <li><a href="/categories/%E6%9E%B6%E6%9E%84/">架构 (15)</a></li>
     
@@ -807,7 +860,7 @@ code.has-jax {
     
     <li><a href="/years/2025%E5%B9%B4/">2025年 (38)</a></li>
     
-    <li><a href="/years/2026%E5%B9%B4/">2026年 (14)</a></li>
+    <li><a href="/years/2026%E5%B9%B4/">2026年 (15)</a></li>
     
 </ul>
 
@@ -821,9 +874,9 @@ code.has-jax {
     
     <a href="/tags/ambari/">Ambari </a>
     
-    <a href="/tags/architecture/">architecture </a>
+    <a href="/tags/architecture/">Architecture </a>
     
-    <a href="/tags/bigdata/">bigdata </a>
+    <a href="/tags/bigdata/">Bigdata </a>
     
     <a href="/tags/btrace/">BTrace </a>
     
@@ -831,11 +884,11 @@ code.has-jax {
     
     <a href="/tags/c&#43;&#43;/">C&#43;&#43; </a>
     
-    <a href="/tags/calcite/">calcite </a>
+    <a href="/tags/calcite/">Calcite </a>
     
     <a href="/tags/canal/">Canal </a>
     
-    <a href="/tags/claude/">claude </a>
+    <a href="/tags/claude/">Claude </a>
     
     <a href="/tags/cmu-database/">CMU-Database </a>
     
@@ -847,7 +900,7 @@ code.has-jax {
     
     <a href="/tags/doris/">Doris </a>
     
-    <a href="/tags/ebpf/">eBPF </a>
+    <a href="/tags/ebpf/">EBPF </a>
     
     <a href="/tags/english/">English </a>
     
@@ -857,7 +910,7 @@ code.has-jax {
     
     <a href="/tags/flink/">Flink </a>
     
-    <a href="/tags/flume/">flume </a>
+    <a href="/tags/flume/">Flume </a>
     
     <a href="/tags/gc/">GC </a>
     
@@ -867,15 +920,15 @@ code.has-jax {
     
     <a href="/tags/hive/">Hive </a>
     
-    <a href="/tags/iceberg/">iceberg </a>
+    <a href="/tags/iceberg/">Iceberg </a>
     
     <a href="/tags/impala/">Impala </a>
     
-    <a href="/tags/janino/">janino </a>
+    <a href="/tags/janino/">Janino </a>
     
     <a href="/tags/juicefs/">JuiceFS </a>
     
-    <a href="/tags/k8s/">k8s </a>
+    <a href="/tags/k8s/">K8s </a>
     
     <a href="/tags/kafka/">Kafka </a>
     
@@ -891,17 +944,17 @@ code.has-jax {
     
     <a href="/tags/llvm/">LLVM </a>
     
-    <a href="/tags/log4j/">log4j </a>
+    <a href="/tags/log4j/">Log4j </a>
     
-    <a href="/tags/longhorn/">longhorn </a>
+    <a href="/tags/longhorn/">Longhorn </a>
     
     <a href="/tags/manacher/">Manacher </a>
     
     <a href="/tags/mapreduce/">MapReduce </a>
     
-    <a href="/tags/micro-service/">micro-service </a>
+    <a href="/tags/micro-service/">Micro-Service </a>
     
-    <a href="/tags/mq/">mq </a>
+    <a href="/tags/mq/">Mq </a>
     
     <a href="/tags/mysql/">MySQL </a>
     
@@ -915,25 +968,25 @@ code.has-jax {
     
     <a href="/tags/ozone/">Ozone </a>
     
-    <a href="/tags/parquet/">parquet </a>
+    <a href="/tags/parquet/">Parquet </a>
     
-    <a href="/tags/paxos/">paxos </a>
+    <a href="/tags/paxos/">Paxos </a>
     
     <a href="/tags/presto/">Presto </a>
     
     <a href="/tags/pytorch/">PyTorch </a>
     
-    <a href="/tags/quick-sql/">quick-sql </a>
+    <a href="/tags/quick-sql/">Quick-Sql </a>
     
-    <a href="/tags/raft/">raft </a>
+    <a href="/tags/raft/">Raft </a>
     
-    <a href="/tags/scala/">scala </a>
+    <a href="/tags/scala/">Scala </a>
     
     <a href="/tags/seatunnel/">SeaTunnel </a>
     
     <a href="/tags/simd/">SIMD </a>
     
-    <a href="/tags/snowflake/">snowflake </a>
+    <a href="/tags/snowflake/">Snowflake </a>
     
     <a href="/tags/spark/">Spark </a>
     
@@ -947,7 +1000,7 @@ code.has-jax {
     
     <a href="/tags/tuning/">Tuning </a>
     
-    <a href="/tags/unix/">unix </a>
+    <a href="/tags/unix/">Unix </a>
     
     <a href="/tags/volcano/">Volcano </a>
     
