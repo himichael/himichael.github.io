@@ -24,12 +24,13 @@
         }
 
         function openListGallery(anchor) {
-            var thumbs = Array.prototype.slice.call(track.querySelectorAll(".post-image-strip-thumb"));
-            var index = thumbs.indexOf(anchor);
+            var itemsInStrip = Array.prototype.slice.call(strip.querySelectorAll("[data-gallery-item]"));
+            var visibleThumbs = Array.prototype.slice.call(track.querySelectorAll(".post-image-strip-thumb"));
+            var index = visibleThumbs.indexOf(anchor);
             if (index < 0) return;
 
             if (window.jQuery && window.jQuery.fancybox) {
-                var items = thumbs.map(function (thumb) {
+                var items = itemsInStrip.map(function (thumb) {
                     return {
                         src: thumb.getAttribute("href"),
                         opts: {
